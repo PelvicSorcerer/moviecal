@@ -1,11 +1,16 @@
-Product brief
+﻿# Product brief
 
-moviecal is a simple web app for movie fans to search movies, add titles to a personal watchlist, and subscribe to a private iCalendar (iOS Calendar-compatible) feed that reflects release date changes.
-
-Core user value
-- Discover upcoming releases and track titles the user cares about.
-- Receive calendar events for release dates that automatically update if dates change.
+Summary
+moviecal is a personal movie watchlist web app that lets users search TMDb, save movies to a private watchlist, and subscribe to a private iCalendar (.ics) feed compatible with iOS Calendar. The feed provides one all-day event per movie release date and stays up-to-date when release dates change.
 
 Target users
-- Movie enthusiasts who track release dates
-- Users who prefer calendar-based reminders (iOS Calendar integration)
+- Movie fans who want to track release dates in their calendar
+- Users who prefer calendar subscriptions over push or native apps
+
+Value proposition
+- Single authoritative calendar of watchlist release dates
+- Low-friction subscription with automatic updates
+
+Success metrics
+- User can subscribe to feed and see events for watchlisted movies with known release dates
+- Feed updates if a release date changes

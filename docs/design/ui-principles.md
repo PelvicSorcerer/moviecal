@@ -1,7 +1,8 @@
-UI principles
+﻿# UI principles
 
-- Simple and focused: surface only what's necessary for the MVP flows.
-- Accessible: follow basic WCAG contrast and semantics.
-- Privacy-first: do not leak tokens or sensitive info in UI or logs.
-- Consistent: consistent patterns and affordances across pages.
-- Testable: UI changes should be covered by automated tests where feasible.
+- Mobile-first and responsive: iOS users are primary audience.
+- Minimal, distraction-free UI focused on search and watchlist management.
+- Accessible: semantic HTML, good color contrast, keyboard focus.
+- Fast: server-side render where appropriate, cache TMDb responses.
+- Clear security/privacy: surface that calendar URLs are private and rotatable.
+- Small surface: keep number of screens minimal to reduce cognitive load.

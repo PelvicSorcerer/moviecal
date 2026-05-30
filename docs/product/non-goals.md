@@ -1,6 +1,7 @@
-Non-goals
+﻿# Non-goals
 
-- Publicly shareable watchlists (no public aggregation/sharing in MVP).
-- Implementing first-class native iOS app - calendar feed is primary mobile integration.
-- Building complex recommendation algorithms.
-- Storing or exposing real user data in public artifacts or logs.
+- Building a native calendar app or SDK integration (use calendar subscription).
+- Real-time push notifications for release date changes.
+- Social sharing or public watchlists in MVP.
+- Advanced calendar features (reminders, timezone conversions, RSVP tracking).
+- Supporting non-iOS calendar clients with special behavior—focus is iOS Calendar compatibility, but standard iCal should work for others too.

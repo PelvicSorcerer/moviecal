@@ -1,7 +1,23 @@
-Deployment plan (high level)
+﻿# Deployment plan
 
-- CI: run lint, typecheck, tests on PRs via GitHub Actions.
-- Staging: deploy to a staging environment for manual QA.
-- Production: promote from staging after smoke tests and approvals.
-- Environment variables: store secrets in the host's secret store (e.g., GitHub Actions secrets, cloud secret manager).
-- Rollback: use simple rollback strategies (previous release artifact) and monitor errors after deploy.
+Environments
+- Development: local Next.js + Supabase project
+- Production: Vercel (Hobby)
+
+Environment variables (set in Vercel and locally during development)
+- SUPABASE_URL
+- SUPABASE_ANON_KEY (client-safe)
+- SUPABASE_SERVICE_ROLE_KEY (server-only)
+- TMDB_API_KEY
+- VERCEL_CRON_SECRET (for protected refresh endpoint)
+
+Steps
+1. Create Supabase project and apply DB schema (tables and RLS policies).
+2. Create a Vercel project linked to the GitHub repo.
+3. Add required environment variables in Vercel.
+4. Deploy the Next.js app; verify public pages work.
+5. Configure Vercel Cron to call /api/refresh on a schedule.
+6. Monitor logs and add alerts for errors or TMDb rate-limit issues.
+
+Notes
+- Keep credentials out of the repository. Document how to create and add them in a future ops doc.
