@@ -1,4 +1,4 @@
-﻿# Requirements
+# Requirements
 
 Functional requirements
 - Sign-in and user accounts.
@@ -21,6 +21,7 @@ Calendar-specific constraints
 - No interactive login for the feed (clients fetch directly).
 - Stable event UIDs so clients update events instead of creating duplicates.
 - Use all-day DATE events (no time-of-day).
+- Skip movies with unknown release dates in MVP calendar output.
 
 Security constraints
 - Do not expose one user's watchlist to another.
