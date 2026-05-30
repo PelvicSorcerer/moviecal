@@ -1,0 +1,44 @@
+{
+    "name": "agents-scaffold-nextjs-moviecal-app",
+    "version": "1.0.0",
+    "description": "moviecal is a personal movie watchlist web app that lets users search TMDb, save movies to a private watchlist, and subscribe to a private iCalendar (.ics) feed compatible with iOS Calendar. The feed provides one all-day event per movie release date and stays up-to-date when release dates change.",
+    "main": "index.js",
+    "directories": {
+        "doc": "docs",
+        "test": "test"
+    },
+    "scripts": {
+        "start": "next start",
+        "e2e": "playwright test",
+        "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
+        "build": "next build",
+        "typecheck": "tsc --noEmit",
+        "dev": "next dev",
+        "test": "vitest",
+        "lint": "echo \"skip lint (scaffold)\""
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "type": "module",
+    "dependencies": {
+        "next": "^16.2.6",
+        "react": "^19.2.6",
+        "react-dom": "^19.2.6"
+    },
+    "devDependencies": {
+        "@playwright/test": "^1.60.0",
+        "@tailwindcss/postcss": "^4.3.0",
+        "@testing-library/jest-dom": "^6.9.1",
+        "@testing-library/react": "^16.3.2",
+        "@types/node": "^25.9.1",
+        "@types/react": "^19.2.15",
+        "autoprefixer": "^10.5.0",
+        "eslint": "^9.39.4",
+        "eslint-config-next": "^16.2.6",
+        "postcss": "^8.5.15",
+        "tailwindcss": "^4.3.0",
+        "typescript": "^6.0.3",
+        "vitest": "^4.1.7"
+    }
+}
