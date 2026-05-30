@@ -2,6 +2,25 @@
 
 `gh auth status` currently reports an invalid token in this environment, so labels/milestones/issues were not created automatically.
 
+## Attempted in cloud session (failed operations)
+
+The following commands were attempted and failed due to GitHub CLI authentication:
+
+```bash
+gh auth status
+```
+
+Observed result:
+
+```text
+github.com
+  X Failed to log in to github.com using token (GITHUB_TOKEN)
+  - Active account: true
+  - The token in GITHUB_TOKEN is invalid.
+```
+
+Because of this auth failure, automated creation of labels, milestones, and issues was skipped in-cloud and replaced with the manual commands below so another agent can run them locally after authenticating.
+
 ## Labels to create (manual)
 
 ```bash
