@@ -1,6 +1,12 @@
+Agents MUST verify GitHub issue state before drafting work. Run `gh issue view <number> --repo PelvicSorcerer/moviecal --json state` and prefer OPEN issues. If an issue is closed, update this file or create a docs PR to reconcile.
+
 # Backlog (agent-ready)
 
+## Completed
+
 ## 1) Scaffold Next.js app
+- Completed via PR #23 merged on 2026-05-30T04:13:37Z by @PelvicSorcerer.
+
 - **Goal**: Create a minimal Next.js App Router app with TypeScript strict mode and Tailwind.
 - **Relevant docs to read**: `README.md`, `docs/technical/tech-stack.md`, `docs/technical/architecture.md`
 - **Requirements**:

@@ -49,5 +49,6 @@ Actions taken by agent
 - Created milestone: Phase 0 - Planning
 - Applied labels and milestones to open issues
 - Updated issue #6 body to scaffold checklist
+- Reconciled docs/planning/backlog.md to mark #6 completed via PR #23.
 
 If GitHub editing is restricted, use the above mappings to update issues manually via the web UI or a local gh login.
