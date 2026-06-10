@@ -1,5 +1,7 @@
 # Recommended issue sequence (first 16 tasks)
 
+This document describes the intended execution order for future work. It is not a historical progress log.
+
 Start with the scaffold, then follow the dependency chain below. Where an issue number is indicated, that refers to the existing GitHub issue.
 
 1. Scaffold Next.js app (issue #6)
@@ -24,4 +26,4 @@ Notes
 - Adjust ordering if a particular task needs priority or the docs suggest a different dependency chain.
 
 Verification
-- After scaffold (issue #6) completes, run `npm run verify` and then start work on #8 through #11 in small PRs.
+- With the scaffold in place, run `npm run verify` before starting the next issue-sized PRs.

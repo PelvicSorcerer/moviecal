@@ -2,18 +2,24 @@
 
 Frontend pages and API routes (Next.js App Router):
 
+Current status
+- The routes below describe the current scaffold structure.
+- Most pages and API handlers are placeholders and should not be treated as implemented product behavior.
+
 Frontend pages
 - / — Landing / app overview
-- /sign-in — Optional explicit sign-in page (or built-in Supabase UI)
 - /search — Movie search UI (client/server search via API)
-- /movies/[tmdb_id] — Movie detail view
 - /watchlist — User's saved movies
-- /settings — Calendar token management (regenerate)
+- /settings/calendar — Calendar feed token management placeholder
 
 API routes
-- /api/tmdb/search?q= — Server-side TMDb search proxy
-- /api/tmdb/movie/[tmdb_id] — Server-side movie detail fetch and cache
-- /api/watchlist — GET/POST authenticated watchlist operations
-- /api/watchlist/[id] — DELETE authenticated remove
-- /api/calendar/[token].ics — Public calendar feed endpoint (text/calendar)
-- /api/refresh — Protected endpoint for scheduled release-date refresh (called by Vercel Cron or internal job)
+- /api/movies/search?q= — Placeholder movie search endpoint
+- /api/watchlist — Placeholder watchlist endpoint
+- /api/calendar/[token] — Placeholder calendar feed endpoint returning `text/calendar`
+- /api/cron/refresh-releases — Placeholder scheduled refresh endpoint
+
+Planned but not implemented yet
+- `/sign-in` or equivalent Supabase auth UI
+- `/movies/[tmdb_id]` detail view
+- Authenticated watchlist persistence and delete-by-id operations
+- Token rotation and release-date refresh behavior

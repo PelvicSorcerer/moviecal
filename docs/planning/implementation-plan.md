@@ -1,5 +1,7 @@
 # Implementation plan
 
+This document describes the intended implementation order after the scaffold baseline. It is an execution plan, not a historical progress tracker.
+
 ## Phase 0: Repo/docs preparation
 
 - **Goal**: Finalize planning docs and create agent-ready execution artifacts.
@@ -29,7 +31,7 @@
   - Add CI verify workflow
 - **Definition of done**:
   - App builds locally
-  - CI verify runs on pull requests
+  - CI verify runs on pull requests and default-branch pushes
 
 ## Phase 2: Auth and database foundation
 

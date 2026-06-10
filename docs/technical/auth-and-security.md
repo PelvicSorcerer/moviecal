@@ -1,5 +1,9 @@
 ﻿# Auth and security
 
+Status
+- This document describes the intended security model for future implementation.
+- The current scaffold includes placeholders only and should not be treated as a completed auth or persistence implementation.
+
 Supabase
 - Use Supabase Auth for user sign-in and identity (email/password, OAuth optional).
 - Enforce Row Level Security (RLS) on watchlist_items so users can only read/write their own rows.
@@ -12,10 +16,10 @@ Calendar tokens
 
 Server secrets
 - Store secrets in environment variables (Vercel project settings / Supabase Secrets). Never commit them.
-- Example env variables to set: SUPABASE_URL, SUPABASE_ANON_KEY (client-safe), SUPABASE_SERVICE_ROLE_KEY (server-only), TMDB_API_KEY, NEXT_PUBLIC_SUPABASE_ANON_KEY (if used).
+- Example env variables to set: NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY (client-safe), SUPABASE_SERVICE_ROLE_KEY (server-only), TMDB_API_KEY, CRON_SECRET.
 
 Protecting scheduled jobs
-- Protect the /api/refresh endpoint with a Vercel Cron secret header or use Supabase server-side functions so only the scheduler can call it.
+- Protect the `/api/cron/refresh-releases` endpoint with a cron secret header or use Supabase server-side functions so only the scheduler can call it.
 
 Other notes
 - Log access to calendar endpoints (rate-limited) to detect abuse.

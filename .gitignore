@@ -13,6 +13,7 @@ out/
 # Env
 .env
 .env.*
+!.env.example
 
 # OS
 .DS_Store
@@ -25,4 +26,3 @@ Thumbs.db
 # Test artifacts
 test-results/
 playwright-report/
-
