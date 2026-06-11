@@ -5,6 +5,12 @@ export default defineConfig({
   timeout: 30000,
   use: {
     headless: true,
-    baseURL: process.env.APP_URL || 'http://localhost:3000',
+    baseURL: process.env.APP_URL || 'http://127.0.0.1:3000',
+  },
+  webServer: {
+    command: 'npm run dev',
+    url: process.env.APP_URL || 'http://127.0.0.1:3000',
+    reuseExistingServer: !process.env.CI,
+    timeout: 120000,
   },
 });

@@ -10,8 +10,9 @@ if [ ! -f .env.local ] && [ -f .env.example ]; then
   cp .env.example .env.local
 fi
 
+echo "Using placeholder env values unless you replace .env.local with disposable/dev credentials."
+
 npm install
-npm run build
 '''
 
 [[actions]]

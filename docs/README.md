@@ -11,3 +11,5 @@ Recommended reading order for contributors and agents:
 6. `docs/planning/recommended-issue-sequence.md`
 
 Keep docs updated when behavior, routes, environment variables, or security assumptions change. Planning docs should describe the intended execution plan and issue hygiene; they should not be used as a historical progress tracker.
+
+Fresh implementation sessions should use the GitHub issue queue as the source of truth for sequencing. When issue state and planning docs diverge, reconcile the GitHub issue first and then update the docs.

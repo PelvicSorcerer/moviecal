@@ -35,3 +35,6 @@ pnpm-debug.log*
 .DS_Store
 .vscode/
 .idea/
+
+# local codex tooling cache
+.codex/tools/

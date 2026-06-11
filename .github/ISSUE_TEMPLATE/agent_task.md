@@ -8,5 +8,5 @@ Use this template when creating tasks for Copilot agents.
 - Files to change: list of file paths to inspect or modify
 - Tests to run: unit/integration/e2e commands and expected outcomes
 - Constraints: (e.g., no secrets, TypeScript strict, keep changes small)
-- Branch to start from: (e.g., main)
+- Branch to start from: (e.g., master)
 - Manual verification steps / notes for reviewer
