@@ -32,8 +32,8 @@ Local verification commands:
 - `npm run verify` runs the baseline lint, typecheck, unit test, and build contract.
 - `npm run build` may require elevated execution in Codex because Next.js/Turbopack can hit sandbox restrictions even when the project itself builds correctly.
 - `npm run e2e` installs the required Playwright browser automatically before running tests.
-- `npm run tool:install` installs workspace-local `supabase` and `vercel` CLIs under `.codex/tools` when system-wide installs are unavailable.
-- On macOS, the install script may ad-hoc re-sign the local Supabase binary so it can run without a full system-wide install.
+- `npm run tool:install` installs workspace-local `vercel`, plus a repo-local Supabase binary path intended for this Apple Silicon macOS machine.
+- The Supabase portion of `npm run tool:install` is currently a machine-specific workaround for macOS on Apple Silicon. It downloads the Darwin arm64 archive and may ad-hoc re-sign the binary locally so it can run without a full system-wide install.
 
 The current application routes are an early scaffold. Product features such as Supabase auth, TMDb search, persistent watchlists, calendar token rotation, and release-date refresh are planned but not implemented yet.
 

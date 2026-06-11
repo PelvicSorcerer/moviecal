@@ -21,6 +21,7 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 - Use disposable or dev-only credentials and resources for Supabase, TMDb, and cron protection.
 - Do not use production secrets, long-lived personal credentials, or private user data.
 - `.env.example` is placeholder-only. `.env.local` may exist with placeholder values and does not mean live integrations are ready.
+- The repo-local Supabase CLI install path is currently intended for this Apple Silicon macOS environment and should be treated as a local workaround, not a cross-platform project guarantee.
 
 ## Verification contract
 

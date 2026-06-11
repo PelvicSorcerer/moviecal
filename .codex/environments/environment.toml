@@ -13,7 +13,6 @@ fi
 echo "Using placeholder env values unless you replace .env.local with disposable/dev credentials."
 
 npm install
-npm run build
 '''
 
 [[actions]]

@@ -7,6 +7,15 @@ supabase_version="2.105.0"
 supabase_archive="supabase_${supabase_version}_darwin_arm64.tar.gz"
 supabase_url="https://github.com/supabase/cli/releases/download/v${supabase_version}/${supabase_archive}"
 
+os_name="$(uname -s)"
+arch_name="$(uname -m)"
+
+if [ "$os_name" != "Darwin" ] || [ "$arch_name" != "arm64" ]; then
+  echo "The repo-local Supabase install path currently supports only macOS on Apple Silicon (Darwin arm64)." >&2
+  echo "Install Supabase separately on this machine or update scripts/tool-install.sh for your platform." >&2
+  exit 1
+fi
+
 mkdir -p "$bin_dir"
 
 echo "Installing workspace-local Vercel CLI..."
