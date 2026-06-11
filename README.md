@@ -20,16 +20,25 @@ Status: Scaffold complete; MVP implementation pending.
 3. Start the development server: `npm run dev`
 4. Run the baseline checks before opening a PR: `npm run verify`
 
+Supabase helper notes:
+
+- Browser-safe and server-only Supabase helpers live under `src/lib/supabase`.
+- Supabase helpers validate required environment variables at runtime and reject placeholder values from `.env.example`.
+- Server-only helpers fail clearly when `SUPABASE_SERVICE_ROLE_KEY` is missing, and browser helpers never read that variable.
+
 ## Agentic development setup
 
 - Use disposable or dev-only credentials for Supabase, TMDb, and cron secrets. Do not use production values for autonomous feature work.
 - `.env.example` is placeholder-only. A copied `.env.local` does not mean live integrations are ready.
 - Fresh implementation sessions should begin from the single open GitHub issue labeled `agent-ready`.
 - Start work from `master` on a branch named `agent/<issue-number>-<short-slug>`.
+- Use an orchestrator step between worker issues to reconcile the queue and promote the next `agent-ready` issue.
 
 Local verification commands:
 
 - `npm run verify` runs the baseline lint, typecheck, unit test, and build contract.
+- `npm run agent:check` validates that exactly one open issue is `agent-ready` and that the issue has the required execution sections.
+- `npm run agent:handoff` validates post-merge queue readiness from `master` before sending in the next fresh worker.
 - `npm run db:lint` is the repo wrapper for `supabase db lint`. It uses `SUPABASE_DB_URL` when you provide a disposable database URL; otherwise it attempts `supabase db lint --local`.
 - `npm run build` may require elevated execution in Codex because Next.js/Turbopack can hit sandbox restrictions even when the project itself builds correctly.
 - `npm run e2e` installs the required Playwright browser automatically before running tests.
