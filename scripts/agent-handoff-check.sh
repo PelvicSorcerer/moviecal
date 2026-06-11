@@ -15,28 +15,45 @@ if ! gh auth status >/dev/null 2>&1; then
 fi
 
 default_branch=$(gh repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name)
+current_branch=$(git rev-parse --abbrev-ref HEAD)
+
 echo "Repository: $repo (default branch: $default_branch)"
-echo "Checking open issues labeled 'agent-ready'..."
+echo "Local branch: $current_branch"
 
-issues_json=$(gh issue list --repo "$repo" --label agent-ready --state open --json number,title,body)
-count=$(echo "$issues_json" | jq length)
-
-if [ "$count" -eq 0 ]; then
-  echo "No open agent-ready issues found."
+if [ "$current_branch" != "$default_branch" ]; then
+  echo "Handoff audits should run from the default branch after merge." >&2
   exit 1
 fi
 
-if [ "$count" -gt 1 ]; then
-  echo "Found $count open agent-ready issues. Reconcile the queue before starting implementation." >&2
-  echo "$issues_json" | jq -r '.[] | "- #\(.number) \(.title)"'
+if [ -n "$(git status --short)" ]; then
+  echo "Working tree is not clean. Commit, stash, or discard local changes before using handoff mode." >&2
   exit 1
 fi
 
-issue_number=$(echo "$issues_json" | jq -r '.[0].number')
-issue_title=$(echo "$issues_json" | jq -r '.[0].title')
-issue_body=$(echo "$issues_json" | jq -r '.[0].body')
+ready_issues=$(gh issue list --repo "$repo" --label agent-ready --state open --json number,title,body)
+ready_count=$(echo "$ready_issues" | jq length)
+open_prs=$(gh pr list --repo "$repo" --state open --json number,title,headRefName,baseRefName)
+open_pr_count=$(echo "$open_prs" | jq length)
 
-echo "Single agent-ready issue: #$issue_number - $issue_title"
+echo "Open PR count: $open_pr_count"
+
+if [ "$ready_count" -eq 0 ]; then
+  echo "No open agent-ready issues found. The repo is not ready for the next fresh worker." >&2
+  echo "Promote the next dependency-correct issue or explicitly record a blocker before handoff." >&2
+  exit 1
+fi
+
+if [ "$ready_count" -gt 1 ]; then
+  echo "Found $ready_count open agent-ready issues. Reconcile the queue before handoff." >&2
+  echo "$ready_issues" | jq -r '.[] | "- #\(.number) \(.title)"'
+  exit 1
+fi
+
+issue_number=$(echo "$ready_issues" | jq -r '.[0].number')
+issue_title=$(echo "$ready_issues" | jq -r '.[0].title')
+issue_body=$(echo "$ready_issues" | jq -r '.[0].body')
+
+echo "Next worker issue: #$issue_number - $issue_title"
 
 if ! echo "$issue_body" | grep -iq "Acceptance criteria"; then
   echo "Issue #$issue_number is missing an Acceptance criteria section." >&2
@@ -60,4 +77,4 @@ if echo "$issue_body" | grep -Eiq "(auth|database|calendar|token|cron|secret|sup
   fi
 fi
 
-echo "Issue body includes Relevant docs, Acceptance criteria, and Verification."
+echo "Handoff state looks valid for the next worker."

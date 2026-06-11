@@ -11,6 +11,8 @@
         "start": "next start",
         "tool:install": "bash scripts/tool-install.sh",
         "tool:check": "bash scripts/tool-check.sh",
+        "agent:check": "bash scripts/agent-check.sh",
+        "agent:handoff": "bash scripts/agent-handoff-check.sh",
         "pree2e": "npm run e2e:install",
         "e2e:install": "playwright install chromium",
         "e2e": "playwright test",
