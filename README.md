@@ -20,6 +20,12 @@ Status: Scaffold complete; MVP implementation pending.
 3. Start the development server: `npm run dev`
 4. Run the baseline checks before opening a PR: `npm run verify`
 
+Supabase helper notes:
+
+- Browser-safe and server-only Supabase helpers live under `src/lib/supabase`.
+- Supabase helpers validate required environment variables at runtime and reject placeholder values from `.env.example`.
+- Server-only helpers fail clearly when `SUPABASE_SERVICE_ROLE_KEY` is missing, and browser helpers never read that variable.
+
 ## Agentic development setup
 
 - Use disposable or dev-only credentials for Supabase, TMDb, and cron secrets. Do not use production values for autonomous feature work.
