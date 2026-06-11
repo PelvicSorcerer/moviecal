@@ -32,10 +32,13 @@ Supabase helper notes:
 - `.env.example` is placeholder-only. A copied `.env.local` does not mean live integrations are ready.
 - Fresh implementation sessions should begin from the single open GitHub issue labeled `agent-ready`.
 - Start work from `master` on a branch named `agent/<issue-number>-<short-slug>`.
+- Use an orchestrator step between worker issues to reconcile the queue and promote the next `agent-ready` issue.
 
 Local verification commands:
 
 - `npm run verify` runs the baseline lint, typecheck, unit test, and build contract.
+- `npm run agent:check` validates that exactly one open issue is `agent-ready` and that the issue has the required execution sections.
+- `npm run agent:handoff` validates post-merge queue readiness from `master` before sending in the next fresh worker.
 - `npm run build` may require elevated execution in Codex because Next.js/Turbopack can hit sandbox restrictions even when the project itself builds correctly.
 - `npm run e2e` installs the required Playwright browser automatically before running tests.
 - `npm run tool:install` installs workspace-local `vercel`, plus a repo-local Supabase binary path intended for this Apple Silicon macOS machine.

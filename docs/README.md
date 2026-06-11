@@ -9,6 +9,7 @@ Recommended reading order for contributors and agents:
 4. `docs/technical/architecture.md`
 5. `docs/planning/implementation-plan.md`
 6. `docs/planning/recommended-issue-sequence.md`
+7. `docs/planning/agent-orchestration.md`
 
 Keep docs updated when behavior, routes, environment variables, or security assumptions change. Planning docs should describe the intended execution plan and issue hygiene; they should not be used as a historical progress tracker.
 
