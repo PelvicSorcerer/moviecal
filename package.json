@@ -8,16 +8,16 @@
         "test": "test"
     },
     "scripts": {
-    "start": "next start",
-    "tool:install": "bash scripts/tool-install.sh",
-    "tool:check": "bash scripts/tool-check.sh",
-    "pree2e": "npm run e2e:install",
-    "e2e:install": "playwright install chromium",
-    "e2e": "playwright test",
-    "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
-    "build": "next build",
-    "typecheck": "tsc --noEmit",
-    "dev": "next dev",
+        "start": "next start",
+        "tool:install": "bash scripts/tool-install.sh",
+        "tool:check": "bash scripts/tool-check.sh",
+        "pree2e": "npm run e2e:install",
+        "e2e:install": "playwright install chromium",
+        "e2e": "playwright test",
+        "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
+        "build": "next build",
+        "typecheck": "tsc --noEmit",
+        "dev": "next dev",
         "test": "vitest",
         "lint": "echo \"skip lint (scaffold)\""
     },
@@ -26,6 +26,7 @@
     "license": "ISC",
     "type": "module",
     "dependencies": {
+        "@supabase/supabase-js": "^2.108.1",
         "next": "^16.2.6",
         "react": "^19.2.6",
         "react-dom": "^19.2.6"
