@@ -4,6 +4,11 @@
 
 `npm run verify` is the local baseline check. It should run lint, typecheck, unit tests, and production build. Pull-request CI should match this baseline and must not require production secrets.
 
+Database schema verification for Supabase work should use `npm run db:lint`, which wraps `supabase db lint`.
+
+- Prefer `SUPABASE_DB_URL=postgresql://... npm run db:lint` against a disposable or dev-only database when local Docker/Supabase services are unavailable.
+- `supabase db lint --local` is still valid when a local Supabase stack is reachable, but it is not guaranteed inside the Codex sandbox because Docker is unavailable here and localhost database access may be blocked.
+
 ## Unit tests
 
 Use Vitest for small deterministic units, including:

@@ -30,12 +30,14 @@ Status: Scaffold complete; MVP implementation pending.
 Local verification commands:
 
 - `npm run verify` runs the baseline lint, typecheck, unit test, and build contract.
+- `npm run db:lint` is the repo wrapper for `supabase db lint`. It uses `SUPABASE_DB_URL` when you provide a disposable database URL; otherwise it attempts `supabase db lint --local`.
 - `npm run build` may require elevated execution in Codex because Next.js/Turbopack can hit sandbox restrictions even when the project itself builds correctly.
 - `npm run e2e` installs the required Playwright browser automatically before running tests.
 - `npm run tool:install` installs workspace-local `vercel`, plus a repo-local Supabase binary path intended for this Apple Silicon macOS machine.
 - The Supabase portion of `npm run tool:install` is currently a machine-specific workaround for macOS on Apple Silicon. It downloads the Darwin arm64 archive and may ad-hoc re-sign the binary locally so it can run without a full system-wide install.
 - In Codex, `bash scripts/agent-check.sh` may need elevated execution because sandboxed `gh` cannot always see the macOS keychain-backed login even when `gh auth status` succeeds in your normal terminal.
 - `npm run tool:check` is safe to run inside Codex; it redirects the Supabase CLI's writable home to a temp directory for the version check.
+- In this Codex sandbox, `supabase db lint --local` may still be unavailable even with the CLI installed, because Docker is not present and localhost access to the local Supabase Postgres port can be blocked. In that case, run `npm run db:lint` with `SUPABASE_DB_URL` pointed at a disposable database, or run the local lint outside the sandbox on a machine with a reachable Supabase local stack.
 
 The current application routes are an early scaffold. Product features such as Supabase auth, TMDb search, persistent watchlists, calendar token rotation, and release-date refresh are planned but not implemented yet.
 

@@ -24,3 +24,7 @@ if ! HOME="$supabase_home" "$supabase_binary" --version; then
   echo "Supabase CLI is installed but not runnable in this environment. Re-run 'npm run tool:install' or re-sign the binary locally on this Apple Silicon macOS machine." >&2
   exit 1
 fi
+
+echo "Supabase db lint wrapper:"
+echo "- Run 'npm run db:lint' to execute 'supabase db lint'."
+echo "- Without SUPABASE_DB_URL, the wrapper expects a reachable local Supabase/Postgres instance on 127.0.0.1:54322."
