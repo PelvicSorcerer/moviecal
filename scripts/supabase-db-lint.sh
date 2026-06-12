@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-supabase_home="${TMPDIR:-/private/tmp}/moviecal-supabase-home"
+supabase_home="${TMPDIR:-/tmp}/moviecal-supabase-home"
 local_db_host="${SUPABASE_LOCAL_DB_HOST:-127.0.0.1}"
 local_db_port="${SUPABASE_LOCAL_DB_PORT:-54322}"
 

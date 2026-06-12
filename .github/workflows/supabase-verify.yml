@@ -2,7 +2,10 @@ name: supabase-verify
 
 on:
   push:
-    branches: [ master ]
+    branches:
+      - master
+      - agent/**
+      - copilot/**
     paths:
       - 'supabase/**'
       - 'scripts/supabase-db-lint.sh'
@@ -16,12 +19,17 @@ on:
       - '.github/workflows/supabase-verify.yml'
       - 'src/lib/supabase/database.ts'
       - 'test/supabase-schema.test.ts'
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   db-verify:
     runs-on: ubuntu-latest
     env:
       CI: true
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
 
@@ -31,11 +39,11 @@ jobs:
 
       - uses: supabase/setup-cli@v2
         with:
-          version: latest
+          version: '2.106.0'
 
       - run: node --version && npm --version && supabase --version
 
-      - run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
 
       - name: Start local Supabase stack
         run: supabase start
