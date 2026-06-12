@@ -29,12 +29,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CI: true
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
 
       - uses: supabase/setup-cli@v2
         with:
