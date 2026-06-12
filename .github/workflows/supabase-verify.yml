@@ -2,7 +2,10 @@ name: supabase-verify
 
 on:
   push:
-    branches: [ master ]
+    branches:
+      - master
+      - agent/**
+      - copilot/**
     paths:
       - 'supabase/**'
       - 'scripts/supabase-db-lint.sh'
@@ -16,6 +19,7 @@ on:
       - '.github/workflows/supabase-verify.yml'
       - 'src/lib/supabase/database.ts'
       - 'test/supabase-schema.test.ts'
+  workflow_dispatch:
 
 permissions:
   contents: read
