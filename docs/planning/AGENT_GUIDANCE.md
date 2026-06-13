@@ -54,3 +54,4 @@ This repository uses GitHub issues to scope implementation work for humans and a
 3. Ensure exactly one open issue is labeled `agent-ready`, or explicitly record why the queue is blocked.
 4. Check that the promoted issue contains docs, acceptance criteria, verification steps, and security notes where needed.
 5. Hand the worker a clean brief instead of expecting it to infer sequencing from planning docs alone.
+6. Use `docs/planning/worker-dispatch-prompt.md` when dispatching a worker so the first-step check-in, mirrored checkpoint reporting, stop points, and single-issue ownership are explicit.
