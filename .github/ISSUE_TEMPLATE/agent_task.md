@@ -14,5 +14,5 @@ Use this template when creating tasks for Copilot agents.
 - Out of scope: prevent adjacent backlog creep
 - Constraints: (e.g., no secrets, TypeScript strict, keep changes small)
 - Branch to start from: (e.g., master)
-- Queue note: whether this issue is eligible for `agent-ready` now
+- Queue note: whether this issue is eligible for `agent-ready` now and, if it belongs in the current queue, where it should appear in `docs/planning/open-issue-order.json`
 - Manual verification steps / notes for reviewer

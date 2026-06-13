@@ -19,7 +19,14 @@ Start with cleanup that makes the scaffold consistent, then follow the dependenc
 13. Add protected scheduled release-date refresh endpoint.
 14. Add Vercel Cron configuration.
 15. Finalize deployment documentation.
-16. Expand unit, integration, and E2E coverage.
+16. Add unit tests for core utilities and iCalendar formatting.
+17. Add integration tests for Supabase client and TMDb wrapper.
+18. Add Playwright smoke tests for the main user flows.
+19. Align the CI verify workflow with the focused test contract after those test tasks land.
+
+## Current open issue queue
+
+The current issue-number mapping for that sequence lives in `docs/planning/open-issue-order.json`. Keep it in sync with GitHub issue grooming so orchestrator handoff stays deterministic.
 
 ## Agent handoff notes
 

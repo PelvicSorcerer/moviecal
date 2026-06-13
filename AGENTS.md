@@ -24,6 +24,7 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 - The worker owns exactly one implementation issue, one focused branch, verification, and PR delivery.
 - Do not let a worker session self-assign a second implementation issue after finishing the first. Return control to the orchestrator step first.
 - The orchestrator should prefer promoting the next dependency-correct issue immediately after a worker issue lands so the repo never sits in an ambiguous "done but not ready" state.
+- When multiple open issues could look ready, use `docs/planning/open-issue-order.json` as the deterministic tie-breaker and update that file whenever queue priorities change.
 - If no issue is truly ready, the orchestrator should leave zero `agent-ready` issues and record the blocker explicitly in GitHub.
 
 ## Handoff contract

@@ -33,6 +33,7 @@ Use GitHub labels and issue comments to make the queue machine-readable.
 - `agent-ready`: exactly one open issue should have this when the repo is ready for a fresh worker.
 - no `agent-ready`: valid only when the queue is intentionally blocked and the blocker is recorded.
 - domain labels such as `database`, `auth`, `tests`, `calendar`, `watchlist`, `deployment`, or `tmdb`: use these for routing, not readiness.
+- `docs/planning/open-issue-order.json`: the deterministic preferred execution order for the current open implementation queue when multiple issues could otherwise appear ready.
 
 Recommended operational states:
 
@@ -50,9 +51,10 @@ These states can be represented with comments, project fields, or additional lab
 1. Check the repository default branch and current open PR state.
 2. Confirm whether an implementation issue just merged or whether the queue is already idle.
 3. Inspect open issues against dependency order, issue comments, and blocking notes.
-4. Promote exactly one issue to `agent-ready` only if it is current, unblocked, and small enough for one PR.
-5. If no issue qualifies, leave the queue unready and record why.
-6. Generate a worker brief with:
+4. Use `docs/planning/open-issue-order.json` to identify the earliest still-open implementation issue, then confirm its blocker notes are clear.
+5. Promote exactly one issue to `agent-ready` only if it is current, unblocked, and small enough for one PR.
+6. If no issue qualifies, leave the queue unready and record why.
+7. Generate a worker brief with:
    - issue number and title
    - branch naming rule
    - docs to read first
@@ -66,7 +68,7 @@ Run this after a worker PR lands:
 1. Confirm `master` contains the merged work.
 2. Confirm the completed issue is closed.
 3. Confirm no duplicate or stale PR remains open for the same work.
-4. Re-evaluate the next dependency-correct issue.
+4. Re-evaluate the next dependency-correct issue in `docs/planning/open-issue-order.json`.
 5. Promote exactly one issue to `agent-ready`, or document the blocker.
 6. Update planning or guidance docs only if the merge changed queue assumptions.
 

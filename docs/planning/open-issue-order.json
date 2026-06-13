@@ -1,0 +1,52 @@
+{
+  "queue": [
+    {
+      "issue": 16,
+      "title": "Add watchlist database operations"
+    },
+    {
+      "issue": 13,
+      "title": "Add watchlist page"
+    },
+    {
+      "issue": 2,
+      "title": "Add calendar token model"
+    },
+    {
+      "issue": 4,
+      "title": "Add iCalendar feed generator"
+    },
+    {
+      "issue": 5,
+      "title": "Add calendar feed endpoint"
+    },
+    {
+      "issue": 12,
+      "title": "Add scheduled release-date refresh endpoint"
+    },
+    {
+      "issue": 17,
+      "title": "Add Vercel Cron configuration"
+    },
+    {
+      "issue": 15,
+      "title": "Add deployment documentation"
+    },
+    {
+      "issue": 18,
+      "title": "Add unit tests for core utilities and iCalendar generator"
+    },
+    {
+      "issue": 19,
+      "title": "Add integration tests for Supabase client and TMDb wrapper (mocked)"
+    },
+    {
+      "issue": 20,
+      "title": "Add E2E smoke tests for main user flows (Playwright)"
+    },
+    {
+      "issue": 21,
+      "title": "Integrate tests into CI verify workflow"
+    }
+  ]
+}
