@@ -7,6 +7,7 @@
 - Enforce Row Level Security on user-owned tables so users can only read and write their own rows.
 - Client-safe Supabase values may be exposed to browser code when prefixed with `NEXT_PUBLIC_`.
 - The Supabase service-role key stays server-side only and must never be committed.
+- The app session should be established server-side with HTTP-only cookies so protected pages and API routes do not rely on client-only auth checks.
 
 ## Calendar tokens
 
