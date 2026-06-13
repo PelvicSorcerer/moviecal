@@ -54,11 +54,13 @@ queue_status=$(echo "$expected_issue_comments" | jq -r '[.[] | select(.body | st
 open_blockers=""
 
 if [ -n "$queue_status" ]; then
-  open_blockers=$(echo "$queue_status" | grep -oE '#[0-9]+' | tr -d '#' | while read -r blocker; do
+  blockers=$(echo "$queue_status" | grep -oE '#[0-9]+' | tr -d '#' || true)
+
+  for blocker in $blockers; do
     if echo "$open_issue_numbers" | grep -qx "$blocker"; then
-      echo "$blocker"
+      open_blockers+="${open_blockers:+$'\n'}$blocker"
     fi
-  done || true)
+  done
 fi
 
 echo "Expected next implementation issue: #$expected_issue_number - $expected_issue_title"
