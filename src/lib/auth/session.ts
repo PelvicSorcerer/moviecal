@@ -13,7 +13,6 @@ import {
   createRefreshTokenCookieOptions,
   readAuthTokens,
   sanitizeNextPath,
-  sessionToAuthTokens,
   type AuthTokens,
 } from './cookies';
 
@@ -29,9 +28,37 @@ export interface AuthResolution {
   user: User | null;
 }
 
-export async function resolveAuthTokens(
+export interface AuthClientLike {
+  auth: {
+    getUser(accessToken: string): Promise<{ data: { user: User | null } }>;
+    refreshSession(args: {
+      refresh_token: string;
+    }): Promise<{
+      data: {
+        session:
+          | {
+              access_token: string;
+              refresh_token: string;
+              expires_in?: number;
+            }
+          | null;
+        user: User | null;
+      };
+    }>;
+  };
+}
+
+export interface ResolveAuthTokenOptions {
+  allowRefresh?: boolean;
+}
+
+export async function resolveAuthTokensWithClient(
+  client: AuthClientLike,
   tokens: AuthTokens | null,
+  options: ResolveAuthTokenOptions = {},
 ): Promise<AuthResolution> {
+  const { allowRefresh = true } = options;
+
   if (!tokens) {
     return {
       refreshedSession: null,
@@ -40,8 +67,7 @@ export async function resolveAuthTokens(
     };
   }
 
-  const supabase = createServerSupabaseClient();
-  const { data: userData } = await supabase.auth.getUser(tokens.accessToken);
+  const { data: userData } = await client.auth.getUser(tokens.accessToken);
 
   if (userData.user) {
     return {
@@ -51,7 +77,15 @@ export async function resolveAuthTokens(
     };
   }
 
-  const { data: refreshData } = await supabase.auth.refreshSession({
+  if (!allowRefresh) {
+    return {
+      refreshedSession: null,
+      shouldClearCookies: false,
+      user: null,
+    };
+  }
+
+  const { data: refreshData } = await client.auth.refreshSession({
     refresh_token: tokens.refreshToken,
   });
 
@@ -65,7 +99,8 @@ export async function resolveAuthTokens(
 
   return {
     refreshedSession: {
-      ...sessionToAuthTokens(refreshData.session),
+      accessToken: refreshData.session.access_token,
+      refreshToken: refreshData.session.refresh_token,
       expiresIn: refreshData.session.expires_in,
     },
     shouldClearCookies: false,
@@ -73,10 +108,21 @@ export async function resolveAuthTokens(
   };
 }
 
+export async function resolveAuthTokens(
+  tokens: AuthTokens | null,
+  options: ResolveAuthTokenOptions = {},
+): Promise<AuthResolution> {
+  const supabase = createServerSupabaseClient();
+
+  return resolveAuthTokensWithClient(supabase, tokens, options);
+}
+
 export async function getOptionalUser(): Promise<User | null> {
   try {
     const cookieStore = await cookies();
-    const auth = await resolveAuthTokens(readAuthTokens(cookieStore));
+    const auth = await resolveAuthTokens(readAuthTokens(cookieStore), {
+      allowRefresh: false,
+    });
 
     return auth.user;
   } catch (error) {
