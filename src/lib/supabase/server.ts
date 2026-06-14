@@ -20,18 +20,38 @@ function assertServerRuntime(): void {
   }
 }
 
-export function createServerSupabaseClient(): ServerSupabaseClient {
+function createConfiguredServerSupabaseClient(
+  key: string,
+  accessToken?: string,
+): ServerSupabaseClient {
+  const { url } = getPublicSupabaseEnv();
+
+  return createClient<Database>(url, key, {
+    ...serverClientOptions,
+    global: accessToken
+      ? {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      : undefined,
+  });
+}
+
+export function createServerSupabaseClient(
+  accessToken?: string,
+): ServerSupabaseClient {
   assertServerRuntime();
 
-  const { url, anonKey } = getPublicSupabaseEnv();
+  const { anonKey } = getPublicSupabaseEnv();
 
-  return createClient<Database>(url, anonKey, serverClientOptions);
+  return createConfiguredServerSupabaseClient(anonKey, accessToken);
 }
 
 export function createServerSupabaseServiceRoleClient(): ServerSupabaseClient {
   assertServerRuntime();
 
-  const { url, serviceRoleKey } = getServerSupabaseEnv();
+  const { serviceRoleKey } = getServerSupabaseEnv();
 
-  return createClient<Database>(url, serviceRoleKey, serverClientOptions);
+  return createConfiguredServerSupabaseClient(serviceRoleKey);
 }

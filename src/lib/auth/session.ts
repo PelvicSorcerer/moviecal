@@ -158,6 +158,7 @@ export async function authenticateApiRequest(
   request: NextRequest,
 ): Promise<
   | {
+      accessToken: string;
       applyAuthCookies(response: NextResponse): void;
       user: User;
     }
@@ -179,7 +180,21 @@ export async function authenticateApiRequest(
       return response;
     }
 
+    const accessToken = auth.refreshedSession?.accessToken ?? readAuthTokens(request.cookies)?.accessToken;
+
+    if (!accessToken) {
+      const response = NextResponse.json(
+        { error: 'Authentication required.' },
+        { status: 401 },
+      );
+
+      clearAuthCookies(response);
+
+      return response;
+    }
+
     return {
+      accessToken,
       applyAuthCookies(response: NextResponse): void {
         if (auth.refreshedSession) {
           setAuthCookies(response, auth.refreshedSession);
