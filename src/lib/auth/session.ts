@@ -134,6 +134,37 @@ export async function getOptionalUser(): Promise<User | null> {
   }
 }
 
+export interface AuthenticatedPageSession {
+  accessToken: string;
+  user: User;
+}
+
+export async function getOptionalPageSession(): Promise<AuthenticatedPageSession | null> {
+  try {
+    const cookieStore = await cookies();
+    const tokens = readAuthTokens(cookieStore);
+    const auth = await resolveAuthTokens(tokens, {
+      allowRefresh: false,
+    });
+    const accessToken = tokens?.accessToken;
+
+    if (!auth.user || !accessToken) {
+      return null;
+    }
+
+    return {
+      accessToken,
+      user: auth.user,
+    };
+  } catch (error) {
+    if (error instanceof SupabaseEnvironmentError) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
 export async function requireAuthenticatedPage(nextPath: string): Promise<User> {
   const user = await getOptionalUser();
 
@@ -142,6 +173,18 @@ export async function requireAuthenticatedPage(nextPath: string): Promise<User> 
   }
 
   return user;
+}
+
+export async function requireAuthenticatedPageSession(
+  nextPath: string,
+): Promise<AuthenticatedPageSession> {
+  const session = await getOptionalPageSession();
+
+  if (!session) {
+    redirect(`/sign-in?next=${encodeURIComponent(nextPath)}`);
+  }
+
+  return session;
 }
 
 export async function getSignedInRedirect(nextPath?: string): Promise<string | null> {

@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  formatReleaseDate,
   getResultCountLabel,
   getSearchHref,
   getWatchlistSignInHref,
   getWatchlistStatusMessage,
   shouldSyncSubmittedQuery,
 } from '../src/app/search/search-page-client';
+import { formatReleaseDate } from '../src/lib/format-release-date';
 
 describe('search page helpers', () => {
   it('formats known release dates for result cards', () => {
