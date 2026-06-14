@@ -1,6 +1,59 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { authenticateApiRequest } from '../../../lib/auth/session';
+import {
+  addWatchlistItem,
+  listWatchlistItems,
+  WatchlistDataError,
+  WatchlistInputError,
+} from '../../../lib/watchlist';
+import {
+  createServerSupabaseClient,
+  createServerSupabaseServiceRoleClient,
+} from '../../../lib/supabase/server';
+import { createSupabaseWatchlistRepository } from '../../../lib/supabase/watchlist';
+import {
+  getMovieDetails,
+  TMDbEnvironmentError,
+  TMDbRequestError,
+} from '../../../lib/tmdb/client';
+
+function applyAuthCookies(
+  auth: Exclude<Awaited<ReturnType<typeof authenticateApiRequest>>, NextResponse>,
+  response: NextResponse,
+): NextResponse {
+  auth.applyAuthCookies(response);
+
+  return response;
+}
+
+function createRepositoryForRequest(
+  auth: Exclude<Awaited<ReturnType<typeof authenticateApiRequest>>, NextResponse>,
+) {
+  return createSupabaseWatchlistRepository({
+    userClient: createServerSupabaseClient(auth.accessToken),
+    adminClient: createServerSupabaseServiceRoleClient(),
+  });
+}
+
+function handleWatchlistError(error: unknown): NextResponse {
+  if (error instanceof WatchlistInputError || error instanceof WatchlistDataError) {
+    return NextResponse.json({ error: error.message }, { status: error.status });
+  }
+
+  if (error instanceof TMDbEnvironmentError) {
+    return NextResponse.json(
+      { error: 'Watchlist updates are unavailable until TMDb is configured.' },
+      { status: 503 },
+    );
+  }
+
+  if (error instanceof TMDbRequestError) {
+    return NextResponse.json({ error: error.message }, { status: error.status });
+  }
+
+  throw error;
+}
 
 export async function GET(request: NextRequest) {
   const auth = await authenticateApiRequest(request);
@@ -9,15 +62,32 @@ export async function GET(request: NextRequest) {
     return auth;
   }
 
-  const response = NextResponse.json({
-    ok: true,
-    message: 'watchlist GET placeholder',
-    userId: auth.user.id,
-  });
+  try {
+    const items = await listWatchlistItems({
+      repository: createRepositoryForRequest(auth),
+      userId: auth.user.id,
+    });
 
-  auth.applyAuthCookies(response);
+    return applyAuthCookies(auth, NextResponse.json({ items }));
+  } catch (error) {
+    return applyAuthCookies(auth, handleWatchlistError(error));
+  }
+}
 
-  return response;
+interface WatchlistCreateRequestBody {
+  tmdb_id?: unknown;
+}
+
+async function readRequestBody(
+  request: NextRequest,
+): Promise<WatchlistCreateRequestBody> {
+  try {
+    const body = (await request.json()) as WatchlistCreateRequestBody;
+
+    return typeof body === 'object' && body !== null ? body : {};
+  } catch {
+    throw new WatchlistInputError('Request body must be valid JSON.');
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -27,31 +97,32 @@ export async function POST(request: NextRequest) {
     return auth;
   }
 
-  const response = NextResponse.json({
-    ok: true,
-    message: 'watchlist POST placeholder',
-    userId: auth.user.id,
-  });
+  try {
+    const body = await readRequestBody(request);
+    const tmdbId = body.tmdb_id;
 
-  auth.applyAuthCookies(response);
+    if (typeof tmdbId !== 'number') {
+      throw new WatchlistInputError('A valid tmdb_id is required.');
+    }
 
-  return response;
-}
+    const result = await addWatchlistItem({
+      getMovieDetails,
+      repository: createRepositoryForRequest(auth),
+      tmdbId,
+      userId: auth.user.id,
+    });
 
-export async function DELETE(request: NextRequest) {
-  const auth = await authenticateApiRequest(request);
-
-  if (auth instanceof NextResponse) {
-    return auth;
+    return applyAuthCookies(
+      auth,
+      NextResponse.json(
+        {
+          created: result.created,
+          item: result.item,
+        },
+        { status: result.created ? 201 : 200 },
+      ),
+    );
+  } catch (error) {
+    return applyAuthCookies(auth, handleWatchlistError(error));
   }
-
-  const response = NextResponse.json({
-    ok: true,
-    message: 'watchlist DELETE placeholder',
-    userId: auth.user.id,
-  });
-
-  auth.applyAuthCookies(response);
-
-  return response;
 }

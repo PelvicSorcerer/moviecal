@@ -1,0 +1,214 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { NextRequest, NextResponse } from 'next/server';
+
+const mocks = vi.hoisted(() => ({
+  authenticateApiRequest: vi.fn(),
+  createSupabaseWatchlistRepository: vi.fn(),
+  listWatchlistItems: vi.fn(),
+  addWatchlistItem: vi.fn(),
+  removeWatchlistItem: vi.fn(),
+  createServerSupabaseClient: vi.fn(),
+  createServerSupabaseServiceRoleClient: vi.fn(),
+  getMovieDetails: vi.fn(),
+}));
+
+vi.mock('../src/lib/auth/session', () => ({
+  authenticateApiRequest: mocks.authenticateApiRequest,
+}));
+
+vi.mock('../src/lib/supabase/server', () => ({
+  createServerSupabaseClient: mocks.createServerSupabaseClient,
+  createServerSupabaseServiceRoleClient: mocks.createServerSupabaseServiceRoleClient,
+}));
+
+vi.mock('../src/lib/supabase/watchlist', () => ({
+  createSupabaseWatchlistRepository: mocks.createSupabaseWatchlistRepository,
+}));
+
+vi.mock('../src/lib/tmdb/client', () => ({
+  getMovieDetails: mocks.getMovieDetails,
+  TMDbEnvironmentError: class TMDbEnvironmentError extends Error {},
+  TMDbRequestError: class TMDbRequestError extends Error {
+    status: number;
+
+    constructor(message: string, status = 502) {
+      super(message);
+      this.status = status;
+    }
+  },
+}));
+
+vi.mock('../src/lib/watchlist', async () => {
+  const actual = await vi.importActual<typeof import('../src/lib/watchlist')>(
+    '../src/lib/watchlist',
+  );
+
+  return {
+    ...actual,
+    listWatchlistItems: mocks.listWatchlistItems,
+    addWatchlistItem: mocks.addWatchlistItem,
+    removeWatchlistItem: mocks.removeWatchlistItem,
+  };
+});
+
+describe('watchlist routes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.createServerSupabaseClient.mockReturnValue({ name: 'user-client' });
+    mocks.createServerSupabaseServiceRoleClient.mockReturnValue({
+      name: 'admin-client',
+    });
+    mocks.createSupabaseWatchlistRepository.mockReturnValue({ name: 'repository' });
+    mocks.authenticateApiRequest.mockResolvedValue({
+      accessToken: 'access-token',
+      user: { id: 'user-1' },
+      applyAuthCookies(response: NextResponse) {
+        response.cookies.set('sb-access-token', 'refreshed');
+      },
+    });
+  });
+
+  it('returns the user watchlist from GET /api/watchlist', async () => {
+    const { GET } = await import('../src/app/api/watchlist/route');
+
+    mocks.listWatchlistItems.mockResolvedValue([
+      {
+        id: 'watchlist-item-1',
+        addedAt: '2026-06-13T05:00:00.000Z',
+        movie: {
+          id: 42,
+          tmdbId: 603,
+          title: 'The Matrix',
+          releaseDate: '1999-03-31',
+          overview: 'A hacker discovers the truth.',
+          posterPath: '/poster.jpg',
+        },
+      },
+    ]);
+
+    const response = await GET(
+      new NextRequest('https://moviecal.test/api/watchlist'),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      items: [
+        {
+          id: 'watchlist-item-1',
+          addedAt: '2026-06-13T05:00:00.000Z',
+          movie: {
+            id: 42,
+            tmdbId: 603,
+            title: 'The Matrix',
+            releaseDate: '1999-03-31',
+            overview: 'A hacker discovers the truth.',
+            posterPath: '/poster.jpg',
+          },
+        },
+      ],
+    });
+    expect(mocks.listWatchlistItems).toHaveBeenCalledWith({
+      repository: { name: 'repository' },
+      userId: 'user-1',
+    });
+  });
+
+  it('returns 201 from POST /api/watchlist when a movie is newly added', async () => {
+    const { POST } = await import('../src/app/api/watchlist/route');
+
+    mocks.addWatchlistItem.mockResolvedValue({
+      created: true,
+      item: {
+        id: 'watchlist-item-1',
+        addedAt: '2026-06-13T05:00:00.000Z',
+        movie: {
+          id: 42,
+          tmdbId: 603,
+          title: 'The Matrix',
+          releaseDate: '1999-03-31',
+          overview: 'A hacker discovers the truth.',
+          posterPath: '/poster.jpg',
+        },
+      },
+    });
+
+    const response = await POST(
+      new NextRequest('https://moviecal.test/api/watchlist', {
+        method: 'POST',
+        body: JSON.stringify({ tmdb_id: 603 }),
+        headers: {
+          'content-type': 'application/json',
+        },
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual({
+      created: true,
+      item: {
+        id: 'watchlist-item-1',
+        addedAt: '2026-06-13T05:00:00.000Z',
+        movie: {
+          id: 42,
+          tmdbId: 603,
+          title: 'The Matrix',
+          releaseDate: '1999-03-31',
+          overview: 'A hacker discovers the truth.',
+          posterPath: '/poster.jpg',
+        },
+      },
+    });
+    expect(mocks.addWatchlistItem).toHaveBeenCalledWith({
+      getMovieDetails: mocks.getMovieDetails,
+      repository: { name: 'repository' },
+      tmdbId: 603,
+      userId: 'user-1',
+    });
+  });
+
+  it('returns 400 from POST /api/watchlist when tmdb_id is invalid', async () => {
+    const { POST } = await import('../src/app/api/watchlist/route');
+
+    const response = await POST(
+      new NextRequest('https://moviecal.test/api/watchlist', {
+        method: 'POST',
+        body: JSON.stringify({ tmdb_id: '603' }),
+        headers: {
+          'content-type': 'application/json',
+        },
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: 'A valid tmdb_id is required.',
+    });
+    expect(mocks.addWatchlistItem).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 from DELETE /api/watchlist/[id] for another user item', async () => {
+    const { DELETE } = await import('../src/app/api/watchlist/[id]/route');
+    const { WatchlistNotFoundError } = await import('../src/lib/watchlist');
+
+    mocks.removeWatchlistItem.mockRejectedValue(
+      new WatchlistNotFoundError('Watchlist item not found.'),
+    );
+
+    const response = await DELETE(
+      new NextRequest('https://moviecal.test/api/watchlist/watchlist-item-2', {
+        method: 'DELETE',
+      }),
+      { params: Promise.resolve({ id: 'watchlist-item-2' }) },
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Watchlist item not found.',
+    });
+    expect(mocks.removeWatchlistItem).toHaveBeenCalledWith({
+      itemId: 'watchlist-item-2',
+      repository: { name: 'repository' },
+      userId: 'user-1',
+    });
+  });
+});
