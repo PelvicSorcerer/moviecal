@@ -61,18 +61,28 @@ These states can be represented with comments, project fields, or additional lab
    - exact verification commands
    - known constraints or security notes
 8. Use `docs/planning/worker-dispatch-prompt.md` as the default worker handoff template so reporting cadence, role boundaries, and stop points are explicit.
-9. Include the exact reporting destination and mechanism in the brief so the worker does not have to guess how to send mirrored checkpoints back to the orchestrator.
+9. Include the exact checkpoint mechanism the worker should use in its own thread so it does not have to guess how to surface status.
 10. Include a heartbeat interval so the worker reports progress proactively instead of waiting to be asked for status.
+11. While any worker is active, every orchestrator response cycle should include an explicit `wait_agent` step before concluding the turn or deciding that no update is available.
 
 ## Worker brief template
 
 Use `docs/planning/worker-dispatch-prompt.md` when dispatching a worker. It is intentionally operational:
 
 - it tells the worker to acknowledge the assignment in its own thread first
-- it requires the same checkpoint to be sent back to the orchestrator immediately
+- it requires checkpoints to be emitted in the worker thread immediately for orchestrator collection
 - it makes reporting cadence explicit at initial acknowledgment, planned file targets, blockers, ready-for-review, PR-opened, and any orchestrator decision point
 - it requires proactive heartbeat updates when the worker is still active but has not yet reached another formal checkpoint
 - it keeps worker and orchestrator responsibilities separate so the worker does not improvise queue management or additional dispatch work
+
+## Active wait loop
+
+When a worker is in flight, the orchestrator should not rely on passive visibility into worker progress.
+
+- The worker emits checkpoints in its own thread.
+- The orchestrator collects those checkpoints with `wait_agent`.
+- Every orchestrator response while a worker is active should include a `wait_agent` call unless the worker has already reached a final stop point and no longer needs supervision.
+- Heartbeat intervals in the worker brief should guide how long the orchestrator waits before polling again.
 
 ## Post-merge handoff checklist
 

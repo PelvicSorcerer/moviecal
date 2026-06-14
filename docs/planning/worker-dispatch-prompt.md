@@ -16,12 +16,13 @@ Role boundaries:
 
 First step:
 - Before doing any substantive work, reply in your own thread with a short acknowledgment of this assignment.
-- Immediately after that acknowledgment, send the same checkpoint back to the orchestrator thread so the reporting path is exercised before implementation starts.
+- Immediately after that acknowledgment, emit the checkpoint in your own thread so the orchestrator can collect it through its polling/wait loop before implementation starts.
 
 Reporting path:
 - Orchestrator thread or destination: [ORCHESTRATOR_DESTINATION]
-- Use this exact reporting mechanism after each required checkpoint: [REPORTING_MECHANISM]
-- If you cannot perform the mirrored report exactly as instructed, stop after the initial acknowledgment and report that blocker immediately instead of continuing silently.
+- Use this exact checkpoint mechanism in your own worker thread after each required checkpoint: [REPORTING_MECHANISM]
+- The orchestrator is responsible for collecting your checkpoints with `wait_agent` or an equivalent polling step while you are active.
+- If you cannot emit the required checkpoint in your own thread, stop after the initial acknowledgment and report that blocker immediately instead of continuing silently.
 - Do not wait for the orchestrator to ask for updates. Send each required checkpoint as soon as you reach it.
 
 Branch:
@@ -52,12 +53,12 @@ Issue brief:
 
 Worker reporting contract:
 - Respond in your own thread/session as usual.
-- After every substantive response in your own thread, immediately send the same checkpoint back to the orchestrator thread.
+- After every substantive response in your own thread, ensure the checkpoint is present there for the orchestrator to collect.
 - Do not assume repo docs alone are enough. Report explicitly at each checkpoint below.
 - Do not wait to be prompted for the next checkpoint. Reporting is your responsibility.
 - If you are still working and have not hit a formal checkpoint within [HEARTBEAT_INTERVAL], send a short heartbeat with current status, files being touched, and whether you are blocked.
 
-Required checkpoints to send to both threads:
+Required checkpoints to emit in your own worker thread for orchestrator collection:
 1. Initial acknowledgment before substantive work starts.
 2. Planned file targets once you have read the required docs and understand the task shape.
 3. Any blocker, ambiguity, missing prerequisite, or request for orchestrator input. Stop after reporting the blocker.

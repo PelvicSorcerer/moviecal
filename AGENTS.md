@@ -21,6 +21,7 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 
 - Separate the `orchestrator` role from the `worker` role.
 - The orchestrator owns queue hygiene: issue triage, dependency checks, `agent-ready` promotion/demotion, and post-merge handoff.
+- While a worker session is active, the orchestrator must actively collect worker checkpoints with `wait_agent` rather than assuming they will appear without polling.
 - The worker owns exactly one implementation issue, one focused branch, verification, and PR delivery.
 - Do not let a worker session self-assign a second implementation issue after finishing the first. Return control to the orchestrator step first.
 - The orchestrator should prefer promoting the next dependency-correct issue immediately after a worker issue lands so the repo never sits in an ambiguous "done but not ready" state.
