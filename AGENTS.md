@@ -21,6 +21,7 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 
 - Separate the `orchestrator` role from the `worker` role.
 - The orchestrator owns queue hygiene: issue triage, dependency checks, `agent-ready` promotion/demotion, and post-merge handoff.
+- The orchestrator also owns the human-testing handoff: pushing the current issue branch, providing an issue-specific manual testing checklist, and deciding when the branch is ready to advance from implementation to review.
 - While a worker session is active, the orchestrator must actively collect worker checkpoints with `wait_agent` rather than assuming they will appear without polling.
 - The worker owns exactly one implementation issue, one focused branch, verification, and PR delivery.
 - Do not let a worker session self-assign a second implementation issue after finishing the first. Return control to the orchestrator step first.
@@ -31,6 +32,7 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 ## Handoff contract
 
 - After an implementation PR merges, check `master`, confirm the merged issue is closed, and reconcile the next queue state before declaring the repo ready again.
+- Before an implementation branch is marked ready for review, the orchestrator should publish the current branch state and hand the human tester an issue-specific checklist derived from `docs/planning/manual-testing-checklist-template.md`.
 - A ready handoff means:
   - `master` contains the merged change.
   - there are no stray open PRs for the same issue.
@@ -51,6 +53,8 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 - Baseline verification: `npm run verify`
 - Production build: `npm run build`
 - E2E: `npm run e2e`
+- Human local testing should happen on the pushed orchestrator-owned issue branch before the PR is promoted from draft or work-in-progress to ready for review.
+- Each implementation issue should produce an explicit manual testing checklist with setup assumptions, happy-path steps, edge cases, regression checks, and expected results.
 - Update docs when routes, environment variables, verification commands, or security assumptions change.
 
 ## Session workflow
