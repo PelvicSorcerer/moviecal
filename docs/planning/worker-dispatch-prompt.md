@@ -44,6 +44,12 @@ Issue brief:
 - Verification commands:
   - `[VERIFY_COMMAND_1]`
   - `[VERIFY_COMMAND_2]`
+- Manual local testing checklist for the human tester:
+  - `[SETUP_ASSUMPTION_1]`
+  - `[HAPPY_PATH_STEP_1]`
+  - `[EDGE_CASE_1]`
+  - `[REGRESSION_CHECK_1]`
+  - `[EXPECTED_RESULT_1]`
 - Security constraints:
   - [SECURITY_NOTE_1]
   - [SECURITY_NOTE_2]
@@ -63,6 +69,7 @@ Required checkpoints to emit in your own worker thread for orchestrator collecti
 2. Planned file targets once you have read the required docs and understand the task shape.
 3. Any blocker, ambiguity, missing prerequisite, or request for orchestrator input. Stop after reporting the blocker.
 4. Ready-for-review checkpoint after implementation and verification are complete, but before opening or updating the PR if the orchestrator asked to review first.
+   - Include the issue-specific manual local testing checklist in this checkpoint when the branch is ready for human testing.
 5. PR-opened checkpoint immediately after creating the PR, including PR number, URL, branch name, changed files, and verification run.
 6. Any time you need the orchestrator to make a decision about scope, sequencing, or approval.
 7. Heartbeat checkpoint whenever the heartbeat interval elapses without another required checkpoint.
