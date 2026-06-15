@@ -10,6 +10,7 @@ Use this template when creating tasks for Copilot agents.
 - Goal / Acceptance criteria: explicit, testable criteria (pass/fail)
 - Files to change: list of file paths to inspect or modify
 - Tests to run: unit/integration/e2e commands and expected outcomes
+- Manual testing checklist: issue-specific local verification steps for the human tester, including setup assumptions, happy path, edge cases, regression checks, and expected results
 - Security notes: required for auth, database, calendar, cron, tokens, or secrets work
 - Out of scope: prevent adjacent backlog creep
 - Constraints: (e.g., no secrets, TypeScript strict, keep changes small)
