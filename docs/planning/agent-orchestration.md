@@ -59,7 +59,7 @@ These states can be represented with comments, project fields, or additional lab
    - branch naming rule
    - docs to read first
    - exact verification commands
-   - a human local testing checklist to be used once the branch is ready for manual verification
+   - a human local testing checklist to be used once the worker branch is ready for manual verification
    - known constraints or security notes
 8. Use `docs/planning/worker-dispatch-prompt.md` as the default worker handoff template so reporting cadence, role boundaries, and stop points are explicit.
 9. Include the exact checkpoint mechanism the worker should use in its own thread so it does not have to guess how to surface status.
@@ -71,10 +71,10 @@ These states can be represented with comments, project fields, or additional lab
 Manual local testing is part of issue completion, not a later separate phase.
 
 1. The worker implements the issue and runs the required automated verification.
-2. The worker reports a ready-for-review checkpoint, including an issue-specific manual testing checklist.
-3. The orchestrator integrates any worker changes into its own issue branch as needed and pushes the branch that should be tested locally.
-4. The human tester runs the checklist against that pushed orchestrator-owned branch.
-5. Bugs found during that pass are fixed on the same issue branch before the PR is promoted to ready for review.
+2. The worker emits a ready-for-review checkpoint in its own thread, including an issue-specific manual testing checklist for orchestrator collection via `wait_agent`.
+3. The orchestrator collects that checkpoint with `wait_agent` and asks the human tester to test the current pushed worker branch.
+4. The human tester runs the checklist against that pushed worker-owned issue branch.
+5. Bugs found during that pass are fixed on the same worker-owned issue branch before the PR is promoted to ready for review.
 6. A draft PR may exist before or during this loop for visibility, but the branch should not be treated as review-ready until the checklist either passes or has explicit follow-up notes.
 
 ## Worker brief template
@@ -86,6 +86,7 @@ Use `docs/planning/worker-dispatch-prompt.md` when dispatching a worker. It is i
 - it makes reporting cadence explicit at initial acknowledgment, planned file targets, blockers, ready-for-review, PR-opened, and any orchestrator decision point
 - it requires proactive heartbeat updates when the worker is still active but has not yet reached another formal checkpoint
 - it keeps worker and orchestrator responsibilities separate so the worker does not improvise queue management or additional dispatch work
+- manual-testing additions do not change the reporting destination; the worker still reports in its own thread and the orchestrator still collects with `wait_agent`
 
 ## Active wait loop
 
