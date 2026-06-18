@@ -134,13 +134,11 @@ This document describes the intended MVP work in dependency order. It is not a p
 
 ## 11) Deployment documentation and hardening
 
-- **Goal**: Provide practical deployment instructions and broaden test coverage.
+- **Goal**: Provide practical deployment instructions and close any remaining deployment-hardening gaps.
 - **Relevant docs**: `docs/technical/deployment-plan.md`, `docs/technical/testing-strategy.md`
 - **Requirements**:
   - Document Vercel and Supabase setup.
-  - Add meaningful unit, integration, and E2E coverage.
   - Add security and observability notes for calendar and cron endpoints.
 - **Acceptance criteria**:
   - A maintainer can deploy without committing secrets.
-  - Critical MVP flows are covered by deterministic tests.
 - **Verification**: `npm run verify` plus documented E2E command when E2E flows exist.
