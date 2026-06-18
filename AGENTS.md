@@ -28,6 +28,7 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 - The orchestrator should prefer promoting the next dependency-correct issue immediately after a worker issue lands so the repo never sits in an ambiguous "done but not ready" state.
 - When multiple open issues could look ready, use `docs/planning/open-issue-order.json` as the deterministic tie-breaker and update that file whenever queue priorities change.
 - If no issue is truly ready, the orchestrator should leave zero `agent-ready` issues and record the blocker explicitly in GitHub.
+- For feature issues, the orchestrator should ensure the issue body states the expected automated coverage plan and any explicit deferred-coverage follow-up before marking the issue `agent-ready`.
 
 ## Handoff contract
 
@@ -55,6 +56,7 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 - E2E: `npm run e2e`
 - Human local testing should happen on the pushed worker-owned issue branch before the PR is promoted from draft or work-in-progress to ready for review.
 - Each implementation issue should produce an explicit manual testing checklist with setup assumptions, happy-path steps, edge cases, regression checks, and expected results.
+- Each implementation issue should either land its intended automated coverage or identify the immediate feature-specific follow-up issue for any deferred Playwright coverage before review handoff.
 - Update docs when routes, environment variables, verification commands, or security assumptions change.
 
 ## Session workflow

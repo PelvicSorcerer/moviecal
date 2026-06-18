@@ -10,6 +10,15 @@ Database schema verification for Supabase work should use `npm run db:lint`, whi
 - `supabase db lint --local` is still valid when a local Supabase stack is reachable, but it is not guaranteed inside the Codex sandbox because Docker is unavailable here and localhost database access may be blocked.
 - The authoritative infra-backed schema gate is `.github/workflows/supabase-verify.yml`, which runs the real DB lint path in GitHub-hosted CI.
 
+## Incremental coverage policy
+
+Automated coverage should be added incrementally with feature delivery rather than deferred to a late broad testing pass.
+
+- Feature PRs should add or update unit and integration coverage in the same PR when the affected logic is deterministic.
+- Feature PRs should add or update Playwright coverage as soon as the user flow is deterministic enough to test with mocks or fixtures.
+- If Playwright coverage is not yet practical, open an immediate feature-specific follow-up issue before merge instead of deferring the gap to a broad umbrella issue.
+- The shared Playwright foundation is a finite setup task; after it lands, future browser-flow coverage should expand per feature.
+
 ## Unit tests
 
 Use Vitest for small deterministic units, including:
@@ -31,13 +40,15 @@ Add integration tests around server boundaries once the relevant modules exist:
 
 ## End-to-end tests
 
-Use Playwright for main user flows after auth, search, watchlist, and calendar feed behavior can run deterministically without production secrets:
+Use Playwright for user flows once each flow can run deterministically without production secrets:
 
 - Sign in or stubbed test session.
 - Search for a movie.
 - Add and remove a watchlist item.
 - Retrieve a calendar URL.
 - Fetch calendar feed and assert expected `VEVENT` output.
+
+Start with a shared smoke-test foundation and then extend coverage incrementally as features land.
 
 E2E tests should be a focused CI gate only after test fixtures and mocks make them reliable in pull requests.
 
