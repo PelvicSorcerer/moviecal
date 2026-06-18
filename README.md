@@ -44,7 +44,7 @@ Local verification commands:
 - `npm run db:lint` is the repo wrapper for `supabase db lint`. It uses `SUPABASE_DB_URL` when you provide a disposable database URL; otherwise it attempts `supabase db lint --local`.
 - `.github/workflows/supabase-verify.yml` is the authoritative infra-backed Supabase schema gate for PRs that change database schema verification surfaces.
 - `npm run build` may require elevated execution in Codex because Next.js/Turbopack can hit sandbox restrictions even when the project itself builds correctly.
-- `npm run e2e` installs the required Playwright browser automatically before running tests.
+- `npm run e2e` installs the required Playwright browser automatically before running tests and runs against deterministic auth/watchlist fixtures plus Playwright API stubs, so it does not require real Supabase or TMDb secrets.
 - `npm run tool:install` installs workspace-local `vercel`, plus a repo-local Supabase binary path intended for this Apple Silicon macOS machine.
 - The Supabase portion of `npm run tool:install` is currently a machine-specific workaround for macOS on Apple Silicon. It downloads the Darwin arm64 archive and may ad-hoc re-sign the binary locally so it can run without a full system-wide install.
 - In Codex, `bash scripts/agent-check.sh` may need elevated execution because sandboxed `gh` cannot always see the macOS keychain-backed login even when `gh auth status` succeeds in your normal terminal.

@@ -2,6 +2,13 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { authenticateApiRequest } from '../../../lib/auth/session';
 import {
+  createE2EWatchlistItem,
+  getE2EMovieFixture,
+  hasE2EAuthenticatedSession,
+  readE2EWatchlistItems,
+  setE2EWatchlistCookie,
+} from '../../../lib/e2e/fixtures';
+import {
   addWatchlistItem,
   listWatchlistItems,
   WatchlistDataError,
@@ -62,6 +69,12 @@ export async function GET(request: NextRequest) {
     return auth;
   }
 
+  if (hasE2EAuthenticatedSession(request.cookies)) {
+    return NextResponse.json({
+      items: readE2EWatchlistItems(request.cookies),
+    });
+  }
+
   try {
     const items = await listWatchlistItems({
       repository: createRepositoryForRequest(auth),
@@ -103,6 +116,35 @@ export async function POST(request: NextRequest) {
 
     if (typeof tmdbId !== 'number') {
       throw new WatchlistInputError('A valid tmdb_id is required.');
+    }
+
+    if (hasE2EAuthenticatedSession(request.cookies)) {
+      const existingItems = readE2EWatchlistItems(request.cookies);
+      const existingItem = existingItems.find((item) => item.movie.tmdbId === tmdbId);
+
+      if (existingItem) {
+        return NextResponse.json({
+          created: false,
+          item: existingItem,
+        });
+      }
+
+      if (!getE2EMovieFixture(tmdbId)) {
+        return NextResponse.json({ error: 'Movie not found.' }, { status: 404 });
+      }
+
+      const nextItem = createE2EWatchlistItem(tmdbId);
+      const response = NextResponse.json(
+        {
+          created: true,
+          item: nextItem,
+        },
+        { status: 201 },
+      );
+
+      setE2EWatchlistCookie(response, [...existingItems, nextItem]);
+
+      return response;
     }
 
     const result = await addWatchlistItem({

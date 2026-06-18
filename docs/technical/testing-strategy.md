@@ -45,12 +45,16 @@ Use Playwright for user flows once each flow can run deterministically without p
 - Sign in or stubbed test session.
 - Search for a movie.
 - Add and remove a watchlist item.
-- Retrieve a calendar URL.
-- Fetch calendar feed and assert expected `VEVENT` output.
+- Open protected calendar settings.
+Calendar URL retrieval and feed-content assertions should land with the future token/feed implementation work rather than this foundation issue.
 
-Start with a shared smoke-test foundation and then extend coverage incrementally as features land.
+The current smoke-test foundation keeps that scope intentionally finite:
 
-E2E tests should be a focused CI gate only after test fixtures and mocks make them reliable in pull requests.
+- `npm run e2e` starts the app with `MOVIECAL_E2E_TEST_MODE=1`, which enables an e2e-only stubbed auth/session path and cookie-backed watchlist fixtures for protected server pages and watchlist mutations.
+- Playwright should keep external dependencies such as TMDb deterministic through reusable route interception helpers instead of live third-party requests.
+- Follow-up feature work should extend the shared fixtures and add targeted browser coverage in the relevant feature issue or PR, rather than treating this foundation task as the permanent bucket for all Playwright tests.
+
+E2E tests should be a focused CI gate only after these fixtures and mocks remain reliable in pull requests.
 
 ## Test data and secrets
 

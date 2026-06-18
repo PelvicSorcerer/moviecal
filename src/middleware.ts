@@ -3,6 +3,10 @@ import { NextResponse } from 'next/server';
 
 import { readAuthTokens } from './lib/auth/cookies';
 import {
+  hasE2EAuthenticatedSession,
+  isE2ETestModeEnabled,
+} from './lib/e2e/fixtures';
+import {
   clearAuthCookies,
   redirectToSignIn,
   resolveAuthTokens,
@@ -11,6 +15,10 @@ import {
 import { SupabaseEnvironmentError } from './lib/supabase/env';
 
 export async function middleware(request: NextRequest) {
+  if (hasE2EAuthenticatedSession(request.cookies)) {
+    return NextResponse.next();
+  }
+
   try {
     const auth = await resolveAuthTokens(readAuthTokens(request.cookies));
 
@@ -33,6 +41,10 @@ export async function middleware(request: NextRequest) {
     return response;
   } catch (error) {
     if (error instanceof SupabaseEnvironmentError) {
+      if (isE2ETestModeEnabled()) {
+        return redirectToSignIn(request);
+      }
+
       return redirectToSignIn(request, 'auth-unavailable');
     }
 

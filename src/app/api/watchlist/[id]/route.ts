@@ -1,6 +1,11 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { authenticateApiRequest } from '../../../../lib/auth/session';
+import {
+  hasE2EAuthenticatedSession,
+  readE2EWatchlistItems,
+  setE2EWatchlistCookie,
+} from '../../../../lib/e2e/fixtures';
 import { removeWatchlistItem, WatchlistNotFoundError } from '../../../../lib/watchlist';
 import {
   createServerSupabaseClient,
@@ -28,6 +33,23 @@ export async function DELETE(
   }
 
   const { id } = await context.params;
+
+  if (hasE2EAuthenticatedSession(request.cookies)) {
+    const existingItems = readE2EWatchlistItems(request.cookies);
+    const nextItems = existingItems.filter((item) => item.id !== id);
+
+    if (nextItems.length === existingItems.length) {
+      return NextResponse.json(
+        { error: 'Watchlist item not found.' },
+        { status: 404 },
+      );
+    }
+
+    const response = NextResponse.json({ deleted: true, id });
+    setE2EWatchlistCookie(response, nextItems);
+
+    return response;
+  }
 
   try {
     await removeWatchlistItem({

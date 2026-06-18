@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
+import { cookies } from 'next/headers';
 
 import { requireAuthenticatedPageSession } from '../../lib/auth/session';
+import { E2E_USER, readE2EWatchlistItems } from '../../lib/e2e/fixtures';
 import { createServerSupabaseClient, createServerSupabaseServiceRoleClient } from '../../lib/supabase/server';
 import { createSupabaseWatchlistRepository } from '../../lib/supabase/watchlist';
 import { SupabaseEnvironmentError } from '../../lib/supabase/env';
@@ -21,22 +23,26 @@ export default async function WatchlistPage() {
   let items: WatchlistItem[] = [];
   let errorMessage: string | null = null;
 
-  try {
-    items = await listWatchlistItems({
-      repository: createSupabaseWatchlistRepository({
-        userClient: createServerSupabaseClient(accessToken),
-        adminClient: createServerSupabaseServiceRoleClient(),
-      }),
-      userId: user.id,
-    });
-  } catch (error) {
-    if (error instanceof SupabaseEnvironmentError) {
-      errorMessage =
-        'Watchlist access is unavailable until Supabase is configured for this environment.';
-    } else if (error instanceof WatchlistDataError) {
-      errorMessage = error.message;
-    } else {
-      errorMessage = 'Could not load your watchlist right now.';
+  if (user.id === E2E_USER.id) {
+    items = readE2EWatchlistItems(await cookies());
+  } else {
+    try {
+      items = await listWatchlistItems({
+        repository: createSupabaseWatchlistRepository({
+          userClient: createServerSupabaseClient(accessToken),
+          adminClient: createServerSupabaseServiceRoleClient(),
+        }),
+        userId: user.id,
+      });
+    } catch (error) {
+      if (error instanceof SupabaseEnvironmentError) {
+        errorMessage =
+          'Watchlist access is unavailable until Supabase is configured for this environment.';
+      } else if (error instanceof WatchlistDataError) {
+        errorMessage = error.message;
+      } else {
+        errorMessage = 'Could not load your watchlist right now.';
+      }
     }
   }
 

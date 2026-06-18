@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { sanitizeNextPath } from '../../../lib/auth/cookies';
+import { isE2ETestModeEnabled, setE2EAuthCookie } from '../../../lib/e2e/fixtures';
 import { setAuthCookies } from '../../../lib/auth/session';
 import { SupabaseEnvironmentError } from '../../../lib/supabase/env';
 import { createServerSupabaseClient } from '../../../lib/supabase/server';
@@ -20,6 +21,14 @@ export async function POST(request: Request) {
       request,
       `/sign-in?error=missing-fields&next=${encodeURIComponent(nextPath)}`,
     );
+  }
+
+  if (isE2ETestModeEnabled()) {
+    const response = buildRedirect(request, nextPath);
+
+    setE2EAuthCookie(response);
+
+    return response;
   }
 
   try {

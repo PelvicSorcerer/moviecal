@@ -3,6 +3,12 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { NextResponse, type NextRequest } from 'next/server';
 
+import {
+  clearE2EStateCookies,
+  E2E_SESSION,
+  E2E_USER,
+  hasE2EAuthenticatedSession,
+} from '../e2e/fixtures';
 import { SupabaseEnvironmentError } from '../supabase/env';
 import { createServerSupabaseClient } from '../supabase/server';
 import {
@@ -118,8 +124,13 @@ export async function resolveAuthTokens(
 }
 
 export async function getOptionalUser(): Promise<User | null> {
+  const cookieStore = await cookies();
+
+  if (hasE2EAuthenticatedSession(cookieStore)) {
+    return E2E_USER;
+  }
+
   try {
-    const cookieStore = await cookies();
     const auth = await resolveAuthTokens(readAuthTokens(cookieStore), {
       allowRefresh: false,
     });
@@ -140,8 +151,16 @@ export interface AuthenticatedPageSession {
 }
 
 export async function getOptionalPageSession(): Promise<AuthenticatedPageSession | null> {
+  const cookieStore = await cookies();
+
+  if (hasE2EAuthenticatedSession(cookieStore)) {
+    return {
+      accessToken: E2E_SESSION.accessToken,
+      user: E2E_USER,
+    };
+  }
+
   try {
-    const cookieStore = await cookies();
     const tokens = readAuthTokens(cookieStore);
     const auth = await resolveAuthTokens(tokens, {
       allowRefresh: false,
@@ -207,6 +226,14 @@ export async function authenticateApiRequest(
     }
   | NextResponse
 > {
+  if (hasE2EAuthenticatedSession(request.cookies)) {
+    return {
+      accessToken: E2E_SESSION.accessToken,
+      applyAuthCookies(): void {},
+      user: E2E_USER,
+    };
+  }
+
   try {
     const auth = await resolveAuthTokens(readAuthTokens(request.cookies));
 
@@ -288,6 +315,7 @@ export function clearAuthCookies(response: NextResponse): void {
     '',
     createExpiredCookieOptions(),
   );
+  clearE2EStateCookies(response);
 }
 
 export function redirectToSignIn(
