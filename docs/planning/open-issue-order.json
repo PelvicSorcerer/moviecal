@@ -9,6 +9,22 @@
       "title": "Add watchlist page"
     },
     {
+      "issue": 20,
+      "title": "Establish Playwright smoke-test foundation"
+    },
+    {
+      "issue": 55,
+      "title": "Add Playwright coverage for auth-protected app access"
+    },
+    {
+      "issue": 53,
+      "title": "Add Playwright coverage for authenticated search flow"
+    },
+    {
+      "issue": 54,
+      "title": "Add Playwright coverage for watchlist add/remove flow"
+    },
+    {
       "issue": 2,
       "title": "Add calendar token model"
     },
@@ -39,10 +55,6 @@
     {
       "issue": 19,
       "title": "Add integration tests for Supabase client and TMDb wrapper (mocked)"
-    },
-    {
-      "issue": 20,
-      "title": "Add E2E smoke tests for main user flows (Playwright)"
     },
     {
       "issue": 21,
