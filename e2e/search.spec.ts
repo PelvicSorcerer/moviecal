@@ -18,7 +18,7 @@ test('anonymous search visitors see deterministic results and a sign-in CTA', as
   ).toBeVisible();
 });
 
-test('authenticated visitors can add a deterministic fixture movie to the watchlist', async ({
+test('authenticated visitors can add and remove a deterministic fixture movie through the watchlist flow', async ({
   page,
   seedAuthenticatedSession,
   stubMovieSearch,
@@ -38,6 +38,12 @@ test('authenticated visitors can add a deterministic fixture movie to the watchl
 
   await page.goto('/watchlist');
   await expect(page.getByRole('heading', { name: 'The Matrix' })).toBeVisible();
+  await page.getByRole('button', { name: 'Remove' }).click();
+
+  await expect(
+    page.getByText('Removed The Matrix from your watchlist.'),
+  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Your watchlist is empty' })).toBeVisible();
 });
 
 test('authenticated search shows the loading state while the app endpoint is pending', async ({
