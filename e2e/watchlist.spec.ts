@@ -1,14 +1,41 @@
 import { expect, test } from './test-fixtures';
 
-test('stubbed sign-in reaches the protected watchlist without live credentials', async ({
+test('unauthenticated visitors are redirected away from protected app pages', async ({
+  assertRedirectsToSignIn,
+}) => {
+  await assertRedirectsToSignIn('/watchlist');
+  await assertRedirectsToSignIn('/settings/calendar');
+});
+
+test('stubbed sign-in reaches the intended protected route without live credentials', async ({
   page,
   signInAsTestUser,
 }) => {
-  await signInAsTestUser();
+  await signInAsTestUser('/settings/calendar');
 
-  await expect(page).toHaveURL('/watchlist');
+  await expect(page).toHaveURL('/settings/calendar');
+  await expect(
+    page.getByRole('heading', { name: 'Calendar settings' }),
+  ).toBeVisible();
+  await expect(page.getByRole('main').getByText('e2e@example.com')).toBeVisible();
+});
+
+test('seeded authenticated sessions can open protected app pages directly', async ({
+  page,
+  seedAuthenticatedSession,
+}) => {
+  await seedAuthenticatedSession();
+
+  await page.goto('/watchlist');
+
   await expect(page.getByText('Signed in as')).toContainText('e2e@example.com');
   await expect(page.getByRole('heading', { name: 'Your watchlist is empty' })).toBeVisible();
+
+  await page.goto('/settings/calendar');
+  await expect(
+    page.getByRole('heading', { name: 'Calendar settings' }),
+  ).toBeVisible();
+  await expect(page.getByRole('main').getByText('e2e@example.com')).toBeVisible();
 });
 
 test('seeded watchlist fixtures can be removed deterministically', async ({

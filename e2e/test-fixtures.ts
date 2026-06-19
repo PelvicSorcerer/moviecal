@@ -9,12 +9,26 @@ import {
 } from '../src/lib/e2e/fixtures';
 
 type SmokeFixtures = {
+  assertRedirectsToSignIn(
+    protectedPath: '/watchlist' | '/settings/calendar',
+  ): Promise<void>;
   seedAuthenticatedSession(tmdbIds?: number[]): Promise<void>;
   signInAsTestUser(nextPath?: string): Promise<void>;
   stubMovieSearch(tmdbIds?: number[]): Promise<void>;
 };
 
 export const test = base.extend<SmokeFixtures>({
+  assertRedirectsToSignIn: async ({ page }, use) => {
+    await use(async (protectedPath) => {
+      await page.goto(protectedPath);
+      await expect(page).toHaveURL(
+        new RegExp(`/sign-in\\?next=${encodeURIComponent(protectedPath)}$`),
+      );
+      await expect(
+        page.getByRole('heading', { name: 'Sign in to moviecal' }),
+      ).toBeVisible();
+    });
+  },
   seedAuthenticatedSession: async ({ baseURL, context }, use) => {
     await use(async (tmdbIds = []) => {
       if (!baseURL) {

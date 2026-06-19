@@ -1,6 +1,6 @@
 import { expect, test } from './test-fixtures';
 
-test('anonymous visitors are redirected to sign-in from protected routes', async ({ page }) => {
+test('homepage preserves the unauthenticated watchlist redirect entry point', async ({ page }) => {
   await page.goto('/');
 
   await expect(page.locator('h2')).toContainText(
