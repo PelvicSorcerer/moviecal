@@ -12,6 +12,13 @@ type SmokeFixtures = {
   assertRedirectsToSignIn(
     protectedPath: '/watchlist' | '/settings/calendar',
   ): Promise<void>;
+  stubMovieSearchWithScenario(args?: {
+    delayMs?: number;
+    query?: string;
+    results?: ReturnType<typeof getE2EMovieSummaries>;
+    status?: number;
+    error?: string;
+  }): Promise<void>;
   seedAuthenticatedSession(tmdbIds?: number[]): Promise<void>;
   signInAsTestUser(nextPath?: string): Promise<void>;
   stubMovieSearch(tmdbIds?: number[]): Promise<void>;
@@ -85,6 +92,48 @@ export const test = base.extend<SmokeFixtures>({
 
         await route.fulfill({
           status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ results }),
+        });
+      });
+    });
+  },
+  stubMovieSearchWithScenario: async ({ page }, use) => {
+    await use(async ({
+      delayMs = 0,
+      query,
+      results = getE2EMovieSummaries([603]),
+      status = 200,
+      error,
+    } = {}) => {
+      await page.route('**/api/movies/search**', async (route) => {
+        const requestUrl = new URL(route.request().url());
+        const requestQuery = requestUrl.searchParams.get('q')?.trim() ?? '';
+
+        if (query && requestQuery !== query) {
+          await route.fallback();
+
+          return;
+        }
+
+        if (delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+
+        if (status >= 400) {
+          await route.fulfill({
+            status,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              error: error ?? 'Movie search is unavailable right now.',
+            }),
+          });
+
+          return;
+        }
+
+        await route.fulfill({
+          status,
           contentType: 'application/json',
           body: JSON.stringify({ results }),
         });
