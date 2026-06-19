@@ -1,10 +1,12 @@
-import { headers } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 
 import { requireAuthenticatedPageSession } from '../../../lib/auth/session';
 import {
   buildCalendarSubscriptionUrl,
   getOrCreateCalendarToken,
 } from '../../../lib/calendar-tokens';
+import { syncE2ECalendarToken } from '../../../lib/e2e/calendar-token-state';
+import { E2E_USER } from '../../../lib/e2e/fixtures';
 import { readRequestOrigin } from '../../../lib/request-origin';
 import { createSupabaseCalendarTokenRepository } from '../../../lib/supabase/calendar-tokens';
 import {
@@ -15,17 +17,18 @@ import { rotateCalendarTokenAction } from './actions';
 
 export default async function CalendarSettings() {
   const session = await requireAuthenticatedPageSession('/settings/calendar');
-  const repository = createSupabaseCalendarTokenRepository({
-    adminClient: createServerSupabaseServiceRoleClient(),
-    userClient: createServerSupabaseClient(session.accessToken),
-  });
-  const tokenRow = await getOrCreateCalendarToken({
-    repository,
-    userId: session.user.id,
-  });
+  const token = session.user.id === E2E_USER.id
+    ? syncE2ECalendarToken(await cookies())
+    : (await getOrCreateCalendarToken({
+        repository: createSupabaseCalendarTokenRepository({
+          adminClient: createServerSupabaseServiceRoleClient(),
+          userClient: createServerSupabaseClient(session.accessToken),
+        }),
+        userId: session.user.id,
+      })).token;
   const subscriptionUrl = buildCalendarSubscriptionUrl(
     readRequestOrigin(await headers()),
-    tokenRow.token,
+    token,
   );
 
   return (

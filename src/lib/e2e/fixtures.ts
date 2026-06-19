@@ -1,6 +1,4 @@
 import type { User } from '@supabase/supabase-js';
-import type { NextResponse } from 'next/server';
-
 import {
   createAccessTokenCookieOptions,
   createExpiredCookieOptions,
@@ -11,9 +9,18 @@ import type { WatchlistItem } from '../watchlist';
 
 export const E2E_AUTH_COOKIE = 'moviecal-e2e-auth';
 export const E2E_WATCHLIST_COOKIE = 'moviecal-e2e-watchlist';
+export const E2E_CALENDAR_TOKEN_COOKIE = 'moviecal-e2e-calendar-token';
+const E2E_CALENDAR_TOKEN_PREFIX = 'e2e-calendar-token';
 
 const E2E_AUTHENTICATED_VALUE = 'authenticated';
 const E2E_COOKIE_MAX_AGE_SECONDS = 60 * 60;
+export const E2E_DEFAULT_CALENDAR_TOKEN = 'e2e-calendar-token-initial-1234567890';
+
+interface CookieWriter {
+  cookies: {
+    set(name: string, value: string, options: ReturnType<typeof createAccessTokenCookieOptions>): void;
+  };
+}
 
 export const E2E_USER: User = {
   id: 'e2e-user',
@@ -167,7 +174,25 @@ export function readE2EWatchlistItems(reader: CookieValueReader): WatchlistItem[
   }
 }
 
-export function setE2EAuthCookie(response: NextResponse): void {
+export function readE2ECalendarToken(reader: CookieValueReader): string {
+  if (!isE2ETestModeEnabled()) {
+    return E2E_DEFAULT_CALENDAR_TOKEN;
+  }
+
+  return reader.get(E2E_CALENDAR_TOKEN_COOKIE)?.value ?? E2E_DEFAULT_CALENDAR_TOKEN;
+}
+
+export function createSeededE2ECalendarToken(seed: string): string {
+  return `${E2E_CALENDAR_TOKEN_PREFIX}-${seed}-initial`;
+}
+
+export function createNextE2ECalendarToken(currentToken: string): string {
+  return currentToken.endsWith('-initial')
+    ? `${currentToken.slice(0, -'-initial'.length)}-rotated`
+    : currentToken;
+}
+
+export function setE2EAuthCookie(response: CookieWriter): void {
   response.cookies.set(
     E2E_AUTH_COOKIE,
     E2E_AUTHENTICATED_VALUE,
@@ -176,7 +201,7 @@ export function setE2EAuthCookie(response: NextResponse): void {
 }
 
 export function setE2EWatchlistCookie(
-  response: NextResponse,
+  response: CookieWriter,
   items: WatchlistItem[],
 ): void {
   response.cookies.set(
@@ -186,7 +211,19 @@ export function setE2EWatchlistCookie(
   );
 }
 
-export function clearE2EStateCookies(response: NextResponse): void {
+export function setE2ECalendarTokenCookie(
+  response: CookieWriter,
+  token: string,
+): void {
+  response.cookies.set(
+    E2E_CALENDAR_TOKEN_COOKIE,
+    token,
+    createAccessTokenCookieOptions(E2E_COOKIE_MAX_AGE_SECONDS),
+  );
+}
+
+export function clearE2EStateCookies(response: CookieWriter): void {
   response.cookies.set(E2E_AUTH_COOKIE, '', createExpiredCookieOptions());
   response.cookies.set(E2E_WATCHLIST_COOKIE, '', createExpiredCookieOptions());
+  response.cookies.set(E2E_CALENDAR_TOKEN_COOKIE, '', createExpiredCookieOptions());
 }

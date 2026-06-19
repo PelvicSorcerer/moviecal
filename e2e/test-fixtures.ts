@@ -2,7 +2,9 @@ import { expect, test as base } from '@playwright/test';
 
 import {
   createE2EWatchlistItem,
+  createSeededE2ECalendarToken,
   E2E_AUTH_COOKIE,
+  E2E_CALENDAR_TOKEN_COOKIE,
   E2E_WATCHLIST_COOKIE,
   getE2EMovieSummaries,
   serializeE2EWatchlistItems,
@@ -36,11 +38,18 @@ export const test = base.extend<SmokeFixtures>({
       ).toBeVisible();
     });
   },
-  seedAuthenticatedSession: async ({ baseURL, context }, use) => {
+  seedAuthenticatedSession: async ({ baseURL, context, request }, use) => {
     await use(async (tmdbIds = []) => {
       if (!baseURL) {
         throw new Error('A baseURL is required for Playwright smoke fixtures.');
       }
+
+      const watchlistCookieValue = serializeE2EWatchlistItems(
+        tmdbIds.map((tmdbId) => createE2EWatchlistItem(tmdbId)),
+      );
+      const calendarToken = createSeededE2ECalendarToken(
+        `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      );
 
       await context.addCookies([
         {
@@ -52,14 +61,29 @@ export const test = base.extend<SmokeFixtures>({
         },
         {
           name: E2E_WATCHLIST_COOKIE,
-          value: serializeE2EWatchlistItems(
-            tmdbIds.map((tmdbId) => createE2EWatchlistItem(tmdbId)),
-          ),
+          value: watchlistCookieValue,
+          url: baseURL,
+          httpOnly: true,
+          sameSite: 'Lax',
+        },
+        {
+          name: E2E_CALENDAR_TOKEN_COOKIE,
+          value: calendarToken,
           url: baseURL,
           httpOnly: true,
           sameSite: 'Lax',
         },
       ]);
+
+      await request.get(`${baseURL}/settings/calendar`, {
+        headers: {
+          cookie: [
+            `${E2E_AUTH_COOKIE}=authenticated`,
+            `${E2E_CALENDAR_TOKEN_COOKIE}=${calendarToken}`,
+            `${E2E_WATCHLIST_COOKIE}=${watchlistCookieValue}`,
+          ].join('; '),
+        },
+      });
     });
   },
   signInAsTestUser: async ({ page }, use) => {
