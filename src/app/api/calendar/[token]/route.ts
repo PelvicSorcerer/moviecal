@@ -1,6 +1,7 @@
 import {
   createServerSupabaseServiceRoleClient,
 } from '../../../../lib/supabase/server';
+import { buildCalendarFeed } from '../../../../lib/calendar-feed';
 import { isE2ECalendarTokenActive } from '../../../../lib/e2e/calendar-token-state';
 import {
   E2E_USER,
@@ -8,6 +9,26 @@ import {
 } from '../../../../lib/e2e/fixtures';
 import { resolveCalendarTokenOwner } from '../../../../lib/calendar-tokens';
 import { createSupabaseCalendarTokenRepository } from '../../../../lib/supabase/calendar-tokens';
+import { createSupabaseWatchlistRepository } from '../../../../lib/supabase/watchlist';
+import { listWatchlistItems } from '../../../../lib/watchlist';
+
+function createCalendarTokenRepository() {
+  const adminClient = createServerSupabaseServiceRoleClient();
+
+  return createSupabaseCalendarTokenRepository({
+    adminClient,
+    userClient: adminClient,
+  });
+}
+
+function createWatchlistRepository() {
+  const adminClient = createServerSupabaseServiceRoleClient();
+
+  return createSupabaseWatchlistRepository({
+    adminClient,
+    userClient: adminClient,
+  });
+}
 
 export async function GET(
   _request: Request,
@@ -32,10 +53,7 @@ export async function GET(
     });
   }
 
-  const repository = createSupabaseCalendarTokenRepository({
-    adminClient: createServerSupabaseServiceRoleClient(),
-    userClient: createServerSupabaseServiceRoleClient(),
-  });
+  const repository = createCalendarTokenRepository();
   const ownerId = await resolveCalendarTokenOwner({
     repository,
     token,
@@ -45,12 +63,17 @@ export async function GET(
     return new Response('Not Found', { status: 404 });
   }
 
-  const ics = [
-    'BEGIN:VCALENDAR',
-    'VERSION:2.0',
-    'PRODID:-//moviecal//EN',
-    'END:VCALENDAR'
-  ].join('\r\n');
+  const items = await listWatchlistItems({
+    repository: createWatchlistRepository(),
+    userId: ownerId,
+  });
 
-  return new Response(ics, { headers: { 'Content-Type': 'text/calendar; charset=utf-8' } });
+  const ics = buildCalendarFeed({
+    items,
+    userId: ownerId,
+  });
+
+  return new Response(ics, {
+    headers: { 'Content-Type': 'text/calendar; charset=utf-8' },
+  });
 }
