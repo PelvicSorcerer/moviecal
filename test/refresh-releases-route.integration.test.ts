@@ -110,6 +110,42 @@ describe('refresh releases route', () => {
     expect(upsertMovie).toHaveBeenCalledTimes(2);
   });
 
+  it('allows the Vercel cron GET request shape with bearer auth', async () => {
+    const upsertMovie = vi.fn(async () => ({ id: 42 }));
+
+    mocks.createSupabaseWatchlistRepository.mockReturnValue({
+      listTrackedMovies: vi.fn(async () => [buildMovieRow()]),
+      upsertMovie,
+    });
+    mocks.getMovieDetails.mockResolvedValue({
+      tmdbId: 603,
+      title: 'The Matrix',
+      releaseDate: '1999-03-31',
+      posterPath: null,
+      overview: null,
+      rawJson: { id: 603 },
+    });
+
+    const { GET } = await import('../src/app/api/cron/refresh-releases/route');
+    const response = await GET(
+      new Request('https://moviecal.test/api/cron/refresh-releases', {
+        method: 'GET',
+        headers: {
+          authorization: 'Bearer cron-secret-for-tests',
+          'user-agent': 'vercel-cron/1.0',
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      trackedMovies: 1,
+      refreshedMovies: 1,
+      failedMovies: 0,
+    });
+    expect(upsertMovie).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects unauthorized refresh attempts', async () => {
     const { POST } = await import('../src/app/api/cron/refresh-releases/route');
     const response = await POST(
