@@ -27,8 +27,10 @@ Server-only values:
 3. Create a Vercel project linked to the GitHub repository.
 4. Add required environment variables in Vercel.
 5. Deploy the Next.js app.
-6. Configure Vercel Cron to call `/api/cron/refresh-releases` with `CRON_SECRET` in `Authorization: Bearer <CRON_SECRET>` or the fallback `x-cron-secret` header.
-7. Run post-deploy smoke checks for public pages, authenticated flows, calendar feed, and scheduled refresh protection.
+6. Add the repo's `vercel.json` cron entry so Vercel schedules `GET /api/cron/refresh-releases` at `0 5 * * *` (05:00 UTC daily).
+7. Set `CRON_SECRET` in the Vercel project so Vercel Cron automatically sends `Authorization: Bearer <CRON_SECRET>` to the refresh route.
+8. Keep the fallback `x-cron-secret` header documented only for trusted non-Vercel server-side callers when needed.
+9. Run post-deploy smoke checks for public pages, authenticated flows, calendar feed, and scheduled refresh protection.
 
 ## Security notes
 

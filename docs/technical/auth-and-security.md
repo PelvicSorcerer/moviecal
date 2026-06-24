@@ -30,7 +30,8 @@ Server-only secrets include:
 ## Protecting scheduled jobs
 
 - Protect `/api/cron/refresh-releases` with a secret header or an equivalent trusted scheduler mechanism.
-- The route accepts `Authorization: Bearer <CRON_SECRET>` and a fallback `x-cron-secret` header for trusted server-side schedulers.
+- Vercel Cron invokes the configured path with `GET` and automatically sends `Authorization: Bearer <CRON_SECRET>` when `CRON_SECRET` is set in the project environment.
+- The route accepts `Authorization: Bearer <CRON_SECRET>` and keeps a fallback `x-cron-secret` header for trusted server-side callers outside Vercel Cron.
 - Reject unauthorized refresh attempts.
 - Avoid returning sensitive refresh details to unauthorized callers.
 

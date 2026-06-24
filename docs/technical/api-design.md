@@ -21,7 +21,8 @@ Use Supabase auth for all interactive user-scoped endpoints. Frontend code may u
 
 ## Server-only/protected endpoints
 
-- `POST /api/cron/refresh-releases` — protected endpoint for scheduled release-date refresh. It must be callable only by the configured scheduler or trusted server-side process.
+- `GET /api/cron/refresh-releases` — protected Vercel Cron entrypoint for scheduled release-date refresh. It must be callable only by the configured scheduler or trusted server-side process.
+- `POST /api/cron/refresh-releases` — protected fallback entrypoint for trusted server-side callers that need to trigger the same refresh path outside Vercel Cron.
 
 ## TMDb proxy endpoints
 

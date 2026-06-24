@@ -51,7 +51,7 @@ function createRefreshRepository() {
   });
 }
 
-export async function POST(request: NextRequest) {
+async function handleRefreshRequest(request: NextRequest) {
   try {
     if (!isAuthorizedRequest(request)) {
       return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
@@ -94,4 +94,12 @@ export async function POST(request: NextRequest) {
 
     throw error;
   }
+}
+
+export async function GET(request: NextRequest) {
+  return handleRefreshRequest(request);
+}
+
+export async function POST(request: NextRequest) {
+  return handleRefreshRequest(request);
 }
