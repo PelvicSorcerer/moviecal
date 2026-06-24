@@ -2,7 +2,7 @@
 
 moviecal is a personal movie watchlist web app that lets users search TMDb, save movies to a private watchlist, and subscribe to a private iCalendar (`.ics`) feed compatible with iOS Calendar. The feed provides one all-day event per movie release date and stays up-to-date when release dates change.
 
-Status: Scaffold complete; MVP implementation pending.
+Status: MVP foundation shipped. Local and hosted environments still require real Supabase, TMDb, and cron-secret configuration before authenticated features, calendar feeds, and scheduled refreshes are fully usable.
 
 ## Planned tech stack
 
@@ -16,9 +16,10 @@ Status: Scaffold complete; MVP implementation pending.
 ## Local development
 
 1. Install dependencies: `npm install`
-2. Copy `.env.example` to `.env.local` and fill in local development values.
+2. Copy `.env.example` to `.env.local` and replace the placeholders with disposable or dev-only values.
 3. Start the development server: `npm run dev`
 4. Run the baseline checks before opening a PR: `npm run verify`
+5. Create a disposable Supabase email/password user if you want to exercise authenticated pages locally.
 
 Supabase helper notes:
 
@@ -51,7 +52,27 @@ Local verification commands:
 - `npm run tool:check` is safe to run inside Codex; it redirects the Supabase CLI's writable home to a temp directory for the version check.
 - In this Codex sandbox, `supabase db lint --local` may still be unavailable even with the CLI installed, because Docker is not present and localhost access to the local Supabase Postgres port can be blocked. In that case, use the PR's `supabase-verify` GitHub Actions workflow as the authoritative DB check, or run `npm run db:lint` with `SUPABASE_DB_URL` pointed at a disposable database.
 
-The current application routes are an early scaffold. Product features such as Supabase auth, TMDb search, persistent watchlists, calendar token rotation, and release-date refresh are planned but not implemented yet.
+## Deployment at a glance
+
+- Use `.env.local` only for local development. Do not commit it.
+- Set the same runtime variable names in the Vercel project for Preview and Production deployments:
+  - `NEXT_PUBLIC_SUPABASE_URL`
+  - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+  - `SUPABASE_SERVICE_ROLE_KEY`
+  - `TMDB_API_KEY`
+  - `CRON_SECRET`
+- No separate app base-URL environment variable is required today; calendar subscription URLs are derived from request headers in the deployed environment.
+- Keep real values in hosting-provider secret stores and Supabase/Vercel dashboards, not in the repository.
+- See `docs/technical/deployment-plan.md` for the full deploy runbook and post-deploy smoke checks.
+
+## Current MVP surfaces
+
+The repository now ships the core MVP surfaces needed for deployment validation:
+
+- public home page and sign-in flow
+- authenticated search and watchlist pages
+- calendar settings with token rotation and a tokenized `.ics` feed route
+- protected release-refresh cron endpoint backed by `vercel.json`
 
 ## Documentation
 
