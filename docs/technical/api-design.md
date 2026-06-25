@@ -15,9 +15,10 @@ Use Supabase auth for all interactive user-scoped endpoints. Frontend code may u
 
 ## Authenticated user endpoints
 
-- `GET /api/watchlist` — returns the authenticated user's watchlist with joined movie metadata.
-- `POST /api/watchlist` with `{ tmdb_id }` — adds a movie to the authenticated user's watchlist and creates or updates cached movie metadata as needed.
-- `DELETE /api/watchlist/[id]` — removes one item from the authenticated user's watchlist.
+- `GET /api/watchlist` — returns the authenticated user's personal watchlist with joined movie metadata.
+- `POST /api/watchlist` with `{ tmdb_id }` — adds a movie to the authenticated user's personal watchlist and creates or updates cached movie metadata as needed.
+- `DELETE /api/watchlist/[id]` — removes one item from the authenticated user's personal watchlist.
+- Shared-watchlist endpoints are intentionally deferred. The multi-watchlist schema is the source of truth now, but current API behavior stays personal-watchlist scoped until the later shared-watchlist app-layer issues land.
 
 ## Server-only/protected endpoints
 
@@ -33,4 +34,4 @@ Use Supabase auth for all interactive user-scoped endpoints. Frontend code may u
 
 - Use standard HTTP status codes: `400`, `401`, `403`, `404`, and `500`.
 - Calendar feed returns `404` for unknown tokens to avoid leaking token existence details via authorization differences.
-- API errors must not include secrets, raw service-role keys, TMDb keys, or private calendar tokens.
+- API errors must not include secrets, raw service-role keys, TMDb keys, raw invite tokens, or private calendar tokens.
