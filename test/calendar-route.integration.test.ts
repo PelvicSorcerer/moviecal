@@ -61,20 +61,49 @@ function createCalendarTokenRepository(): CalendarTokenRepository {
 
 function createWatchlistRepository(): WatchlistRepository {
   return {
-    async deleteItemByIdForUser() {
+    async deleteItemByIdForWatchlist() {
       return false;
     },
-    async findItemByMovieIdForUser() {
+    async ensurePersonalWatchlist(userId) {
+      return {
+        id: userId === 'user-1' ? 'personal-watchlist-1' : 'personal-watchlist-2',
+        kind: 'personal',
+        name: 'My watchlist',
+        ownerUserId: userId,
+      };
+    },
+    async findItemByMovieIdForWatchlist() {
       return null;
     },
-    async insertItemForUser() {
+    async getWatchlistAccess(actorUserId, watchlistId) {
+      if (
+        (actorUserId === 'user-1' && watchlistId === 'personal-watchlist-1') ||
+        (actorUserId !== 'user-1' && watchlistId === 'personal-watchlist-2')
+      ) {
+        return {
+          status: 'authorized' as const,
+          watchlist: {
+            id: watchlistId,
+            kind: 'personal' as const,
+            name: 'My watchlist',
+            ownerUserId: actorUserId,
+          },
+          canEdit: true,
+        };
+      }
+
+      return {
+        status: 'forbidden' as const,
+      };
+    },
+    async insertItemForWatchlist() {
       return {
         errorCode: null,
         row: null,
       };
     },
-    async listItemsForUser(userId) {
-      if (userId === 'user-1') {
+    async listItemsForWatchlist(watchlistId) {
+      if (watchlistId === 'personal-watchlist-1') {
         return [
           {
             added_at: '2026-06-20T00:00:00.000Z',
@@ -126,6 +155,9 @@ function createWatchlistRepository(): WatchlistRepository {
           },
         },
       ];
+    },
+    async listWatchlistsForUser() {
+      return [];
     },
     async upsertMovie() {
       return { id: 42 };

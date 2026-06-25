@@ -4,9 +4,9 @@ import { NextRequest, NextResponse } from 'next/server';
 const mocks = vi.hoisted(() => ({
   authenticateApiRequest: vi.fn(),
   createSupabaseWatchlistRepository: vi.fn(),
-  listWatchlistItems: vi.fn(),
-  addWatchlistItem: vi.fn(),
-  removeWatchlistItem: vi.fn(),
+  listPersonalWatchlistItems: vi.fn(),
+  addPersonalWatchlistItem: vi.fn(),
+  removePersonalWatchlistItem: vi.fn(),
   createServerSupabaseClient: vi.fn(),
   createServerSupabaseServiceRoleClient: vi.fn(),
   getMovieDetails: vi.fn(),
@@ -45,9 +45,9 @@ vi.mock('../src/lib/watchlist', async () => {
 
   return {
     ...actual,
-    listWatchlistItems: mocks.listWatchlistItems,
-    addWatchlistItem: mocks.addWatchlistItem,
-    removeWatchlistItem: mocks.removeWatchlistItem,
+    listPersonalWatchlistItems: mocks.listPersonalWatchlistItems,
+    addPersonalWatchlistItem: mocks.addPersonalWatchlistItem,
+    removePersonalWatchlistItem: mocks.removePersonalWatchlistItem,
   };
 });
 
@@ -71,7 +71,7 @@ describe('watchlist routes', () => {
   it('returns the user watchlist from GET /api/watchlist', async () => {
     const { GET } = await import('../src/app/api/watchlist/route');
 
-    mocks.listWatchlistItems.mockResolvedValue([
+    mocks.listPersonalWatchlistItems.mockResolvedValue([
       {
         id: 'watchlist-item-1',
         addedAt: '2026-06-13T05:00:00.000Z',
@@ -107,7 +107,7 @@ describe('watchlist routes', () => {
         },
       ],
     });
-    expect(mocks.listWatchlistItems).toHaveBeenCalledWith({
+    expect(mocks.listPersonalWatchlistItems).toHaveBeenCalledWith({
       repository: { name: 'repository' },
       userId: 'user-1',
     });
@@ -116,7 +116,7 @@ describe('watchlist routes', () => {
   it('returns 201 from POST /api/watchlist when a movie is newly added', async () => {
     const { POST } = await import('../src/app/api/watchlist/route');
 
-    mocks.addWatchlistItem.mockResolvedValue({
+    mocks.addPersonalWatchlistItem.mockResolvedValue({
       created: true,
       item: {
         id: 'watchlist-item-1',
@@ -158,7 +158,7 @@ describe('watchlist routes', () => {
         },
       },
     });
-    expect(mocks.addWatchlistItem).toHaveBeenCalledWith({
+    expect(mocks.addPersonalWatchlistItem).toHaveBeenCalledWith({
       getMovieDetails: mocks.getMovieDetails,
       repository: { name: 'repository' },
       tmdbId: 603,
@@ -183,14 +183,14 @@ describe('watchlist routes', () => {
     await expect(response.json()).resolves.toEqual({
       error: 'A valid tmdb_id is required.',
     });
-    expect(mocks.addWatchlistItem).not.toHaveBeenCalled();
+    expect(mocks.addPersonalWatchlistItem).not.toHaveBeenCalled();
   });
 
   it('returns 404 from DELETE /api/watchlist/[id] for another user item', async () => {
     const { DELETE } = await import('../src/app/api/watchlist/[id]/route');
     const { WatchlistNotFoundError } = await import('../src/lib/watchlist');
 
-    mocks.removeWatchlistItem.mockRejectedValue(
+    mocks.removePersonalWatchlistItem.mockRejectedValue(
       new WatchlistNotFoundError('Watchlist item not found.'),
     );
 
@@ -205,7 +205,7 @@ describe('watchlist routes', () => {
     await expect(response.json()).resolves.toEqual({
       error: 'Watchlist item not found.',
     });
-    expect(mocks.removeWatchlistItem).toHaveBeenCalledWith({
+    expect(mocks.removePersonalWatchlistItem).toHaveBeenCalledWith({
       itemId: 'watchlist-item-2',
       repository: { name: 'repository' },
       userId: 'user-1',

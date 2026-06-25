@@ -9,8 +9,9 @@ import {
   setE2EWatchlistCookie,
 } from '../../../lib/e2e/fixtures';
 import {
-  addWatchlistItem,
-  listWatchlistItems,
+  addPersonalWatchlistItem,
+  listPersonalWatchlistItems,
+  WatchlistAccessError,
   WatchlistDataError,
   WatchlistInputError,
 } from '../../../lib/watchlist';
@@ -44,7 +45,11 @@ function createRepositoryForRequest(
 }
 
 function handleWatchlistError(error: unknown): NextResponse {
-  if (error instanceof WatchlistInputError || error instanceof WatchlistDataError) {
+  if (
+    error instanceof WatchlistAccessError ||
+    error instanceof WatchlistInputError ||
+    error instanceof WatchlistDataError
+  ) {
     return NextResponse.json({ error: error.message }, { status: error.status });
   }
 
@@ -76,7 +81,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const items = await listWatchlistItems({
+    const items = await listPersonalWatchlistItems({
       repository: createRepositoryForRequest(auth),
       userId: auth.user.id,
     });
@@ -147,7 +152,7 @@ export async function POST(request: NextRequest) {
       return response;
     }
 
-    const result = await addWatchlistItem({
+    const result = await addPersonalWatchlistItem({
       getMovieDetails,
       repository: createRepositoryForRequest(auth),
       tmdbId,

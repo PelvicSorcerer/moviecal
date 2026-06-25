@@ -7,7 +7,8 @@ import { createServerSupabaseClient, createServerSupabaseServiceRoleClient } fro
 import { createSupabaseWatchlistRepository } from '../../lib/supabase/watchlist';
 import { SupabaseEnvironmentError } from '../../lib/supabase/env';
 import {
-  listWatchlistItems,
+  listPersonalWatchlistItems,
+  WatchlistAccessError,
   WatchlistDataError,
   type WatchlistItem,
 } from '../../lib/watchlist';
@@ -27,7 +28,7 @@ export default async function WatchlistPage() {
     items = readE2EWatchlistItems(await cookies());
   } else {
     try {
-      items = await listWatchlistItems({
+      items = await listPersonalWatchlistItems({
         repository: createSupabaseWatchlistRepository({
           userClient: createServerSupabaseClient(accessToken),
           adminClient: createServerSupabaseServiceRoleClient(),
@@ -38,6 +39,8 @@ export default async function WatchlistPage() {
       if (error instanceof SupabaseEnvironmentError) {
         errorMessage =
           'Watchlist access is unavailable until Supabase is configured for this environment.';
+      } else if (error instanceof WatchlistAccessError) {
+        errorMessage = error.message;
       } else if (error instanceof WatchlistDataError) {
         errorMessage = error.message;
       } else {

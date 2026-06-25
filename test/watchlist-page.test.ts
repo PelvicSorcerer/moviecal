@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   createServerSupabaseClient: vi.fn(),
   createServerSupabaseServiceRoleClient: vi.fn(),
   createSupabaseWatchlistRepository: vi.fn(),
-  listWatchlistItems: vi.fn(),
+  listPersonalWatchlistItems: vi.fn(),
 }));
 
 vi.mock('../src/lib/auth/session', () => ({
@@ -29,7 +29,7 @@ vi.mock('../src/lib/watchlist', async () => {
 
   return {
     ...actual,
-    listWatchlistItems: mocks.listWatchlistItems,
+    listPersonalWatchlistItems: mocks.listPersonalWatchlistItems,
   };
 });
 
@@ -55,7 +55,7 @@ describe('watchlist page', () => {
   });
 
   it('renders the signed-in user watchlist from a user-scoped repository client', async () => {
-    mocks.listWatchlistItems.mockResolvedValue([
+    mocks.listPersonalWatchlistItems.mockResolvedValue([
       {
         id: 'watchlist-item-1',
         addedAt: '2026-06-13T05:00:00.000Z',
@@ -83,14 +83,14 @@ describe('watchlist page', () => {
       userClient: { name: 'user-client' },
       adminClient: { name: 'admin-client' },
     });
-    expect(mocks.listWatchlistItems).toHaveBeenCalledWith({
+    expect(mocks.listPersonalWatchlistItems).toHaveBeenCalledWith({
       repository: { name: 'repository' },
       userId: 'user-1',
     });
   });
 
   it('renders an empty state when the user has no saved movies', async () => {
-    mocks.listWatchlistItems.mockResolvedValue([]);
+    mocks.listPersonalWatchlistItems.mockResolvedValue([]);
 
     const { default: WatchlistPage } = await import('../src/app/watchlist/page');
     const markup = renderToStaticMarkup(await WatchlistPage());
@@ -100,7 +100,7 @@ describe('watchlist page', () => {
   });
 
   it('renders a clear error state when loading fails', async () => {
-    mocks.listWatchlistItems.mockRejectedValue(
+    mocks.listPersonalWatchlistItems.mockRejectedValue(
       new Error('Could not load your watchlist right now.'),
     );
 

@@ -24,26 +24,49 @@ function createRepository(
   overrides: Partial<WatchlistRepository> = {},
 ): WatchlistRepository {
   return {
-    async listItemsForUser() {
-      return [];
+    async deleteItemByIdForWatchlist() {
+      return true;
     },
-    async listTrackedMovies() {
-      return [];
+    async ensurePersonalWatchlist() {
+      return {
+        id: 'watchlist-1',
+        kind: 'personal',
+        name: 'My watchlist',
+        ownerUserId: 'user-1',
+      };
     },
-    async upsertMovie() {
-      return { id: 42 };
+    async findItemByMovieIdForWatchlist() {
+      return null;
     },
-    async insertItemForUser() {
+    async getWatchlistAccess() {
+      return {
+        status: 'authorized',
+        watchlist: {
+          id: 'watchlist-1',
+          kind: 'personal',
+          name: 'My watchlist',
+          ownerUserId: 'user-1',
+        },
+        canEdit: true,
+      };
+    },
+    async insertItemForWatchlist() {
       return {
         row: null,
         errorCode: null,
       };
     },
-    async findItemByMovieIdForUser() {
-      return null;
+    async listItemsForWatchlist() {
+      return [];
     },
-    async deleteItemByIdForUser() {
-      return true;
+    async listTrackedMovies() {
+      return [];
+    },
+    async listWatchlistsForUser() {
+      return [];
+    },
+    async upsertMovie() {
+      return { id: 42 };
     },
     ...overrides,
   };

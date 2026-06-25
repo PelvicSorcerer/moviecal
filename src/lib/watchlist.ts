@@ -16,6 +16,15 @@ export interface WatchlistItem {
   movie: WatchlistMovie;
 }
 
+export type WatchlistKind = 'personal' | 'shared';
+
+export interface WatchlistSummary {
+  id: string;
+  kind: WatchlistKind;
+  name: string;
+  ownerUserId: string;
+}
+
 export interface WatchlistMovieRow {
   id: number;
   raw_json: Json;
@@ -31,18 +40,38 @@ export interface WatchlistRow {
   movie: WatchlistMovieRow | null;
 }
 
+export interface AuthorizedWatchlistAccess {
+  canEdit: boolean;
+  status: 'authorized';
+  watchlist: WatchlistSummary;
+}
+
+export type WatchlistAccessResult =
+  | AuthorizedWatchlistAccess
+  | { status: 'forbidden' }
+  | { status: 'not_found' };
+
 export interface WatchlistRepository {
-  deleteItemByIdForUser(userId: string, itemId: string): Promise<boolean>;
-  findItemByMovieIdForUser(
-    userId: string,
+  deleteItemByIdForWatchlist(
+    watchlistId: string,
+    itemId: string,
+  ): Promise<boolean>;
+  ensurePersonalWatchlist(userId: string): Promise<WatchlistSummary>;
+  findItemByMovieIdForWatchlist(
+    watchlistId: string,
     movieId: number,
   ): Promise<WatchlistRow | null>;
-  insertItemForUser(
-    userId: string,
+  getWatchlistAccess(
+    actorUserId: string,
+    watchlistId: string,
+  ): Promise<WatchlistAccessResult>;
+  insertItemForWatchlist(
+    watchlistId: string,
     movieId: number,
   ): Promise<{ errorCode: string | null; row: WatchlistRow | null }>;
-  listItemsForUser(userId: string): Promise<WatchlistRow[]>;
+  listItemsForWatchlist(watchlistId: string): Promise<WatchlistRow[]>;
   listTrackedMovies(): Promise<WatchlistMovieRow[]>;
+  listWatchlistsForUser(userId: string): Promise<WatchlistSummary[]>;
   upsertMovie(detail: NormalizedMovieDetail): Promise<{ id: number }>;
 }
 
@@ -61,6 +90,18 @@ export class WatchlistNotFoundError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'WatchlistNotFoundError';
+  }
+}
+
+export class WatchlistAccessError extends Error {
+  readonly status = 403;
+
+  constructor(
+    message: string,
+    readonly reason: 'forbidden' | 'not_found' = 'forbidden',
+  ) {
+    super(message);
+    this.name = 'WatchlistAccessError';
   }
 }
 
@@ -121,26 +162,39 @@ export function mapWatchlistRow(row: WatchlistRow): WatchlistItem {
 }
 
 export async function listWatchlistItems(args: {
+  actorUserId: string;
   repository: WatchlistRepository;
-  userId: string;
+  watchlistId: string;
 }): Promise<WatchlistItem[]> {
-  const rows = await args.repository.listItemsForUser(args.userId);
+  await requireWatchlistAccess({
+    actorUserId: args.actorUserId,
+    repository: args.repository,
+    watchlistId: args.watchlistId,
+  });
+  const rows = await args.repository.listItemsForWatchlist(args.watchlistId);
 
   return rows.map(mapWatchlistRow);
 }
 
 export async function addWatchlistItem(args: {
+  actorUserId: string;
   getMovieDetails(tmdbId: number): Promise<NormalizedMovieDetail>;
   repository: WatchlistRepository;
   tmdbId: number;
-  userId: string;
+  watchlistId: string;
 }): Promise<AddWatchlistItemResult> {
   assertTmdbId(args.tmdbId);
+  const watchlistAccess = await requireWatchlistAccess({
+    actorUserId: args.actorUserId,
+    repository: args.repository,
+    requireEdit: true,
+    watchlistId: args.watchlistId,
+  });
 
   const detail = await args.getMovieDetails(args.tmdbId);
   const movie = await args.repository.upsertMovie(detail);
-  const insertResult = await args.repository.insertItemForUser(
-    args.userId,
+  const insertResult = await args.repository.insertItemForWatchlist(
+    watchlistAccess.watchlist.id,
     movie.id,
   );
 
@@ -152,8 +206,8 @@ export async function addWatchlistItem(args: {
   }
 
   if (insertResult.errorCode === '23505') {
-    const existingRow = await args.repository.findItemByMovieIdForUser(
-      args.userId,
+    const existingRow = await args.repository.findItemByMovieIdForWatchlist(
+      watchlistAccess.watchlist.id,
       movie.id,
     );
 
@@ -169,16 +223,101 @@ export async function addWatchlistItem(args: {
 }
 
 export async function removeWatchlistItem(args: {
+  actorUserId: string;
   itemId: string;
   repository: WatchlistRepository;
-  userId: string;
+  watchlistId: string;
 }): Promise<void> {
-  const deleted = await args.repository.deleteItemByIdForUser(
-    args.userId,
+  const watchlistAccess = await requireWatchlistAccess({
+    actorUserId: args.actorUserId,
+    repository: args.repository,
+    requireEdit: true,
+    watchlistId: args.watchlistId,
+  });
+  const deleted = await args.repository.deleteItemByIdForWatchlist(
+    watchlistAccess.watchlist.id,
     args.itemId,
   );
 
   if (!deleted) {
     throw new WatchlistNotFoundError('Watchlist item not found.');
   }
+}
+
+export async function listPersonalWatchlistItems(args: {
+  repository: WatchlistRepository;
+  userId: string;
+}): Promise<WatchlistItem[]> {
+  const watchlist = await args.repository.ensurePersonalWatchlist(args.userId);
+
+  return listWatchlistItems({
+    actorUserId: args.userId,
+    repository: args.repository,
+    watchlistId: watchlist.id,
+  });
+}
+
+export async function addPersonalWatchlistItem(args: {
+  getMovieDetails(tmdbId: number): Promise<NormalizedMovieDetail>;
+  repository: WatchlistRepository;
+  tmdbId: number;
+  userId: string;
+}): Promise<AddWatchlistItemResult> {
+  const watchlist = await args.repository.ensurePersonalWatchlist(args.userId);
+
+  return addWatchlistItem({
+    actorUserId: args.userId,
+    getMovieDetails: args.getMovieDetails,
+    repository: args.repository,
+    tmdbId: args.tmdbId,
+    watchlistId: watchlist.id,
+  });
+}
+
+export async function removePersonalWatchlistItem(args: {
+  itemId: string;
+  repository: WatchlistRepository;
+  userId: string;
+}): Promise<void> {
+  const watchlist = await args.repository.ensurePersonalWatchlist(args.userId);
+
+  return removeWatchlistItem({
+    actorUserId: args.userId,
+    itemId: args.itemId,
+    repository: args.repository,
+    watchlistId: watchlist.id,
+  });
+}
+
+export async function listUserWatchlists(args: {
+  repository: WatchlistRepository;
+  userId: string;
+}): Promise<WatchlistSummary[]> {
+  return args.repository.listWatchlistsForUser(args.userId);
+}
+
+async function requireWatchlistAccess(args: {
+  actorUserId: string;
+  repository: WatchlistRepository;
+  requireEdit?: boolean;
+  watchlistId: string;
+}): Promise<AuthorizedWatchlistAccess> {
+  const access = await args.repository.getWatchlistAccess(
+    args.actorUserId,
+    args.watchlistId,
+  );
+
+  if (access.status === 'not_found') {
+    throw new WatchlistNotFoundError('Watchlist not found.');
+  }
+
+  if (access.status === 'forbidden') {
+    throw new WatchlistAccessError('Watchlist access denied.');
+  }
+
+  if (args.requireEdit && !access.canEdit) {
+    throw new WatchlistAccessError('Watchlist access denied.');
+  }
+
+  return access;
 }

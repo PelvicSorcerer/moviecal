@@ -6,7 +6,11 @@ import {
   readE2EWatchlistItems,
   setE2EWatchlistCookie,
 } from '../../../../lib/e2e/fixtures';
-import { removeWatchlistItem, WatchlistNotFoundError } from '../../../../lib/watchlist';
+import {
+  removePersonalWatchlistItem,
+  WatchlistAccessError,
+  WatchlistNotFoundError,
+} from '../../../../lib/watchlist';
 import {
   createServerSupabaseClient,
   createServerSupabaseServiceRoleClient,
@@ -52,7 +56,7 @@ export async function DELETE(
   }
 
   try {
-    await removeWatchlistItem({
+    await removePersonalWatchlistItem({
       itemId: id,
       repository: createSupabaseWatchlistRepository({
         userClient: createServerSupabaseClient(auth.accessToken),
@@ -63,7 +67,10 @@ export async function DELETE(
 
     return applyAuthCookies(auth, NextResponse.json({ deleted: true, id }));
   } catch (error) {
-    if (error instanceof WatchlistNotFoundError) {
+    if (
+      error instanceof WatchlistAccessError ||
+      error instanceof WatchlistNotFoundError
+    ) {
       return applyAuthCookies(
         auth,
         NextResponse.json({ error: error.message }, { status: error.status }),
