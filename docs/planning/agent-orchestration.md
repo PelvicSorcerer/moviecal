@@ -67,6 +67,7 @@ These states can be represented with comments, project fields, or additional lab
 11. Include the exact checkpoint mechanism the worker should use in its own thread so it does not have to guess how to surface status.
 12. Include a heartbeat interval so the worker reports progress proactively instead of waiting to be asked for status.
 13. While any worker is active, every orchestrator response cycle should include an explicit `wait_agent` step before concluding the turn or deciding that no update is available.
+14. Run post-merge handoff checks from an attached local branch that tracks `origin/master`; the branch name may be `master`, `orchestrator/live`, or another local name.
 
 ## Human local testing loop
 
@@ -106,7 +107,7 @@ When a worker is in flight, the orchestrator should not rely on passive visibili
 
 Run this after a worker PR lands:
 
-1. Confirm `master` contains the merged work.
+1. Confirm an attached local branch tracking `origin/master` contains the merged work.
 2. Confirm the completed issue is closed.
 3. Confirm no duplicate or stale PR remains open for the same work.
 4. Re-evaluate the next dependency-correct issue in `docs/planning/open-issue-order.json`.

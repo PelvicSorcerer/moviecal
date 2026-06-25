@@ -30,6 +30,7 @@ This repository uses GitHub issues to scope implementation work for humans and a
 - Use `agent-ready` only for the single issue that a fresh worker should implement next.
 - Re-evaluate `agent-ready` immediately after merge, not only before the next worker starts.
 - Prefer one orchestrator session between worker sessions. That session owns queue cleanup, dependency checks, and next-issue promotion.
+- Run post-merge orchestrator audits from an attached local branch that tracks `origin/master`; the local branch name does not need to be `master`.
 - When no issue is actually ready, leave the queue empty and document the blocker in GitHub instead of forcing a guess.
 - Use `bash scripts/agent-check.sh` before worker implementation and `bash scripts/agent-handoff-check.sh` after merge or when auditing repo readiness.
 
@@ -51,14 +52,15 @@ This repository uses GitHub issues to scope implementation work for humans and a
 ## Orchestrator checklist
 
 1. Audit open issues and PRs on the default branch.
-2. Confirm the dependency-correct next issue from the current repo and issue state.
-3. Ensure exactly one open issue is labeled `agent-ready`, or explicitly record why the queue is blocked.
-4. Check that the promoted issue contains docs, acceptance criteria, verification steps, and security notes where needed.
-5. Hand the worker a clean brief instead of expecting it to infer sequencing from planning docs alone.
-6. When dispatching a worker, include the exact checkpoint mechanism it should use in its own thread, not just a generic instruction to "check in."
-7. Use `docs/planning/worker-dispatch-prompt.md` when dispatching a worker so the first-step check-in, worker-thread checkpoint reporting, stop points, and single-issue ownership are explicit.
-8. Include a heartbeat interval in the worker brief so the worker reports status proactively if it keeps working without reaching another formal checkpoint.
-9. Require a startup checkpoint that confirms the issue number, branch name, first files/areas to inspect, and whether a fresh worktree started on detached `HEAD` matching `origin/master`.
-10. While a worker is active, treat `wait_agent` as part of every orchestrator response cycle so worker checkpoints are actively collected rather than passively assumed.
-11. Do not stop supervision after one short poll. Continue polling until the worker reaches the next explicit gate: ready-for-review, PR-opened/publish, blocker, or explicit completion.
-12. Once the worker confirms the branch push during publish, verify PR state directly on GitHub instead of waiting only on worker narration.
+2. Run the audit from an attached local branch that tracks `origin/master`, even if the branch name is something like `orchestrator/live`.
+3. Confirm the dependency-correct next issue from the current repo and issue state.
+4. Ensure exactly one open issue is labeled `agent-ready`, or explicitly record why the queue is blocked.
+5. Check that the promoted issue contains docs, acceptance criteria, verification steps, and security notes where needed.
+6. Hand the worker a clean brief instead of expecting it to infer sequencing from planning docs alone.
+7. When dispatching a worker, include the exact checkpoint mechanism it should use in its own thread, not just a generic instruction to "check in."
+8. Use `docs/planning/worker-dispatch-prompt.md` when dispatching a worker so the first-step check-in, worker-thread checkpoint reporting, stop points, and single-issue ownership are explicit.
+9. Include a heartbeat interval in the worker brief so the worker reports status proactively if it keeps working without reaching another formal checkpoint.
+10. Require a startup checkpoint that confirms the issue number, branch name, first files/areas to inspect, and whether a fresh worktree started on detached `HEAD` matching `origin/master`.
+11. While a worker is active, treat `wait_agent` as part of every orchestrator response cycle so worker checkpoints are actively collected rather than passively assumed.
+12. Do not stop supervision after one short poll. Continue polling until the worker reaches the next explicit gate: ready-for-review, PR-opened/publish, blocker, or explicit completion.
+13. Once the worker confirms the branch push during publish, verify PR state directly on GitHub instead of waiting only on worker narration.

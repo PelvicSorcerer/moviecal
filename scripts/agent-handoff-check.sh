@@ -28,13 +28,20 @@ if ! gh auth status >/dev/null 2>&1; then
 fi
 
 default_branch=$(gh repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name)
-current_branch=$(git rev-parse --abbrev-ref HEAD)
+current_branch=$(git branch --show-current)
+upstream_branch=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)
 
 echo "Repository: $repo (default branch: $default_branch)"
 echo "Local branch: $current_branch"
+echo "Upstream: ${upstream_branch:-<none>}"
 
-if [ "$current_branch" != "$default_branch" ]; then
-  echo "Handoff audits should run from the default branch after merge." >&2
+if [ -z "$current_branch" ]; then
+  echo "Handoff audits should run from an attached local branch, not detached HEAD." >&2
+  exit 1
+fi
+
+if [ "$upstream_branch" != "origin/master" ]; then
+  echo "Handoff audits should run from a local branch that tracks origin/master after merge." >&2
   exit 1
 fi
 

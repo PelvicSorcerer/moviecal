@@ -8,7 +8,8 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 - Treat GitHub issue state as the operational source of truth when it conflicts with planning docs.
 - Do not start feature work from detached `HEAD`; branch from `master`.
 - Branch name format: `agent/<issue-number>-<short-slug>`.
-- Governance or queue-maintenance sessions should branch from `master` with a `docs/` or `chore/` prefix and must not mix feature delivery into the same PR.
+- Governance or queue-maintenance changes should stay separate from feature delivery. Use a `docs/` or `chore/` branch for governance PRs; the persistent orchestrator worktree itself may remain on an attached local branch that tracks `origin/master`.
+- Orchestrator audits after merge should run from an attached local branch that tracks `origin/master`; the local branch name does not need to be `master`.
 
 ## Required preflight
 
@@ -35,10 +36,10 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 
 ## Handoff contract
 
-- After an implementation PR merges, check `master`, confirm the merged issue is closed, and reconcile the next queue state before declaring the repo ready again.
+- After an implementation PR merges, check an attached local branch that tracks `origin/master`, confirm the merged issue is closed, and reconcile the next queue state before declaring the repo ready again.
 - Before an implementation branch is marked ready for review, the orchestrator should collect the worker's ready-for-review checkpoint and hand the human tester an issue-specific checklist derived from `docs/planning/manual-testing-checklist-template.md`.
 - A ready handoff means:
-  - `master` contains the merged change.
+  - a local branch tracking `origin/master` contains the merged change.
   - there are no stray open PRs for the same issue.
   - exactly one open issue is labeled `agent-ready`, unless the queue is intentionally blocked.
   - the promoted issue has current acceptance criteria, verification steps, and security notes when applicable.
