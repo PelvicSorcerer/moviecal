@@ -9,6 +9,7 @@ This repository uses GitHub issues to scope implementation work for humans and a
 - If multiple issues are labeled `agent-ready`, stop and reconcile the queue before handing the repo to a new agent. The default should be exactly one clearly next implementation issue.
 - If zero issues are labeled `agent-ready`, treat the repo as not ready for a fresh implementation agent until an orchestrator promotes the next issue or records a blocker.
 - Treat current GitHub issue state as authoritative when it conflicts with planning docs.
+- If an issue has been open through later merged feature work, spot-check the current repo against the live issue acceptance criteria before implementing it. Close or relabel stale issues instead of producing a no-op PR.
 - The issue should include acceptance criteria and verification steps.
 - The issue should be small enough for one focused PR.
 - Issues touching auth, database access, calendar feeds, scheduled jobs, or secrets must include a security note.
@@ -57,4 +58,7 @@ This repository uses GitHub issues to scope implementation work for humans and a
 6. When dispatching a worker, include the exact checkpoint mechanism it should use in its own thread, not just a generic instruction to "check in."
 7. Use `docs/planning/worker-dispatch-prompt.md` when dispatching a worker so the first-step check-in, worker-thread checkpoint reporting, stop points, and single-issue ownership are explicit.
 8. Include a heartbeat interval in the worker brief so the worker reports status proactively if it keeps working without reaching another formal checkpoint.
-9. While a worker is active, treat `wait_agent` as part of every orchestrator response cycle so worker checkpoints are actively collected rather than passively assumed.
+9. Require a startup checkpoint that confirms the issue number, branch name, first files/areas to inspect, and whether a fresh worktree started on detached `HEAD` matching `origin/master`.
+10. While a worker is active, treat `wait_agent` as part of every orchestrator response cycle so worker checkpoints are actively collected rather than passively assumed.
+11. Do not stop supervision after one short poll. Continue polling until the worker reaches the next explicit gate: ready-for-review, PR-opened/publish, blocker, or explicit completion.
+12. Once the worker confirms the branch push during publish, verify PR state directly on GitHub instead of waiting only on worker narration.

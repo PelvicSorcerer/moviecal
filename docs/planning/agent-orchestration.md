@@ -52,19 +52,21 @@ These states can be represented with comments, project fields, or additional lab
 2. Confirm whether an implementation issue just merged or whether the queue is already idle.
 3. Inspect open issues against dependency order, issue comments, and blocking notes.
 4. Use `docs/planning/open-issue-order.json` to identify the earliest still-open implementation issue, then confirm its blocker notes are clear.
-5. Promote exactly one issue to `agent-ready` only if it is current, unblocked, and small enough for one PR.
-6. If no issue qualifies, leave the queue unready and record why.
-7. Generate a worker brief with:
+5. If that issue has remained open through later merged feature work, do a quick repo-state spot check against the live acceptance criteria before promotion so stale issues are reconciled instead of handed to a worker.
+6. Promote exactly one issue to `agent-ready` only if it is current, unblocked, and small enough for one PR.
+7. If no issue qualifies, leave the queue unready and record why.
+8. Generate a worker brief with:
    - issue number and title
    - branch naming rule
    - docs to read first
    - exact verification commands
    - a human local testing checklist to be used once the worker branch is ready for manual verification
    - known constraints or security notes
-8. Use `docs/planning/worker-dispatch-prompt.md` as the default worker handoff template so reporting cadence, role boundaries, and stop points are explicit.
-9. Include the exact checkpoint mechanism the worker should use in its own thread so it does not have to guess how to surface status.
-10. Include a heartbeat interval so the worker reports progress proactively instead of waiting to be asked for status.
-11. While any worker is active, every orchestrator response cycle should include an explicit `wait_agent` step before concluding the turn or deciding that no update is available.
+9. Require a startup checkpoint that confirms the issue number, branch name, first files or areas to inspect, and whether a fresh worktree started on detached `HEAD` matching `origin/master`.
+10. Use `docs/planning/worker-dispatch-prompt.md` as the default worker handoff template so reporting cadence, role boundaries, and stop points are explicit.
+11. Include the exact checkpoint mechanism the worker should use in its own thread so it does not have to guess how to surface status.
+12. Include a heartbeat interval so the worker reports progress proactively instead of waiting to be asked for status.
+13. While any worker is active, every orchestrator response cycle should include an explicit `wait_agent` step before concluding the turn or deciding that no update is available.
 
 ## Human local testing loop
 
@@ -95,7 +97,10 @@ When a worker is in flight, the orchestrator should not rely on passive visibili
 - The worker emits checkpoints in its own thread.
 - The orchestrator collects those checkpoints with `wait_agent`.
 - Every orchestrator response while a worker is active should include a `wait_agent` call unless the worker has already reached a final stop point and no longer needs supervision.
+- Do not stop after one immediate poll or one short follow-up read. Continue polling until the worker reaches the next explicit gate: ready-for-review, PR-opened or publish, blocker, or explicit completion.
+- Do not send a definitive final-style status response while the worker is still active unless the orchestrator is genuinely blocked and needs human input.
 - Heartbeat intervals in the worker brief should guide how long the orchestrator waits before polling again.
+- Once the worker confirms the branch push during publish, treat publish as GitHub-led: verify the PR directly on GitHub instead of waiting only on the worker thread to narrate the final publish state.
 
 ## Post-merge handoff checklist
 
@@ -142,6 +147,7 @@ Mitigation:
 
 - compare the issue against `docs/planning/recommended-issue-sequence.md`
 - read issue comments for blocker notes before promotion
+- spot-check the current repo against the live issue acceptance criteria when the issue may have gone stale through later merged work
 - prefer blocking the queue over promoting speculative work
 
 ## Minimal automation boundary

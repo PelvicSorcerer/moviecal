@@ -14,6 +14,7 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 
 - Read `.github/copilot-instructions.md` and the docs linked from the selected issue.
 - Confirm the issue is still open, unblocked, and still the only `agent-ready` issue.
+- If the issue has been open across later merged feature work, spot-check current repo state against the live acceptance criteria before dispatching a worker so stale `agent-ready` issues are reconciled instead of implemented with a no-op PR.
 - Confirm the required environment/tooling for that issue exists before coding.
 - Stop and escalate if blocked on secrets, auth, external infrastructure, conflicting issue state, or unclear acceptance criteria.
 
@@ -23,6 +24,8 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 - The orchestrator owns queue hygiene: issue triage, dependency checks, `agent-ready` promotion/demotion, and post-merge handoff.
 - The orchestrator also owns the human-testing handoff: collecting the worker's ready-for-review checkpoint with `wait_agent`, providing an issue-specific manual testing checklist, and deciding when the issue is ready to advance from implementation to review.
 - While a worker session is active, the orchestrator must actively collect worker checkpoints with `wait_agent` rather than assuming they will appear without polling.
+- After every substantive orchestrator-to-worker instruction, continue the supervision loop until the worker reaches the next explicit gate: ready-for-review, PR-opened/publish, blocker, or explicit completion.
+- Do not stop at a polished status summary while a worker is still active; stay in supervision mode until the real gate, blocker, or full review/merge/handoff cycle is complete.
 - The worker owns exactly one implementation issue, one focused branch, verification, and PR delivery.
 - Do not let a worker session self-assign a second implementation issue after finishing the first. Return control to the orchestrator step first.
 - The orchestrator should prefer promoting the next dependency-correct issue immediately after a worker issue lands so the repo never sits in an ambiguous "done but not ready" state.
@@ -63,5 +66,6 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 
 - Use dedicated prep/governance sessions for repo hardening only.
 - Use a fresh session for each implementation issue.
+- When using a fresh worker worktree, verify the starting commit first. If the worker starts on detached `HEAD`, confirm that commit matches `origin/master` and create the issue branch immediately from that verified commit.
 - Keep PR scope to one issue unless the issue explicitly says otherwise.
 - After governance changes, update the queue guidance docs and issue templates in the same PR when they change operator behavior.
