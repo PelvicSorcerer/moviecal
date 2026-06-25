@@ -1,64 +1,28 @@
 {
   "queue": [
     {
-      "issue": 16,
-      "title": "Add watchlist database operations"
+      "issue": 69,
+      "title": "Add multi-watchlist schema and migrate personal watchlists"
     },
     {
-      "issue": 13,
-      "title": "Add watchlist page"
+      "issue": 70,
+      "title": "Generalize watchlist domain and repository helpers for list-scoped access"
     },
     {
-      "issue": 20,
-      "title": "Establish Playwright smoke-test foundation"
+      "issue": 71,
+      "title": "Add shared watchlist creation and watchlist overview UI"
     },
     {
-      "issue": 55,
-      "title": "Add Playwright coverage for auth-protected app access"
+      "issue": 72,
+      "title": "Add shared watchlist invite-link acceptance and membership management"
     },
     {
-      "issue": 53,
-      "title": "Add Playwright coverage for authenticated search flow"
+      "issue": 73,
+      "title": "Add shared watchlist detail page and target-aware add/remove flow"
     },
     {
-      "issue": 54,
-      "title": "Add Playwright coverage for watchlist add/remove flow"
-    },
-    {
-      "issue": 2,
-      "title": "Add calendar token model"
-    },
-    {
-      "issue": 4,
-      "title": "Add iCalendar feed generator"
-    },
-    {
-      "issue": 5,
-      "title": "Add calendar feed endpoint"
-    },
-    {
-      "issue": 12,
-      "title": "Add scheduled release-date refresh endpoint"
-    },
-    {
-      "issue": 17,
-      "title": "Add Vercel Cron configuration"
-    },
-    {
-      "issue": 15,
-      "title": "Add deployment documentation"
-    },
-    {
-      "issue": 18,
-      "title": "Add unit tests for core utilities and iCalendar generator"
-    },
-    {
-      "issue": 19,
-      "title": "Add integration tests for Supabase client and TMDb wrapper (mocked)"
-    },
-    {
-      "issue": 21,
-      "title": "Integrate tests into CI verify workflow"
+      "issue": 74,
+      "title": "Aggregate shared watchlists into calendar feeds and add shared-watchlist regressions"
     }
   ]
 }
