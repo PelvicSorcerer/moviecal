@@ -16,7 +16,8 @@ Role boundaries:
 
 First step:
 - Before doing any substantive work, reply in your own thread with a short acknowledgment of this assignment.
-- Immediately after that acknowledgment, emit the checkpoint in your own thread so the orchestrator can collect it through its polling/wait loop before implementation starts.
+- Immediately after that acknowledgment, emit the startup checkpoint in your own thread so the orchestrator can collect it through its polling/wait loop before implementation starts.
+- If the fresh worktree starts on detached `HEAD`, confirm whether that commit matches `origin/master`, then create the issue branch immediately from that verified commit.
 
 Reporting path:
 - Orchestrator thread or destination: [ORCHESTRATOR_DESTINATION]
@@ -67,13 +68,19 @@ Worker reporting contract:
 
 Required checkpoints to emit in your own worker thread for orchestrator collection:
 1. Initial acknowledgment before substantive work starts.
-2. Planned file targets once you have read the required docs and understand the task shape.
-3. Any blocker, ambiguity, missing prerequisite, or request for orchestrator input. Stop after reporting the blocker.
-4. Ready-for-review checkpoint after implementation and verification are complete, but before opening or updating the PR if the orchestrator asked to review first.
+2. Startup checkpoint immediately after the acknowledgment, including:
+   - issue number
+   - branch name
+   - first files or areas you will inspect
+   - whether the fresh worktree started on detached `HEAD`
+   - whether that starting commit matches `origin/master`
+3. Planned file targets once you have read the required docs and understand the task shape.
+4. Any blocker, ambiguity, missing prerequisite, or request for orchestrator input. Stop after reporting the blocker.
+5. Ready-for-review checkpoint after implementation and verification are complete, but before opening or updating the PR if the orchestrator asked to review first.
    - Include the issue-specific manual local testing checklist in this checkpoint in your own worker thread so the orchestrator can collect it with `wait_agent`.
-5. PR-opened checkpoint immediately after creating the PR, including PR number, URL, branch name, changed files, and verification run.
-6. Any time you need the orchestrator to make a decision about scope, sequencing, or approval.
-7. Heartbeat checkpoint whenever the heartbeat interval elapses without another required checkpoint.
+6. PR-opened checkpoint immediately after creating the PR, including PR number, URL, branch name, changed files, and verification run.
+7. Any time you need the orchestrator to make a decision about scope, sequencing, or approval.
+8. Heartbeat checkpoint whenever the heartbeat interval elapses without another required checkpoint.
 
 Stop points for orchestrator review:
 - Stop and report if acceptance criteria are unclear or conflicting.
@@ -87,5 +94,6 @@ Execution reminders:
 - Keep the PR focused on this issue only.
 - Run the listed verification commands and report the results clearly.
 - Update docs when the issue changes routes, environment variables, verification steps, or security assumptions.
+- If you open the PR through the CLI, prefer a shell-safe plain-text PR body and avoid markdown code fences or backticks in the command path.
 - Do not revert unrelated user changes.
 ```
