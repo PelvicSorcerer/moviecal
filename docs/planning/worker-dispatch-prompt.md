@@ -31,6 +31,9 @@ Branch:
 - Start from `master`.
 - Create branch `[BRANCH_NAME]`.
 
+Orchestrator note:
+- The orchestrator may supervise and run post-merge handoff from any attached local branch that tracks `origin/master`; it does not need to be literally on a local branch named `master`.
+
 Read these docs first:
 - `AGENTS.md`
 - `.github/copilot-instructions.md`
