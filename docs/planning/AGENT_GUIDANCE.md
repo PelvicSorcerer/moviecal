@@ -22,6 +22,7 @@ This repository uses GitHub issues to scope implementation work for humans and a
 
 - Branch name: `agent/<issue-number>-<short-description>` when an issue number exists; otherwise use `docs/<short-description>` for docs-only cleanup.
 - Branch from the repository default branch.
+- Worker branches should be created inside orchestrator-provisioned git worktrees that are distinct from the orchestrator worktree. Use deterministic issue-centric names so the assigned worktree is easy to validate during startup.
 - PR title should use conventional scopes such as `docs:`, `feat:`, `fix:`, `test:`, or `chore:`.
 - PR body should link the originating issue when one exists and include the verification commands that were run.
 
@@ -56,11 +57,17 @@ This repository uses GitHub issues to scope implementation work for humans and a
 3. Confirm the dependency-correct next issue from the current repo and issue state.
 4. Ensure exactly one open issue is labeled `agent-ready`, or explicitly record why the queue is blocked.
 5. Check that the promoted issue contains docs, acceptance criteria, verification steps, and security notes where needed.
-6. Hand the worker a clean brief instead of expecting it to infer sequencing from planning docs alone.
-7. When dispatching a worker, include the exact checkpoint mechanism it should use in its own thread, not just a generic instruction to "check in."
-8. Use `docs/planning/worker-dispatch-prompt.md` when dispatching a worker so the first-step check-in, worker-thread checkpoint reporting, stop points, and single-issue ownership are explicit.
-9. Include a heartbeat interval in the worker brief so the worker reports status proactively if it keeps working without reaching another formal checkpoint.
-10. Require a startup checkpoint that confirms the issue number, branch name, first files/areas to inspect, and whether a fresh worktree started on detached `HEAD` matching `origin/master`.
-11. While a worker is active, treat `wait_agent` as part of every orchestrator response cycle so worker checkpoints are actively collected rather than passively assumed.
-12. Do not stop supervision after one short poll. Continue polling until the worker reaches the next explicit gate: ready-for-review, PR-opened/publish, blocker, or explicit completion.
-13. Once the worker confirms the branch push during publish, verify PR state directly on GitHub instead of waiting only on worker narration.
+6. Provision the worker through the main repo Codex environment profile, run the worker environment readiness check, and create the assigned git worktree before dispatching the worker.
+7. Use `spawn_agent` plus orchestrator-created git worktree isolation as the default worker launch path.
+8. Hand the worker a clean brief instead of expecting it to infer sequencing from planning docs alone.
+9. When dispatching a worker, include the exact checkpoint mechanism it should use in its own thread, not just a generic instruction to "check in."
+10. Use `docs/planning/worker-dispatch-prompt.md` when dispatching a worker so the boot/startup gates, strict worker-thread checkpoints, stop points, and single-issue ownership are explicit.
+11. Require the two-step startup contract: `BOOT_CHECKPOINT` from the worker's natural startup context, then `STARTUP_CHECKPOINT` only after the orchestrator explicitly retargets the worker to the assigned worktree.
+12. Validate the startup checkpoint against the assigned worktree path and branch before allowing any substantive work to begin.
+13. Include a heartbeat interval in the worker brief so the worker reports status proactively if it keeps working without reaching another formal checkpoint.
+14. Require strict machine-parseable `REVIEW_CHECKPOINT` and `PUBLISH_CHECKPOINT` blocks so review handoff and publish status can be collected safely through `wait_agent`.
+15. While a worker is active, treat `wait_agent` as part of every orchestrator response cycle so worker checkpoints are actively collected rather than passively assumed.
+16. Do not stop supervision after one short poll. Continue polling after every substantive worker instruction until the worker reaches the next explicit gate: blocker, review checkpoint, publish checkpoint, or explicit completion.
+17. Preserve worker worktrees and branches after publish while review or CI is still running. Clean them up only after merge or explicit abandonment.
+18. Once the worker confirms the branch push during publish, verify PR state directly on GitHub instead of waiting only on worker narration.
+19. Routine merge decisions for acceptable worker PRs belong to the orchestrator by default unless a maintainer explicitly withholds merge authority or a real blocker needs human judgment.
