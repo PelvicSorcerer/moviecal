@@ -17,3 +17,6 @@ Agent-specific guidance
 - For agent tasks include: branch to start from, files to change, exact acceptance criteria, tests to run, and any constraints.
 - Keep PRs small and focused. Provide unit/integration tests for behaviour changes.
 - If a task touches authentication, data access, or calendar feeds, add a security note in the PR and ensure secrets are not committed.
+- Treat the repo's `.codex/environments` profiles and `.codex/scripts` helpers as supported Codex operator tooling for this repo.
+- The validated path for that tooling is Codex Desktop on macOS; Unix-like Codex environments are expected to work but are not yet validated here, and Windows is not yet validated.
+- When worker worktrees are provisioned, use the main repo `.codex/environments` profile as the source of truth for environment/bootstrap behavior.

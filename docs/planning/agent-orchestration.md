@@ -26,6 +26,14 @@ The worker is an implementation agent. It owns:
 - running the required verification commands
 - reporting blockers instead of improvising around missing prerequisites
 
+## Codex operator tooling scope
+
+- The repo's `.codex/environments` profiles and `.codex/scripts` helpers are supported operator tooling for Codex-based development in this repository.
+- Codex Desktop on macOS is the validated operator environment for that tooling.
+- Unix-like Codex environments are expected to work, but they are not yet validated in this repo.
+- Windows is not yet a validated environment for this tooling.
+- Worker provisioning and bootstrap should read the main repo `.codex/environments` profile as the source of truth, even when the worker runs inside a separate git worktree.
+
 ## Queue states
 
 Use GitHub labels and issue comments to make the queue machine-readable.

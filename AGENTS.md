@@ -55,6 +55,11 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 
 ## Environment policy
 
+- The repo's `.codex/environments` profiles and `.codex/scripts` helpers are supported operator tooling for Codex-based development in this repository.
+- The validated operator environment for that tooling is Codex Desktop on macOS.
+- The same tooling is expected to work in Unix-like Codex environments, but that path is not yet validated in this repo.
+- The tooling is not yet validated on Windows.
+- When the orchestrator provisions a worker worktree, resolve environment/bootstrap behavior from the main repo `.codex/environments` profile as the source of truth.
 - Use disposable or dev-only credentials and resources for Supabase, TMDb, and cron protection.
 - Do not use production secrets, long-lived personal credentials, or private user data.
 - `.env.example` is placeholder-only. `.env.local` may exist with placeholder values and does not mean live integrations are ready.

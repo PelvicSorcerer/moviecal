@@ -10,13 +10,27 @@ if [ ! -f .env.local ] && [ -f .env.example ]; then
   cp .env.example .env.local
 fi
 
-echo "Using placeholder env values unless you replace .env.local with disposable/dev credentials."
+env_check_script=""
+if [ -x .codex/scripts/check-worker-environment.sh ]; then
+  env_check_script=".codex/scripts/check-worker-environment.sh"
+elif [ -n "${CODEX_ENV_SOURCE_ROOT:-}" ] && [ -x "${CODEX_ENV_SOURCE_ROOT}/.codex/scripts/check-worker-environment.sh" ]; then
+  env_check_script="${CODEX_ENV_SOURCE_ROOT}/.codex/scripts/check-worker-environment.sh"
+fi
+
+echo "Bootstrap complete."
+echo "Replace placeholder values in .env.local with disposable/dev credentials before exercising authenticated, TMDb, calendar, or cron flows."
 
 npm install
+
+if [ -n "$env_check_script" ]; then
+  bash "$env_check_script"
+else
+  echo "ENV_WARNING=worker environment check script not found in current worktree or CODEX_ENV_SOURCE_ROOT" >&2
+fi
 '''
 
 [[actions]]
-name = "Run"
+name = "Dev Server"
 icon = "tool"
 command = "npm run dev"
 
@@ -29,6 +43,26 @@ command = "npm run verify"
 name = "Test"
 icon = "tool"
 command = "npm run test"
+
+[[actions]]
+name = "Agent Check"
+icon = "tool"
+command = "npm run agent:check"
+
+[[actions]]
+name = "Tool Check"
+icon = "tool"
+command = "npm run tool:check"
+
+[[actions]]
+name = "Worker Env Check"
+icon = "tool"
+command = "bash .codex/scripts/check-worker-environment.sh"
+
+[[actions]]
+name = "DB Lint"
+icon = "tool"
+command = "npm run db:lint"
 
 [[actions]]
 name = "E2E"
