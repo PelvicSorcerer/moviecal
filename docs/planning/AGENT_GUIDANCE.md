@@ -35,6 +35,14 @@ This repository uses GitHub issues to scope implementation work for humans and a
 - When no issue is actually ready, leave the queue empty and document the blocker in GitHub instead of forcing a guess.
 - Use `bash scripts/agent-check.sh` before worker implementation and `bash scripts/agent-handoff-check.sh` after merge or when auditing repo readiness.
 
+## Codex operator tooling
+
+- The repo's `.codex/environments` profiles and `.codex/scripts` helpers are supported operator tooling for Codex-based development in this repository.
+- Codex Desktop on macOS is the validated operator environment for that tooling today.
+- Unix-like Codex environments are expected to work, but this repo has not yet validated them.
+- Windows support for this tooling is not yet validated.
+- Worker worktree bootstrap should resolve from the main repo `.codex/environments` profile as the source of truth, even when the worker executes inside a separate provisioned worktree.
+
 ## Operator checklist
 
 1. Read `.github/copilot-instructions.md` and the relevant docs for the task.
