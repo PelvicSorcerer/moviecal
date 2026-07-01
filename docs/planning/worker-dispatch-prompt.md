@@ -36,9 +36,9 @@ Reporting path:
 - Do not wait for the orchestrator to ask for updates. Send each required checkpoint as soon as you reach it.
 - Manual-testing updates do not change the reporting destination. Continue reporting in your own worker thread so the orchestrator can collect the checkpoint with `wait_agent`.
 
-Branch:
-- Start from `master`.
-- Create branch `[BRANCH_NAME]`.
+Branch state:
+- Use the pre-provisioned assigned branch `[BRANCH_NAME]` in the assigned worktree.
+- Do not create or switch branches unless the assigned worktree is actually on detached `HEAD` and the orchestrator explicitly instructed you to repair that state from `origin/master`.
 
 Orchestrator note:
 - The orchestrator should supervise from an attached local branch that tracks `origin/master`, such as `orchestrator/live`, and should not drift onto worker branches.
