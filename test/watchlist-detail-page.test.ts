@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   createServerSupabaseClient: vi.fn(),
   createServerSupabaseServiceRoleClient: vi.fn(),
   createSupabaseWatchlistRepository: vi.fn(),
+  cookies: vi.fn(),
   getWatchlistDetail: vi.fn(),
   notFound: vi.fn(() => {
     throw new Error('NEXT_NOT_FOUND');
@@ -19,6 +20,10 @@ vi.mock('../src/lib/auth/session', () => ({
 vi.mock('../src/lib/supabase/server', () => ({
   createServerSupabaseClient: mocks.createServerSupabaseClient,
   createServerSupabaseServiceRoleClient: mocks.createServerSupabaseServiceRoleClient,
+}));
+
+vi.mock('next/headers', () => ({
+  cookies: mocks.cookies,
 }));
 
 vi.mock('../src/lib/supabase/watchlist', () => ({
@@ -53,6 +58,7 @@ describe('watchlist detail page', () => {
     mocks.createServerSupabaseClient.mockReturnValue({ name: 'user-client' });
     mocks.createServerSupabaseServiceRoleClient.mockReturnValue({ name: 'admin-client' });
     mocks.createSupabaseWatchlistRepository.mockReturnValue({ name: 'repository' });
+    mocks.cookies.mockResolvedValue({});
   });
 
   it('renders the authorized watchlist detail page', async () => {
@@ -62,7 +68,7 @@ describe('watchlist detail page', () => {
         id: 'shared-watchlist-1',
         kind: 'shared',
         name: 'Friday movie night',
-        ownerUserId: 'user-1',
+        ownerUserId: 'user-2',
       },
       items: [
         {
@@ -91,7 +97,7 @@ describe('watchlist detail page', () => {
 
     expect(markup).toContain('Friday movie night');
     expect(markup).toContain('The Matrix');
-    expect(markup).toContain('Back to all watchlists');
+    expect(markup).toContain('Back to watchlists');
     expect(mocks.getWatchlistDetail).toHaveBeenCalledWith({
       actorUserId: 'user-1',
       repository: { name: 'repository' },

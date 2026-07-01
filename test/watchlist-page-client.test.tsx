@@ -191,7 +191,7 @@ describe('WatchlistPageClient', () => {
       '/watchlist/personal-watchlist-1',
     );
     expect(
-      screen.getByRole('link', { name: 'Friday movie night' }).getAttribute('href'),
+      screen.getAllByRole('link', { name: 'Friday movie night' })[0]?.getAttribute('href'),
     ).toBe('/watchlist/shared-watchlist-1');
   });
 

@@ -201,8 +201,16 @@ export function WatchlistPageClient({
                   <p className="mt-2 text-sm leading-6 text-slate-600">
                     {isPersonal
                       ? 'Your private watchlist remains the source for calendar tracking and item management on this page.'
-                      : 'Open the detail page to review or manage movies in this shared watchlist.'}
+                      : 'Open the shared watchlist detail page to manage saved movies, invite links, and current access.'}
                   </p>
+                  {!isPersonal ? (
+                    <Link
+                      href={`/watchlist/${watchlist.id}`}
+                      className="mt-4 inline-flex rounded-full border border-sky-200 px-3 py-1.5 text-sm font-medium text-sky-800 transition hover:border-sky-300 hover:bg-sky-50"
+                    >
+                      Open shared watchlist
+                    </Link>
+                  ) : null}
                 </article>
               );
             })}
@@ -217,8 +225,8 @@ export function WatchlistPageClient({
             Start a shared list
           </h3>
           <p className="mt-3 text-sm leading-6 text-slate-600">
-            Create a collaborative watchlist now. Invite acceptance and shared-detail
-            pages will arrive in later issues without changing this route.
+            Create a collaborative watchlist now. Then open the shared detail page to
+            create an invite link and manage who can access it.
           </p>
 
           <form className="mt-6 space-y-4" onSubmit={(event) => {
@@ -257,8 +265,16 @@ export function WatchlistPageClient({
             ) : (
               <ul className="mt-3 space-y-2">
                 {visibleSharedWatchlists.map((watchlist) => (
-                  <li key={watchlist.id} className="rounded-xl bg-white px-3 py-2">
-                    {watchlist.name}
+                  <li
+                    key={watchlist.id}
+                    className="rounded-xl bg-white px-3 py-2"
+                  >
+                    <Link
+                      href={`/watchlist/${watchlist.id}`}
+                      className="font-medium text-slate-900 transition hover:text-sky-700"
+                    >
+                      {watchlist.name}
+                    </Link>
                   </li>
                 ))}
               </ul>

@@ -6,8 +6,8 @@ import { NextResponse, type NextRequest } from 'next/server';
 import {
   clearE2EStateCookies,
   E2E_SESSION,
-  E2E_USER,
   hasE2EAuthenticatedSession,
+  readE2EUser,
 } from '../e2e/fixtures';
 import { SupabaseEnvironmentError } from '../supabase/env';
 import { createServerSupabaseClient } from '../supabase/server';
@@ -127,7 +127,7 @@ export async function getOptionalUser(): Promise<User | null> {
   const cookieStore = await cookies();
 
   if (hasE2EAuthenticatedSession(cookieStore)) {
-    return E2E_USER;
+    return readE2EUser(cookieStore);
   }
 
   try {
@@ -156,7 +156,7 @@ export async function getOptionalPageSession(): Promise<AuthenticatedPageSession
   if (hasE2EAuthenticatedSession(cookieStore)) {
     return {
       accessToken: E2E_SESSION.accessToken,
-      user: E2E_USER,
+      user: readE2EUser(cookieStore),
     };
   }
 
@@ -230,7 +230,7 @@ export async function authenticateApiRequest(
     return {
       accessToken: E2E_SESSION.accessToken,
       applyAuthCookies(): void {},
-      user: E2E_USER,
+      user: readE2EUser(request.cookies),
     };
   }
 

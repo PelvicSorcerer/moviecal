@@ -5,6 +5,9 @@ const mocks = vi.hoisted(() => ({
   authenticateApiRequest: vi.fn(),
   createSupabaseWatchlistRepository: vi.fn(),
   createSharedWatchlist: vi.fn(),
+  createSharedWatchlistInviteLink: vi.fn(),
+  acceptWatchlistInvite: vi.fn(),
+  removeSharedWatchlistMember: vi.fn(),
   listPersonalWatchlistItems: vi.fn(),
   addPersonalWatchlistItem: vi.fn(),
   addWatchlistItem: vi.fn(),
@@ -49,6 +52,9 @@ vi.mock('../src/lib/watchlist', async () => {
   return {
     ...actual,
     createSharedWatchlist: mocks.createSharedWatchlist,
+    createSharedWatchlistInviteLink: mocks.createSharedWatchlistInviteLink,
+    acceptWatchlistInvite: mocks.acceptWatchlistInvite,
+    removeSharedWatchlistMember: mocks.removeSharedWatchlistMember,
     listPersonalWatchlistItems: mocks.listPersonalWatchlistItems,
     addPersonalWatchlistItem: mocks.addPersonalWatchlistItem,
     addWatchlistItem: mocks.addWatchlistItem,
@@ -386,5 +392,120 @@ describe('watchlist routes', () => {
       error: 'A shared watchlist name is required.',
     });
     expect(mocks.createSharedWatchlist).not.toHaveBeenCalled();
+  });
+
+  it('returns 201 from POST /api/watchlist/shared/[watchlistId]/invite when a link is created', async () => {
+    const { POST } = await import(
+      '../src/app/api/watchlist/shared/[watchlistId]/invite/route'
+    );
+
+    mocks.createSharedWatchlistInviteLink.mockResolvedValue({
+      inviteUrl: 'https://moviecal.test/watchlist/invite/secret-token',
+      watchlist: {
+        id: 'shared-watchlist-1',
+        kind: 'shared',
+        name: 'Friday movie night',
+        ownerUserId: 'user-1',
+      },
+    });
+
+    const response = await POST(
+      new NextRequest('https://moviecal.test/api/watchlist/shared/shared-watchlist-1/invite', {
+        method: 'POST',
+      }),
+      { params: Promise.resolve({ watchlistId: 'shared-watchlist-1' }) },
+    );
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual({
+      inviteUrl: 'https://moviecal.test/watchlist/invite/secret-token',
+      watchlist: {
+        id: 'shared-watchlist-1',
+        kind: 'shared',
+        name: 'Friday movie night',
+        ownerUserId: 'user-1',
+      },
+    });
+    expect(mocks.createSharedWatchlistInviteLink).toHaveBeenCalledWith({
+      actorUserId: 'user-1',
+      baseUrl: 'https://moviecal.test',
+      repository: { name: 'repository' },
+      watchlistId: 'shared-watchlist-1',
+    });
+  });
+
+  it('returns 200 from POST /api/watchlist/invite/accept when a user joins', async () => {
+    const { POST } = await import('../src/app/api/watchlist/invite/accept/route');
+
+    mocks.acceptWatchlistInvite.mockResolvedValue({
+      joined: true,
+      watchlist: {
+        id: 'shared-watchlist-1',
+        kind: 'shared',
+        name: 'Friday movie night',
+        ownerUserId: 'user-1',
+      },
+    });
+
+    const response = await POST(
+      new NextRequest('https://moviecal.test/api/watchlist/invite/accept', {
+        method: 'POST',
+        body: JSON.stringify({ token: 'secret-token' }),
+        headers: {
+          'content-type': 'application/json',
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      joined: true,
+      watchlist: {
+        id: 'shared-watchlist-1',
+        kind: 'shared',
+        name: 'Friday movie night',
+        ownerUserId: 'user-1',
+      },
+    });
+    expect(mocks.acceptWatchlistInvite).toHaveBeenCalledWith({
+      actorUserId: 'user-1',
+      repository: { name: 'repository' },
+      token: 'secret-token',
+    });
+  });
+
+  it('returns 200 from DELETE /api/watchlist/shared/[watchlistId]/members/[membershipId]', async () => {
+    const { DELETE } = await import(
+      '../src/app/api/watchlist/shared/[watchlistId]/members/[membershipId]/route'
+    );
+
+    mocks.removeSharedWatchlistMember.mockResolvedValue(undefined);
+
+    const response = await DELETE(
+      new NextRequest(
+        'https://moviecal.test/api/watchlist/shared/shared-watchlist-1/members/membership-1',
+        {
+          method: 'DELETE',
+        },
+      ),
+      {
+        params: Promise.resolve({
+          membershipId: 'membership-1',
+          watchlistId: 'shared-watchlist-1',
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      deleted: true,
+      membershipId: 'membership-1',
+    });
+    expect(mocks.removeSharedWatchlistMember).toHaveBeenCalledWith({
+      actorUserId: 'user-1',
+      membershipId: 'membership-1',
+      repository: { name: 'repository' },
+      watchlistId: 'shared-watchlist-1',
+    });
   });
 });

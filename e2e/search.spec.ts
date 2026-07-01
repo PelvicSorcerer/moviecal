@@ -1,4 +1,8 @@
 import { expect, test } from './test-fixtures';
+import {
+  createE2ESharedWatchlist,
+  createE2EWatchlistMember,
+} from '../src/lib/e2e/fixtures';
 
 test('anonymous search visitors see deterministic results and a sign-in CTA', async ({
   page,
@@ -78,13 +82,28 @@ test('authenticated search excludes read-only watchlists from add targets', asyn
   seedAuthenticatedSession,
   stubMovieSearch,
 }) => {
+  const sharedWatchlist = createE2ESharedWatchlist('Curated picks', 0, false);
+
   await seedAuthenticatedSession({
-    sharedWatchlists: [
+    sharedState: {
+      inviteLinks: [],
+      memberships: [
+        createE2EWatchlistMember({
+          userId: 'e2e-collaborator-user',
+          watchlistId: sharedWatchlist.id,
+        }),
+      ],
+    },
+    user: 'collaborator',
+    watchlists: [
       {
-        canEdit: false,
-        id: 'e2e-shared-watchlist-readonly',
-        name: 'Curated picks',
+        canEdit: true,
+        id: 'e2e-personal-watchlist-e2e-user',
+        kind: 'personal',
+        name: 'Owner watchlist',
+        ownerUserId: 'e2e-user',
       },
+      sharedWatchlist,
     ],
   });
   await stubMovieSearch();
@@ -93,9 +112,20 @@ test('authenticated search excludes read-only watchlists from add targets', asyn
   await page.getByRole('searchbox', { name: 'Search for a movie' }).fill('matrix');
   await page.getByRole('button', { name: 'Search' }).click();
 
-  await expect(page.getByLabel('Save to')).toHaveValue('e2e-personal-watchlist');
-  await expect(page.getByText('Read-only watchlists: Curated picks.')).toBeVisible();
-  await expect(page.getByRole('option', { name: 'Curated picks' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Search results' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'The Matrix' })).toBeVisible();
+  await expect(page.getByLabel('Save to')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Add to watchlist' })).toHaveCount(0);
+  await expect(
+    page.getByText(
+      'You can view shared watchlists, but none of your current targets allow edits.',
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      'Your current watchlist memberships are read-only, so you cannot add this movie from search.',
+    ),
+  ).toBeVisible();
 });
 
 test('authenticated search shows the empty state for zero mocked results', async ({

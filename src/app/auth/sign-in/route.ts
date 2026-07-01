@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
 
 import { sanitizeNextPath } from '../../../lib/auth/cookies';
-import { isE2ETestModeEnabled, setE2EAuthCookie } from '../../../lib/e2e/fixtures';
+import {
+  findE2EUserByEmail,
+  isE2ETestModeEnabled,
+  setE2EAuthCookie,
+} from '../../../lib/e2e/fixtures';
 import { setAuthCookies } from '../../../lib/auth/session';
 import { SupabaseEnvironmentError } from '../../../lib/supabase/env';
 import { createServerSupabaseClient } from '../../../lib/supabase/server';
@@ -24,9 +28,18 @@ export async function POST(request: Request) {
   }
 
   if (isE2ETestModeEnabled()) {
+    const e2eUser = findE2EUserByEmail(email);
+
+    if (!e2eUser || password !== 'password123') {
+      return buildRedirect(
+        request,
+        `/sign-in?error=invalid-credentials&next=${encodeURIComponent(nextPath)}`,
+      );
+    }
+
     const response = buildRedirect(request, nextPath);
 
-    setE2EAuthCookie(response);
+    setE2EAuthCookie(response, e2eUser);
 
     return response;
   }

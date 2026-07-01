@@ -5,8 +5,10 @@ import {
   addE2EWatchlistItemToTarget,
   findE2EWatchlist,
   getE2EMovieFixture,
+  getE2EPersonalWatchlistId,
   hasE2EAuthenticatedSession,
   readE2EWatchlistItems,
+  readE2EUser,
   setE2EWatchlistCookie,
 } from '../../../lib/e2e/fixtures';
 import {
@@ -131,7 +133,8 @@ export async function POST(request: NextRequest) {
     }
 
     if (hasE2EAuthenticatedSession(request.cookies)) {
-      const targetWatchlistId = watchlistId ?? 'e2e-personal-watchlist';
+      const targetWatchlistId = watchlistId
+        ?? getE2EPersonalWatchlistId(readE2EUser(request.cookies).id);
       const targetWatchlist = findE2EWatchlist(request.cookies, targetWatchlistId);
 
       if (!targetWatchlist) {

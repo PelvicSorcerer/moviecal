@@ -5,28 +5,81 @@ import { notFound } from 'next/navigation';
 
 import { requireAuthenticatedPageSession } from '../../../lib/auth/session';
 import {
-  E2E_USER,
+  getE2EActiveInviteLink,
+  getE2EWatchlistAccess,
+  listE2EWatchlistMembers,
+} from '../../../lib/e2e/shared-watchlists';
+import {
+  findE2EUserById,
+  hasE2EAuthenticatedSession,
+  readE2EUser,
   findE2EWatchlist,
   readE2EWatchlistItemsForWatchlist,
 } from '../../../lib/e2e/fixtures';
+import { SupabaseEnvironmentError } from '../../../lib/supabase/env';
 import {
   createServerSupabaseClient,
   createServerSupabaseServiceRoleClient,
 } from '../../../lib/supabase/server';
 import { createSupabaseWatchlistRepository } from '../../../lib/supabase/watchlist';
-import { SupabaseEnvironmentError } from '../../../lib/supabase/env';
 import {
+  getSharedWatchlistInviteLinkStatus,
   getWatchlistDetail,
+  listSharedWatchlistMembers,
   WatchlistAccessError,
   WatchlistDataError,
   WatchlistNotFoundError,
+  type WatchlistMember,
+  type WatchlistSummary,
 } from '../../../lib/watchlist';
 import { WatchlistDetailClient } from '../watchlist-detail-client';
+import { SharedWatchlistPageClient } from './shared-watchlist-page-client';
 
 export const metadata: Metadata = {
   title: 'Watchlist detail | moviecal',
-  description: 'Review and manage movies saved to an authorized moviecal watchlist.',
+  description:
+    'Review watchlist movies and, for shared watchlists, inspect access and invite management.',
 };
+
+interface MemberEntry {
+  acceptedAt: string | null;
+  canRemove: boolean;
+  email: string | null;
+  id: string;
+  isCurrentUser: boolean;
+  isOwner: boolean;
+  role: 'owner' | 'editor';
+}
+
+async function resolveUserEmailMap(userIds: string[]): Promise<Record<string, string | null>> {
+  const adminClient = createServerSupabaseServiceRoleClient();
+  const userEmailEntries = await Promise.all(
+    [...new Set(userIds)].map(async (userId) => {
+      const userResponse = await adminClient.auth.admin.getUserById(userId);
+
+      return [userId, userResponse.data.user?.email ?? null] as const;
+    }),
+  );
+
+  return Object.fromEntries(userEmailEntries);
+}
+
+function mapMemberEntries(args: {
+  actorUserId: string;
+  emailsByUserId: Record<string, string | null>;
+  members: WatchlistMember[];
+  watchlist: WatchlistSummary;
+}): MemberEntry[] {
+  return args.members.map((member) => ({
+    acceptedAt: member.acceptedAt,
+    canRemove: member.role !== 'owner',
+    email: args.emailsByUserId[member.userId] ?? null,
+    id: member.id,
+    isCurrentUser: member.userId === args.actorUserId,
+    isOwner: member.role === 'owner',
+    role: member.role,
+  }));
+}
 
 export default async function WatchlistDetailPage({
   params,
@@ -38,74 +91,105 @@ export default async function WatchlistDetailPage({
     `/watchlist/${watchlistId}`,
   );
 
+  let detail: Awaited<ReturnType<typeof getWatchlistDetail>> | null = null;
+  let ownerCanManage = false;
+  let activeInviteLinkExists = false;
+  let memberEntries: MemberEntry[] = [];
+
   try {
-    if (user.id === E2E_USER.id) {
-      const cookieStore = await cookies();
+    const cookieStore = await cookies();
+
+    if (hasE2EAuthenticatedSession(cookieStore) && user.id === readE2EUser(cookieStore).id) {
       const watchlist = findE2EWatchlist(cookieStore, watchlistId);
 
       if (!watchlist) {
         notFound();
       }
 
-      const items = readE2EWatchlistItemsForWatchlist(cookieStore, watchlistId);
+      detail = {
+        watchlist,
+        items: readE2EWatchlistItemsForWatchlist(cookieStore, watchlistId),
+      };
 
-      return (
-        <section className="space-y-8">
-          <div className="rounded-3xl bg-slate-950 px-8 py-10 text-white shadow-xl">
-            <p className="text-sm font-medium uppercase tracking-[0.2em] text-sky-200">
-              Watchlist detail
-            </p>
-            <h2 className="mt-3 text-4xl font-semibold leading-tight">{watchlist.name}</h2>
-            <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-200">
-              Review the movies saved to this authorized {watchlist.kind} watchlist without
-              exposing any other list metadata.
-            </p>
-            <p className="mt-5 text-sm text-slate-300">
-              <Link href="/watchlist" className="font-medium text-white underline underline-offset-4">
-                Back to all watchlists
-              </Link>
-            </p>
-          </div>
+      if (watchlist.kind === 'shared') {
+        const access = getE2EWatchlistAccess(cookieStore, user.id, watchlistId);
 
-          <WatchlistDetailClient initialItems={items} watchlist={watchlist} />
-        </section>
-      );
+        if (!access) {
+          notFound();
+        }
+
+        ownerCanManage = watchlist.ownerUserId === user.id;
+        activeInviteLinkExists = ownerCanManage
+          && getE2EActiveInviteLink(cookieStore, watchlistId) !== null;
+
+        if (ownerCanManage) {
+          const members = [
+            {
+              acceptedAt: null,
+              id: `owner:${watchlist.ownerUserId}`,
+              invitedByUserId: null,
+              role: 'owner' as const,
+              userId: watchlist.ownerUserId,
+              watchlistId: watchlist.id,
+            },
+            ...listE2EWatchlistMembers(cookieStore, watchlistId),
+          ];
+          const emailsByUserId = Object.fromEntries(
+            members.map((member) => [
+              member.userId,
+              findE2EUserById(member.userId)?.email ?? null,
+            ]),
+          );
+
+          memberEntries = mapMemberEntries({
+            actorUserId: user.id,
+            emailsByUserId,
+            members,
+            watchlist,
+          });
+        }
+      }
+    } else {
+      const repository = createSupabaseWatchlistRepository({
+        userClient: createServerSupabaseClient(accessToken),
+        adminClient: createServerSupabaseServiceRoleClient(),
+      });
+
+      detail = await getWatchlistDetail({
+        actorUserId: user.id,
+        repository,
+        watchlistId,
+      });
+
+      if (detail.watchlist.kind === 'shared') {
+        ownerCanManage = detail.watchlist.ownerUserId === user.id;
+
+        if (ownerCanManage) {
+          const members = await listSharedWatchlistMembers({
+            actorUserId: user.id,
+            repository,
+            watchlistId,
+          });
+          const emailsByUserId = await resolveUserEmailMap(
+            members.map((member) => member.userId),
+          );
+
+          memberEntries = mapMemberEntries({
+            actorUserId: user.id,
+            emailsByUserId,
+            members,
+            watchlist: detail.watchlist,
+          });
+          activeInviteLinkExists = (
+            await getSharedWatchlistInviteLinkStatus({
+              actorUserId: user.id,
+              repository,
+              watchlistId,
+            })
+          ) !== null;
+        }
+      }
     }
-
-    const repository = createSupabaseWatchlistRepository({
-      userClient: createServerSupabaseClient(accessToken),
-      adminClient: createServerSupabaseServiceRoleClient(),
-    });
-    const detail = await getWatchlistDetail({
-      actorUserId: user.id,
-      repository,
-      watchlistId,
-    });
-
-    return (
-      <section className="space-y-8">
-        <div className="rounded-3xl bg-slate-950 px-8 py-10 text-white shadow-xl">
-          <p className="text-sm font-medium uppercase tracking-[0.2em] text-sky-200">
-            Watchlist detail
-          </p>
-          <h2 className="mt-3 text-4xl font-semibold leading-tight">{detail.watchlist.name}</h2>
-          <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-200">
-            Review the movies saved to this authorized {detail.watchlist.kind} watchlist without
-            exposing any other list metadata.
-          </p>
-          <p className="mt-5 text-sm text-slate-300">
-            <Link href="/watchlist" className="font-medium text-white underline underline-offset-4">
-              Back to all watchlists
-            </Link>
-          </p>
-        </div>
-
-        <WatchlistDetailClient
-          initialItems={detail.items}
-          watchlist={detail.watchlist}
-        />
-      </section>
-    );
   } catch (error) {
     if (
       error instanceof WatchlistAccessError ||
@@ -136,4 +220,48 @@ export default async function WatchlistDetailPage({
 
     throw error;
   }
+
+  if (!detail) {
+    notFound();
+  }
+
+  const isSharedWatchlist = detail.watchlist.kind === 'shared';
+
+  return (
+    <section className="space-y-8">
+      <div className="rounded-3xl bg-slate-950 px-8 py-10 text-white shadow-xl">
+        <p className="text-sm font-medium uppercase tracking-[0.2em] text-sky-200">
+          {isSharedWatchlist ? 'Shared watchlist detail' : 'Watchlist detail'}
+        </p>
+        <h1 className="mt-3 text-4xl font-semibold leading-tight">{detail.watchlist.name}</h1>
+        <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-200">
+          {isSharedWatchlist
+            ? 'Review the movies saved here and, when you own the watchlist, manage invite links and collaborator access from the same route.'
+            : 'Review and manage the movies saved to this authorized watchlist without exposing any other list metadata.'}
+        </p>
+        <div className="mt-6">
+          <Link
+            href="/watchlist"
+            className="inline-flex rounded-full border border-slate-700 px-4 py-2 text-sm font-medium text-slate-100 transition hover:border-slate-500 hover:text-white"
+          >
+            Back to watchlists
+          </Link>
+        </div>
+      </div>
+
+      <WatchlistDetailClient
+        initialItems={detail.items}
+        watchlist={detail.watchlist}
+      />
+
+      {isSharedWatchlist ? (
+        <SharedWatchlistPageClient
+          activeInviteLinkExists={activeInviteLinkExists}
+          initialMembers={memberEntries}
+          ownerCanManage={ownerCanManage}
+          watchlist={detail.watchlist}
+        />
+      ) : null}
+    </section>
+  );
 }

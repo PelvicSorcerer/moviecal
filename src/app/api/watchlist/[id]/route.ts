@@ -2,10 +2,11 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { authenticateApiRequest } from '../../../../lib/auth/session';
 import {
-  E2E_PERSONAL_WATCHLIST_ID,
   findE2EWatchlist,
+  getE2EPersonalWatchlistId,
   hasE2EAuthenticatedSession,
   removeE2EWatchlistItemFromTarget,
+  readE2EUser,
   setE2EWatchlistCookie,
 } from '../../../../lib/e2e/fixtures';
 import {
@@ -43,7 +44,8 @@ export async function DELETE(
   const watchlistId = request.nextUrl.searchParams.get('watchlist_id')?.trim() || null;
 
   if (hasE2EAuthenticatedSession(request.cookies)) {
-    const targetWatchlistId = watchlistId ?? E2E_PERSONAL_WATCHLIST_ID;
+    const targetWatchlistId = watchlistId
+      ?? getE2EPersonalWatchlistId(readE2EUser(request.cookies).id);
     const targetWatchlist = findE2EWatchlist(request.cookies, targetWatchlistId);
 
     if (!targetWatchlist) {

@@ -1,18 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  acceptWatchlistInvite,
   createSharedWatchlist,
+  createSharedWatchlistInviteLink,
   addPersonalWatchlistItem,
   addWatchlistItem,
   getWatchlistDetail,
+  getSharedWatchlistInviteLinkStatus,
   listPersonalWatchlistItems,
+  listSharedWatchlistMembers,
   listUserWatchlists,
   listWatchlistItems,
   mapWatchlistRow,
+  removeSharedWatchlistMember,
   removeWatchlistItem,
+  resolveWatchlistInvite,
   WatchlistAccessError,
-  WatchlistInputError,
   WatchlistNotFoundError,
+  WatchlistInputError,
   type WatchlistRepository,
   type WatchlistRow,
   type WatchlistSummary,
@@ -61,6 +67,26 @@ function createRepository(
         name: 'Friday movie night',
       });
     },
+    async acceptInviteMembership() {
+      return {
+        acceptedAt: '2026-06-20T00:00:00.000Z',
+        id: 'membership-1',
+        invitedByUserId: 'user-1',
+        role: 'editor',
+        userId: 'user-2',
+        watchlistId: 'shared-watchlist-1',
+      };
+    },
+    async createInviteLink() {
+      return {
+        createdAt: '2026-06-20T00:00:00.000Z',
+        createdByUserId: 'user-1',
+        expiresAt: null,
+        id: 'invite-1',
+        revokedAt: null,
+        watchlistId: 'shared-watchlist-1',
+      };
+    },
     async deleteItemByIdForWatchlist() {
       return true;
     },
@@ -69,6 +95,15 @@ function createRepository(
     },
     async findItemByMovieIdForWatchlist() {
       return buildWatchlistRow();
+    },
+    async findMembershipForUser() {
+      return null;
+    },
+    async findInviteLinkByTokenHash() {
+      return null;
+    },
+    async getActiveInviteLinkForWatchlist() {
+      return null;
     },
     async getWatchlistAccess() {
       return {
@@ -86,11 +121,20 @@ function createRepository(
     async listItemsForWatchlist() {
       return [];
     },
+    async listMembersForWatchlist() {
+      return [];
+    },
     async listTrackedMovies() {
       return [];
     },
     async listWatchlistsForUser() {
       return [buildWatchlistSummary()];
+    },
+    async revokeInviteLinksForWatchlist() {
+      return undefined;
+    },
+    async removeMembershipFromWatchlist() {
+      return true;
     },
     async upsertMovie() {
       return { id: 42 };
@@ -347,6 +391,223 @@ describe('watchlist domain helpers', () => {
         name: 'Friday movie night',
       }),
     );
+  });
+
+  it('resolves only active shared-watchlist invite links', async () => {
+    await expect(
+      resolveWatchlistInvite({
+        repository: createRepository({
+          async findInviteLinkByTokenHash() {
+            return {
+              inviteLink: {
+                createdAt: '2026-06-20T00:00:00.000Z',
+                createdByUserId: 'user-1',
+                expiresAt: null,
+                id: 'invite-1',
+                revokedAt: null,
+                watchlistId: 'shared-watchlist-1',
+              },
+              watchlist: buildWatchlistSummary({
+                id: 'shared-watchlist-1',
+                kind: 'shared',
+                name: 'Friday movie night',
+              }),
+            };
+          },
+        }),
+        token: 'secret-token',
+      }),
+    ).resolves.toMatchObject({
+      watchlist: {
+        id: 'shared-watchlist-1',
+        kind: 'shared',
+      },
+    });
+
+    await expect(
+      resolveWatchlistInvite({
+        repository: createRepository({
+          async findInviteLinkByTokenHash() {
+            return {
+              inviteLink: {
+                createdAt: '2026-06-20T00:00:00.000Z',
+                createdByUserId: 'user-1',
+                expiresAt: null,
+                id: 'invite-1',
+                revokedAt: '2026-06-21T00:00:00.000Z',
+                watchlistId: 'shared-watchlist-1',
+              },
+              watchlist: buildWatchlistSummary({
+                id: 'shared-watchlist-1',
+                kind: 'shared',
+              }),
+            };
+          },
+        }),
+        token: 'secret-token',
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it('creates a shared watchlist invite link for the owner', async () => {
+    const revokeInviteLinksForWatchlist = vi.fn();
+    const createInviteLink = vi.fn(async () => ({
+      createdAt: '2026-06-20T00:00:00.000Z',
+      createdByUserId: 'user-1',
+      expiresAt: null,
+      id: 'invite-1',
+      revokedAt: null,
+      watchlistId: 'shared-watchlist-1',
+    }));
+
+    await expect(
+      createSharedWatchlistInviteLink({
+        actorUserId: 'user-1',
+        baseUrl: 'https://moviecal.test',
+        repository: createRepository({
+          createInviteLink,
+          getWatchlistAccess: async () => ({
+            status: 'authorized',
+            watchlist: buildWatchlistSummary({
+              id: 'shared-watchlist-1',
+              kind: 'shared',
+              ownerUserId: 'user-1',
+            }),
+            canEdit: true,
+          }),
+          revokeInviteLinksForWatchlist,
+        }),
+        watchlistId: 'shared-watchlist-1',
+      }),
+    ).resolves.toMatchObject({
+      watchlist: {
+        id: 'shared-watchlist-1',
+      },
+    });
+
+    expect(revokeInviteLinksForWatchlist).toHaveBeenCalledWith('shared-watchlist-1');
+    expect(createInviteLink).toHaveBeenCalledOnce();
+  });
+
+  it('accepts a shared watchlist invite for a new member', async () => {
+    const acceptInviteMembership = vi.fn();
+
+    await expect(
+      acceptWatchlistInvite({
+        actorUserId: 'user-2',
+        repository: createRepository({
+          acceptInviteMembership,
+          async findInviteLinkByTokenHash() {
+            return {
+              inviteLink: {
+                createdAt: '2026-06-20T00:00:00.000Z',
+                createdByUserId: 'user-1',
+                expiresAt: null,
+                id: 'invite-1',
+                revokedAt: null,
+                watchlistId: 'shared-watchlist-1',
+              },
+              watchlist: buildWatchlistSummary({
+                id: 'shared-watchlist-1',
+                kind: 'shared',
+                ownerUserId: 'user-1',
+              }),
+            };
+          },
+        }),
+        token: 'secret-token',
+      }),
+    ).resolves.toEqual({
+      joined: true,
+      watchlist: buildWatchlistSummary({
+        id: 'shared-watchlist-1',
+        kind: 'shared',
+        ownerUserId: 'user-1',
+      }),
+    });
+
+    expect(acceptInviteMembership).toHaveBeenCalledOnce();
+  });
+
+  it('lists and removes shared watchlist members through owner-only helpers', async () => {
+    const repository = createRepository({
+      async getWatchlistAccess() {
+        return {
+          status: 'authorized',
+          watchlist: buildWatchlistSummary({
+            id: 'shared-watchlist-1',
+            kind: 'shared',
+            ownerUserId: 'user-1',
+          }),
+          canEdit: true,
+        };
+      },
+      async listMembersForWatchlist() {
+        return [
+          {
+            acceptedAt: '2026-06-20T00:00:00.000Z',
+            id: 'membership-1',
+            invitedByUserId: 'user-1',
+            role: 'editor',
+            userId: 'user-2',
+          },
+        ];
+      },
+      async removeMembershipFromWatchlist() {
+        return true;
+      },
+    });
+
+    await expect(
+      listSharedWatchlistMembers({
+        actorUserId: 'user-1',
+        repository,
+        watchlistId: 'shared-watchlist-1',
+      }),
+    ).resolves.toHaveLength(2);
+
+    await expect(
+      removeSharedWatchlistMember({
+        actorUserId: 'user-1',
+        membershipId: 'membership-1',
+        repository,
+        watchlistId: 'shared-watchlist-1',
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('reports whether a shared watchlist currently has an active invite link', async () => {
+    await expect(
+      getSharedWatchlistInviteLinkStatus({
+        actorUserId: 'user-1',
+        repository: createRepository({
+          async getActiveInviteLinkForWatchlist() {
+            return {
+              createdAt: '2026-06-20T00:00:00.000Z',
+              createdByUserId: 'user-1',
+              expiresAt: null,
+              id: 'invite-1',
+              revokedAt: null,
+              watchlistId: 'shared-watchlist-1',
+            };
+          },
+          async getWatchlistAccess() {
+            return {
+              status: 'authorized',
+              watchlist: buildWatchlistSummary({
+                id: 'shared-watchlist-1',
+                kind: 'shared',
+                ownerUserId: 'user-1',
+              }),
+              canEdit: true,
+            };
+          },
+        }),
+        watchlistId: 'shared-watchlist-1',
+      }),
+    ).resolves.toMatchObject({
+      id: 'invite-1',
+    });
   });
 
   it('distinguishes forbidden watchlist access from not-found watchlists', async () => {
