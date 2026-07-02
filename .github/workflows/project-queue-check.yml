@@ -1,0 +1,37 @@
+name: project-queue-check
+
+on:
+  push:
+    branches: [ master ]
+    paths:
+      - 'scripts/project-queue-check.sh'
+      - '.github/workflows/project-queue-check.yml'
+      - 'docs/planning/github-project-migration-plan.md'
+      - 'package.json'
+  pull_request:
+    paths:
+      - 'scripts/project-queue-check.sh'
+      - '.github/workflows/project-queue-check.yml'
+      - 'docs/planning/github-project-migration-plan.md'
+      - 'package.json'
+  workflow_dispatch:
+
+jobs:
+  project-queue-check:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_QUEUE_TOKEN }}
+      PROJECT_QUEUE_MODE: pre-cutover
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure project queue token exists
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "Missing PROJECT_QUEUE_TOKEN secret." >&2
+            echo "Create a repository secret with GitHub token scopes 'project' and 'read:project' before relying on project queue automation." >&2
+            exit 1
+          fi
+      - name: Show tool versions
+        run: gh --version && jq --version
+      - name: Validate GitHub Project queue state
+        run: bash scripts/project-queue-check.sh
