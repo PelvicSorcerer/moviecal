@@ -436,27 +436,27 @@ These issues complete the multi-agent / multi-environment work from `docs/planni
 
 | Queue Order | Issue | Title | Blocked by | Notes |
 |---:|---|---|---|---|
-| 96 | #98 | Restructure agent docs: `docs/operators/` | — | PR #98 open. Finish during remaining migration items #93–#95 so project-as-queue docs land on the stable operator layout. |
-| 97 | #102 | Define multi-platform agent dispatch policy | #95, #98 | Phase 5. Uses `Agent Dispatch` / `Execution Mode` language, not legacy `agent-ready` as primary authority. |
-| 98 | #103 | Align Node.js version across agent platforms | #98 | Phase 4. Can run in parallel with #102 once #98 merges. |
-| 99 | #104 | Consolidate Codex orchestration docs under `docs/operators/` | #95, #98, #102 | Phase 2 (deferred). Documentation consolidation only. |
-| 100 | #105 | Verify GitHub Copilot coding agent against repo | #98, #102 | Replaces audit-only content in `docs/operators/github-copilot.md`. |
-| 101 | #106 | Validate Codex operator tooling on Linux | #98 | Can run in parallel with #105 once #98 merges. |
+| 96 | #98 | Restructure agent docs: `docs/operators/` | — | Done (merged PR #98). |
+| 97 | #102 | Define multi-platform agent dispatch policy | #95 | Phase 5. `#98` dependency satisfied. Uses `Agent Dispatch` / `Execution Mode` language, not legacy `agent-ready` as primary authority. |
+| 98 | #103 | Align Node.js version across agent platforms | — | Phase 4. `#98` done; can run in parallel with #102. |
+| 99 | #104 | Consolidate Codex orchestration docs under `docs/operators/` | #95, #102 | Phase 2 (deferred). Documentation consolidation only. |
+| 100 | #105 | Verify GitHub Copilot coding agent against repo | #102 | `#98` done. Replaces audit-only content in `docs/operators/github-copilot.md`. |
+| 101 | #106 | Validate Codex operator tooling on Linux | — | `#98` done; can run in parallel with #105. |
 
-**Migration items still in flight** (finish before or in parallel with Queue Order 96–97 as noted above):
+**Migration items still in flight** (finish before platform Queue Order 97):
 
 | Queue Order | Issue | Title | Status |
 |---:|---|---|---|
 | 92 | #92 | Update repo docs so project becomes queue source of truth | Done (merged PR #101) |
-| 93 | #93 | Deprecate `open-issue-order.json` | Open |
-| 94 | #94 | Update queue-validation scripts | Open |
-| 95 | #95 | Remove obsolete queue rules after cutover | Open |
+| 93 | #93 | Deprecate `open-issue-order.json` | Done (merged PR #109) |
+| 94 | #94 | Update queue-validation scripts | Done (merged PR #111) |
+| 95 | #95 | Remove obsolete queue rules after cutover | Open (next migration item) |
 
 **Suggested GitHub Project fields** when adding #98 and #102–#106:
 
 | Issue | Status | Track | Area | Execution Mode | Agent Dispatch | Priority |
 |---|---|---|---|---|---|---|
-| #98 | In Progress (or Ready) | Platform | docs | Agent | No | P1 |
+| #98 | Done | Platform | docs | Agent | No | P1 |
 | #102 | Backlog | Platform | process | Human then Agent | No | P1 |
 | #103 | Backlog | Platform | process | Agent | No | P2 |
 | #104 | Backlog | Platform | docs | Agent | No | P2 |

@@ -19,7 +19,7 @@ declare -A QUEUE_ORDER=(
 )
 
 declare -A STATUS=(
-  [98]="In Progress"
+  [98]="Done"
   [102]="Backlog"
   [103]="Backlog"
   [104]="Backlog"
