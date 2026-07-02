@@ -1,0 +1,9 @@
+{
+  "install": "set -e\n[ -f .env.local ] || cp .env.example .env.local\nnpm install\n",
+  "ports": [
+    {
+      "name": "Next.js dev server",
+      "port": 3000
+    }
+  ]
+}

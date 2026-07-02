@@ -6,6 +6,7 @@ on:
       - master
       - agent/**
       - copilot/**
+      - cursor/**
     paths:
       - 'supabase/**'
       - 'scripts/supabase-db-lint.sh'
