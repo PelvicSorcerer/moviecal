@@ -16,15 +16,39 @@ This doc covers what's specific to Codex (Desktop app or CLI) when it develops t
 
 ## What's verified vs assumed
 
-- Codex Desktop on macOS is the platform this repo's Codex tooling was built and validated against.
-- Unix-like Codex environments are expected to work but have not been validated in this repo by an actual Codex session (as opposed to Cursor Cloud, which was verified end-to-end on Ubuntu/x86_64 in a prior session — see `cursor-cloud.md`). Issue **#106** tracks Linux validation.
+### macOS (Codex Desktop)
+
+- Codex Desktop on macOS is the platform this repo's Codex tooling was originally built and validated against.
+- macOS Codex **sandbox** quirks below (elevated `gh`/`build`, port-binding risk) are verified on macOS only.
+
+### Linux (issue #106)
+
+Verified on **Linux x86_64** (Ubuntu bookworm, kernel `6.12.58+`, Node **v24.18.0**) by running Codex bootstrap/worker scripts directly on a Linux host — not by inferring from Cursor Cloud results. This pass exercised `.codex/` scripts and shared `npm run` commands; it did **not** run inside Codex Desktop's Linux sandbox, so sandbox-specific elevation behavior on Linux Codex may still differ.
+
+| Command / script | Result |
+|---|---|
+| `.codex/scripts/check-worker-environment.sh` | Pass (`ENV_CHECK_OK=1`). Placeholder credential warnings expected with `.env.example` bootstrap. |
+| `.codex/environments/environment.toml` bootstrap (`npm install` + env check) | Pass via `orchestrator-worker-worktree.sh provision`. |
+| `.codex/scripts/orchestrator-worker-worktree.sh` `provision` / `cleanup` | Pass. Worktree created under `$HOME/.codex/worktrees/workers/...`, bootstrap ran, cleanup deleted branch. |
+| `npm run tool:install` | Pass on `linux/amd64` (Supabase CLI **2.105.0**, Vercel CLI **54.18.7**). |
+| `npm run tool:check` | Pass. |
+| `npm run verify` (`lint`, `typecheck`, `test`, `build`) | Pass without elevated execution on this Linux host. |
+| `npm run e2e` (including `playwright install chromium`) | Pass — **20/20** tests. |
+| `npm run db:lint` | Blocked without Docker/local Supabase (`nc` probe on `127.0.0.1:54322` fails). Use `supabase-verify` CI or `SUPABASE_DB_URL`. |
+| `npm run agent:project-check` | Pass with operator PAT (`GITHUB_PAT_OPERATOR` / `GH_TOKEN`). |
+| `gh` CLI | Present (**2.91.0**). Integration token supports git clone/push; project/issue GraphQL needs operator PAT (same pattern as `cursor-cloud.md`). |
+| Docker | Not available on the validation host — same `db:lint --local` fallback as Cursor Cloud. |
+
+### Unverified
+
 - Windows is not a validated environment for this tooling.
+- Codex Desktop **Linux sandbox** elevation/port-binding behavior has not been re-tested inside Codex itself; only the shared scripts and `npm run` contract were validated on a plain Linux host.
 
 ## Node version policy
 
 - **Policy:** Node **24** (major), matching `.nvmrc`, `package.json` `engines.node` (`>=24`), and CI (`verify.yml`, `supabase-verify.yml`).
 - Codex Desktop/macOS does not use `.cursor/Dockerfile`; workers should run `node --version` during bootstrap and use Node 24 (for example via the host's Node install or `nvm use` when `.nvmrc` is present) before `npm install`.
-- `.codex/scripts/check-worker-environment.sh` reports `NODE_PRESENT` but does not yet enforce a minimum Node major version; rely on `engines` and CI for enforcement until Linux validation (**#106**) records any Codex-specific caveats.
+- `.codex/scripts/check-worker-environment.sh` reports `NODE_PRESENT` but does not yet enforce a minimum Node major version; rely on `engines` and CI for enforcement. Linux validation (**#106**) found no Node-version caveats beyond the repo's Node 24 policy when the host already ships Node 24.
 
 ## Bootstrap / environment config
 
@@ -35,9 +59,9 @@ This doc covers what's specific to Codex (Desktop app or CLI) when it develops t
 ## Tool availability quirks
 
 - `npm run tool:install` (installs a repo-local Supabase + Vercel CLI into `.codex/tools`) supports macOS (Intel/Apple Silicon) and Linux (amd64/arm64); it is not supported on Windows. It used to hard-fail on anything but Darwin/arm64 — this was fixed and verified on Linux/x86_64 in a prior session (see `docs/planning/agent-environment-compatibility-plan.md`, Phase 0).
-- In a Codex sandbox, GitHub CLI (`gh`) checks may need elevated execution because sandboxed processes may not always see the same macOS keychain-backed `gh` login that's available in a normal terminal.
-- `npm run build` may require elevated execution in a Codex sandbox because Next.js/Turbopack can hit sandbox restrictions even when the project itself builds correctly.
-- In a Codex sandbox, `supabase db lint --local` may be unavailable even with the CLI installed, because Docker is not present and localhost access to the local Supabase Postgres port can be blocked. Use the `supabase-verify` GitHub Actions workflow as the authoritative infra-backed DB gate, or run `npm run db:lint` with `SUPABASE_DB_URL` pointed at a disposable database.
+- **macOS Codex sandbox:** GitHub CLI (`gh`) checks may need elevated execution because sandboxed processes may not always see the same macOS keychain-backed `gh` login that's available in a normal terminal. On Linux (**#106**), `gh auth status` worked without elevation when the integration token or operator PAT was present.
+- **macOS Codex sandbox:** `npm run build` may require elevated execution because Next.js/Turbopack can hit sandbox restrictions even when the project itself builds correctly. On a plain Linux x86_64 host (**#106**), `npm run verify` (including `build`) passed without elevation; Linux Codex sandbox behavior is still unverified.
+- `supabase db lint --local` is unavailable without Docker or a reachable local Supabase Postgres port — verified blocked on Linux (**#106**) and assumed the same in macOS Codex sandboxes without Docker. Use the `supabase-verify` GitHub Actions workflow as the authoritative infra-backed DB gate, or run `npm run db:lint` with `SUPABASE_DB_URL` pointed at a disposable database.
 - `npm run tool:check` is safe to run inside a Codex sandbox; it redirects the Supabase CLI's writable home to a temp directory for the version check.
 
 ## Branch convention
@@ -58,3 +82,4 @@ This doc covers what's specific to Codex (Desktop app or CLI) when it develops t
 ## Known gaps / follow-ups
 
 - Multi-platform dispatch policy is documented in `docs/operators/multi-platform-dispatch-policy.md`. Only Codex workers may consume `Agent Dispatch = Yes` for product-track feature delivery.
+- Re-validate inside Codex Desktop's Linux sandbox if Codex-on-Linux becomes a supported worker host — this issue's pass used a plain Linux VM, not Codex's sandbox layer.
