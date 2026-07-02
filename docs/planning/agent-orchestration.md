@@ -8,10 +8,11 @@ This document defines how to let one agent manage queue state while other agents
 
 The orchestrator is a governance agent. It does not own product delivery for a feature issue. It owns:
 
-- validating the GitHub queue
+- validating the GitHub Project queue
 - selecting the next dependency-correct issue
-- promoting exactly one issue to `agent-ready`
+- setting `Status`, `Queue Order`, and `Agent Dispatch` on queue issues
 - demoting blocked or superseded issues
+- keeping compatibility labels aligned while migration cleanup remains in progress
 - checking handoff state after merge
 - producing the worker brief for the next implementation session
 
@@ -19,7 +20,7 @@ The orchestrator is a governance agent. It does not own product delivery for a f
 
 The worker is an implementation agent. It owns:
 
-- one open `agent-ready` issue
+- one open issue selected by the GitHub Project dispatch slot
 - one branch and one focused PR
 - reading the linked docs and repo instructions
 - implementing code and docs for that issue only
@@ -36,12 +37,14 @@ The worker is an implementation agent. It owns:
 
 ## Queue states
 
-Use GitHub labels and issue comments to make the queue machine-readable.
+Use the GitHub Project to make the queue machine-readable.
 
-- `agent-ready`: exactly one open issue should have this when the repo is ready for a fresh worker.
-- no `agent-ready`: valid only when the queue is intentionally blocked and the blocker is recorded.
+- `Agent Dispatch = Yes`: exactly one open issue should have this when the repo is ready for a fresh worker.
+- no open issue with `Agent Dispatch = Yes`: valid only when the queue is intentionally blocked and the blocker is recorded.
+- `Status`: use `Backlog`, `Ready`, `In Progress`, `Review`, `Blocked`, and `Done` for workflow state.
+- `Queue Order`: the deterministic preferred execution order for open implementation issues when multiple issues could otherwise appear ready.
 - domain labels such as `database`, `auth`, `tests`, `calendar`, `watchlist`, `deployment`, or `tmdb`: use these for routing, not readiness.
-- `docs/planning/open-issue-order.json`: the deterministic preferred execution order for the current open implementation queue when multiple issues could otherwise appear ready.
+- `agent-ready`: compatibility label only. If retained, it is derived from `Agent Dispatch` and must not override the project.
 
 Recommended operational states:
 
@@ -52,16 +55,16 @@ Recommended operational states:
 5. `blocked`
 6. `done`
 
-These states can be represented with comments, project fields, or additional labels if you want stronger automation later. The minimum required invariant is still the single open `agent-ready` issue.
+These states are represented in project fields. The minimum required invariant is still a single open dispatch issue.
 
 ## Orchestrator workflow
 
 1. Check the repository default branch and current open PR state from an attached local branch that tracks `origin/master`, such as `orchestrator/live`.
 2. Confirm whether an implementation issue just merged or whether the queue is already idle.
-3. Inspect open issues against dependency order, issue comments, and blocking notes.
-4. Use `docs/planning/open-issue-order.json` to identify the earliest still-open implementation issue, then confirm its blocker notes are clear.
+3. Inspect open issues against project order, issue comments, and blocking notes.
+4. Use the project `Queue Order` field to identify the earliest still-open implementation issue, then confirm its blocker notes are clear.
 5. If that issue has remained open through later merged feature work, do a quick repo-state spot check against the live acceptance criteria before promotion so stale issues are reconciled instead of handed to a worker.
-6. Promote exactly one issue to `agent-ready` only if it is current, unblocked, and small enough for one PR.
+6. Set `Agent Dispatch = Yes` on exactly one issue only if it is current, unblocked, small enough for one PR, and still has `Status = Ready`.
 7. If no issue qualifies, leave the queue unready and record why.
 8. Provision the worker through the main repo Codex environment profile, run the worker environment readiness check, and create a deterministic issue-centric worktree that is clearly separate from the orchestrator worktree.
 9. Launch the worker with `spawn_agent`, let it boot naturally, and collect `BOOT_CHECKPOINT` from that natural startup context before retargeting anything.
@@ -129,8 +132,8 @@ Run this after a worker PR lands:
 2. Confirm the completed issue is closed.
 3. Confirm no duplicate or stale PR remains open for the same work.
 4. Clean up the worker branch and worktree only after merge or explicit abandonment.
-5. Re-evaluate the next dependency-correct issue in `docs/planning/open-issue-order.json`.
-6. Promote exactly one issue to `agent-ready`, or document the blocker.
+5. Re-evaluate the next dependency-correct issue in the project by `Queue Order`.
+6. Promote exactly one issue to `Agent Dispatch = Yes`, or document the blocker.
 7. Update planning or guidance docs only if the merge changed queue assumptions.
 
 ## Manual testing checklist source
@@ -158,7 +161,7 @@ This is the failure you just hit. The worker finished, but nobody promoted the n
 
 Mitigation:
 
-- fail queue validation when more than one open issue has `agent-ready`
+- fail queue validation when more than one open issue has `Agent Dispatch = Yes`
 - require the orchestrator to demote all but one before a fresh worker starts
 
 ### Ready issue is not actually dependency-correct
