@@ -5,6 +5,7 @@ Status note:
 - This document audits the migration-era queue model that existed before the GitHub Project cutover.
 - The live queue authority is now the `moviecal Delivery` GitHub Project.
 - References below to `agent-ready` and `docs/planning/open-issue-order.json` describe compatibility surfaces, legacy assumptions, or remaining cleanup work unless a section explicitly says otherwise.
+- `docs/planning/open-issue-order.json` is now intended to be generated-only when retained at all; humans should not treat it as the live queue source.
 
 ## Purpose
 
@@ -27,7 +28,7 @@ This is explicitly **not** a push for a fully agent-agnostic repo (for example, 
 - `AGENTS.md`: the **Orchestrator contract** and **Session workflow** sections in full, and the Codex-specific bullets inside **Environment policy** (validated environment claim, `CODEX_ENV_SOURCE_ROOT`/worktree resolution).
 - `docs/planning/agent-orchestration.md`, `docs/planning/worker-dispatch-prompt.md` — pure orchestrator/worker operating procedure and dispatch template (`spawn_agent`, `wait_agent`, `BOOT_CHECKPOINT`/`STARTUP_CHECKPOINT`/`REVIEW_CHECKPOINT`/`PUBLISH_CHECKPOINT`).
 - `docs/planning/AGENT_GUIDANCE.md` — mostly the same orchestrator checklist, with a smaller generic-issue-hygiene core mixed in.
-- `scripts/agent-check.sh`, `scripts/agent-handoff-check.sh` and their `npm run agent:check` / `npm run agent:handoff` scripts — implementation is platform-agnostic bash (uses `gh`/`jq` against GitHub issue state and `docs/planning/open-issue-order.json`), but the concept (single `agent-ready` queue, orchestrator-driven promotion) is currently documented only as part of the Codex orchestrator contract.
+- `scripts/agent-check.sh`, `scripts/agent-handoff-check.sh` and their `npm run agent:check` / `npm run agent:handoff` scripts — implementation is platform-agnostic bash (uses `gh`/`jq` against GitHub issue state and the generated compatibility artifact `docs/planning/open-issue-order.json`), but the concept (single `agent-ready` queue, orchestrator-driven promotion) is currently documented only as part of the Codex orchestrator contract and is scheduled for project-first replacement.
 - Vocabulary that only makes sense inside this model: `spawn_agent`, `wait_agent`, `BOOT_CHECKPOINT`, `STARTUP_CHECKPOINT`, `REVIEW_CHECKPOINT`, `PUBLISH_CHECKPOINT`, `orchestrator/live`.
 
 ### 1.2 Cursor-specific artifacts

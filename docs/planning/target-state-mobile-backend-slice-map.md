@@ -6,8 +6,8 @@ Status: forward-looking architecture map for future planning only.
 
 - This file is a strategy artifact for future slicing and issue creation.
 - It is **not** the active implementation queue and must not override live GitHub issue state.
-- Agents should continue to start from the single open `agent-ready` issue and `docs/planning/open-issue-order.json`.
-- When this map conflicts with active issue scope, GitHub issue state wins.
+- Agents should continue to start from the single open issue whose `moviecal Delivery` project item has `Agent Dispatch = Yes` and `Status = Ready`.
+- When this map conflicts with active queue scope, GitHub Project and issue state win.
 
 ## Scope and intent
 
@@ -45,10 +45,10 @@ This map captures a target backend shape for a mobile-first product direction wh
 5. Create an executable auth-contract slice that separates identity/session resolution from cookie transport and route-level cookie mutation.
 6. Add a versioned mobile API surface for watchlist read/write once the auth-contract slice is in place.
 
-Shared-watchlist calendar aggregation is already in the active ordered queue as issue #74 (`docs/planning/open-issue-order.json`) and should be tracked there rather than duplicated as future slice work in this file.
+Shared-watchlist calendar aggregation is already the active delivery issue as #74 in the `moviecal Delivery` project and should be tracked there rather than duplicated as future slice work in this file.
 
 ## Guardrails for backlog safety
 
-- Do not relabel or reorder current `agent-ready` work from this file alone.
+- Do not change current dispatch or queue ordering from this file alone.
 - Any slice here should become executable only after a scoped GitHub issue exists with acceptance criteria and verification steps.
 - Keep this map in sync with docs only after issue queue decisions are made in GitHub.
