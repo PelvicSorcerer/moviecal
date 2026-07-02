@@ -129,13 +129,13 @@ Phases 1–3 were executed in PR #98 after this document was first written. Whil
 
 ## Part 5: Remaining work — tracked as GitHub issues #103–#106
 
-| Phase | Issue | Title |
-|---|---|---|
-| 4 (Node alignment) | #103 | Align Node.js version across agent platforms |
-| 2 (consolidation) | #104 | Consolidate Codex orchestration docs under `docs/operators/` |
-| Verification | #105 | Verify GitHub Copilot coding agent against repo |
-| Verification | #106 | Validate Codex operator tooling on Linux |
+| Phase | Issue | Title | Status |
+|---|---|---|---|
+| 4 (Node alignment) | #103 | Align Node.js version across agent platforms | Done — `.cursor/Dockerfile` (`node:24-bookworm`) + operator docs |
+| 2 (consolidation) | #104 | Consolidate Codex orchestration docs under `docs/operators/` | Open |
+| Verification | #105 | Verify GitHub Copilot coding agent against repo | Open |
+| Verification | #106 | Validate Codex operator tooling on Linux | Open |
 
 See `docs/planning/github-project-migration-plan.md` (Platform compatibility track) for execution order, project `Queue Order` values, and dependencies. Platform and migration issues do not belong in `docs/planning/open-issue-order.json`.
 
-Migration cleanup **#93–#95** is complete. Dispatch policy **#102** is complete. Issue **#103** or **#104** is the next platform-track dependency gate.
+Migration cleanup **#93–#95** is complete. Dispatch policy **#102** is complete. Node alignment **#103** is complete. Issue **#104** is the next platform-track dependency gate.

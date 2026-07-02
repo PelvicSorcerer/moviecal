@@ -1,5 +1,9 @@
 {
-  "install": "set -e\n[ -f .env.local ] || cp .env.example .env.local\nnpm install\n",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "install": "set -e\nnode_major=\"$(node -p \"Number(process.versions.node.split('.')[0])\")\"\nif [ \"$node_major\" -lt 24 ]; then\n  echo \"Node 24+ required (see .nvmrc); got $(node --version)\" >&2\n  exit 1\nfi\n[ -f .env.local ] || cp .env.example .env.local\nnpm install\n",
   "start": "set -e\nif [ -n \"${GITHUB_PAT_OPERATOR:-}\" ]; then\n  unset GH_TOKEN GITHUB_TOKEN\n  export GH_TOKEN=\"$GITHUB_PAT_OPERATOR\"\nfi\n",
   "ports": [
     {
