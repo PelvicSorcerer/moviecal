@@ -1,5 +1,11 @@
 # Agent and environment compatibility: audit and refactor plan
 
+Status note:
+
+- This document audits the migration-era queue model that existed before the GitHub Project cutover.
+- The live queue authority is now the `moviecal Delivery` GitHub Project.
+- References below to `agent-ready` and `docs/planning/open-issue-order.json` describe compatibility surfaces, legacy assumptions, or remaining cleanup work unless a section explicitly says otherwise.
+
 ## Purpose
 
 This repo has been developed exclusively through Codex (Codex Desktop on macOS), and its agent-facing tooling reflects that: a Codex-specific orchestrator/worker contract is woven directly into `AGENTS.md`, `.codex/`, `scripts/`, and `docs/planning/`. Cursor Cloud Agents and GitHub Copilot's coding agent are now also expected to work against this repo.

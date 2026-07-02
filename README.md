@@ -32,17 +32,16 @@ Supabase helper notes:
 - This repo currently supports two agent platforms: Codex (via `.codex/environments`, validated on Codex Desktop/macOS) and Cursor Cloud Agents (via `.cursor/environment.json`, a generic Ubuntu/x86_64 VM). See `AGENTS.md` for the full contract, including a "Cursor Cloud specific instructions" section that lists the differences between the two (Docker/Supabase CLI availability, branch naming, `gh` auth, and secrets handling).
 - Use disposable or dev-only credentials for Supabase, TMDb, and cron secrets. Do not use production values for autonomous feature work.
 - `.env.example` is placeholder-only. A copied `.env.local` does not mean live integrations are ready.
-- Fresh implementation sessions should begin from the single open GitHub issue labeled `agent-ready`.
+- Fresh implementation sessions should begin from the single open GitHub issue whose `moviecal Delivery` project item has `Agent Dispatch = Yes` and `Status = Ready`.
 - Start work from `master` on a branch named `agent/<issue-number>-<short-slug>`.
-- Use an orchestrator step between worker issues to reconcile the queue and promote the next `agent-ready` issue.
+- Use an orchestrator step between worker issues to reconcile the project queue and promote the next dispatch issue.
 - For implementation issues, the orchestrator should provide an issue-specific manual testing checklist before the branch is considered ready for review.
 - Human local testing should run against the pushed worker-owned issue branch before a draft PR is promoted to ready for review.
 
 Local verification commands:
 
 - `npm run verify` runs the baseline lint, typecheck, unit test, and build contract.
-- `npm run agent:check` validates that exactly one open issue is `agent-ready` and that the issue has the required execution sections.
-- `npm run agent:handoff` validates post-merge queue readiness from `master` before sending in the next fresh worker.
+- `npm run agent:check` and `npm run agent:handoff` are legacy compatibility checks while the repo finishes migrating queue validation from label/json-based rules to the project-first model.
 - `npm run db:lint` is the repo wrapper for `supabase db lint`. It uses `SUPABASE_DB_URL` when you provide a disposable database URL; otherwise it attempts `supabase db lint --local`.
 - `.github/workflows/supabase-verify.yml` is the authoritative infra-backed Supabase schema gate for PRs that change database schema verification surfaces.
 - `npm run build` may require elevated execution in Codex because Next.js/Turbopack can hit sandbox restrictions even when the project itself builds correctly.
@@ -77,7 +76,7 @@ The repository now ships the core MVP surfaces needed for deployment validation:
 
 ## Documentation
 
-See `docs/` for product, design, technical, and planning notes. Planning docs describe the intended implementation sequence instead of acting as a progress tracker.
+See `docs/` for product, design, technical, planning, and operator notes. Planning docs describe the intended implementation sequence instead of acting as a progress tracker.
 
 ## Security
 
