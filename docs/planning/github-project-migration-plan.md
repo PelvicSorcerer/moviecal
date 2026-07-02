@@ -468,7 +468,7 @@ These issues complete the multi-agent / multi-environment work from `docs/planni
 - **#98 is not duplicated** — it already exists (PR #98); the platform track starts there, not with a new issue.
 - **#92/#101 is not duplicated** — project-as-queue authority stays in migration item 5; #102 only decides which *platforms* may receive `Agent Dispatch = Yes` after cutover.
 - **Orchestration doc consolidation (#104) waits** until #95 and #102 so queue rules are not reorganized twice.
-- **Product queue unchanged** — `#74` remains the only `agent-ready` feature issue via `open-issue-order.json` until migration cutover.
+- **Product queue unchanged** — `#74` remains the live feature-delivery item; after cutover its dispatch state lives in the project `Agent Dispatch` field, not `open-issue-order.json`.
 
 If the project API is unavailable from an automation token, add these items manually in the `moviecal Delivery` project with the `Queue Order` values above.
 

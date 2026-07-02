@@ -9,12 +9,14 @@ on:
       - cursor/**
     paths:
       - 'scripts/project-queue-check.sh'
+      - 'scripts/project-platform-track-sync.sh'
       - '.github/workflows/project-queue-check.yml'
       - 'docs/planning/github-project-migration-plan.md'
       - 'package.json'
   pull_request:
     paths:
       - 'scripts/project-queue-check.sh'
+      - 'scripts/project-platform-track-sync.sh'
       - '.github/workflows/project-queue-check.yml'
       - 'docs/planning/github-project-migration-plan.md'
       - 'package.json'

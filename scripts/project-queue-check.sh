@@ -14,6 +14,77 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+setup_token() {
+  if [ -n "${GITHUB_PAT_OPERATOR:-}" ]; then
+    export GH_TOKEN="$GITHUB_PAT_OPERATOR"
+  fi
+  unset GITHUB_TOKEN 2>/dev/null || true
+}
+
+fetch_project_items_json() {
+  local response graphql_limit=100
+  if [ "$list_limit" -lt "$graphql_limit" ]; then
+    graphql_limit="$list_limit"
+  fi
+
+  if project_items_json=$(gh project item-list "$project_number" --owner "$owner" --limit "$list_limit" --format json 2>/dev/null); then
+    return 0
+  fi
+
+  response=$(gh api graphql -f query="query {
+    user(login: \"$owner\") {
+      projectV2(number: $project_number) {
+        items(first: $graphql_limit) {
+          nodes {
+            content {
+              __typename
+              ... on Issue { number title labels(first: 20) { nodes { name } } }
+              ... on PullRequest { number title }
+            }
+            fieldValues(first: 20) {
+              nodes {
+                ... on ProjectV2ItemFieldSingleSelectValue {
+                  name
+                  field { ... on ProjectV2FieldCommon { name } }
+                }
+                ... on ProjectV2ItemFieldNumberValue {
+                  number
+                  field { ... on ProjectV2FieldCommon { name } }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }")
+
+  project_items_json=$(echo "$response" | jq '{
+    items: [
+      .data.user.projectV2.items.nodes[]
+      | {
+          title: .content.title,
+          labels: ((.content.labels.nodes // []) | map(.name)),
+          content: (
+            if .content.__typename == "Issue" then
+              {type: "Issue", number: .content.number}
+            elif .content.__typename == "PullRequest" then
+              {type: "PullRequest", number: .content.number}
+            else
+              {type: "Draft", number: null}
+            end
+          ),
+          status: (
+            [.fieldValues.nodes[] | select(.field.name == "Status") | .name][0] // ""
+          ),
+          "agent Dispatch": (
+            [.fieldValues.nodes[] | select(.field.name == "Agent Dispatch") | .name][0] // ""
+          )
+        }
+    ]
+  }')
+}
+
 case "$mode" in
   pre-cutover|post-cutover) ;;
   *)
@@ -41,12 +112,14 @@ else
     exit 1
   fi
 
+  setup_token
+
   if ! gh auth status >/dev/null 2>&1; then
-    echo "gh CLI is not authenticated. Provide GH_TOKEN/PROJECT_QUEUE_TOKEN in CI or run 'gh auth login -h github.com' locally." >&2
+    echo "gh CLI is not authenticated. Provide GH_TOKEN/PROJECT_QUEUE_TOKEN/GITHUB_PAT_OPERATOR in CI or locally." >&2
     exit 1
   fi
 
-  project_items_json=$(gh project item-list "$project_number" --owner "$owner" --limit "$list_limit" --format json)
+  fetch_project_items_json
   open_issues_json=$(gh issue list --repo "$repo" --state open --limit "$list_limit" --json number,title)
   echo "Repository: $repo"
   echo "Project: $owner/$project_number"
