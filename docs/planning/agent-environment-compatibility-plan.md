@@ -125,17 +125,17 @@ Phases 1–3 were executed in PR #98 after this document was first written. Whil
 - **Phase 1 — extract platform sections out of `AGENTS.md` into `docs/operators/*.md`.** Done. `AGENTS.md` now has a router table; `cursor-cloud.md` and `github-copilot.md` are new; the orchestrator contract and session workflow sections were replaced with a short pointer plus durable cross-platform invariants using project `Agent Dispatch` language.
 - **Phase 2 — consolidate the Codex orchestration docs.** Deferred to issue **#104** until migration **#95** and policy **#102** complete.
 - **Phase 3 — promote the branch-prefix table into `docs/operators/branch-and-ci-conventions.md`.** Done. `branch-prefixes.json` and `scripts/check-branch-ci-conventions.py` (`npm run check:branch-ci`, enforced in `verify.yml`) catch prefix/CI drift automatically.
+- **Phase 5 — multi-platform dispatch policy.** Done. `docs/operators/multi-platform-dispatch-policy.md` documents that only Codex workers may receive `Agent Dispatch = Yes` for product-track feature delivery; Cursor Cloud Agents and GitHub Copilot implement platform/governance work via direct assignment only.
 
-## Part 5: Remaining work — tracked as GitHub issues #102–#106
+## Part 5: Remaining work — tracked as GitHub issues #103–#106
 
 | Phase | Issue | Title |
 |---|---|---|
 | 4 (Node alignment) | #103 | Align Node.js version across agent platforms |
-| 5 (dispatch policy) | #102 | Define multi-platform agent dispatch policy for post-cutover queue |
 | 2 (consolidation) | #104 | Consolidate Codex orchestration docs under `docs/operators/` |
 | Verification | #105 | Verify GitHub Copilot coding agent against repo |
 | Verification | #106 | Validate Codex operator tooling on Linux |
 
 See `docs/planning/github-project-migration-plan.md` (Platform compatibility track) for execution order, project `Queue Order` values, and dependencies. Platform and migration issues do not belong in `docs/planning/open-issue-order.json`.
 
-Migration cleanup **#93–#95** is complete. Issue **#102** is the next platform-track dependency gate.
+Migration cleanup **#93–#95** is complete. Dispatch policy **#102** is complete. Issue **#103** or **#104** is the next platform-track dependency gate.

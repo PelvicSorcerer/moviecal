@@ -12,7 +12,7 @@ This doc covers what's specific to Codex (Desktop app or CLI) when it develops t
 - Start implementation only from the single open issue whose project item has `Agent Dispatch = Yes` and `Status = Ready`.
 - Use the project `Queue Order` field when multiple issues could plausibly become the next dispatch candidate.
 - Use the GitHub issue body as the execution contract for acceptance criteria, verification steps, security notes, and dependency details.
-- The GitHub Project is the dispatch authority. Use `Agent Dispatch = Yes` and `Status = Ready` on exactly one open issue when the queue is ready for a fresh worker.
+- The GitHub Project is the dispatch authority. Use `Agent Dispatch = Yes` and `Status = Ready` on exactly one open **product-track** issue when the queue is ready for a fresh Codex worker. See `docs/operators/multi-platform-dispatch-policy.md` for platform-specific dispatch rights.
 
 ## What's verified vs assumed
 
@@ -51,4 +51,4 @@ This doc covers what's specific to Codex (Desktop app or CLI) when it develops t
 
 ## Known gaps / follow-ups
 
-- Whether Cursor Cloud Agents or GitHub Copilot's coding agent may consume the single `Agent Dispatch = Yes` slot is a separate, still-open policy decision (issue **#102**). Do not assume queue access on behalf of another platform.
+- Multi-platform dispatch policy is documented in `docs/operators/multi-platform-dispatch-policy.md`. Only Codex workers may consume `Agent Dispatch = Yes` for product-track feature delivery.
