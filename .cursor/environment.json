@@ -1,5 +1,6 @@
 {
-  "install": "set -e\n[ -f .env.local ] || cp .env.example .env.local\nnpm install\nif [ -n \"${GITHUB_PAT_OPERATOR:-}\" ]; then\n  echo \"$GITHUB_PAT_OPERATOR\" | gh auth login --with-token\nfi\n",
+  "install": "set -e\n[ -f .env.local ] || cp .env.example .env.local\nnpm install\n",
+  "start": "set -e\nif [ -n \"${GITHUB_PAT_OPERATOR:-}\" ]; then\n  gh auth logout --hostname github.com 2>/dev/null || true\n  echo \"$GITHUB_PAT_OPERATOR\" | gh auth login --with-token\nfi\n",
   "ports": [
     {
       "name": "Next.js dev server",
