@@ -20,7 +20,8 @@ Unlike `docs/operators/codex.md` and `docs/operators/cursor-cloud.md`, nothing b
 ## Queue governance
 
 - Copilot's coding agent runs one agent per assigned issue/PR, similar to Cursor Cloud Agents; it does not participate in Codex's orchestrator/worker worktree handshake described in `docs/operators/codex.md` and `docs/planning/agent-orchestration.md`.
-- Whether Copilot may receive `Agent Dispatch = Yes` on a project item is the same open policy decision noted for Cursor (issue **#102**). Until decided, treat Copilot's coding agent as following this repo's general branch/PR/verification rules on whatever task it is assigned, without asserting queue rights.
+- **GitHub Copilot may not receive `Agent Dispatch = Yes` on any project item.** Product-track feature delivery is owned by Codex workers via the single dispatch slot. See `docs/operators/multi-platform-dispatch-policy.md`.
+- Copilot **may** implement platform-track issues (`Track = Platform`), governance/docs work (`docs/**`, `chore/**`), and other tasks when GitHub assigns an issue/PR to Copilot or a human delegates the work. Direct assignment is not dispatch-slot consumption — do not set or assume `Agent Dispatch = Yes`.
 
 ## Known gaps / follow-ups
 

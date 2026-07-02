@@ -13,7 +13,8 @@ This file is the generic contract every agent and human contributor reads. Platf
 
 ## Start conditions
 
-- Start implementation only from the single open GitHub issue whose `moviecal Delivery` project item has `Agent Dispatch = Yes` and `Status = Ready`.
+- **Product-track feature work (Codex workers):** start implementation only from the single open GitHub issue whose `moviecal Delivery` project item has `Agent Dispatch = Yes` and `Status = Ready`.
+- **Platform-track, governance, or directly assigned work (any platform):** start only when a human assigns the task or delegates the issue; these items keep `Agent Dispatch = No`. See `docs/operators/multi-platform-dispatch-policy.md`.
 - Treat the GitHub Project as the operational source of truth for live queue state, status, and ordering.
 - Do not start feature work from detached `HEAD`; branch from `master`.
 - Branch name format is platform-specific. See `docs/operators/branch-and-ci-conventions.md` for the exact prefix each platform uses; do not rename a platform-assigned branch to match a different platform's convention.
@@ -45,7 +46,7 @@ The invariants below apply regardless of which doc currently governs procedural 
 - A ready handoff means: a local branch tracking `origin/master` contains the merged change; there are no stray open PRs for the same issue; exactly one open issue has `Agent Dispatch = Yes` and `Status = Ready`, unless the queue is intentionally blocked; and the promoted issue has current acceptance criteria, verification steps, and security notes when applicable.
 - If the next issue depends on missing tooling, secrets, or infrastructure, mark the queue blocked instead of promoting a speculative dispatch issue.
 - When multiple open issues could look ready, use the project `Queue Order` field as the deterministic tie-breaker.
-- Whether agent platforms other than Codex (Cursor Cloud, GitHub Copilot) may receive `Agent Dispatch = Yes` on a project item is a separate, still-open policy decision (issue **#102**). Do not assume queue access on behalf of a platform that doesn't already have an explicit answer in its `docs/operators/*.md` guide.
+- Multi-platform dispatch rights are documented in `docs/operators/multi-platform-dispatch-policy.md`. Only Codex workers may receive `Agent Dispatch = Yes` for product-track feature delivery; Cursor Cloud Agents and GitHub Copilot implement platform/governance work via direct assignment only.
 
 ## Environment policy
 
