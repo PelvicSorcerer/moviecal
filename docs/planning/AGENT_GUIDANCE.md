@@ -1,14 +1,14 @@
 # Agent guidance
 
-This repository uses GitHub issues to scope implementation work for humans and automated agents. Use these rules before starting any non-trivial coding task.
+This repository uses the `moviecal Delivery` GitHub Project for live queue state and GitHub issues for scoped implementation contracts. Use these rules before starting any non-trivial coding task.
 
 ## Mandatory preflight checks
 
 - Work from an open GitHub issue unless the maintainer explicitly asks for a docs-only cleanup or planning change.
-- Prefer issues labeled `agent-ready`. Treat issues without that label as blocked, deferred, or needing triage before implementation.
-- If multiple issues are labeled `agent-ready`, stop and reconcile the queue before handing the repo to a new agent. The default should be exactly one clearly next implementation issue.
-- If zero issues are labeled `agent-ready`, treat the repo as not ready for a fresh implementation agent until an orchestrator promotes the next issue or records a blocker.
-- Treat current GitHub issue state as authoritative when it conflicts with planning docs.
+- Prefer the single open issue whose project item has `Agent Dispatch = Yes` and `Status = Ready`. Treat issues without that project state as blocked, deferred, or needing triage before implementation.
+- If multiple open issues have `Agent Dispatch = Yes`, stop and reconcile the queue before handing the repo to a new agent. The default should be exactly one clearly next implementation issue.
+- If zero open issues have `Agent Dispatch = Yes`, treat the repo as not ready for a fresh implementation agent until an orchestrator promotes the next issue or records a blocker.
+- Treat current GitHub Project state as authoritative for queue status and ordering when it conflicts with planning docs.
 - Treat forward-looking strategy docs (for example `target-state` slice maps) as non-executable input until converted into scoped GitHub issues.
 - If an issue has been open through later merged feature work, spot-check the current repo against the live issue acceptance criteria before implementing it. Close or relabel stale issues instead of producing a no-op PR.
 - The issue should include acceptance criteria and verification steps.
@@ -29,12 +29,12 @@ This repository uses GitHub issues to scope implementation work for humans and a
 
 ## Queue governance
 
-- Use `agent-ready` only for the single issue that a fresh worker should implement next.
-- Re-evaluate `agent-ready` immediately after merge, not only before the next worker starts.
+- Use `Agent Dispatch = Yes` only for the single issue that a fresh worker should implement next.
+- Re-evaluate project dispatch state immediately after merge, not only before the next worker starts.
 - Prefer one orchestrator session between worker sessions. That session owns queue cleanup, dependency checks, and next-issue promotion.
 - Run post-merge orchestrator audits from an attached local branch that tracks `origin/master`; the local branch name does not need to be `master`.
 - When no issue is actually ready, leave the queue empty and document the blocker in GitHub instead of forcing a guess.
-- Use `bash scripts/agent-check.sh` before worker implementation and `bash scripts/agent-handoff-check.sh` after merge or when auditing repo readiness.
+- Use `bash scripts/agent-check.sh` before worker implementation and `bash scripts/agent-handoff-check.sh` after merge or when auditing repo readiness only as compatibility checks until the remaining legacy queue scripts are retired.
 
 ## Codex operator tooling
 
@@ -64,7 +64,7 @@ This repository uses GitHub issues to scope implementation work for humans and a
 1. Audit open issues and PRs on the default branch.
 2. Run the audit from an attached local branch that tracks `origin/master`, even if the branch name is something like `orchestrator/live`.
 3. Confirm the dependency-correct next issue from the current repo and issue state.
-4. Ensure exactly one open issue is labeled `agent-ready`, or explicitly record why the queue is blocked.
+4. Ensure exactly one open issue has `Agent Dispatch = Yes` and `Status = Ready`, or explicitly record why the queue is blocked.
 5. Check that the promoted issue contains docs, acceptance criteria, verification steps, and security notes where needed.
 6. Provision the worker through the main repo Codex environment profile, run the worker environment readiness check, and create the assigned git worktree before dispatching the worker.
 7. Use `spawn_agent` plus orchestrator-created git worktree isolation as the default worker launch path.
