@@ -106,12 +106,22 @@ Everything below is implemented, tested against a real run in this session, and 
 
 None of these changes alter the meaning of the orchestrator/worker contract, the `agent-ready` queue invariant, or any branch-naming convention already in use — they only make already-shared scripts, CI triggers, and docs correctly reflect the platforms that actually use them.
 
-## Part 4: Proposed next phases (not yet executed — need a decision, not just an audit)
+## Part 4: Remaining work — tracked as GitHub issues #98 and #102–#106
 
-These are bigger structural moves. They're described here so they can be reviewed and sequenced deliberately, rather than executed inline in this same change, because they touch `AGENTS.md`'s live orchestrator contract while a Codex orchestrator/worker queue may be actively running against this repo.
+Phases 0–3 from the original plan:
 
-- **Phase 1 — extract platform sections out of `AGENTS.md` into `docs/operators/*.md`.** Move the Orchestrator contract, Session workflow, and Codex-specific Environment policy bullets into `docs/operators/codex.md`; move the Cursor Cloud section into `docs/operators/cursor-cloud.md`; write `docs/operators/github-copilot.md` from the current `copilot-instructions.md` footer plus the issue-template/CI-trigger facts in Part 1.3. Replace the moved sections in `AGENTS.md` with a short router table. This is a pure move (no semantic change) but touches a file every in-flight agent session reads, so it should land in its own governance PR when no worker session is actively mid-task, per the existing "governance changes stay separate from feature delivery" rule.
-- **Phase 2 — consolidate the Codex orchestration docs.** `docs/planning/agent-orchestration.md` and `docs/planning/AGENT_GUIDANCE.md` currently overlap heavily; fold them into the new `docs/operators/codex.md` and either delete the originals or leave short redirect stubs, then update `docs/README.md`'s reading order and every doc that currently links to the old paths (`worker-dispatch-prompt.md`, `AGENT_GUIDANCE.md`, `copilot-instructions.md`).
-- **Phase 3 — promote the branch-prefix table into its own `docs/operators/branch-and-ci-conventions.md`** once there is more than one CI workflow that needs to reference it, and add a lightweight CI check (or a step in `agent-check.sh`) that fails if a branch prefix appears in this doc's table but not in a workflow's trigger list, or vice versa, so the Part 1.7 drift class of bug is caught automatically instead of by manual audit.
-- **Phase 4 — decide on Node-version alignment across platforms.** `.nvmrc`/`engines` now name Node 24 as the target, but this session's Cursor Cloud Agent VM's base image ships Node 22 by default. Decide whether to align Cursor's environment configuration (e.g., via a Dockerfile that installs Node 24) to the pinned version, or relax the pin to whatever is actually validated everywhere; either is fine, but the two should agree.
-- **Phase 5 — decide the queue-eligibility question for non-Codex platforms.** Right now `agent-check.sh`/`agent-handoff-check.sh` and the `agent-ready` queue are Codex-orchestrator-governed. Decide whether Cursor Cloud Agents and Copilot's coding agent should be able to pick up `agent-ready` issues directly (accepting their own branch-prefix conventions), or should be scoped to a different lane (governance/docs/chore work, or ad hoc tasks outside the queue) while Codex's orchestrator/worker system keeps owning the feature-issue queue. This was flagged as an open question in the prior Cursor environment-setup change and is restated here because it's the biggest remaining compatibility decision — everything in Phases 1-3 works either way, but Phase 5 changes what "agent-ready" is allowed to mean.
+- **Phase 0** — shipped in PR #96 (cross-platform scripts, `.cursor/environment.json`, compatibility audit doc).
+- **Phases 1–3** — issue **#98** / PR #98 (`docs/operators/` restructure, branch/CI conventions, drift check). Merge before or during the #92/#101 cutover window.
+- **Phase 2 (orchestration doc consolidation)** — deferred to issue **#104** until migration #95 and policy **#102** complete.
+
+Remaining open decisions and verification:
+
+| Phase | Issue | Title |
+|---|---|---|
+| 4 (Node alignment) | #103 | Align Node.js version across agent platforms |
+| 5 (dispatch policy) | #102 | Define multi-platform agent dispatch policy for post-cutover queue |
+| 2 (consolidation) | #104 | Consolidate Codex orchestration docs under `docs/operators/` |
+| Verification | #105 | Verify GitHub Copilot coding agent against repo |
+| Verification | #106 | Validate Codex operator tooling on Linux |
+
+See `docs/planning/github-project-migration-plan.md` (Platform compatibility track) for execution order, project `Queue Order` values, and dependencies. None of these issues belong in `agent-ready` or `open-issue-order.json`.

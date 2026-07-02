@@ -428,6 +428,50 @@ Current live product issue to include immediately:
 
 - `#74 Aggregate shared watchlists into calendar feeds and add shared-watchlist regressions`
 
+## Platform compatibility track (after migration cutover)
+
+These issues complete the multi-agent / multi-environment work from `docs/planning/agent-environment-compatibility-plan.md`. They are **not** feature-delivery items: do not label them `agent-ready` or add them to `docs/planning/open-issue-order.json`.
+
+**Execution order** (also use as GitHub Project `Queue Order` values):
+
+| Queue Order | Issue | Title | Blocked by | Notes |
+|---:|---|---|---|---|
+| 96 | #98 | Restructure agent docs: `docs/operators/` | — | PR #98 open. Finish during or immediately after #92/#101 so project-as-queue docs land on the stable operator layout. |
+| 97 | #102 | Define multi-platform agent dispatch policy | #95, #98 | Phase 5. Uses `Agent Dispatch` / `Execution Mode` language, not legacy `agent-ready` as primary authority. |
+| 98 | #103 | Align Node.js version across agent platforms | #98 | Phase 4. Can run in parallel with #102 once #98 merges. |
+| 99 | #104 | Consolidate Codex orchestration docs under `docs/operators/` | #95, #98, #102 | Phase 2 (deferred). Documentation consolidation only. |
+| 100 | #105 | Verify GitHub Copilot coding agent against repo | #98, #102 | Replaces audit-only content in `docs/operators/github-copilot.md`. |
+| 101 | #106 | Validate Codex operator tooling on Linux | #98 | Can run in parallel with #105 once #98 merges. |
+
+**Migration items still in flight** (finish before or in parallel with Queue Order 96–97 as noted above):
+
+| Queue Order | Issue | Title | Status |
+|---:|---|---|---|
+| 92 | #92 | Update repo docs so project becomes queue source of truth | Open (PR #101) |
+| 93 | #93 | Deprecate `open-issue-order.json` | Open |
+| 94 | #94 | Update queue-validation scripts | Open |
+| 95 | #95 | Remove obsolete queue rules after cutover | Open |
+
+**Suggested GitHub Project fields** when adding #98 and #102–#106:
+
+| Issue | Status | Track | Area | Execution Mode | Agent Dispatch | Priority |
+|---|---|---|---|---|---|---|
+| #98 | In Progress (or Ready) | Platform | docs | Agent | No | P1 |
+| #102 | Backlog | Platform | process | Human then Agent | No | P1 |
+| #103 | Backlog | Platform | process | Agent | No | P2 |
+| #104 | Backlog | Platform | docs | Agent | No | P2 |
+| #105 | Backlog | Platform | process | Either | No | P3 |
+| #106 | Backlog | Platform | process | Either | No | P3 |
+
+**Concerns addressed in this sequencing:**
+
+- **#98 is not duplicated** — it already exists (PR #98); the platform track starts there, not with a new issue.
+- **#92/#101 is not duplicated** — project-as-queue authority stays in migration item 5; #102 only decides which *platforms* may receive `Agent Dispatch = Yes` after cutover.
+- **Orchestration doc consolidation (#104) waits** until #95 and #102 so queue rules are not reorganized twice.
+- **Product queue unchanged** — `#74` remains the only `agent-ready` feature issue via `open-issue-order.json` until migration cutover.
+
+If the project API is unavailable from an automation token, add these items manually in the `moviecal Delivery` project with the `Queue Order` values above.
+
 ## Recommended initial project items
 
 ### 1. Create and document the GitHub Project schema

@@ -10,7 +10,8 @@ Recommended reading order for contributors and agents:
 5. `docs/planning/implementation-plan.md`
 6. `docs/planning/recommended-issue-sequence.md`
 7. `docs/planning/agent-orchestration.md` (Codex orchestrator/worker operating procedure; see `AGENTS.md` if you are on a different agent platform, such as Cursor Cloud)
-8. `docs/planning/agent-environment-compatibility-plan.md` (audit of agent/environment-specific artifacts and the plan for keeping multiple platforms compatible)
+8. `docs/planning/agent-environment-compatibility-plan.md` (audit of agent/environment-specific artifacts; remaining work tracked as #98 and #102–#106)
+9. `docs/planning/github-project-migration-plan.md` (migration + Platform track queue order for #92–#106)
 
 Keep docs updated when behavior, routes, environment variables, or security assumptions change. Planning docs should describe the intended execution plan and issue hygiene; they should not be used as a historical progress tracker.
 
