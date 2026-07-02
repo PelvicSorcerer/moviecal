@@ -47,8 +47,8 @@ Local verification commands:
 - `.github/workflows/supabase-verify.yml` is the authoritative infra-backed Supabase schema gate for PRs that change database schema verification surfaces.
 - `npm run build` may require elevated execution in Codex because Next.js/Turbopack can hit sandbox restrictions even when the project itself builds correctly.
 - `npm run e2e` installs the required Playwright browser automatically before running tests and runs against deterministic auth/watchlist fixtures plus Playwright API stubs, so it does not require real Supabase or TMDb secrets.
-- `npm run tool:install` installs workspace-local `vercel`, plus a repo-local Supabase binary path intended for this Apple Silicon macOS machine.
-- The Supabase portion of `npm run tool:install` is currently a machine-specific workaround for macOS on Apple Silicon. It downloads the Darwin arm64 archive and may ad-hoc re-sign the binary locally so it can run without a full system-wide install.
+- `npm run tool:install` installs workspace-local `vercel`, plus a repo-local Supabase binary. It detects OS/arch and supports macOS (Intel/Apple Silicon) and Linux (amd64/arm64); Windows is not supported.
+- The Supabase portion of `npm run tool:install` downloads the matching platform archive and, on macOS, may ad-hoc re-sign the binary locally so it can run without a full system-wide install (a no-op on Linux).
 - In Codex, `bash scripts/agent-check.sh` may need elevated execution because sandboxed `gh` cannot always see the macOS keychain-backed login even when `gh auth status` succeeds in your normal terminal.
 - `npm run tool:check` is safe to run inside Codex; it redirects the Supabase CLI's writable home to a temp directory for the version check.
 - In this Codex sandbox, `supabase db lint --local` may still be unavailable even with the CLI installed, because Docker is not present and localhost access to the local Supabase Postgres port can be blocked. In that case, use the PR's `supabase-verify` GitHub Actions workflow as the authoritative DB check, or run `npm run db:lint` with `SUPABASE_DB_URL` pointed at a disposable database.

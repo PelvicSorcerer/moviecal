@@ -7,9 +7,24 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 - Start implementation only from the single open GitHub issue labeled `agent-ready`.
 - Treat GitHub issue state as the operational source of truth when it conflicts with planning docs.
 - Do not start feature work from detached `HEAD`; branch from `master`.
-- Branch name format: `agent/<issue-number>-<short-slug>`.
+- Branch name format: `agent/<issue-number>-<short-slug>` for Codex worker issue branches. Other agent platforms use their own platform-assigned prefix instead (see the branch-prefix table below); do not rename a platform-assigned branch to match this format.
 - Governance or queue-maintenance changes should stay separate from feature delivery. Use a `docs/` or `chore/` branch for governance PRs; the persistent orchestrator worktree itself may remain on an attached local branch that tracks `origin/master`.
 - Orchestrator audits after merge should run from an attached local branch that tracks `origin/master`; the local branch name does not need to be `master`.
+
+## Branch prefixes and CI triggers (single source of truth)
+
+- This table is the single source of truth for branch-prefix-to-platform mapping. When you add a new agent platform or change a prefix, update this table and every CI workflow `branches:` filter in the same change so they cannot drift apart.
+
+| Prefix | Used by | Notes |
+|---|---|---|
+| `agent/<issue-number>-<short-slug>` | Codex worker issue branches | One branch per implementation issue; see Orchestrator contract below |
+| `orchestrator/live` (or similar) | Codex orchestrator's own attached branch | Tracks `origin/master`; never used for feature work |
+| `cursor/<slug>-<run-id>` | Cursor Cloud Agents | Prefix and suffix are assigned by the Cursor platform, not chosen by the agent |
+| `copilot/**` | GitHub Copilot coding agent | Assigned by GitHub's Copilot agent platform |
+| `docs/**`, `chore/**` | Governance/queue-maintenance work from any agent or human | Kept separate from `agent/**` feature branches per the Start conditions above |
+
+- Any GitHub Actions workflow that triggers on `push` to a subset of branches (for example `.github/workflows/supabase-verify.yml`) must include every prefix in this table that can touch the paths it guards. A branch prefix missing from a workflow's `branches:` filter is a real interoperability bug, not a style choice — it silently skips push-triggered CI for that platform (PR-triggered runs still happen once a PR is opened, since `pull_request` triggers are not branch-filtered here, but that is a weaker safety net than push-triggered CI).
+- See `docs/planning/agent-environment-compatibility-plan.md` for the full audit of agent/environment-specific artifacts in this repo and the phased plan for keeping multiple agent platforms compatible without breaking each other.
 
 ## Required preflight
 
@@ -63,14 +78,14 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 - Use disposable or dev-only credentials and resources for Supabase, TMDb, and cron protection.
 - Do not use production secrets, long-lived personal credentials, or private user data.
 - `.env.example` is placeholder-only. `.env.local` may exist with placeholder values and does not mean live integrations are ready.
-- The repo-local Supabase CLI install path is currently intended for this Apple Silicon macOS environment and should be treated as a local workaround, not a cross-platform project guarantee.
+- The repo-local Supabase/Vercel CLI install path (`npm run tool:install`) supports macOS (Intel/Apple Silicon) and Linux (amd64/arm64); it is not supported on Windows.
 - In Codex, GitHub CLI checks may need elevated execution because sandboxed processes may not see the same macOS keychain-backed `gh` login that is available in your normal terminal.
 
 ## Cursor Cloud specific instructions
 
 - `.cursor/environment.json` defines the Cursor Cloud Agent environment for this repo. It runs on a generic Ubuntu/x86_64 VM and is independent of the `.codex/environments` profile, which targets Codex Desktop on macOS.
 - The `.cursor/environment.json` install script copies `.env.example` to `.env.local` when missing and runs `npm install`. It does not run `.codex/scripts/check-worker-environment.sh`; that script is part of the Codex worker/orchestrator worktree contract described above, not the Cursor Cloud Agent contract.
-- `npm run tool:install` hard-fails on Cursor Cloud Agent VMs: it only downloads the Supabase CLI for Darwin arm64 and exits 1 on any other OS/architecture. Do not run it here. If a task needs the Supabase CLI on this VM, install the Linux x86_64 release directly instead.
+- `npm run tool:install` works on Cursor Cloud Agent VMs (verified on Ubuntu/x86_64): it detects OS/arch and downloads the matching Supabase CLI release.
 - Docker is not present on the default Cursor Cloud Agent VM, so `supabase db lint --local` and any workflow that needs a local Supabase/Postgres stack will not work here either. Use the `supabase-verify` GitHub Actions workflow, or run `npm run db:lint` with a disposable `SUPABASE_DB_URL`.
 - Unlike the Codex sandbox caveats noted above, `npm run lint`, `npm run typecheck`, `npm run test`, `npm run build`, and `npm run e2e` (including its automatic `playwright install chromium` step) have been verified to run without elevated execution and without extra system packages on the default Cursor Cloud Agent VM.
 - `gh` is preauthenticated on Cursor Cloud Agent VMs and does not have the macOS keychain visibility issue described above for Codex.
