@@ -1180,7 +1180,9 @@ Use this section as a compact reference while clicking through project setup in 
 | Setting | Value |
 | --- | --- |
 | Name | `moviecal Delivery` |
-| Description | `Operational delivery board for moviecal. During the GitHub Project migration rollout, this project is planning-only and the current repo-driven queue remains authoritative for dispatch until the cutover criteria in docs/planning/github-project-migration-plan.md are met.` |
+| Bootstrap description (Phase 0 only) | `Operational delivery board for moviecal. During the GitHub Project migration rollout, this project is planning-only and the current repo-driven queue remains authoritative for dispatch until the cutover criteria in docs/planning/github-project-migration-plan.md are met.` |
+| Post-cutover description | `Operational delivery board for moviecal. GitHub Project is the authoritative source for live queue state, workflow status, and execution order. GitHub issues remain the authoritative source for scoped task requirements, acceptance criteria, verification steps, and security notes.` |
+| Post-cutover automation | `npm run agent:project-metadata-sync` applies the post-cutover description and readme via `scripts/project-post-cutover-metadata-sync.sh` (issue #119). |
 
 ### Fields
 
