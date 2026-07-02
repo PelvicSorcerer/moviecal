@@ -436,7 +436,7 @@ These issues complete the multi-agent / multi-environment work from `docs/planni
 
 | Queue Order | Issue | Title | Blocked by | Notes |
 |---:|---|---|---|---|
-| 96 | #98 | Restructure agent docs: `docs/operators/` | — | PR #98 open. Finish during or immediately after #92/#101 so project-as-queue docs land on the stable operator layout. |
+| 96 | #98 | Restructure agent docs: `docs/operators/` | — | PR #98 open. Finish during remaining migration items #93–#95 so project-as-queue docs land on the stable operator layout. |
 | 97 | #102 | Define multi-platform agent dispatch policy | #95, #98 | Phase 5. Uses `Agent Dispatch` / `Execution Mode` language, not legacy `agent-ready` as primary authority. |
 | 98 | #103 | Align Node.js version across agent platforms | #98 | Phase 4. Can run in parallel with #102 once #98 merges. |
 | 99 | #104 | Consolidate Codex orchestration docs under `docs/operators/` | #95, #98, #102 | Phase 2 (deferred). Documentation consolidation only. |
@@ -447,7 +447,7 @@ These issues complete the multi-agent / multi-environment work from `docs/planni
 
 | Queue Order | Issue | Title | Status |
 |---:|---|---|---|
-| 92 | #92 | Update repo docs so project becomes queue source of truth | Open (PR #101) |
+| 92 | #92 | Update repo docs so project becomes queue source of truth | Done (merged PR #101) |
 | 93 | #93 | Deprecate `open-issue-order.json` | Open |
 | 94 | #94 | Update queue-validation scripts | Open |
 | 95 | #95 | Remove obsolete queue rules after cutover | Open |

@@ -1,5 +1,11 @@
 # Agent and environment compatibility: audit and refactor plan
 
+Status note:
+
+- This document audits the migration-era queue model that existed before the GitHub Project cutover.
+- The live queue authority is now the `moviecal Delivery` GitHub Project.
+- References below to `agent-ready` and `docs/planning/open-issue-order.json` describe compatibility surfaces, legacy assumptions, or remaining cleanup work unless a section explicitly says otherwise.
+
 ## Purpose
 
 This repo has been developed exclusively through Codex (Codex Desktop on macOS), and its agent-facing tooling reflects that: a Codex-specific orchestrator/worker contract is woven directly into `AGENTS.md`, `.codex/`, `scripts/`, and `docs/planning/`. Cursor Cloud Agents and GitHub Copilot's coding agent are now also expected to work against this repo.
@@ -111,7 +117,7 @@ None of these changes alter the meaning of the orchestrator/worker contract, the
 Phases 0–3 from the original plan:
 
 - **Phase 0** — shipped in PR #96 (cross-platform scripts, `.cursor/environment.json`, compatibility audit doc).
-- **Phases 1–3** — issue **#98** / PR #98 (`docs/operators/` restructure, branch/CI conventions, drift check). Merge before or during the #92/#101 cutover window.
+- **Phases 1–3** — issue **#98** / PR #98 (`docs/operators/` restructure, branch/CI conventions, drift check). Merge during remaining migration items #93–#95.
 - **Phase 2 (orchestration doc consolidation)** — deferred to issue **#104** until migration #95 and policy **#102** complete.
 
 Remaining open decisions and verification:

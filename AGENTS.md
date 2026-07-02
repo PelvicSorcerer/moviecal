@@ -1,15 +1,23 @@
 # Agent Workflow Contract
 
-This repository is prepared for issue-by-issue agent execution. Read this file first, then confirm the current GitHub issue state before changing code.
+This repository is prepared for issue-by-issue agent execution. Read this file first, then confirm the current GitHub Project and issue state before changing code.
 
 ## Start conditions
 
-- Start implementation only from the single open GitHub issue labeled `agent-ready`.
-- Treat GitHub issue state as the operational source of truth when it conflicts with planning docs.
+- Start implementation only from the single open GitHub issue whose `moviecal Delivery` project item has `Agent Dispatch = Yes` and `Status = Ready`.
+- Treat the GitHub Project as the operational source of truth for live queue state, status, and ordering.
 - Do not start feature work from detached `HEAD`; branch from `master`.
 - Branch name format: `agent/<issue-number>-<short-slug>` for Codex worker issue branches. Other agent platforms use their own platform-assigned prefix instead (see the branch-prefix table below); do not rename a platform-assigned branch to match this format.
 - Governance or queue-maintenance changes should stay separate from feature delivery. Use a `docs/` or `chore/` branch for governance PRs; the persistent orchestrator worktree itself may remain on an attached local branch that tracks `origin/master`.
 - Orchestrator audits after merge should run from an attached local branch that tracks `origin/master`; the local branch name does not need to be `master`.
+
+## Queue authority
+
+- The `moviecal Delivery` GitHub Project is authoritative for live queue state, workflow status, queue ordering, and dispatch selection.
+- GitHub issues remain authoritative for background, acceptance criteria, verification steps, security notes, out-of-scope boundaries, and dependency notes.
+- The project field `Agent Dispatch` is the dispatch authority surface. `Yes` marks the one issue a fresh implementation agent may start; `No` marks every other issue.
+- During compatibility cleanup, `agent-ready` may still exist as a derived label. Treat it as a sync surface only, not as the authority for queue selection.
+- If project state, issue labels, and planning docs disagree, reconcile the GitHub Project first, then update the issue/compatibility state, then update docs.
 
 ## Branch prefixes and CI triggers (single source of truth)
 
@@ -29,8 +37,9 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 ## Required preflight
 
 - Read `.github/copilot-instructions.md` and the docs linked from the selected issue.
-- Confirm the issue is still open, unblocked, and still the only `agent-ready` issue.
-- If the issue has been open across later merged feature work, spot-check current repo state against the live acceptance criteria before dispatching a worker so stale `agent-ready` issues are reconciled instead of implemented with a no-op PR.
+- Confirm the issue is still open, unblocked, and still the only issue with `Agent Dispatch = Yes`.
+- Confirm that same project item still has `Status = Ready`.
+- If the issue has been open across later merged feature work, spot-check current repo state against the live acceptance criteria before dispatching a worker so stale dispatch candidates are reconciled instead of implemented with a no-op PR.
 - Confirm the required environment/tooling for that issue exists before coding.
 - Stop and escalate if blocked on secrets, auth, external infrastructure, conflicting issue state, or unclear acceptance criteria.
 
@@ -38,7 +47,7 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 
 - Separate the `orchestrator` role from the `worker` role.
 - The official primary worker workflow is `spawn_agent` plus orchestrator-created git worktree isolation. Provision the worker worktree first, let the worker boot naturally, then retarget the worker to the assigned worktree path before substantive work begins.
-- The orchestrator owns queue hygiene: issue triage, dependency checks, `agent-ready` promotion/demotion, and post-merge handoff.
+- The orchestrator owns queue hygiene: issue triage, dependency checks, project status/dispatch updates, compatibility-label sync, and post-merge handoff.
 - The orchestrator also owns the human-testing handoff: collecting the worker's ready-for-review checkpoint with `wait_agent`, providing an issue-specific manual testing checklist, and deciding when the issue is ready to advance from implementation to review.
 - The orchestrator should remain on an attached local branch that tracks `origin/master`, such as `orchestrator/live`, and should not drift onto worker branches while supervising workers.
 - The orchestrator owns worker provisioning: use the main repo Codex environment profile, run a worker environment readiness check before dispatch, and create a deterministic issue-centric worktree name that is clearly separate from the orchestrator worktree.
@@ -52,9 +61,9 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 - The worker owns exactly one implementation issue, one focused branch, verification, and PR delivery.
 - Do not let a worker session self-assign a second implementation issue after finishing the first. Return control to the orchestrator step first.
 - The orchestrator should prefer promoting the next dependency-correct issue immediately after a worker issue lands so the repo never sits in an ambiguous "done but not ready" state.
-- When multiple open issues could look ready, use `docs/planning/open-issue-order.json` as the deterministic tie-breaker and update that file whenever queue priorities change.
-- If no issue is truly ready, the orchestrator should leave zero `agent-ready` issues and record the blocker explicitly in GitHub.
-- For feature issues, the orchestrator should ensure the issue body states the expected automated coverage plan and any explicit deferred-coverage follow-up before marking the issue `agent-ready`.
+- When multiple open issues could look ready, use the project `Queue Order` field as the deterministic tie-breaker and keep ordering current in the project.
+- If no issue is truly ready, the orchestrator should leave zero open issues with `Agent Dispatch = Yes` and record the blocker explicitly in GitHub.
+- For feature issues, the orchestrator should ensure the issue body states the expected automated coverage plan and any explicit deferred-coverage follow-up before setting `Agent Dispatch = Yes`.
 
 ## Handoff contract
 
@@ -64,9 +73,9 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 - A ready handoff means:
   - a local branch tracking `origin/master` contains the merged change.
   - there are no stray open PRs for the same issue.
-  - exactly one open issue is labeled `agent-ready`, unless the queue is intentionally blocked.
+  - exactly one open issue has `Agent Dispatch = Yes` and `Status = Ready`, unless the queue is intentionally blocked.
   - the promoted issue has current acceptance criteria, verification steps, and security notes when applicable.
-- If the next issue depends on missing tooling, secrets, or infrastructure, mark the queue blocked instead of promoting a speculative `agent-ready` issue.
+- If the next issue depends on missing tooling, secrets, or infrastructure, mark the queue blocked instead of promoting a speculative dispatch issue.
 
 ## Environment policy
 
@@ -92,7 +101,7 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 - Optional operator PAT: add a fine-grained GitHub PAT with **Issues** and **Pull requests** write access on this repo as `GITHUB_PAT_OPERATOR` (Runtime Secret) in Cursor Dashboard → Cloud Agents → Secrets. Do not name this secret `GH_TOKEN` or `GITHUB_TOKEN` — Cursor may inject its integration token as `GH_TOKEN`, and `gh` gives those variables precedence over stored credentials.
 - After adding `GITHUB_PAT_OPERATOR`, start a new agent run (secrets inject at boot, not mid-session) and verify: `gh auth status`, `gh api user -q .login`, `gh issue list --limit 1`, and a smoke-test `gh pr comment`. Fine-grained PATs via `--with-token` can behave differently from classic tokens; confirm the exact operations you need.
 - Cursor Cloud Agents branch using the `cursor/<slug>-<run-id>` naming convention supplied by the Cursor platform, which is different from this repo's `agent/<issue-number>-<short-slug>` convention for Codex worker issue branches. Treat both prefixes as valid depending on which system produced the branch; do not rename a Cursor-created branch to match the Codex convention.
-- The Codex orchestrator/worker contract in this file (spawn_agent, worktree provisioning, `BOOT_CHECKPOINT`/`STARTUP_CHECKPOINT` gates) is specific to Codex's multi-agent tooling and does not apply to Cursor Cloud Agents, which run as a single agent per task/PR with no equivalent orchestrator step. Whether Cursor Cloud Agents may pick up `agent-ready` queue issues directly is an open policy decision, not yet resolved (see Phase 5 in `docs/planning/agent-environment-compatibility-plan.md`); until that decision is made, treat a Cursor Cloud Agent as following this repo's general branch/PR/verification rules on whatever task it is given, without assuming it may consume the single `agent-ready` issue.
+- The Codex orchestrator/worker contract in this file (spawn_agent, worktree provisioning, `BOOT_CHECKPOINT`/`STARTUP_CHECKPOINT` gates) is specific to Codex's multi-agent tooling and does not apply to Cursor Cloud Agents, which run as a single agent per task/PR with no equivalent orchestrator step. Whether Cursor Cloud Agents may pick up project-dispatched implementation issues directly is an open policy decision, not yet resolved (see Phase 5 in `docs/planning/agent-environment-compatibility-plan.md`); until that decision is made, treat a Cursor Cloud Agent as following this repo's general branch/PR/verification rules on whatever task it is given, without assuming it may consume the single dispatch slot.
 - For real (disposable/dev-only) Supabase, TMDb, and cron-secret values, prefer the Secrets tab in Cursor Dashboard → Cloud Agents over editing `.env.local` by hand. Secrets are injected as process environment variables, which Next.js reads at build and runtime even without a matching `.env.local` entry; use the exact variable names from `.env.example`.
 
 ## Verification contract
