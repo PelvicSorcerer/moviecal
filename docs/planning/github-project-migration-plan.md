@@ -495,6 +495,7 @@ Definition of done:
 
 - file is either removed or marked generated-only
 - no workflow docs require humans to maintain it manually
+- if the file is temporarily retained for compatibility, it is generated from project state rather than edited by hand
 
 ### 7. Update scripts that assume repo-local queue state
 
