@@ -1,0 +1,36 @@
+name: "Copilot Setup Steps"
+
+# Run automatically when changed (for validation), and allow manual runs.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+  # Job name MUST be `copilot-setup-steps` — GitHub Copilot picks it up by this exact name.
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    env:
+      # Suppress Node 20 deprecation annotations from actions/checkout and
+      # actions/setup-node v4, which run on Node 20 internally by default.
+      # Without this, GitHub logs a deprecation warning for every run.
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
