@@ -20,7 +20,7 @@ Unlike `docs/operators/codex.md` and `docs/operators/cursor-cloud.md`, nothing b
 ## Queue governance
 
 - Copilot's coding agent runs one agent per assigned issue/PR, similar to Cursor Cloud Agents; it does not participate in Codex's orchestrator/worker worktree handshake described in `docs/operators/codex.md` and `docs/planning/agent-orchestration.md`.
-- Whether Copilot may consume the single `agent-ready` queue issue directly is the same open policy decision noted for Cursor (Phase 5 in `docs/planning/agent-environment-compatibility-plan.md`). Until decided, treat Copilot's coding agent as following this repo's general branch/PR/verification rules on whatever task it is assigned, without asserting queue rights.
+- Whether Copilot may receive `Agent Dispatch = Yes` on a project item is the same open policy decision noted for Cursor (issue **#102**). Until decided, treat Copilot's coding agent as following this repo's general branch/PR/verification rules on whatever task it is assigned, without asserting queue rights.
 
 ## Known gaps / follow-ups
 

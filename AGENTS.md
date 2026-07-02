@@ -2,129 +2,68 @@
 
 This repository is prepared for issue-by-issue agent execution. Read this file first, then confirm the current GitHub Project and issue state before changing code.
 
+## Which platform are you running on?
+
+This file is the generic contract every agent and human contributor reads. Platform-specific detail (bootstrap/config file location, tool availability quirks, branch convention, secrets handling) lives in `docs/operators/` so this file stays short enough to read in full every session.
+
+- Codex (Desktop or CLI): read `docs/operators/codex.md`.
+- Cursor Cloud Agent: read `docs/operators/cursor-cloud.md`.
+- GitHub Copilot coding agent: read `docs/operators/github-copilot.md`.
+- Human contributor, or a platform not listed here: the generic rules below are all you need; see `docs/operators/README.md` if you want to add a guide for a new platform.
+
 ## Start conditions
 
 - Start implementation only from the single open GitHub issue whose `moviecal Delivery` project item has `Agent Dispatch = Yes` and `Status = Ready`.
 - Treat the GitHub Project as the operational source of truth for live queue state, status, and ordering.
 - Do not start feature work from detached `HEAD`; branch from `master`.
-- Branch name format: `agent/<issue-number>-<short-slug>` for Codex worker issue branches. Other agent platforms use their own platform-assigned prefix instead (see the branch-prefix table below); do not rename a platform-assigned branch to match this format.
-- Governance or queue-maintenance changes should stay separate from feature delivery. Use a `docs/` or `chore/` branch for governance PRs; the persistent orchestrator worktree itself may remain on an attached local branch that tracks `origin/master`.
-- Orchestrator audits after merge should run from an attached local branch that tracks `origin/master`; the local branch name does not need to be `master`.
+- Branch name format is platform-specific. See `docs/operators/branch-and-ci-conventions.md` for the exact prefix each platform uses; do not rename a platform-assigned branch to match a different platform's convention.
+- Governance or queue-maintenance changes should stay separate from feature delivery. Use a `docs/` or `chore/` branch for governance PRs.
+- Keep PR scope to one issue unless the issue explicitly says otherwise. After governance changes, update the queue guidance docs and issue templates in the same PR when they change operator behavior.
 
 ## Queue authority
 
 - The `moviecal Delivery` GitHub Project is authoritative for live queue state, workflow status, queue ordering, and dispatch selection.
 - GitHub issues remain authoritative for background, acceptance criteria, verification steps, security notes, out-of-scope boundaries, and dependency notes.
 - The project field `Agent Dispatch` is the dispatch authority surface. `Yes` marks the one issue a fresh implementation agent may start; `No` marks every other issue.
-- During compatibility cleanup, `agent-ready` may still exist as a derived label. Treat it as a sync surface only, not as the authority for queue selection.
+- During compatibility cleanup (**#93–#95**), `agent-ready` may still exist as a derived label. Treat it as a sync surface only, not as the authority for queue selection.
 - If project state, issue labels, and planning docs disagree, reconcile the GitHub Project first, then update the issue/compatibility state, then update docs.
-
-## Branch prefixes and CI triggers (single source of truth)
-
-- This table is the single source of truth for branch-prefix-to-platform mapping. When you add a new agent platform or change a prefix, update this table and every CI workflow `branches:` filter in the same change so they cannot drift apart.
-
-| Prefix | Used by | Notes |
-|---|---|---|
-| `agent/<issue-number>-<short-slug>` | Codex worker issue branches | One branch per implementation issue; see Orchestrator contract below |
-| `orchestrator/live` (or similar) | Codex orchestrator's own attached branch | Tracks `origin/master`; never used for feature work |
-| `cursor/<slug>-<run-id>` | Cursor Cloud Agents | Prefix and suffix are assigned by the Cursor platform, not chosen by the agent |
-| `copilot/**` | GitHub Copilot coding agent | Assigned by GitHub's Copilot agent platform |
-| `docs/**`, `chore/**` | Governance/queue-maintenance work from any agent or human | Kept separate from `agent/**` feature branches per the Start conditions above |
-
-- Any GitHub Actions workflow that triggers on `push` to a subset of branches (for example `.github/workflows/supabase-verify.yml`) must include every prefix in this table that can touch the paths it guards. A branch prefix missing from a workflow's `branches:` filter is a real interoperability bug, not a style choice — it silently skips push-triggered CI for that platform (PR-triggered runs still happen once a PR is opened, since `pull_request` triggers are not branch-filtered here, but that is a weaker safety net than push-triggered CI).
-- See `docs/planning/agent-environment-compatibility-plan.md` for the full audit of agent/environment-specific artifacts in this repo and the phased plan for keeping multiple agent platforms compatible without breaking each other.
 
 ## Required preflight
 
 - Read `.github/copilot-instructions.md` and the docs linked from the selected issue.
 - Confirm the issue is still open, unblocked, and still the only issue with `Agent Dispatch = Yes`.
 - Confirm that same project item still has `Status = Ready`.
-- If the issue has been open across later merged feature work, spot-check current repo state against the live acceptance criteria before dispatching a worker so stale dispatch candidates are reconciled instead of implemented with a no-op PR.
+- If the issue has been open across later merged feature work, spot-check current repo state against the live acceptance criteria before starting so stale dispatch candidates are reconciled instead of implemented with a no-op PR.
 - Confirm the required environment/tooling for that issue exists before coding.
 - Stop and escalate if blocked on secrets, auth, external infrastructure, conflicting issue state, or unclear acceptance criteria.
 
-## Orchestrator contract
+## Queue governance and the orchestrator/worker contract
 
-- Separate the `orchestrator` role from the `worker` role.
-- The official primary worker workflow is `spawn_agent` plus orchestrator-created git worktree isolation. Provision the worker worktree first, let the worker boot naturally, then retarget the worker to the assigned worktree path before substantive work begins.
-- The orchestrator owns queue hygiene: issue triage, dependency checks, project status/dispatch updates, compatibility-label sync, and post-merge handoff.
-- The orchestrator also owns the human-testing handoff: collecting the worker's ready-for-review checkpoint with `wait_agent`, providing an issue-specific manual testing checklist, and deciding when the issue is ready to advance from implementation to review.
-- The orchestrator should remain on an attached local branch that tracks `origin/master`, such as `orchestrator/live`, and should not drift onto worker branches while supervising workers.
-- The orchestrator owns worker provisioning: use the main repo Codex environment profile, run a worker environment readiness check before dispatch, and create a deterministic issue-centric worktree name that is clearly separate from the orchestrator worktree.
-- The worker startup contract is two-step: first collect `BOOT_CHECKPOINT` from the worker's natural startup context, then explicitly retarget the worker to the assigned worktree and require `STARTUP_CHECKPOINT` that matches the assigned worktree path and branch.
-- The worker must not start substantive work until the orchestrator validates the second startup gate against the assigned worktree path and branch, preferably through the local wrapper or script gate used for worker dispatch.
-- While a worker session is active, the orchestrator must actively collect worker checkpoints with `wait_agent` rather than assuming they will appear without polling.
-- After every substantive orchestrator-to-worker instruction, continue the supervision loop until the worker reaches the next explicit gate: ready-for-review, PR-opened/publish, blocker, or explicit completion.
-- Do not stop at a polished status summary while a worker is still active; stay in supervision mode until the real gate, blocker, or full review/merge/handoff cycle is complete.
-- Require strict machine-parseable `REVIEW_CHECKPOINT` and `PUBLISH_CHECKPOINT` blocks in the worker brief so review handoff and publish state can be collected without ambiguity.
-- Routine merge decisions for acceptable worker PRs belong to the orchestrator by default unless the maintainer explicitly withholds merge authority for that run or the PR raises a blocker that genuinely needs human judgment.
-- The worker owns exactly one implementation issue, one focused branch, verification, and PR delivery.
-- Do not let a worker session self-assign a second implementation issue after finishing the first. Return control to the orchestrator step first.
-- The orchestrator should prefer promoting the next dependency-correct issue immediately after a worker issue lands so the repo never sits in an ambiguous "done but not ready" state.
-- When multiple open issues could look ready, use the project `Queue Order` field as the deterministic tie-breaker and keep ordering current in the project.
-- If no issue is truly ready, the orchestrator should leave zero open issues with `Agent Dispatch = Yes` and record the blocker explicitly in GitHub.
-- For feature issues, the orchestrator should ensure the issue body states the expected automated coverage plan and any explicit deferred-coverage follow-up before setting `Agent Dispatch = Yes`.
+The full Codex orchestrator/worker procedure (roles, worktree provisioning, `spawn_agent`, checkpoint gates, detailed post-merge handoff steps, session workflow) lives in `docs/planning/agent-orchestration.md` and `docs/planning/AGENT_GUIDANCE.md`, not in this file. Those documents were intentionally **not** moved into `docs/operators/codex.md` yet — issue **#104** consolidates them after migration cutover (**#95**).
 
-## Handoff contract
+The invariants below apply regardless of which doc currently governs procedural detail:
 
-- After an implementation PR merges, check an attached local branch that tracks `origin/master`, confirm the merged issue is closed, and reconcile the next queue state before declaring the repo ready again.
-- Before an implementation branch is marked ready for review, the orchestrator should collect the worker's ready-for-review checkpoint and hand the human tester an issue-specific checklist derived from `docs/planning/manual-testing-checklist-template.md`.
-- Preserve the worker branch and worktree after publish while PR review or CI is still in progress. Clean them up only after merge or explicit abandonment.
-- A ready handoff means:
-  - a local branch tracking `origin/master` contains the merged change.
-  - there are no stray open PRs for the same issue.
-  - exactly one open issue has `Agent Dispatch = Yes` and `Status = Ready`, unless the queue is intentionally blocked.
-  - the promoted issue has current acceptance criteria, verification steps, and security notes when applicable.
+- A ready handoff means: a local branch tracking `origin/master` contains the merged change; there are no stray open PRs for the same issue; exactly one open issue has `Agent Dispatch = Yes` and `Status = Ready`, unless the queue is intentionally blocked; and the promoted issue has current acceptance criteria, verification steps, and security notes when applicable.
 - If the next issue depends on missing tooling, secrets, or infrastructure, mark the queue blocked instead of promoting a speculative dispatch issue.
+- When multiple open issues could look ready, use the project `Queue Order` field as the deterministic tie-breaker.
+- Whether agent platforms other than Codex (Cursor Cloud, GitHub Copilot) may receive `Agent Dispatch = Yes` on a project item is a separate, still-open policy decision (issue **#102**). Do not assume queue access on behalf of a platform that doesn't already have an explicit answer in its `docs/operators/*.md` guide.
 
 ## Environment policy
 
-- The repo's `.codex/environments` profiles and `.codex/scripts` helpers are supported operator tooling for Codex-based development in this repository.
-- The validated operator environment for that tooling is Codex Desktop on macOS.
-- The same tooling is expected to work in Unix-like Codex environments, but that path is not yet validated in this repo.
-- The tooling is not yet validated on Windows.
-- When the orchestrator provisions a worker worktree, resolve environment/bootstrap behavior from the main repo `.codex/environments` profile as the source of truth.
 - Use disposable or dev-only credentials and resources for Supabase, TMDb, and cron protection.
 - Do not use production secrets, long-lived personal credentials, or private user data.
 - `.env.example` is placeholder-only. `.env.local` may exist with placeholder values and does not mean live integrations are ready.
-- The repo-local Supabase/Vercel CLI install path (`npm run tool:install`) supports macOS (Intel/Apple Silicon) and Linux (amd64/arm64); it is not supported on Windows.
-- In Codex, GitHub CLI checks may need elevated execution because sandboxed processes may not see the same macOS keychain-backed `gh` login that is available in your normal terminal.
-
-## Cursor Cloud specific instructions
-
-- `.cursor/environment.json` defines the Cursor Cloud Agent environment for this repo. It runs on a generic Ubuntu/x86_64 VM and is independent of the `.codex/environments` profile, which targets Codex Desktop on macOS.
-- The `.cursor/environment.json` install script copies `.env.example` to `.env.local` when missing and runs `npm install`. Its `start` hook optionally runs `gh auth login --with-token` when `GITHUB_PAT_OPERATOR` is set. It does not run `.codex/scripts/check-worker-environment.sh`; that script is part of the Codex worker/orchestrator worktree contract described above, not the Cursor Cloud Agent contract.
-- `npm run tool:install` works on Cursor Cloud Agent VMs (verified on Ubuntu/x86_64): it detects OS/arch and downloads the matching Supabase CLI release.
-- Docker is not present on the default Cursor Cloud Agent VM, so `supabase db lint --local` and any workflow that needs a local Supabase/Postgres stack will not work here either. Use the `supabase-verify` GitHub Actions workflow, or run `npm run db:lint` with a disposable `SUPABASE_DB_URL`.
-- Unlike the Codex sandbox caveats noted above, `npm run lint`, `npm run typecheck`, `npm run test`, `npm run build`, and `npm run e2e` (including its automatic `playwright install chromium` step) have been verified to run without elevated execution and without extra system packages on the default Cursor Cloud Agent VM.
-- `gh` is available on Cursor Cloud Agent VMs, but default auth uses Cursor's GitHub integration token (`ghs_...`). That token supports clone/push but not richer GitHub API operations (for example `gh issue list`, `gh pr comment`) and may return `Resource not accessible by integration`. It does not have the macOS keychain visibility issue described above for Codex.
-- Optional operator PAT: add a classic GitHub PAT as `GITHUB_PAT_OPERATOR` (Runtime Secret) in Cursor Dashboard → Cloud Agents → Secrets. Required scopes: **`project`** and **`repo`**. The `read:org` scope is optional for repo scripts: `gh project` CLI subcommands require it, but `npm run agent:project-platform-sync` uses the Projects GraphQL API and works with `project` + `repo` only.
-  - Do not name this secret `GH_TOKEN` or `GITHUB_TOKEN` — Cursor may inject its integration token as `GH_TOKEN`, and `gh` gives those variables precedence over stored credentials. The `.cursor/environment.json` `start` hook exports `GH_TOKEN=$GITHUB_PAT_OPERATOR` when set.
-- After adding or changing `GITHUB_PAT_OPERATOR`, **start a new agent run** (secrets inject at boot via the `.cursor/environment.json` `start` hook, not mid-session). Verify the PAT took effect before project or issue writes:
-  - `echo "${GITHUB_PAT_OPERATOR:+set}"` should print `set`
-  - `GH_TOKEN=$GITHUB_PAT_OPERATOR gh api user -q .login` should print your GitHub username, not fail with integration-token errors
-  - `GH_TOKEN=$GITHUB_PAT_OPERATOR gh api graphql -f query='{ viewer { projectsV2(first: 5) { nodes { title } } } }'` should list `moviecal Delivery`
-  - `npm run agent:project-platform-sync` (idempotent Platform track backfill)
-  - Smoke-test write: `GH_TOKEN=$GITHUB_PAT_OPERATOR gh issue comment <number> --body "PAT smoke test"` (delete afterward if desired)
-- Cursor Cloud Agents branch using the `cursor/<slug>-<run-id>` naming convention supplied by the Cursor platform, which is different from this repo's `agent/<issue-number>-<short-slug>` convention for Codex worker issue branches. Treat both prefixes as valid depending on which system produced the branch; do not rename a Cursor-created branch to match the Codex convention.
-- The Codex orchestrator/worker contract in this file (spawn_agent, worktree provisioning, `BOOT_CHECKPOINT`/`STARTUP_CHECKPOINT` gates) is specific to Codex's multi-agent tooling and does not apply to Cursor Cloud Agents, which run as a single agent per task/PR with no equivalent orchestrator step. Whether Cursor Cloud Agents may pick up project-dispatched implementation issues directly is an open policy decision, not yet resolved (see Phase 5 in `docs/planning/agent-environment-compatibility-plan.md`); until that decision is made, treat a Cursor Cloud Agent as following this repo's general branch/PR/verification rules on whatever task it is given, without assuming it may consume the single dispatch slot.
-- For real (disposable/dev-only) Supabase, TMDb, and cron-secret values, prefer the Secrets tab in Cursor Dashboard → Cloud Agents over editing `.env.local` by hand. Secrets are injected as process environment variables, which Next.js reads at build and runtime even without a matching `.env.local` entry; use the exact variable names from `.env.example`.
+- Platform-specific environment/tooling details (validated OS support, Docker availability, `gh` auth quirks, the repo-local Supabase/Vercel CLI install path) live in `docs/operators/`. See the router table above for which doc to read.
 
 ## Verification contract
 
 - Baseline verification: `npm run verify`
 - Production build: `npm run build`
 - E2E: `npm run e2e`
-- Human local testing should happen on the pushed worker-owned issue branch before the PR is promoted from draft or work-in-progress to ready for review.
+- Human local testing should happen on the pushed issue branch before the PR is promoted from draft or work-in-progress to ready for review.
 - Each implementation issue should produce an explicit manual testing checklist with setup assumptions, happy-path steps, edge cases, regression checks, and expected results.
 - Each implementation issue should either land its intended automated coverage or identify the immediate feature-specific follow-up issue for any deferred Playwright coverage before review handoff.
 - Update docs when routes, environment variables, verification commands, or security assumptions change.
+- If you change a branch prefix or a CI workflow's `branches:` filter, run `npm run check:branch-ci` (also enforced in `.github/workflows/verify.yml`) to confirm `docs/operators/branch-prefixes.json` and the workflow triggers still agree.
 
-## Session workflow
-
-- Use dedicated prep/governance sessions for repo hardening only.
-- Use a fresh session for each implementation issue.
-- When using a fresh worker worktree, let the worker emit `BOOT_CHECKPOINT` from its natural startup context first. After the orchestrator retargets the worker to the assigned worktree, require `STARTUP_CHECKPOINT` and validate the assigned path, branch, and starting commit before allowing substantive work.
-- If the worker starts on detached `HEAD`, confirm that commit matches `origin/master` and create the issue branch immediately from that verified commit.
-- Keep PR scope to one issue unless the issue explicitly says otherwise.
-- After governance changes, update the queue guidance docs and issue templates in the same PR when they change operator behavior.
+See `docs/planning/agent-environment-compatibility-plan.md` for the full audit of agent/environment-specific artifacts in this repo and the phased plan for keeping multiple agent platforms compatible without breaking each other.

@@ -18,7 +18,13 @@ Everything below marked "verified" was actually run against this repo on a real 
 - `npm run tool:install` works on Cursor Cloud Agent VMs (verified on Ubuntu/x86_64): it detects OS/arch and downloads the matching Supabase CLI release.
 - Docker is not present on the default Cursor Cloud Agent VM, so `supabase db lint --local` and any workflow that needs a local Supabase/Postgres stack will not work here either. Use the `supabase-verify` GitHub Actions workflow, or run `npm run db:lint` with a disposable `SUPABASE_DB_URL`.
 - Unlike the Codex sandbox caveats in `docs/operators/codex.md`, `npm run lint`, `npm run typecheck`, `npm run test`, `npm run build`, and `npm run e2e` (including its automatic `playwright install chromium` step) have been verified to run without elevated execution and without extra system packages on the default Cursor Cloud Agent VM.
-- `gh` is preauthenticated on Cursor Cloud Agent VMs and does not have the macOS keychain visibility issue described for Codex.
+- `gh` is available on Cursor Cloud Agent VMs, but default auth uses Cursor's GitHub integration token (`ghs_...`). That token supports clone/push but not richer GitHub API operations (for example `gh project`, `gh issue comment`) and may return `Resource not accessible by integration`.
+- Optional operator PAT: add a classic GitHub PAT as `GITHUB_PAT_OPERATOR` (Runtime Secret) in Cursor Dashboard → Cloud Agents → Secrets. Required scopes: **`project`** and **`repo`**. Do not name this secret `GH_TOKEN` or `GITHUB_TOKEN` — Cursor may inject its integration token as `GH_TOKEN`, and `gh` gives those variables precedence over stored credentials. The `.cursor/environment.json` `start` hook exports `GH_TOKEN=$GITHUB_PAT_OPERATOR` when set.
+- After adding or changing `GITHUB_PAT_OPERATOR`, **start a new agent run** (secrets inject at boot, not mid-session). Verify the PAT took effect before project or issue writes:
+  - `echo "${GITHUB_PAT_OPERATOR:+set}"` should print `set`
+  - `GH_TOKEN=$GITHUB_PAT_OPERATOR gh api user -q .login` should print your GitHub username
+  - `GH_TOKEN=$GITHUB_PAT_OPERATOR gh api graphql -f query='{ viewer { projectsV2(first: 5) { nodes { title } } } }'` should list `moviecal Delivery`
+  - `npm run agent:project-platform-sync` (idempotent Platform track backfill)
 - This VM's default Node version (22.x at verification time) does not match the `24` pinned in `.nvmrc`/`package.json`'s `engines` field and used by CI. Nothing failed functionally on Node 22 in the verified session, but this is an unresolved alignment gap — see Phase 4 in `docs/planning/agent-environment-compatibility-plan.md`.
 
 ## Branch convention
@@ -28,7 +34,7 @@ Everything below marked "verified" was actually run against this repo on a real 
 ## Queue governance
 
 - The Codex orchestrator/worker contract (`spawn_agent`, worktree provisioning, `BOOT_CHECKPOINT`/`STARTUP_CHECKPOINT` gates — see `docs/operators/codex.md` and `docs/planning/agent-orchestration.md`) is specific to Codex's multi-agent tooling and does not apply to Cursor Cloud Agents, which run as a single agent per task/PR with no equivalent orchestrator step.
-- Whether Cursor Cloud Agents may pick up `agent-ready` queue issues directly is an open policy decision, not yet resolved (see Phase 5 in `docs/planning/agent-environment-compatibility-plan.md`). Until that decision is made, treat a Cursor Cloud Agent as following this repo's general branch/PR/verification rules on whatever task it is given, without assuming it may consume the single `agent-ready` issue.
+- Whether Cursor Cloud Agents may receive `Agent Dispatch = Yes` on a project item is an open policy decision (issue **#102**). Until that decision is made, treat a Cursor Cloud Agent as following this repo's general branch/PR/verification rules on whatever task it is given, without assuming it may consume the single dispatch slot.
 
 ## Secrets
 
@@ -37,4 +43,4 @@ For real (disposable/dev-only) Supabase, TMDb, and cron-secret values, prefer th
 ## Known gaps / follow-ups
 
 - Node version alignment with CI (see Phase 4 in the compatibility plan).
-- Whether Cursor Cloud Agents should ever consume `agent-ready` directly (Phase 5).
+- Whether Cursor Cloud Agents should ever receive `Agent Dispatch = Yes` (issue **#102**).

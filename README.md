@@ -29,7 +29,7 @@ Supabase helper notes:
 
 ## Agentic development setup
 
-- This repo currently supports two agent platforms: Codex (via `.codex/environments`, validated on Codex Desktop/macOS) and Cursor Cloud Agents (via `.cursor/environment.json`, a generic Ubuntu/x86_64 VM). See `AGENTS.md` for the full contract, including a "Cursor Cloud specific instructions" section that lists the differences between the two (Docker/Supabase CLI availability, branch naming, `gh` auth, and secrets handling).
+- This repo supports multiple agent platforms: Codex (via `.codex/environments`, validated on Codex Desktop/macOS), Cursor Cloud Agents (via `.cursor/environment.json`, a generic Ubuntu/x86_64 VM), and GitHub Copilot's coding agent. See `AGENTS.md` for the generic contract; it routes to a per-platform guide under `docs/operators/` (Docker/Supabase CLI availability, branch naming, `gh` auth, and secrets handling differ per platform).
 - Use disposable or dev-only credentials for Supabase, TMDb, and cron secrets. Do not use production values for autonomous feature work.
 - `.env.example` is placeholder-only. A copied `.env.local` does not mean live integrations are ready.
 - Fresh implementation sessions should begin from the single open GitHub issue whose `moviecal Delivery` project item has `Agent Dispatch = Yes` and `Status = Ready`.
