@@ -26,7 +26,8 @@
         "dev": "next dev",
         "test": "vitest",
         "lint": "echo \"skip lint (scaffold)\"",
-        "agent:project-check": "bash scripts/project-queue-check.sh"
+        "agent:project-check": "bash scripts/project-queue-check.sh",
+        "agent:project-platform-sync": "bash scripts/project-platform-track-sync.sh"
     },
     "keywords": [],
     "author": "",
