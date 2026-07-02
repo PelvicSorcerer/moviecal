@@ -117,7 +117,7 @@ None of these changes alter the meaning of the orchestrator/worker contract, the
 Phases 0–3 from the original plan:
 
 - **Phase 0** — shipped in PR #96 (cross-platform scripts, `.cursor/environment.json`, compatibility audit doc).
-- **Phases 1–3** — issue **#98** / PR #98 (`docs/operators/` restructure, branch/CI conventions, drift check). Merge before or during the #92/#101 cutover window.
+- **Phases 1–3** — issue **#98** / PR #98 (`docs/operators/` restructure, branch/CI conventions, drift check). Merge during remaining migration items #93–#95.
 - **Phase 2 (orchestration doc consolidation)** — deferred to issue **#104** until migration #95 and policy **#102** complete.
 
 Remaining open decisions and verification:
