@@ -16,6 +16,7 @@
         "tool:check": "bash scripts/tool-check.sh",
         "agent:check": "bash scripts/agent-check.sh",
         "agent:handoff": "bash scripts/agent-handoff-check.sh",
+        "check:branch-ci": "python3 scripts/check-branch-ci-conventions.py",
         "db:lint": "bash scripts/supabase-db-lint.sh",
         "pree2e": "npm run e2e:install",
         "e2e:install": "playwright install chromium",
