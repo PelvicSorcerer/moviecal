@@ -31,17 +31,17 @@ jobs:
       PROJECT_QUEUE_MODE: pre-cutover
     steps:
       - uses: actions/checkout@v4
-      - name: Ensure project queue token exists
+      - name: Note missing project queue token
+        if: ${{ secrets.PROJECT_QUEUE_TOKEN == '' }}
         run: |
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "Missing PROJECT_QUEUE_TOKEN secret." >&2
-            echo "Create a repository secret with GitHub token scopes that can read both Projects and repository issues before relying on project queue automation." >&2
-            echo "Minimum expected scopes today: project and read:project, plus repository issue-read access compatible with gh issue list." >&2
-            exit 1
-          fi
+          echo "PROJECT_QUEUE_TOKEN is not configured for this repository."
+          echo "Skipping live GitHub Project validation and continuing with fixture coverage."
+          echo "Configure a repository secret with token scopes that can read both Projects and repository issues to enable the live check."
+          echo "Minimum expected scopes today: project and read:project, plus repository issue-read access compatible with gh issue list."
       - name: Show tool versions
         run: gh --version && jq --version
       - name: Validate live GitHub Project queue state
+        if: ${{ secrets.PROJECT_QUEUE_TOKEN != '' }}
         run: bash scripts/project-queue-check.sh
       - name: Validate fixture-based post-cutover happy path
         env:
