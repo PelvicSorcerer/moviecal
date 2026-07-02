@@ -1,6 +1,6 @@
 Agent task template
 
-Use this template when creating tasks for Copilot agents.
+Use this template when creating tasks for any coding agent (Codex, Cursor, GitHub Copilot, or similar).
 
 - Title: short task title
 - Background: context and why this change is needed
