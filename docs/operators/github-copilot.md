@@ -6,12 +6,27 @@ This doc covers what's specific to GitHub Copilot's coding agent when it develop
 
 ## What's verified vs assumed
 
-Unlike `docs/operators/codex.md` and `docs/operators/cursor-cloud.md`, nothing below has been directly verified by actually running Copilot's coding agent against this repo in a tracked session. This is audit-derived from repo artifacts (the `copilot/**` CI trigger, the issue template's prior "for Copilot agents" wording, and `.github/copilot-instructions.md`), not a verified operator report. Treat these as best-known facts, not guarantees, until someone runs Copilot's coding agent here and updates this doc with real findings — the same way `cursor-cloud.md` was populated by actually running Cursor here.
+Everything marked **verified** below was observed in an actual GitHub Copilot coding-agent session against this repo (issue #105, branch `copilot/remaining-issue-fix`, Ubuntu 24.04 / x86_64). Items still marked **assumed** have not been independently confirmed.
 
 ## Bootstrap / environment config
 
-- This repo has no Copilot-specific bootstrap file today. Copilot's coding agent supports a `copilot-setup-steps.yml` GitHub Actions workflow for custom environment setup (comparable in spirit to `.codex/environments/*.toml` or `.cursor/environment.json`); none exists here yet. If Copilot needs custom setup (a specific Node version, Playwright system dependencies, etc.), add that workflow file rather than repurposing `.codex/` or `.cursor/`, which are mechanically read only by their respective platforms.
-- Absent that file, Copilot's coding agent runs whatever its own default environment provides, then reads `.github/copilot-instructions.md` and `AGENTS.md`.
+- **Verified:** `.github/workflows/copilot-setup-steps.yml` is now present in this repo. It installs Node 24 via `actions/setup-node@v4` and runs `npm ci` before Copilot starts work. This is required because the default Copilot coding-agent VM ships Node 22 (see Node version policy below).
+- The `copilot-setup-steps.yml` job name is required by Copilot's platform — do not rename it. The workflow auto-triggers on changes to the file so setup can be validated without a full agent run.
+- `.codex/` and `.cursor/` are platform-specific and are not read by Copilot's coding agent.
+
+## Node version policy
+
+- **Policy:** Node **24** (major), matching `.nvmrc`, `package.json` `engines.node` (`>=24`), and CI (`verify.yml`, `supabase-verify.yml`).
+- **Verified:** The default Copilot coding-agent VM ships Node **v22.23.0** with npm 10.9.8. `npm install` completes with an `EBADENGINE` warning (`required: >=24, current: v22.23.0`). `npm run verify` (lint → typecheck → test → build) still passes under Node 22 despite the warning, but the repo policy is Node 24.
+- **Fix:** `.github/workflows/copilot-setup-steps.yml` installs Node 24 via `actions/setup-node@v4` before Copilot starts work. Do not rely on `.nvmrc` alone — it is not automatically applied in the Copilot runner environment.
+
+## Tool availability
+
+- **Verified:** Docker **is available** on the Copilot coding-agent VM (`docker ps` succeeds, Docker v28.0.4). This differs from Cursor Cloud Agents where Docker is not accessible. Local Supabase stacks (`supabase start`) should be feasible, though not tested in this session.
+- **Verified:** `gh` CLI v2.95.0 is available, but `gh auth status` reports "Failed to log in to github.com using token (GITHUB_TOKEN)" — the default `GITHUB_TOKEN` is not a valid `gh` auth credential. Basic push/clone still works through the Copilot platform's own credentials; richer GitHub API calls (`gh project`, `gh issue comment`) may not work without a separate PAT.
+- **Verified:** `npm run tool:install` works: it detects `linux/amd64` and installs the workspace-local Supabase CLI (v2.105.0) and Vercel CLI successfully.
+- **Verified:** `npm run lint`, `npm run typecheck`, `npm run test` (120/120 tests pass), `npm run build`, `npm run verify`, and `npm run check:branch-ci` all pass.
+- **Verified:** `npm run e2e` **fails** — port 3100 is already bound by Copilot's own agent tooling when the agent session is active. This is an intrinsic environment constraint, not a missing dependency. Use the `verify` GitHub Actions workflow as the CI fallback for e2e coverage, the same way Cursor Cloud Agents rely on CI for checks blocked by Docker unavailability.
 
 ## Branch convention
 
@@ -23,6 +38,11 @@ Unlike `docs/operators/codex.md` and `docs/operators/cursor-cloud.md`, nothing b
 - **GitHub Copilot may not receive `Agent Dispatch = Yes` on any project item.** Product-track feature delivery is owned by Codex workers via the single dispatch slot. See `docs/operators/multi-platform-dispatch-policy.md`.
 - Copilot **may** implement platform-track issues (`Track = Platform`), governance/docs work (`docs/**`, `chore/**`), and other tasks when GitHub assigns an issue/PR to Copilot or a human delegates the work. Direct assignment is not dispatch-slot consumption — do not set or assume `Agent Dispatch = Yes`.
 
+## Secrets
+
+- The `GITHUB_TOKEN` injected by the Copilot platform is not a usable `gh` CLI credential for project/issue API calls. If a task requires `gh` API calls, use a PAT configured via the `copilot` environment in the repository's GitHub Actions secrets; see [GitHub docs on setting environment variables](https://docs.github.com/en/copilot/customizing-copilot/customizing-copilots-development-environment#setting-environment-variables-in-copilots-environment). This is the same pattern as `GITHUB_PAT_OPERATOR` in `docs/operators/cursor-cloud.md`, but it has not been tested in this repo yet.
+
 ## Known gaps / follow-ups
 
-- No verified information yet about the Copilot coding agent VM's OS/arch, Docker availability, `gh` CLI auth state, or whether `npm run tool:install`/`npm run e2e` work unmodified there. Whoever first runs Copilot's coding agent against this repo for real should update this section with actual findings.
+- Local Supabase stack (`supabase start` via Docker) has not been tested in a Copilot coding-agent session. Docker is available but the full stack was not started during the #105 verification run. Use `supabase-verify` CI workflow as the authoritative check for schema/migration correctness.
+- The `copilot` environment PAT mechanism for `gh` API calls has not been tested in this repo yet.
