@@ -39,7 +39,7 @@ This file is the generic contract every agent and human contributor reads. Platf
 
 ## Queue governance and the orchestrator/worker contract
 
-The full Codex orchestrator/worker procedure (roles, worktree provisioning, `spawn_agent`, checkpoint gates, detailed post-merge handoff steps, session workflow) lives in `docs/planning/agent-orchestration.md` and `docs/planning/AGENT_GUIDANCE.md`, not in this file. Those documents were intentionally **not** moved into `docs/operators/codex.md` yet — issue **#104** consolidates them after migration cutover (**#95**).
+The full Codex orchestrator/worker procedure (roles, worktree provisioning, `spawn_agent`, checkpoint gates, detailed post-merge handoff steps, session workflow) lives in `docs/operators/codex-orchestration.md`, not in this file.
 
 The invariants below apply regardless of which doc currently governs procedural detail:
 

@@ -6,7 +6,7 @@ This table is the single source of truth for branch-prefix-to-platform mapping. 
 
 | Prefix | Used by | Requires a path-restricted push trigger? | Notes |
 |---|---|---|---|
-| `agent/<issue-number>-<short-slug>` | Codex worker issue branches | Yes | One branch per implementation issue; see `docs/operators/codex.md` and `docs/planning/agent-orchestration.md` |
+| `agent/<issue-number>-<short-slug>` | Codex worker issue branches | Yes | One branch per implementation issue; see `docs/operators/codex.md` and `docs/operators/codex-orchestration.md` |
 | `orchestrator/live` (or similar) | Codex orchestrator's own attached branch | No | Tracks `origin/master`; never used for feature work |
 | `cursor/<slug>-<run-id>` | Cursor Cloud Agents | Yes | Prefix and suffix are assigned by the Cursor platform, not chosen by the agent; see `docs/operators/cursor-cloud.md` |
 | `copilot/**` | GitHub Copilot coding agent | Yes | Assigned by GitHub's Copilot agent platform; see `docs/operators/github-copilot.md` |

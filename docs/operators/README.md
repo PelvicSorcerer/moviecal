@@ -20,7 +20,7 @@ This directory holds one guide per agent platform that develops this repo (Codex
 
 ## A note on scope: platforms vs procedure
 
-This directory documents differences between **how each agent platform runs** (bootstrap, tool availability, branch naming, secrets). It intentionally does **not** absorb the full Codex orchestrator/worker procedure — that content still lives in `docs/planning/agent-orchestration.md` and `docs/planning/AGENT_GUIDANCE.md` until issue **#104** consolidates it here.
+This directory documents differences between **how each agent platform runs** (bootstrap, tool availability, branch naming, secrets). The Codex orchestrator/worker procedure lives in `codex-orchestration.md`; the worker dispatch prompt template is in `codex-worker-dispatch-prompt.md`.
 
 ## Adding a new platform
 
@@ -38,7 +38,9 @@ Then update `AGENTS.md`'s router table and `docs/operators/branch-and-ci-convent
 
 ## Files in this directory
 
-- `codex.md` — Codex Desktop/CLI environment and tooling notes (orchestrator procedure pointers; not the full queue contract).
+- `codex.md` — Codex Desktop/CLI environment and tooling notes.
+- `codex-orchestration.md` — Codex orchestrator/worker operating procedure (roles, checkpoints, handoff).
+- `codex-worker-dispatch-prompt.md` — default worker dispatch prompt template for Codex orchestrators.
 - `cursor-cloud.md` — Cursor Cloud Agent environment notes.
 - `github-copilot.md` — GitHub Copilot coding agent notes.
 - `multi-platform-dispatch-policy.md` — which platforms may receive `Agent Dispatch = Yes` after project cutover.

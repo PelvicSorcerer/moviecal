@@ -39,7 +39,7 @@ Everything below marked "verified" was actually run against this repo on a real 
 
 ## Queue governance
 
-- The Codex orchestrator/worker contract (`spawn_agent`, worktree provisioning, `BOOT_CHECKPOINT`/`STARTUP_CHECKPOINT` gates — see `docs/operators/codex.md` and `docs/planning/agent-orchestration.md`) is specific to Codex's multi-agent tooling and does not apply to Cursor Cloud Agents, which run as a single agent per task/PR with no equivalent orchestrator step.
+- The Codex orchestrator/worker contract (`spawn_agent`, worktree provisioning, `BOOT_CHECKPOINT`/`STARTUP_CHECKPOINT` gates — see `docs/operators/codex-orchestration.md`) is specific to Codex's multi-agent tooling and does not apply to Cursor Cloud Agents, which run as a single agent per task/PR with no equivalent orchestrator step.
 - **Cursor Cloud Agents may not receive `Agent Dispatch = Yes` on any project item.** Product-track feature delivery is owned by Codex workers via the single dispatch slot. See `docs/operators/multi-platform-dispatch-policy.md`.
 - Cursor Cloud Agents **may** implement platform-track issues (`Track = Platform`), governance/docs work (`docs/**`, `chore/**`), and other tasks when a human assigns them directly (for example, a Cursor Cloud Agent task or an explicitly delegated issue). Direct assignment is not dispatch-slot consumption — do not set or assume `Agent Dispatch = Yes`.
 

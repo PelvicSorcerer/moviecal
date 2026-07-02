@@ -25,7 +25,7 @@ Only **Codex workers** may start implementation from the single `Agent Dispatch 
 
 Rationale:
 
-- This repo's feature-delivery operating model is a Codex orchestrator/worker contract: the orchestrator promotes issues, sets project dispatch fields, provisions worker worktrees, and validates checkpoint gates. See `docs/planning/agent-orchestration.md` and `docs/operators/codex.md`.
+- This repo's feature-delivery operating model is a Codex orchestrator/worker contract: the orchestrator promotes issues, sets project dispatch fields, provisions worker worktrees, and validates checkpoint gates. See `codex-orchestration.md` and `codex.md`.
 - The dispatch slot exists to give exactly one fresh Codex worker a deterministic start signal. Other platforms do not participate in that handshake.
 
 Codex workers use `agent/<issue-number>-<short-slug>` branches. The Codex orchestrator uses `orchestrator/live` (or similar) and does not consume the dispatch slot for feature work.
@@ -70,7 +70,7 @@ Governance and queue-maintenance changes that are not tied to a product implemen
 
 ## What this policy does not change
 
-- Codex orchestrator/worker procedure remains in `docs/planning/agent-orchestration.md` until consolidated by issue **#104**.
+- Codex orchestrator/worker procedure is documented in `codex-orchestration.md`.
 - Project automation and `scripts/project-queue-check.sh` validation rules are unchanged (issue **#94** scope if further automation is needed).
 - Branch prefixes and CI trigger conventions remain in `docs/operators/branch-and-ci-conventions.md`.
 
