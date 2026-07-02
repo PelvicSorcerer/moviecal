@@ -200,7 +200,7 @@ export function WatchlistPageClient({
                   </h4>
                   <p className="mt-2 text-sm leading-6 text-slate-600">
                     {isPersonal
-                      ? 'Your private watchlist remains the source for calendar tracking and item management on this page.'
+                      ? 'Your private watchlist is the default target for item management on this page. Your calendar feed includes movies from every watchlist you can access.'
                       : 'Open the shared watchlist detail page to manage saved movies, invite links, and current access.'}
                   </p>
                   {!isPersonal ? (

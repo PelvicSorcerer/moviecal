@@ -164,6 +164,27 @@ describe('buildCalendarFeed', () => {
     );
   });
 
+  it('skips duplicate tmdb ids when defensive feed dedupe receives repeated items', () => {
+    const feed = buildCalendarFeed({
+      generatedAt: new Date('2026-06-20T14:05:06.789Z'),
+      items: [
+        buildWatchlistItem(),
+        buildWatchlistItem({
+          id: 'watchlist-item-duplicate',
+          movie: {
+            ...buildWatchlistItem().movie,
+            title: 'Duplicate Matrix',
+          },
+        }),
+      ],
+      userId: 'user-1',
+    });
+
+    expect(feed.match(/BEGIN:VEVENT/g)?.length).toBe(1);
+    expect(feed).toContain('SUMMARY:The Matrix');
+    expect(feed).not.toContain('Duplicate Matrix');
+  });
+
   it('skips movies with missing or invalid release dates', () => {
     const feed = buildCalendarFeed({
       generatedAt: new Date('2026-06-20T14:05:06.789Z'),

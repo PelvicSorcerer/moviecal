@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   createSupabaseCalendarTokenRepository: vi.fn(),
   createSupabaseWatchlistRepository: vi.fn(),
   resolveCalendarTokenOwner: vi.fn(),
-  listPersonalWatchlistItems: vi.fn(),
+  listCalendarWatchlistItems: vi.fn(),
   buildCalendarFeed: vi.fn(),
 }));
 
@@ -29,7 +29,7 @@ vi.mock('../src/lib/calendar-tokens', () => ({
 }));
 
 vi.mock('../src/lib/watchlist', () => ({
-  listPersonalWatchlistItems: mocks.listPersonalWatchlistItems,
+  listCalendarWatchlistItems: mocks.listCalendarWatchlistItems,
 }));
 
 vi.mock('../src/lib/calendar-feed', () => ({
@@ -65,13 +65,13 @@ describe('calendar feed route', () => {
     );
 
     expect(response.status).toBe(404);
-    expect(mocks.listPersonalWatchlistItems).not.toHaveBeenCalled();
+    expect(mocks.listCalendarWatchlistItems).not.toHaveBeenCalled();
     expect(mocks.buildCalendarFeed).not.toHaveBeenCalled();
   });
 
   it('returns the token owner calendar payload for a valid token', async () => {
     mocks.resolveCalendarTokenOwner.mockResolvedValue('user-1');
-    mocks.listPersonalWatchlistItems.mockResolvedValue([
+    mocks.listCalendarWatchlistItems.mockResolvedValue([
       {
         id: 'watchlist-item-1',
         addedAt: '2026-06-20T00:00:00.000Z',
@@ -108,7 +108,7 @@ describe('calendar feed route', () => {
       repository: { name: 'calendar-token-repository' },
       token: 'good-token',
     });
-    expect(mocks.listPersonalWatchlistItems).toHaveBeenCalledWith({
+    expect(mocks.listCalendarWatchlistItems).toHaveBeenCalledWith({
       repository: { name: 'watchlist-repository' },
       userId: 'user-1',
     });

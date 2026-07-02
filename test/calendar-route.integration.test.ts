@@ -60,30 +60,83 @@ function createCalendarTokenRepository(): CalendarTokenRepository {
 }
 
 function createWatchlistRepository(): WatchlistRepository {
+  const personalWatchlist = {
+    canEdit: true,
+    id: 'personal-watchlist-1',
+    kind: 'personal' as const,
+    name: 'My watchlist',
+    ownerUserId: 'user-1',
+  };
+  const sharedWatchlist = {
+    canEdit: true,
+    id: 'shared-watchlist-1',
+    kind: 'shared' as const,
+    name: 'Household picks',
+    ownerUserId: 'user-1',
+  };
+
   return {
+    async acceptInviteMembership() {
+      throw new Error('not implemented');
+    },
+    async createInviteLink() {
+      throw new Error('not implemented');
+    },
+    async createWatchlist() {
+      throw new Error('not implemented');
+    },
     async deleteItemByIdForWatchlist() {
       return false;
     },
     async ensurePersonalWatchlist(userId) {
-      return {
-        id: userId === 'user-1' ? 'personal-watchlist-1' : 'personal-watchlist-2',
-        kind: 'personal',
-        name: 'My watchlist',
-        ownerUserId: userId,
-      };
+      return userId === 'user-1'
+        ? personalWatchlist
+        : {
+            canEdit: true,
+            id: 'personal-watchlist-2',
+            kind: 'personal',
+            name: 'My watchlist',
+            ownerUserId: userId,
+          };
+    },
+    async findInviteLinkByTokenHash() {
+      return null;
     },
     async findItemByMovieIdForWatchlist() {
       return null;
     },
+    async findMembershipForUser() {
+      return null;
+    },
+    async getActiveInviteLinkForWatchlist() {
+      return null;
+    },
     async getWatchlistAccess(actorUserId, watchlistId) {
+      if (actorUserId === 'user-1' && watchlistId === personalWatchlist.id) {
+        return {
+          status: 'authorized' as const,
+          watchlist: personalWatchlist,
+          canEdit: true,
+        };
+      }
+
+      if (actorUserId === 'user-1' && watchlistId === sharedWatchlist.id) {
+        return {
+          status: 'authorized' as const,
+          watchlist: sharedWatchlist,
+          canEdit: true,
+        };
+      }
+
       if (
-        (actorUserId === 'user-1' && watchlistId === 'personal-watchlist-1') ||
-        (actorUserId !== 'user-1' && watchlistId === 'personal-watchlist-2')
+        actorUserId !== 'user-1'
+        && watchlistId === 'personal-watchlist-2'
       ) {
         return {
           status: 'authorized' as const,
           watchlist: {
-            id: watchlistId,
+            canEdit: true,
+            id: 'personal-watchlist-2',
             kind: 'personal' as const,
             name: 'My watchlist',
             ownerUserId: actorUserId,
@@ -103,7 +156,7 @@ function createWatchlistRepository(): WatchlistRepository {
       };
     },
     async listItemsForWatchlist(watchlistId) {
-      if (watchlistId === 'personal-watchlist-1') {
+      if (watchlistId === personalWatchlist.id) {
         return [
           {
             added_at: '2026-06-20T00:00:00.000Z',
@@ -138,27 +191,65 @@ function createWatchlistRepository(): WatchlistRepository {
         ];
       }
 
-      return [
-        {
-          added_at: '2026-06-22T00:00:00.000Z',
-          id: 'watchlist-item-3',
-          movie: {
-            id: 44,
-            raw_json: {
-              overview: 'Another user item.',
-              poster_path: '/other.jpg',
+      if (watchlistId === sharedWatchlist.id) {
+        return [
+          {
+            added_at: '2026-06-22T00:00:00.000Z',
+            id: 'watchlist-item-4',
+            movie: {
+              id: 45,
+              raw_json: {
+                overview: 'Shared watchlist movie.',
+                poster_path: '/inception.jpg',
+              },
+              release_date: '2010-07-16',
+              title: 'Inception',
+              tmdb_id: 27205,
+              updated_at: '2026-06-22T00:00:00.000Z',
             },
-            release_date: '2001-01-01',
-            title: 'Other User Movie',
-            tmdb_id: 605,
-            updated_at: '2026-06-22T00:00:00.000Z',
           },
-        },
-      ];
-    },
-    async listWatchlistsForUser() {
+        ];
+      }
+
+      if (watchlistId === 'personal-watchlist-2') {
+        return [
+          {
+            added_at: '2026-06-22T00:00:00.000Z',
+            id: 'watchlist-item-3',
+            movie: {
+              id: 44,
+              raw_json: {
+                overview: 'Another user item.',
+                poster_path: '/other.jpg',
+              },
+              release_date: '2001-01-01',
+              title: 'Other User Movie',
+              tmdb_id: 605,
+              updated_at: '2026-06-22T00:00:00.000Z',
+            },
+          },
+        ];
+      }
+
       return [];
     },
+    async listMembersForWatchlist() {
+      return [];
+    },
+    async listTrackedMovies() {
+      return [];
+    },
+    async listWatchlistsForUser(userId) {
+      if (userId === 'user-1') {
+        return [personalWatchlist, sharedWatchlist];
+      }
+
+      return [];
+    },
+    async removeMembershipFromWatchlist() {
+      return false;
+    },
+    async revokeInviteLinksForWatchlist() {},
     async upsertMovie() {
       return { id: 42 };
     },
@@ -200,7 +291,9 @@ describe('calendar feed route integration seam', () => {
     );
     expect(body).toContain('BEGIN:VCALENDAR');
     expect(body).toContain('SUMMARY:The Matrix');
+    expect(body).toContain('SUMMARY:Inception');
     expect(body).toContain('DESCRIPTION:https://www.themoviedb.org/movie/603');
+    expect(body).toContain('DESCRIPTION:https://www.themoviedb.org/movie/27205');
     expect(body).toContain(
       foldCalendarLine(
         'UID:35c9675c92fcbee5a2b50e3bf7bcc6797211309f5f0513b0f6f8aa66030a959b@moviecal',

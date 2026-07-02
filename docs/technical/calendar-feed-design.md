@@ -31,3 +31,21 @@ Caching
 
 Privacy
 - Do not leak other users' data. The token->user mapping must be strict and validated server-side.
+
+Watchlist aggregation (MVP)
+- A calendar token still maps to exactly one user. The feed aggregates movies from every watchlist that user can access at request time.
+- Contributing watchlists match the same scope as `listUserWatchlists`:
+  - the token owner's personal watchlist
+  - shared watchlists owned by the token owner
+  - shared watchlists where the token owner has accepted membership
+- Excluded watchlists:
+  - other users' personal watchlists
+  - shared watchlists without accepted membership
+  - revoked or expired invite-only access
+- The feed emits one all-day event per movie (`tmdb_id`) across all contributing watchlists.
+- When the same movie appears in multiple included watchlists, choose one canonical item deterministically:
+  1. personal-watchlist items win over shared-watchlist items
+  2. otherwise keep the earliest `added_at`
+  3. otherwise keep the lexicographically smallest watchlist item id
+- Event UIDs remain `SHA256(user_id + ":" + tmdb_id) + "@moviecal"` so duplicate source items do not create duplicate calendar events.
+- If membership or ownership changes remove a watchlist from the accessible set, its movies stop contributing to the feed on the next request.

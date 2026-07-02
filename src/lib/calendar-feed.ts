@@ -19,13 +19,25 @@ type BuildCalendarFeedOptions = {
   userId: string;
 };
 
+function dedupeWatchlistItemsByTmdbId(items: WatchlistItem[]): WatchlistItem[] {
+  const winnersByTmdbId = new Map<number, WatchlistItem>();
+
+  for (const item of items) {
+    if (!winnersByTmdbId.has(item.movie.tmdbId)) {
+      winnersByTmdbId.set(item.movie.tmdbId, item);
+    }
+  }
+
+  return [...winnersByTmdbId.values()];
+}
+
 export function buildCalendarFeed({
   generatedAt = new Date(),
   items,
   userId,
 }: BuildCalendarFeedOptions): string {
   const dtstamp = formatCalendarTimestamp(generatedAt);
-  const events = items
+  const events = dedupeWatchlistItemsByTmdbId(items)
     .flatMap((item) => {
       const dtstart = formatCalendarDate(item.movie.releaseDate);
 

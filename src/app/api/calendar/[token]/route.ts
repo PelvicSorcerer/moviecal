@@ -10,7 +10,7 @@ import {
 import { resolveCalendarTokenOwner } from '../../../../lib/calendar-tokens';
 import { createSupabaseCalendarTokenRepository } from '../../../../lib/supabase/calendar-tokens';
 import { createSupabaseWatchlistRepository } from '../../../../lib/supabase/watchlist';
-import { listPersonalWatchlistItems } from '../../../../lib/watchlist';
+import { listCalendarWatchlistItems } from '../../../../lib/watchlist';
 
 function createCalendarTokenRepository() {
   const adminClient = createServerSupabaseServiceRoleClient();
@@ -63,7 +63,7 @@ export async function GET(
     return new Response('Not Found', { status: 404 });
   }
 
-  const items = await listPersonalWatchlistItems({
+  const items = await listCalendarWatchlistItems({
     repository: createWatchlistRepository(),
     userId: ownerId,
   });

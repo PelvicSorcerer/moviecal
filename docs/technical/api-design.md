@@ -12,6 +12,8 @@ Use Supabase auth for all interactive user-scoped endpoints. Frontend code may u
   - Returns `200` with `Content-Type: text/calendar; charset=utf-8` for a valid token.
   - Returns `404` for an invalid token.
   - Returns one all-day `VEVENT` per watchlisted movie with a known `release_date`.
+  - Aggregates movies from the token owner's personal watchlist plus every shared watchlist they can still access under the MVP rule documented in `docs/technical/calendar-feed-design.md`.
+  - Deduplicates the same `tmdb_id` across included watchlists before event generation.
 
 ## Authenticated user endpoints
 
