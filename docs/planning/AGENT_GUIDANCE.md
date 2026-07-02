@@ -34,7 +34,7 @@ This repository uses the `moviecal Delivery` GitHub Project for live queue state
 - Prefer one orchestrator session between worker sessions. That session owns queue cleanup, dependency checks, and next-issue promotion.
 - Run post-merge orchestrator audits from an attached local branch that tracks `origin/master`; the local branch name does not need to be `master`.
 - When no issue is actually ready, leave the queue empty and document the blocker in GitHub instead of forcing a guess.
-- Use `bash scripts/agent-check.sh` before worker implementation and `bash scripts/agent-handoff-check.sh` after merge or when auditing repo readiness only as compatibility checks until the remaining legacy queue scripts are retired.
+- Use `bash scripts/agent-check.sh` before worker implementation and `bash scripts/agent-handoff-check.sh` after merge or when auditing repo readiness. Both scripts validate the post-cutover project dispatch invariant (`Agent Dispatch = Yes`, `Status = Ready`) and still require the derived `agent-ready` label as an explicit compatibility check until issue **#95** retires remaining legacy surfaces.
 
 ## Codex operator tooling
 

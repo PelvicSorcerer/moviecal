@@ -46,7 +46,7 @@ This doc covers what's specific to Codex (Desktop app or CLI) when it develops t
 
 ## Compatibility notes
 
-- Some legacy scripts still validate migration-era compatibility surfaces such as `agent-ready` and `docs/planning/open-issue-order.json`. Use those scripts as consistency checks, not as the authority for dispatch selection.
+- `scripts/agent-check.sh` and `scripts/agent-handoff-check.sh` validate the project-first dispatch invariant via `scripts/lib/project-queue-common.sh`. They still require the derived `agent-ready` label as an explicit compatibility check until issue **#95** retires remaining legacy surfaces. `docs/planning/open-issue-order.json` is generated-only when present; do not treat it as dispatch authority.
 - If the GitHub Project, issue labels, and planning docs disagree, reconcile the project first, then the compatibility state, then the docs.
 
 ## Known gaps / follow-ups

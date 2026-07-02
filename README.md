@@ -41,7 +41,9 @@ Supabase helper notes:
 Local verification commands:
 
 - `npm run verify` runs the baseline lint, typecheck, unit test, and build contract.
-- `npm run agent:check` and `npm run agent:handoff` are legacy compatibility checks while the repo finishes migrating queue validation from label/json-based rules to the project-first model.
+- `npm run agent:check` validates the post-cutover project dispatch invariant and issue contract before worker implementation.
+- `npm run agent:handoff` validates the same project dispatch invariant plus local git handoff readiness after merge.
+- `npm run agent:project-check` runs the shared project queue validator (`scripts/project-queue-check.sh`), including pre-cutover mode when `PROJECT_QUEUE_MODE=pre-cutover`.
 - `npm run db:lint` is the repo wrapper for `supabase db lint`. It uses `SUPABASE_DB_URL` when you provide a disposable database URL; otherwise it attempts `supabase db lint --local`.
 - `.github/workflows/supabase-verify.yml` is the authoritative infra-backed Supabase schema gate for PRs that change database schema verification surfaces.
 - `npm run build` may require elevated execution in Codex because Next.js/Turbopack can hit sandbox restrictions even when the project itself builds correctly.

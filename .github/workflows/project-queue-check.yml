@@ -9,6 +9,9 @@ on:
       - cursor/**
     paths:
       - 'scripts/project-queue-check.sh'
+      - 'scripts/agent-check.sh'
+      - 'scripts/agent-handoff-check.sh'
+      - 'scripts/lib/project-queue-common.sh'
       - 'scripts/project-platform-track-sync.sh'
       - '.github/workflows/project-queue-check.yml'
       - 'docs/planning/github-project-migration-plan.md'
@@ -16,6 +19,9 @@ on:
   pull_request:
     paths:
       - 'scripts/project-queue-check.sh'
+      - 'scripts/agent-check.sh'
+      - 'scripts/agent-handoff-check.sh'
+      - 'scripts/lib/project-queue-common.sh'
       - 'scripts/project-platform-track-sync.sh'
       - '.github/workflows/project-queue-check.yml'
       - 'docs/planning/github-project-migration-plan.md'
@@ -95,5 +101,57 @@ jobs:
           set -e
           if [ "$status" -eq 0 ]; then
             echo "Expected post-cutover failure fixture to fail, but it passed." >&2
+            exit 1
+          fi
+      - name: Validate fixture-based agent-check happy path
+        env:
+          PROJECT_QUEUE_MODE: post-cutover
+          PROJECT_QUEUE_ITEMS_JSON: |
+            {"items":[
+              {
+                "agent Dispatch":"Yes",
+                "status":"Ready",
+                "title":"Dispatch issue",
+                "labels":["agent-ready"],
+                "content":{"type":"Issue","number":74}
+              }
+            ]}
+          PROJECT_QUEUE_OPEN_ISSUES_JSON: |
+            [
+              {
+                "number":74,
+                "title":"Dispatch issue",
+                "body":"Relevant docs:\n- AGENTS.md\n\nAcceptance criteria:\n- Do the thing\n\nVerification:\n- npm run verify"
+              }
+            ]
+        run: bash scripts/agent-check.sh
+      - name: Validate fixture-based agent-check failure path
+        env:
+          PROJECT_QUEUE_MODE: post-cutover
+          PROJECT_QUEUE_ITEMS_JSON: |
+            {"items":[
+              {
+                "agent Dispatch":"Yes",
+                "status":"Backlog",
+                "title":"Dispatch issue",
+                "labels":["agent-ready"],
+                "content":{"type":"Issue","number":74}
+              }
+            ]}
+          PROJECT_QUEUE_OPEN_ISSUES_JSON: |
+            [
+              {
+                "number":74,
+                "title":"Dispatch issue",
+                "body":"Relevant docs:\n- AGENTS.md\n\nAcceptance criteria:\n- Do the thing\n\nVerification:\n- npm run verify"
+              }
+            ]
+        run: |
+          set +e
+          bash scripts/agent-check.sh
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "Expected agent-check failure fixture to fail, but it passed." >&2
             exit 1
           fi

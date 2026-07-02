@@ -26,7 +26,7 @@ Start with cleanup that makes the scaffold consistent, then follow the dependenc
 
 ## Current open issue queue
 
-The current live queue lives in the `moviecal Delivery` GitHub Project. Use project `Queue Order` for ordering and the single open issue with `Agent Dispatch = Yes` plus `Status = Ready` for dispatch. If legacy scripts still need `docs/planning/open-issue-order.json`, regenerate it with `bash scripts/export-open-issue-order.sh`; do not hand-edit it.
+The current live queue lives in the `moviecal Delivery` GitHub Project. Use project `Queue Order` for ordering and the single open issue with `Agent Dispatch = Yes` plus `Status = Ready` for dispatch. `npm run agent:check` and `npm run agent:handoff` validate that invariant directly from project state. If other tooling still needs `docs/planning/open-issue-order.json`, regenerate it with `bash scripts/export-open-issue-order.sh`; do not hand-edit it.
 
 ## Agent handoff notes
 
