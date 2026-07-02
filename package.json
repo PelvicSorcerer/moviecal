@@ -3,6 +3,9 @@
     "version": "1.0.0",
     "description": "moviecal is a personal movie watchlist web app that lets users search TMDb, save movies to a private watchlist, and subscribe to a private iCalendar (.ics) feed compatible with iOS Calendar. The feed provides one all-day event per movie release date and stays up-to-date when release dates change.",
     "main": "index.js",
+    "engines": {
+        "node": ">=24"
+    },
     "directories": {
         "doc": "docs",
         "test": "test"
