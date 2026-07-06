@@ -4,34 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { WatchlistDetailClient } from '../src/app/watchlist/watchlist-detail-client';
-import type { WatchlistItem, WatchlistSummary } from '../src/lib/watchlist';
-
-function buildItem(overrides: Partial<WatchlistItem> = {}): WatchlistItem {
-  return {
-    id: 'watchlist-item-1',
-    addedAt: '2026-06-13T05:00:00.000Z',
-    movie: {
-      id: 42,
-      tmdbId: 603,
-      title: 'The Matrix',
-      releaseDate: '1999-03-31',
-      overview: 'A hacker discovers the truth.',
-      posterPath: '/matrix.jpg',
-    },
-    ...overrides,
-  };
-}
-
-function buildWatchlist(overrides: Partial<WatchlistSummary> = {}): WatchlistSummary {
-  return {
-    canEdit: true,
-    id: 'shared-watchlist-1',
-    kind: 'shared',
-    name: 'Friday movie night',
-    ownerUserId: 'user-1',
-    ...overrides,
-  };
-}
+import {
+  buildWatchlistItem,
+  buildWatchlistSummary,
+} from './support';
 
 describe('WatchlistDetailClient', () => {
   beforeEach(() => {
@@ -54,8 +30,12 @@ describe('WatchlistDetailClient', () => {
 
     render(
       <WatchlistDetailClient
-        initialItems={[buildItem()]}
-        watchlist={buildWatchlist()}
+        initialItems={[buildWatchlistItem()]}
+        watchlist={buildWatchlistSummary({
+          id: 'shared-watchlist-1',
+          kind: 'shared',
+          name: 'Friday movie night',
+        })}
       />,
     );
 
@@ -86,8 +66,12 @@ describe('WatchlistDetailClient', () => {
 
     render(
       <WatchlistDetailClient
-        initialItems={[buildItem()]}
-        watchlist={buildWatchlist()}
+        initialItems={[buildWatchlistItem()]}
+        watchlist={buildWatchlistSummary({
+          id: 'shared-watchlist-1',
+          kind: 'shared',
+          name: 'Friday movie night',
+        })}
       />,
     );
 
@@ -104,8 +88,8 @@ describe('WatchlistDetailClient', () => {
   it('shows a read-only state and hides remove actions for non-editable memberships', () => {
     render(
       <WatchlistDetailClient
-        initialItems={[buildItem()]}
-        watchlist={buildWatchlist({
+        initialItems={[buildWatchlistItem()]}
+        watchlist={buildWatchlistSummary({
           canEdit: false,
           name: 'Curated picks',
         })}

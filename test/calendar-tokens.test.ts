@@ -8,44 +8,11 @@ import {
   resolveCalendarTokenOwner,
   rotateCalendarToken,
   type CalendarTokenRepository,
-  type CalendarTokenRow,
 } from '../src/lib/calendar-tokens';
-
-function createRow(overrides: Partial<CalendarTokenRow> = {}): CalendarTokenRow {
-  return {
-    created_at: '2026-06-19T00:00:00.000Z',
-    id: 'token-row-1',
-    token: 'existing-token',
-    user_id: 'user-1',
-    ...overrides,
-  };
-}
-
-function createRepository(
-  overrides: Partial<CalendarTokenRepository> = {},
-): CalendarTokenRepository {
-  return {
-    async findTokenByUserId() {
-      return null;
-    },
-    async findUserIdByToken() {
-      return null;
-    },
-    async insertTokenForUser() {
-      return {
-        errorCode: null,
-        row: createRow(),
-      };
-    },
-    async updateTokenForUser() {
-      return {
-        errorCode: null,
-        row: createRow({ token: 'rotated-token' }),
-      };
-    },
-    ...overrides,
-  };
-}
+import {
+  buildCalendarTokenRow,
+  createCalendarTokenRepository,
+} from './support';
 
 describe('calendar token helpers', () => {
   it('generates url-safe tokens with strong length', () => {
@@ -67,23 +34,23 @@ describe('calendar token helpers', () => {
 
 describe('calendar token domain flow', () => {
   it('returns the existing token without regenerating it', async () => {
-    const repository = createRepository({
+    const repository = createCalendarTokenRepository({
       async findTokenByUserId() {
-        return createRow();
+        return buildCalendarTokenRow();
       },
     });
 
     await expect(
       getOrCreateCalendarToken({ repository, userId: 'user-1' }),
-    ).resolves.toEqual(createRow());
+    ).resolves.toEqual(buildCalendarTokenRow());
   });
 
   it('creates a token when the user does not have one yet', async () => {
-    const repository = createRepository({
+    const repository = createCalendarTokenRepository({
       async insertTokenForUser(_userId, token) {
         return {
           errorCode: null,
-          row: createRow({ token }),
+          row: buildCalendarTokenRow({ token }),
         };
       },
     });
@@ -98,9 +65,9 @@ describe('calendar token domain flow', () => {
   });
 
   it('resolves an insert race by refetching the user token', async () => {
-    const repository = createRepository({
+    const repository = createCalendarTokenRepository({
       async findTokenByUserId() {
-        return createRow({ token: 'raced-token' });
+        return buildCalendarTokenRow({ token: 'raced-token' });
       },
       async insertTokenForUser() {
         return {
@@ -112,18 +79,18 @@ describe('calendar token domain flow', () => {
 
     await expect(
       getOrCreateCalendarToken({ repository, userId: 'user-1' }),
-    ).resolves.toEqual(createRow({ token: 'raced-token' }));
+    ).resolves.toEqual(buildCalendarTokenRow({ token: 'raced-token' }));
   });
 
   it('rotates the token for an existing row', async () => {
-    const repository = createRepository({
+    const repository = createCalendarTokenRepository({
       async findTokenByUserId() {
-        return createRow({ token: 'old-token' });
+        return buildCalendarTokenRow({ token: 'old-token' });
       },
       async updateTokenForUser(_userId, token) {
         return {
           errorCode: null,
-          row: createRow({ token }),
+          row: buildCalendarTokenRow({ token }),
         };
       },
     });
@@ -137,14 +104,14 @@ describe('calendar token domain flow', () => {
   });
 
   it('creates a token on rotate when no token exists yet', async () => {
-    const repository = createRepository({
+    const repository = createCalendarTokenRepository({
       async findTokenByUserId() {
         return null;
       },
       async insertTokenForUser(_userId, token) {
         return {
           errorCode: null,
-          row: createRow({ token }),
+          row: buildCalendarTokenRow({ token }),
         };
       },
     });
@@ -158,7 +125,7 @@ describe('calendar token domain flow', () => {
   });
 
   it('resolves the owner id from a valid token', async () => {
-    const repository = createRepository({
+    const repository = createCalendarTokenRepository({
       async findUserIdByToken(token) {
         return token === 'valid-token' ? 'user-1' : null;
       },
@@ -173,9 +140,9 @@ describe('calendar token domain flow', () => {
   });
 
   it('throws a data error when rotation cannot persist', async () => {
-    const repository = createRepository({
+    const repository = createCalendarTokenRepository({
       async findTokenByUserId() {
-        return createRow();
+        return buildCalendarTokenRow();
       },
       async updateTokenForUser() {
         return {

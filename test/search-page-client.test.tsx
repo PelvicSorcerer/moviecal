@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 
 import { SearchPageClient } from '../src/app/search/search-page-client';
-import type { WatchlistSummary } from '../src/lib/watchlist';
+import { buildWatchlistSummary } from './support';
 
 vi.mock('next/navigation', () => ({
   usePathname: () => '/search',
@@ -12,19 +12,6 @@ vi.mock('next/navigation', () => ({
     replace: vi.fn(),
   }),
 }));
-
-function buildWatchlist(
-  overrides: Partial<WatchlistSummary> = {},
-): WatchlistSummary {
-  return {
-    canEdit: true,
-    id: 'personal-watchlist-1',
-    kind: 'personal',
-    name: 'My watchlist',
-    ownerUserId: 'user-1',
-    ...overrides,
-  };
-}
 
 describe('SearchPageClient', () => {
   beforeEach(() => {
@@ -55,8 +42,8 @@ describe('SearchPageClient', () => {
     render(
       <SearchPageClient
         availableWatchlists={[
-          buildWatchlist(),
-          buildWatchlist({
+          buildWatchlistSummary(),
+          buildWatchlistSummary({
             canEdit: false,
             id: 'shared-watchlist-readonly',
             kind: 'shared',
@@ -97,7 +84,7 @@ describe('SearchPageClient', () => {
     render(
       <SearchPageClient
         availableWatchlists={[
-          buildWatchlist({
+          buildWatchlistSummary({
             canEdit: false,
             id: 'shared-watchlist-readonly',
             kind: 'shared',

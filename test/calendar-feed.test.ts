@@ -8,25 +8,8 @@ import {
   formatCalendarDate,
   formatCalendarTimestamp,
 } from '../src/lib/calendar-feed';
-import type { WatchlistItem } from '../src/lib/watchlist';
-
-function buildWatchlistItem(
-  overrides: Partial<WatchlistItem> = {},
-): WatchlistItem {
-  return {
-    addedAt: '2026-06-20T00:00:00.000Z',
-    id: 'watchlist-item-1',
-    movie: {
-      id: 42,
-      overview: 'A hacker discovers the truth.',
-      posterPath: '/matrix.jpg',
-      releaseDate: '1999-03-31',
-      title: 'The Matrix',
-      tmdbId: 603,
-    },
-    ...overrides,
-  };
-}
+import { TEST_TMDB_IDS, TEST_USER_IDS } from '../src/lib/test-data/catalog';
+import { buildWatchlistItem } from './support';
 
 describe('calendar feed helpers', () => {
   it('formats all-day calendar dates as YYYYMMDD', () => {
@@ -45,7 +28,7 @@ describe('calendar feed helpers', () => {
     expect(buildCalendarEventUid('user-1', 603)).toBe(
       '35c9675c92fcbee5a2b50e3bf7bcc6797211309f5f0513b0f6f8aa66030a959b@moviecal',
     );
-    expect(buildCalendarEventUid('user-1', 603)).toBe(
+    expect(buildCalendarEventUid(TEST_USER_IDS.OWNER, TEST_TMDB_IDS.MATRIX)).toBe(
       buildCalendarEventUid('user-1', 603),
     );
     expect(buildCalendarEventUid('user-2', 603)).not.toBe(

@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { foldCalendarLine } from '../src/lib/calendar-feed';
-import type { CalendarTokenRepository } from '../src/lib/calendar-tokens';
-import type { WatchlistRepository } from '../src/lib/watchlist';
+import { TEST_USER_IDS, TEST_WATCHLIST_IDS } from '../src/lib/test-data/catalog';
+import {
+  buildWatchlistRow,
+  buildWatchlistSummary,
+  createCalendarTokenRepository,
+  createWatchlistRepository,
+} from './support';
 
 const mocks = vi.hoisted(() => ({
   createServerSupabaseServiceRoleClient: vi.fn(),
@@ -36,143 +41,31 @@ vi.mock('../src/lib/e2e/fixtures', () => ({
   isE2ETestModeEnabled: mocks.isE2ETestModeEnabled,
 }));
 
-function createCalendarTokenRepository(): CalendarTokenRepository {
-  return {
-    async findTokenByUserId() {
-      return null;
-    },
+function createCalendarTokenRepositoryForRoute() {
+  return createCalendarTokenRepository({
     async findUserIdByToken(token) {
-      return token === 'valid-token' ? 'user-1' : null;
+      return token === 'valid-token' ? TEST_USER_IDS.OWNER : null;
     },
-    async insertTokenForUser() {
-      return {
-        errorCode: null,
-        row: null,
-      };
-    },
-    async updateTokenForUser() {
-      return {
-        errorCode: null,
-        row: null,
-      };
-    },
-  };
+  });
 }
 
-function createWatchlistRepository(): WatchlistRepository {
-  const personalWatchlist = {
-    canEdit: true,
-    id: 'personal-watchlist-1',
-    kind: 'personal' as const,
+function createWatchlistRepositoryForRoute() {
+  const personalWatchlist = buildWatchlistSummary({
+    id: TEST_WATCHLIST_IDS.PERSONAL,
+    kind: 'personal',
     name: 'My watchlist',
-    ownerUserId: 'user-1',
-  };
-  const sharedWatchlist = {
-    canEdit: true,
-    id: 'shared-watchlist-1',
-    kind: 'shared' as const,
+  });
+  const sharedWatchlist = buildWatchlistSummary({
+    id: TEST_WATCHLIST_IDS.SHARED,
+    kind: 'shared',
     name: 'Household picks',
-    ownerUserId: 'user-1',
-  };
+  });
 
-  return {
-    async acceptInviteMembership() {
-      throw new Error('not implemented');
-    },
-    async createInviteLink() {
-      throw new Error('not implemented');
-    },
-    async createWatchlist() {
-      throw new Error('not implemented');
-    },
-    async deleteItemByIdForWatchlist() {
-      return false;
-    },
-    async ensurePersonalWatchlist(userId) {
-      return userId === 'user-1'
-        ? personalWatchlist
-        : {
-            canEdit: true,
-            id: 'personal-watchlist-2',
-            kind: 'personal',
-            name: 'My watchlist',
-            ownerUserId: userId,
-          };
-    },
-    async findInviteLinkByTokenHash() {
-      return null;
-    },
-    async findItemByMovieIdForWatchlist() {
-      return null;
-    },
-    async findMembershipForUser() {
-      return null;
-    },
-    async getActiveInviteLinkForWatchlist() {
-      return null;
-    },
-    async getWatchlistAccess(actorUserId, watchlistId) {
-      if (actorUserId === 'user-1' && watchlistId === personalWatchlist.id) {
-        return {
-          status: 'authorized' as const,
-          watchlist: personalWatchlist,
-          canEdit: true,
-        };
-      }
-
-      if (actorUserId === 'user-1' && watchlistId === sharedWatchlist.id) {
-        return {
-          status: 'authorized' as const,
-          watchlist: sharedWatchlist,
-          canEdit: true,
-        };
-      }
-
-      if (
-        actorUserId !== 'user-1'
-        && watchlistId === 'personal-watchlist-2'
-      ) {
-        return {
-          status: 'authorized' as const,
-          watchlist: {
-            canEdit: true,
-            id: 'personal-watchlist-2',
-            kind: 'personal' as const,
-            name: 'My watchlist',
-            ownerUserId: actorUserId,
-          },
-          canEdit: true,
-        };
-      }
-
-      return {
-        status: 'forbidden' as const,
-      };
-    },
-    async insertItemForWatchlist() {
-      return {
-        errorCode: null,
-        row: null,
-      };
-    },
+  return createWatchlistRepository({
     async listItemsForWatchlist(watchlistId) {
       if (watchlistId === personalWatchlist.id) {
         return [
-          {
-            added_at: '2026-06-20T00:00:00.000Z',
-            id: 'watchlist-item-1',
-            movie: {
-              id: 42,
-              raw_json: {
-                overview: 'A hacker discovers the truth.',
-                poster_path: '/matrix.jpg',
-              },
-              release_date: '1999-03-31',
-              title: 'The Matrix',
-              tmdb_id: 603,
-              updated_at: '2026-06-20T00:00:00.000Z',
-            },
-          },
+          buildWatchlistRow(),
           {
             added_at: '2026-06-21T00:00:00.000Z',
             id: 'watchlist-item-2',
@@ -193,7 +86,7 @@ function createWatchlistRepository(): WatchlistRepository {
 
       if (watchlistId === sharedWatchlist.id) {
         return [
-          {
+          buildWatchlistRow(27205, {
             added_at: '2026-06-22T00:00:00.000Z',
             id: 'watchlist-item-4',
             movie: {
@@ -207,7 +100,7 @@ function createWatchlistRepository(): WatchlistRepository {
               tmdb_id: 27205,
               updated_at: '2026-06-22T00:00:00.000Z',
             },
-          },
+          }),
         ];
       }
 
@@ -233,27 +126,12 @@ function createWatchlistRepository(): WatchlistRepository {
 
       return [];
     },
-    async listMembersForWatchlist() {
-      return [];
-    },
-    async listTrackedMovies() {
-      return [];
-    },
     async listWatchlistsForUser(userId) {
-      if (userId === 'user-1') {
-        return [personalWatchlist, sharedWatchlist];
-      }
-
-      return [];
+      return userId === TEST_USER_IDS.OWNER
+        ? [personalWatchlist, sharedWatchlist]
+        : [];
     },
-    async removeMembershipFromWatchlist() {
-      return false;
-    },
-    async revokeInviteLinksForWatchlist() {},
-    async upsertMovie() {
-      return { id: 42 };
-    },
-  };
+  });
 }
 
 describe('calendar feed route integration seam', () => {
@@ -267,10 +145,10 @@ describe('calendar feed route integration seam', () => {
       name: 'service-role-client',
     });
     mocks.createSupabaseCalendarTokenRepository.mockReturnValue(
-      createCalendarTokenRepository(),
+      createCalendarTokenRepositoryForRoute(),
     );
     mocks.createSupabaseWatchlistRepository.mockReturnValue(
-      createWatchlistRepository(),
+      createWatchlistRepositoryForRoute(),
     );
     mocks.isE2ETestModeEnabled.mockReturnValue(false);
     mocks.isE2ECalendarTokenActive.mockReturnValue(false);
@@ -309,10 +187,10 @@ describe('calendar feed route integration seam', () => {
       name: 'service-role-client',
     });
     mocks.createSupabaseCalendarTokenRepository.mockReturnValue(
-      createCalendarTokenRepository(),
+      createCalendarTokenRepositoryForRoute(),
     );
     mocks.createSupabaseWatchlistRepository.mockReturnValue(
-      createWatchlistRepository(),
+      createWatchlistRepositoryForRoute(),
     );
     mocks.isE2ETestModeEnabled.mockReturnValue(false);
     mocks.isE2ECalendarTokenActive.mockReturnValue(false);

@@ -4,6 +4,12 @@ import {
   createExpiredCookieOptions,
   type CookieValueReader,
 } from '../auth/cookies';
+import {
+  getTestMovieCatalogEntry,
+  TEST_TIMESTAMPS,
+  TEST_TMDB_IDS,
+  TEST_USER_IDS,
+} from '../test-data/catalog';
 import type { NormalizedMovieDetail, NormalizedMovieSummary } from '../tmdb/client';
 import type {
   WatchlistInviteLink,
@@ -35,26 +41,26 @@ interface CookieWriter {
 type E2EWatchlistItemsByWatchlist = Record<string, WatchlistItem[]>;
 
 export const E2E_USER: User = {
-  id: 'e2e-user',
+  id: TEST_USER_IDS.E2E_OWNER,
   email: 'e2e@example.com',
   app_metadata: {
     provider: 'e2e',
   },
   aud: 'authenticated',
-  created_at: '2026-06-18T00:00:00.000Z',
+  created_at: TEST_TIMESTAMPS.USER_CREATED,
   user_metadata: {
     label: 'Playwright smoke user',
   },
 };
 
 export const E2E_COLLABORATOR_USER: User = {
-  id: 'e2e-collaborator-user',
+  id: TEST_USER_IDS.E2E_COLLABORATOR,
   email: 'friend@example.com',
   app_metadata: {
     provider: 'e2e',
   },
   aud: 'authenticated',
-  created_at: '2026-06-18T00:00:00.000Z',
+  created_at: TEST_TIMESTAMPS.USER_CREATED,
   user_metadata: {
     label: 'Playwright collaborator user',
   },
@@ -77,41 +83,6 @@ export const E2E_SESSION = {
   refreshToken: 'e2e-refresh-token',
 };
 
-const MOVIE_FIXTURES: Record<number, NormalizedMovieDetail> = {
-  603: {
-    tmdbId: 603,
-    title: 'The Matrix',
-    releaseDate: '1999-03-31',
-    posterPath: '/matrix.jpg',
-    overview: 'A hacker discovers the truth.',
-    rawJson: {
-      id: 603,
-      title: 'The Matrix',
-      release_date: '1999-03-31',
-      poster_path: '/matrix.jpg',
-      overview: 'A hacker discovers the truth.',
-    },
-  },
-  27205: {
-    tmdbId: 27205,
-    title: 'Inception',
-    releaseDate: '2010-07-16',
-    posterPath: '/inception.jpg',
-    overview: 'A thief steals secrets through shared dreams.',
-    rawJson: {
-      id: 27205,
-      title: 'Inception',
-      release_date: '2010-07-16',
-      poster_path: '/inception.jpg',
-      overview: 'A thief steals secrets through shared dreams.',
-    },
-  },
-};
-
-const MOVIE_ADDED_AT: Record<number, string> = {
-  603: '2026-06-18T12:00:00.000Z',
-  27205: '2026-06-18T12:05:00.000Z',
-};
 
 export function isE2ETestModeEnabled(): boolean {
   return process.env.MOVIECAL_E2E_TEST_MODE === '1';
@@ -166,7 +137,7 @@ export function getE2EPersonalWatchlistId(userId: string): string {
 export function getE2EMovieFixture(
   tmdbId: number,
 ): NormalizedMovieDetail | null {
-  return MOVIE_FIXTURES[tmdbId] ?? null;
+  return getTestMovieCatalogEntry(tmdbId)?.detail ?? null;
 }
 
 export function getE2EMovieSummaries(
@@ -196,9 +167,14 @@ export function createE2EWatchlistItem(tmdbId: number): WatchlistItem {
     throw new Error(`Missing E2E movie fixture for tmdbId ${tmdbId}.`);
   }
 
+  const catalogEntry = getTestMovieCatalogEntry(tmdbId);
+  const e2eAddedAt = tmdbId === TEST_TMDB_IDS.INCEPTION
+    ? TEST_TIMESTAMPS.INCEPTION_ADDED_AT
+    : TEST_TIMESTAMPS.MATRIX_ADDED_AT;
+
   return {
     id: `e2e-watchlist-item-${tmdbId}`,
-    addedAt: MOVIE_ADDED_AT[tmdbId] ?? MOVIE_ADDED_AT[603],
+    addedAt: e2eAddedAt,
     movie: {
       id: tmdbId,
       tmdbId: movie.tmdbId,
@@ -481,7 +457,7 @@ export function createE2EWatchlistMember(args: {
   watchlistId: string;
 }): WatchlistMember {
   return {
-    acceptedAt: args.acceptedAt ?? new Date().toISOString(),
+    acceptedAt: args.acceptedAt ?? TEST_TIMESTAMPS.MEMBERSHIP_ACCEPTED,
     id: args.id ?? `e2e-membership-${args.watchlistId}-${args.userId}`,
     invitedByUserId: args.invitedByUserId ?? E2E_USER.id,
     role: args.role ?? 'editor',
@@ -500,7 +476,7 @@ export function createE2EWatchlistInviteLink(args: {
   watchlistId: string;
 }): WatchlistInviteLinkWithToken {
   return {
-    createdAt: args.createdAt ?? new Date().toISOString(),
+    createdAt: args.createdAt ?? TEST_TIMESTAMPS.INVITE_CREATED,
     createdByUserId: args.createdByUserId ?? E2E_USER.id,
     expiresAt: args.expiresAt ?? null,
     id: args.id ?? `e2e-invite-${args.watchlistId}`,

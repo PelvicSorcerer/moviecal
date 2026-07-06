@@ -4,36 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { WatchlistPageClient } from '../src/app/watchlist/watchlist-page-client';
-import type { WatchlistItem, WatchlistSummary } from '../src/lib/watchlist';
-
-function buildItem(overrides: Partial<WatchlistItem> = {}): WatchlistItem {
-  return {
-    id: 'watchlist-item-1',
-    addedAt: '2026-06-13T05:00:00.000Z',
-    movie: {
-      id: 42,
-      tmdbId: 603,
-      title: 'The Matrix',
-      releaseDate: '1999-03-31',
-      overview: 'A hacker discovers the truth.',
-      posterPath: '/matrix.jpg',
-    },
-    ...overrides,
-  };
-}
-
-function buildWatchlist(
-  overrides: Partial<WatchlistSummary> = {},
-): WatchlistSummary {
-  return {
-    canEdit: true,
-    id: 'personal-watchlist-1',
-    kind: 'personal',
-    name: 'My watchlist',
-    ownerUserId: 'user-1',
-    ...overrides,
-  };
-}
+import {
+  buildWatchlistItem,
+  buildWatchlistSummary,
+} from './support';
 
 describe('WatchlistPageClient', () => {
   beforeEach(() => {
@@ -49,7 +23,7 @@ describe('WatchlistPageClient', () => {
     render(
       <WatchlistPageClient
         initialItems={[]}
-        initialWatchlists={[buildWatchlist()]}
+        initialWatchlists={[buildWatchlistSummary()]}
         overviewErrorMessage={null}
         personalItemsErrorMessage={null}
         personalWatchlistId="personal-watchlist-1"
@@ -71,8 +45,8 @@ describe('WatchlistPageClient', () => {
 
     render(
       <WatchlistPageClient
-        initialItems={[buildItem()]}
-        initialWatchlists={[buildWatchlist()]}
+        initialItems={[buildWatchlistItem()]}
+        initialWatchlists={[buildWatchlistSummary()]}
         overviewErrorMessage={null}
         personalItemsErrorMessage={null}
         personalWatchlistId="personal-watchlist-1"
@@ -106,8 +80,8 @@ describe('WatchlistPageClient', () => {
 
     render(
       <WatchlistPageClient
-        initialItems={[buildItem()]}
-        initialWatchlists={[buildWatchlist()]}
+        initialItems={[buildWatchlistItem()]}
+        initialWatchlists={[buildWatchlistSummary()]}
         overviewErrorMessage={null}
         personalItemsErrorMessage={null}
         personalWatchlistId="personal-watchlist-1"
@@ -128,7 +102,7 @@ describe('WatchlistPageClient', () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: true,
       json: async () => ({
-        watchlist: buildWatchlist({
+        watchlist: buildWatchlistSummary({
           id: 'shared-watchlist-1',
           kind: 'shared',
           name: 'Friday movie night',
@@ -139,7 +113,7 @@ describe('WatchlistPageClient', () => {
     render(
       <WatchlistPageClient
         initialItems={[]}
-        initialWatchlists={[buildWatchlist()]}
+        initialWatchlists={[buildWatchlistSummary()]}
         overviewErrorMessage={null}
         personalItemsErrorMessage={null}
         personalWatchlistId="personal-watchlist-1"
@@ -174,8 +148,8 @@ describe('WatchlistPageClient', () => {
       <WatchlistPageClient
         initialItems={[]}
         initialWatchlists={[
-          buildWatchlist(),
-          buildWatchlist({
+          buildWatchlistSummary(),
+          buildWatchlistSummary({
             id: 'shared-watchlist-1',
             kind: 'shared',
             name: 'Friday movie night',
@@ -198,7 +172,7 @@ describe('WatchlistPageClient', () => {
   it('shows the overview error without hiding the personal watchlist section', () => {
     render(
       <WatchlistPageClient
-        initialItems={[buildItem()]}
+        initialItems={[buildWatchlistItem()]}
         initialWatchlists={[]}
         overviewErrorMessage="Could not load your watchlists right now."
         personalItemsErrorMessage={null}

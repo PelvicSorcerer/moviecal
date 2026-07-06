@@ -19,6 +19,7 @@ import {
   serializeE2EWatchlists,
   type E2ESharedState,
 } from '../src/lib/e2e/fixtures';
+import { TEST_CALENDAR_TOKENS } from '../src/lib/test-data/catalog';
 import type { WatchlistSummary } from '../src/lib/watchlist';
 
 type SeedArgs =
@@ -108,9 +109,7 @@ export const test = base.extend<SmokeFixtures>({
       };
       const watchlistsCookieValue = serializeE2EWatchlists(watchlists);
       const sharedStateCookieValue = serializeE2ESharedState(sharedState);
-      const calendarToken = createSeededE2ECalendarToken(
-        `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      );
+      const calendarToken = createSeededE2ECalendarToken(TEST_CALENDAR_TOKENS.SEED);
 
       await context.addCookies([
         {

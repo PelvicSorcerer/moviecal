@@ -20,128 +20,13 @@ import {
   WatchlistNotFoundError,
   WatchlistInputError,
   type WatchlistRepository,
-  type WatchlistRow,
   type WatchlistSummary,
 } from '../src/lib/watchlist';
-
-function buildWatchlistSummary(
-  overrides: Partial<WatchlistSummary> = {},
-): WatchlistSummary {
-  return {
-    canEdit: true,
-    id: 'watchlist-1',
-    kind: 'personal',
-    name: 'My watchlist',
-    ownerUserId: 'user-1',
-    ...overrides,
-  };
-}
-
-function buildWatchlistRow(overrides: Partial<WatchlistRow> = {}): WatchlistRow {
-  return {
-    id: 'watchlist-item-1',
-    added_at: '2026-06-13T05:00:00.000Z',
-    movie: {
-      id: 42,
-      tmdb_id: 603,
-      title: 'The Matrix',
-      release_date: '1999-03-31',
-      raw_json: {
-        overview: 'A hacker discovers the truth.',
-        poster_path: '/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg',
-      },
-      updated_at: '2026-06-13T05:00:00.000Z',
-    },
-    ...overrides,
-  };
-}
-
-function createRepository(
-  overrides: Partial<WatchlistRepository> = {},
-): WatchlistRepository {
-  return {
-    async createWatchlist() {
-      return buildWatchlistSummary({
-        id: 'shared-watchlist-1',
-        kind: 'shared',
-        name: 'Friday movie night',
-      });
-    },
-    async acceptInviteMembership() {
-      return {
-        acceptedAt: '2026-06-20T00:00:00.000Z',
-        id: 'membership-1',
-        invitedByUserId: 'user-1',
-        role: 'editor',
-        userId: 'user-2',
-        watchlistId: 'shared-watchlist-1',
-      };
-    },
-    async createInviteLink() {
-      return {
-        createdAt: '2026-06-20T00:00:00.000Z',
-        createdByUserId: 'user-1',
-        expiresAt: null,
-        id: 'invite-1',
-        revokedAt: null,
-        watchlistId: 'shared-watchlist-1',
-      };
-    },
-    async deleteItemByIdForWatchlist() {
-      return true;
-    },
-    async ensurePersonalWatchlist() {
-      return buildWatchlistSummary();
-    },
-    async findItemByMovieIdForWatchlist() {
-      return buildWatchlistRow();
-    },
-    async findMembershipForUser() {
-      return null;
-    },
-    async findInviteLinkByTokenHash() {
-      return null;
-    },
-    async getActiveInviteLinkForWatchlist() {
-      return null;
-    },
-    async getWatchlistAccess() {
-      return {
-        status: 'authorized',
-        watchlist: buildWatchlistSummary(),
-        canEdit: true,
-      };
-    },
-    async insertItemForWatchlist() {
-      return {
-        row: buildWatchlistRow(),
-        errorCode: null,
-      };
-    },
-    async listItemsForWatchlist() {
-      return [];
-    },
-    async listMembersForWatchlist() {
-      return [];
-    },
-    async listTrackedMovies() {
-      return [];
-    },
-    async listWatchlistsForUser() {
-      return [buildWatchlistSummary()];
-    },
-    async revokeInviteLinksForWatchlist() {
-      return undefined;
-    },
-    async removeMembershipFromWatchlist() {
-      return true;
-    },
-    async upsertMovie() {
-      return { id: 42 };
-    },
-    ...overrides,
-  };
-}
+import {
+  buildWatchlistRow,
+  buildWatchlistSummary,
+  createWatchlistRepository,
+} from './support';
 
 describe('watchlist domain helpers', () => {
   it('maps joined movie metadata into the planned API shape', () => {
@@ -154,16 +39,16 @@ describe('watchlist domain helpers', () => {
         title: 'The Matrix',
         releaseDate: '1999-03-31',
         overview: 'A hacker discovers the truth.',
-        posterPath: '/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg',
+        posterPath: '/matrix.jpg',
       },
     });
   });
 
   it('lists an explicitly scoped watchlist after checking access', async () => {
-    const repository = createRepository({
+    const repository = createWatchlistRepository({
       async getWatchlistAccess(actorUserId, watchlistId) {
         expect(actorUserId).toBe('user-1');
-        expect(watchlistId).toBe('watchlist-1');
+        expect(watchlistId).toBe('personal-watchlist-1');
 
         return {
           status: 'authorized',
@@ -172,7 +57,7 @@ describe('watchlist domain helpers', () => {
         };
       },
       async listItemsForWatchlist(watchlistId) {
-        expect(watchlistId).toBe('watchlist-1');
+        expect(watchlistId).toBe('personal-watchlist-1');
         return [buildWatchlistRow()];
       },
     });
@@ -181,7 +66,7 @@ describe('watchlist domain helpers', () => {
       listWatchlistItems({
         actorUserId: 'user-1',
         repository,
-        watchlistId: 'watchlist-1',
+        watchlistId: 'personal-watchlist-1',
       }),
     ).resolves.toEqual([
       {
@@ -193,14 +78,14 @@ describe('watchlist domain helpers', () => {
           title: 'The Matrix',
           releaseDate: '1999-03-31',
           overview: 'A hacker discovers the truth.',
-          posterPath: '/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg',
+          posterPath: '/matrix.jpg',
         },
       },
     ]);
   });
 
   it('returns the authorized watchlist detail contract for a target list', async () => {
-    const repository = createRepository({
+    const repository = createWatchlistRepository({
       async getWatchlistAccess() {
         return {
           status: 'authorized',
@@ -241,7 +126,7 @@ describe('watchlist domain helpers', () => {
             title: 'The Matrix',
             releaseDate: '1999-03-31',
             overview: 'A hacker discovers the truth.',
-            posterPath: '/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg',
+            posterPath: '/matrix.jpg',
           },
         },
       ],
@@ -249,7 +134,7 @@ describe('watchlist domain helpers', () => {
   });
 
   it('preserves the current personal watchlist path through the generalized abstraction', async () => {
-    const repository = createRepository({
+    const repository = createWatchlistRepository({
       async ensurePersonalWatchlist(userId) {
         expect(userId).toBe('user-1');
         return buildWatchlistSummary({
@@ -282,7 +167,7 @@ describe('watchlist domain helpers', () => {
   });
 
   it('ensures the personal watchlist is present and ordered first in the overview list', async () => {
-    const repository = createRepository({
+    const repository = createWatchlistRepository({
       async ensurePersonalWatchlist() {
         return buildWatchlistSummary({
           id: 'personal-watchlist-1',
@@ -322,7 +207,7 @@ describe('watchlist domain helpers', () => {
   });
 
   it('preserves read-only membership state in the watchlist overview contract', async () => {
-    const repository = createRepository({
+    const repository = createWatchlistRepository({
       async ensurePersonalWatchlist() {
         return buildWatchlistSummary({
           id: 'personal-watchlist-1',
@@ -362,7 +247,7 @@ describe('watchlist domain helpers', () => {
   });
 
   it('creates a shared watchlist with normalized input', async () => {
-    const repository = createRepository({
+    const repository = createWatchlistRepository({
       async createWatchlist(args) {
         expect(args).toEqual({
           ownerUserId: 'user-1',
@@ -396,7 +281,7 @@ describe('watchlist domain helpers', () => {
   it('resolves only active shared-watchlist invite links', async () => {
     await expect(
       resolveWatchlistInvite({
-        repository: createRepository({
+        repository: createWatchlistRepository({
           async findInviteLinkByTokenHash() {
             return {
               inviteLink: {
@@ -426,7 +311,7 @@ describe('watchlist domain helpers', () => {
 
     await expect(
       resolveWatchlistInvite({
-        repository: createRepository({
+        repository: createWatchlistRepository({
           async findInviteLinkByTokenHash() {
             return {
               inviteLink: {
@@ -464,7 +349,7 @@ describe('watchlist domain helpers', () => {
       createSharedWatchlistInviteLink({
         actorUserId: 'user-1',
         baseUrl: 'https://moviecal.test',
-        repository: createRepository({
+        repository: createWatchlistRepository({
           createInviteLink,
           getWatchlistAccess: async () => ({
             status: 'authorized',
@@ -495,7 +380,7 @@ describe('watchlist domain helpers', () => {
     await expect(
       acceptWatchlistInvite({
         actorUserId: 'user-2',
-        repository: createRepository({
+        repository: createWatchlistRepository({
           acceptInviteMembership,
           async findInviteLinkByTokenHash() {
             return {
@@ -530,7 +415,7 @@ describe('watchlist domain helpers', () => {
   });
 
   it('lists and removes shared watchlist members through owner-only helpers', async () => {
-    const repository = createRepository({
+    const repository = createWatchlistRepository({
       async getWatchlistAccess() {
         return {
           status: 'authorized',
@@ -580,7 +465,7 @@ describe('watchlist domain helpers', () => {
     await expect(
       getSharedWatchlistInviteLinkStatus({
         actorUserId: 'user-1',
-        repository: createRepository({
+        repository: createWatchlistRepository({
           async getActiveInviteLinkForWatchlist() {
             return {
               createdAt: '2026-06-20T00:00:00.000Z',
@@ -614,14 +499,14 @@ describe('watchlist domain helpers', () => {
     await expect(
       listWatchlistItems({
         actorUserId: 'user-2',
-        repository: createRepository({
+        repository: createWatchlistRepository({
           async getWatchlistAccess() {
             return {
               status: 'forbidden',
             };
           },
         }),
-        watchlistId: 'watchlist-1',
+        watchlistId: 'personal-watchlist-1',
       }),
     ).rejects.toEqual(
       expect.objectContaining({
@@ -634,7 +519,7 @@ describe('watchlist domain helpers', () => {
     await expect(
       listWatchlistItems({
         actorUserId: 'user-2',
-        repository: createRepository({
+        repository: createWatchlistRepository({
           async getWatchlistAccess() {
             return {
               status: 'not_found',
@@ -654,14 +539,14 @@ describe('watchlist domain helpers', () => {
           tmdbId: 603,
           title: 'The Matrix',
           releaseDate: '1999-03-31',
-          posterPath: '/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg',
+          posterPath: '/matrix.jpg',
           overview: 'A hacker discovers the truth.',
           rawJson: {
             id: 603,
             title: 'The Matrix',
           },
         }),
-        repository: createRepository({
+        repository: createWatchlistRepository({
           async getWatchlistAccess() {
             return {
               status: 'authorized',
@@ -680,10 +565,10 @@ describe('watchlist domain helpers', () => {
   });
 
   it('adds a new watchlist item after upserting movie metadata', async () => {
-    const repository = createRepository({
+    const repository = createWatchlistRepository({
       async getWatchlistAccess(actorUserId, watchlistId) {
         expect(actorUserId).toBe('user-1');
-        expect(watchlistId).toBe('watchlist-1');
+        expect(watchlistId).toBe('personal-watchlist-1');
         return {
           status: 'authorized',
           watchlist: buildWatchlistSummary(),
@@ -695,7 +580,7 @@ describe('watchlist domain helpers', () => {
         return { id: 42 };
       },
       async insertItemForWatchlist(watchlistId, movieId) {
-        expect(watchlistId).toBe('watchlist-1');
+        expect(watchlistId).toBe('personal-watchlist-1');
         expect(movieId).toBe(42);
         return {
           row: buildWatchlistRow(),
@@ -711,7 +596,7 @@ describe('watchlist domain helpers', () => {
           tmdbId: 603,
           title: 'The Matrix',
           releaseDate: '1999-03-31',
-          posterPath: '/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg',
+          posterPath: '/matrix.jpg',
           overview: 'A hacker discovers the truth.',
           rawJson: {
             id: 603,
@@ -720,7 +605,7 @@ describe('watchlist domain helpers', () => {
         }),
         repository,
         tmdbId: 603,
-        watchlistId: 'watchlist-1',
+        watchlistId: 'personal-watchlist-1',
       }),
     ).resolves.toEqual({
       created: true,
@@ -733,7 +618,7 @@ describe('watchlist domain helpers', () => {
           title: 'The Matrix',
           releaseDate: '1999-03-31',
           overview: 'A hacker discovers the truth.',
-          posterPath: '/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg',
+          posterPath: '/matrix.jpg',
         },
       },
       watchlist: buildWatchlistSummary(),
@@ -741,7 +626,7 @@ describe('watchlist domain helpers', () => {
   });
 
   it('treats duplicate add attempts as deterministic no-ops within the target watchlist scope', async () => {
-    const repository = createRepository({
+    const repository = createWatchlistRepository({
       async insertItemForWatchlist() {
         return {
           row: null,
@@ -756,7 +641,7 @@ describe('watchlist domain helpers', () => {
           tmdbId: 603,
           title: 'The Matrix',
           releaseDate: '1999-03-31',
-          posterPath: '/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg',
+          posterPath: '/matrix.jpg',
           overview: 'A hacker discovers the truth.',
           rawJson: {
             id: 603,
@@ -773,7 +658,7 @@ describe('watchlist domain helpers', () => {
         id: 'watchlist-item-1',
       },
       watchlist: {
-        id: 'watchlist-1',
+        id: 'personal-watchlist-1',
       },
     });
   });
@@ -784,7 +669,7 @@ describe('watchlist domain helpers', () => {
     await expect(
       addPersonalWatchlistItem({
         getMovieDetails,
-        repository: createRepository(),
+        repository: createWatchlistRepository(),
         tmdbId: 0,
         userId: 'user-1',
       }),
@@ -797,7 +682,7 @@ describe('watchlist domain helpers', () => {
     await expect(
       createSharedWatchlist({
         name: '   ',
-        repository: createRepository(),
+        repository: createWatchlistRepository(),
         userId: 'user-1',
       }),
     ).rejects.toBeInstanceOf(WatchlistInputError);
@@ -808,12 +693,12 @@ describe('watchlist domain helpers', () => {
       removeWatchlistItem({
         actorUserId: 'user-1',
         itemId: 'missing-item',
-        repository: createRepository({
+        repository: createWatchlistRepository({
           async deleteItemByIdForWatchlist() {
             return false;
           },
         }),
-        watchlistId: 'watchlist-1',
+        watchlistId: 'personal-watchlist-1',
       }),
     ).rejects.toBeInstanceOf(WatchlistNotFoundError);
   });
@@ -821,7 +706,7 @@ describe('watchlist domain helpers', () => {
   it('exposes list discovery through the repository abstraction', async () => {
     await expect(
       listUserWatchlists({
-        repository: createRepository({
+        repository: createWatchlistRepository({
           async listWatchlistsForUser(userId) {
             expect(userId).toBe('user-1');
             return [
