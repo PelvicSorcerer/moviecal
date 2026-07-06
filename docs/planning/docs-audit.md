@@ -8,7 +8,8 @@ Use this checklist when updating docs before or during feature work. It describe
 - `.env.example`: placeholder-only environment variable names.
 - `docs/product/*`: MVP scope, requirements, user stories, non-goals.
 - `docs/design/*`: page map, app flow, UI principles.
-- `docs/technical/*`: architecture, auth/security, data model, API design, calendar feed, TMDb, testing, deployment.
+- `docs/technical/*`: architecture, auth/security, data model, API design, calendar feed, TMDb, deployment.
+- `docs/planning/repository-testing-strategy.md`: authoritative repository testing policy and test-layer guidance.
 - `docs/planning/*`: implementation plan, issue hygiene, and recommended sequence.
 
 ## Consistency checks

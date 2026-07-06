@@ -52,7 +52,7 @@ This is explicitly **not** a push for a fully agent-agnostic repo (for example, 
 
 - `AGENTS.md`'s **Start conditions**, **Required preflight**, **Handoff contract**, and **Verification contract** sections mix genuinely agent-agnostic queue/PR/verification norms with Codex-orchestrator-specific phrasing ("dispatching a worker", "worker-owned issue branch").
 - `docs/planning/manual-testing-checklist-template.md`, `issues-audit.md`, `issue-update-plan.md`, `recommended-issue-sequence.md`, `target-state-mobile-backend-slice-map.md` are durable planning content with light orchestrator framing.
-- `docs/technical/testing-strategy.md` has one Codex-sandbox-specific sentence in an otherwise generic CI policy doc.
+- The testing strategy authority now lives in `docs/planning/repository-testing-strategy.md`; `docs/technical/testing-strategy.md` is a reference pointer.
 - `package.json`'s `name` field (`agents-scaffold-nextjs-moviecal-app`) is scaffold naming rather than product naming — cosmetic, not functional.
 
 ### 1.6 Durable, agent-agnostic content (do not touch when addressing platform compatibility)
