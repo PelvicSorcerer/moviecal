@@ -11,7 +11,7 @@ Everything below marked "verified" was actually run against this repo on a real 
 ## Node version policy
 
 - **Policy:** Node **24** (major), matching `.nvmrc`, `package.json` `engines.node` (`>=24`), and CI (`verify.yml`, `supabase-verify.yml`).
-- **Cursor provisioning:** `.cursor/environment.json` builds from `.cursor/Dockerfile` (`node:24-bookworm` plus `git` and `sudo` for Cloud Agent clone/bootstrap). The install script fails fast if `node --version` is below 24.
+- **Cursor provisioning:** `.cursor/environment.json` builds from `.cursor/Dockerfile` (`node:24-bookworm` plus `git`, `jq`, and `sudo` for Cloud Agent clone/bootstrap). The install script fails fast if `node --version` is below 24.
 - **Do not rely on nvm or `.nvmrc` alone on Cursor Cloud Agents.** The default interactive snapshot VM ships a fixed Node 22 binary at `/exec-daemon/node` that takes precedence over nvm; the Dockerfile path is the supported way to align with repo policy.
 - **Verified (issue #103):** `node --version` reports v24.x and `npm run verify` passes on Node 24 (Ubuntu/x86_64).
 
@@ -23,6 +23,7 @@ Everything below marked "verified" was actually run against this repo on a real 
 
 ## Tool availability quirks
 
+- **`jq` is required** for project queue validation and related governance scripts. The Cursor Cloud Agent image installs `jq` via `.cursor/Dockerfile`. Scripts that depend on it include `scripts/project-queue-check.sh`, `scripts/agent-check.sh`, `scripts/agent-handoff-check.sh`, `scripts/export-open-issue-order.sh`, `scripts/project-platform-track-sync.sh`, and `scripts/project-post-cutover-metadata-sync.sh` (all via `scripts/lib/project-queue-common.sh` or direct `command -v jq` checks). CI already expects `jq` (`.github/workflows/project-queue-check.yml`).
 - `npm run tool:install` works on Cursor Cloud Agent VMs (verified on Ubuntu/x86_64): it detects OS/arch and downloads the matching Supabase CLI release.
 - Docker is not available inside the running Cloud Agent workspace for local Supabase stacks, so `supabase db lint --local` and any workflow that needs a local Supabase/Postgres stack will not work here. Use the `supabase-verify` GitHub Actions workflow, or run `npm run db:lint` with a disposable `SUPABASE_DB_URL`.
 - Unlike the Codex sandbox caveats in `docs/operators/codex.md`, `npm run lint`, `npm run typecheck`, `npm run test`, `npm run build`, and `npm run e2e` (including its automatic `playwright install chromium` step) have been verified to run without elevated execution and without extra system packages on the default Cursor Cloud Agent VM.
@@ -33,6 +34,18 @@ Everything below marked "verified" was actually run against this repo on a real 
   - `GH_TOKEN=$GITHUB_PAT_OPERATOR gh api user -q .login` should print your GitHub username
   - `GH_TOKEN=$GITHUB_PAT_OPERATOR gh api graphql -f query='{ viewer { projectsV2(first: 5) { nodes { title } } } }'` should list `moviecal Delivery`
   - `npm run agent:project-platform-sync` (idempotent Platform track backfill)
+  - `npm run agent:project-check` (post-cutover dispatch invariant validation)
+
+### Project queue validation on Cursor Cloud
+
+With `GITHUB_PAT_OPERATOR` configured and `jq` available, platform/governance agents can validate live queue state:
+
+```bash
+npm run agent:project-check
+```
+
+`gh project item-list` may return `unknown owner type` on Cursor Cloud VMs even with a valid operator PAT. Queue scripts already fall back to `gh api graphql` for project item reads (`scripts/lib/project-queue-common.sh`), so use `npm run agent:project-check` rather than ad hoc `gh project` subcommands when validating dispatch invariants.
+
 ## Branch convention
 
 - `cursor/<slug>-<run-id>`, assigned by the Cursor platform, not chosen by the agent. See `docs/operators/branch-and-ci-conventions.md` for the full cross-platform table.
@@ -49,4 +62,4 @@ For real (disposable/dev-only) Supabase, TMDb, and cron-secret values, prefer th
 
 ## Known gaps / follow-ups
 
-- None currently tracked for Cursor Cloud Agent environment compatibility.
+- Docker-based local Supabase stacks remain unavailable on Cursor Cloud Agent VMs (use `supabase-verify` CI or a disposable `SUPABASE_DB_URL` for `npm run db:lint`).
