@@ -1,6 +1,6 @@
 # Testing strategy reference
 
-The authoritative repository testing strategy now lives in [docs/planning/repository-testing-strategy.md](/Users/adammoore/.codex/worktrees/workers/moviecal/issue-123/docs/planning/repository-testing-strategy.md).
+The authoritative repository testing strategy now lives in [docs/planning/repository-testing-strategy.md](../planning/repository-testing-strategy.md).
 
 Use that planning document for:
 
