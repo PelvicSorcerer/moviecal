@@ -2,6 +2,8 @@
 
 This document defines what belongs in manual testing, what must be automated, and how issue-specific manual checklists relate to automated coverage. It complements [repository-testing-strategy.md](./repository-testing-strategy.md), which remains the authoritative guide for test layers, validation tiers, and capability-to-layer mapping.
 
+For environment rules shared by manual and automated testing modes, especially disposable credential requirements and the exclusion of production or non-disposable shared state, see [test-environment-contract.md](./test-environment-contract.md).
+
 Manual testing and automated testing work together. Automation provides fast, repeatable regression confidence on stable product surfaces. Manual testing covers exploratory work, release confidence, and gaps that automation cannot yet prove deterministically. Manual testing does not replace automation for behavior that can and should be verified in pull-request validation.
 
 ## Check classifications

@@ -4,6 +4,8 @@ This document is the authoritative map of moviecal's explicit testing lanes. Use
 
 For the broader testing policy — capability-to-layer mapping, mock rules, and merge-gate expectations — see [repository-testing-strategy.md](./repository-testing-strategy.md).
 
+For the environment contract behind each lane, including disposable credential rules, seeded-data expectations, and the distinction between deterministic local validation and real-stack CI, see [test-environment-contract.md](./test-environment-contract.md).
+
 ## Lane overview
 
 | Lane | Local command | CI workflow / job | Speed | Merge gate |

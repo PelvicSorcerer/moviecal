@@ -2,6 +2,8 @@
 
 This document is the single authoritative testing strategy for the repository. Use it when deciding what automated coverage a feature needs, which test layer should own that coverage, and which checks belong in pull-request validation versus heavier runtime validation.
 
+For environment assumptions by testing mode, including which credentials, seeded data, and resources are allowed in deterministic, real-stack, and smoke validation, see [test-environment-contract.md](./test-environment-contract.md).
+
 For what belongs in manual testing versus automation, how recurring manual regressions are promoted into automated work, and how issue-specific manual checklists relate to automated coverage, see [manual-versus-automated-testing-policy.md](./manual-versus-automated-testing-policy.md).
 
 For explicit lane commands, CI job names, and what each lane is expected to catch, see [testing-lanes.md](./testing-lanes.md).

@@ -4,6 +4,8 @@ The authoritative repository testing strategy now lives in [docs/planning/reposi
 
 Explicit testing lane commands, CI job names, and lane ownership live in [docs/planning/testing-lanes.md](../planning/testing-lanes.md).
 
+The authoritative test environment assumptions by mode live in [docs/planning/test-environment-contract.md](../planning/test-environment-contract.md).
+
 Use that planning document for:
 
 - pull-request versus real-stack validation policy
