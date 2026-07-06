@@ -4,6 +4,8 @@ This document is the single authoritative testing strategy for the repository. U
 
 For what belongs in manual testing versus automation, how recurring manual regressions are promoted into automated work, and how issue-specific manual checklists relate to automated coverage, see [manual-versus-automated-testing-policy.md](./manual-versus-automated-testing-policy.md).
 
+For explicit lane commands, CI job names, and what each lane is expected to catch, see [testing-lanes.md](./testing-lanes.md).
+
 ## Goals
 
 - Keep pull-request validation fast, deterministic, and safe to run without production secrets.
@@ -17,7 +19,8 @@ For what belongs in manual testing versus automation, how recurring manual regre
 
 This is the default gate for everyday feature work.
 
-- Run `npm run verify` on pull requests.
+- Run `npm run verify` on pull requests (baseline, unit, and integration lanes — see [testing-lanes.md](./testing-lanes.md)).
+- Run `npm run lane:browser` for full-stack browser coverage (separate CI workflow).
 - Prefer unit tests, deterministic integration tests, and any browser tests that can run from stable fixtures, seeded test data, or route interception.
 - Do not require production secrets, real third-party traffic, or long-lived shared environments.
 - Failures in this tier should usually mean a real regression, not flaky infrastructure.
@@ -26,8 +29,8 @@ This is the default gate for everyday feature work.
 
 Use this tier when the behavior depends on infrastructure that mocks cannot prove correctly.
 
-- Real database schema validation belongs here, using `npm run db:lint` against a disposable database when available or the authoritative `supabase-verify` GitHub Actions workflow.
-- External smoke checks, hosted-environment checks, and post-deploy verification belong here.
+- Real database schema validation belongs here, using `npm run lane:real-stack` against a disposable database when available or the authoritative `supabase-verify` GitHub Actions workflow (`lane-real-stack` job).
+- External smoke checks, hosted-environment checks, and post-deploy verification belong here (`lane:smoke-external` and `lane:smoke-post-deploy`; see [testing-lanes.md](./testing-lanes.md)).
 - These checks may run less often than the default PR gate, but they remain required before trusting infrastructure-sensitive changes.
 
 ## Capability-to-layer map

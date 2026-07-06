@@ -26,7 +26,8 @@ permissions:
   contents: read
 
 jobs:
-  db-verify:
+  lane-real-stack:
+    name: lane-real-stack
     runs-on: ubuntu-latest
     env:
       CI: true
@@ -49,5 +50,5 @@ jobs:
       - name: Start local Supabase stack
         run: supabase start
 
-      - name: Lint schema against local Supabase stack
-        run: npm run db:lint
+      - name: lane:real-stack
+        run: npm run lane:real-stack

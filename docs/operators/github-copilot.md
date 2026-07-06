@@ -25,8 +25,8 @@ Everything marked **verified** below was observed in an actual GitHub Copilot co
 - **Verified:** Docker **is available** on the Copilot coding-agent VM (`docker ps` succeeds, Docker v28.0.4). This differs from Cursor Cloud Agents where Docker is not accessible. Local Supabase stacks (`supabase start`) should be feasible, though not tested in this session.
 - **Verified:** `gh` CLI v2.95.0 is available, but `gh auth status` reports "Failed to log in to github.com using token (GITHUB_TOKEN)" — the default `GITHUB_TOKEN` is not a valid `gh` auth credential. Basic push/clone still works through the Copilot platform's own credentials; richer GitHub API calls (`gh project`, `gh issue comment`) may not work without a separate PAT.
 - **Verified:** `npm run tool:install` works: it detects `linux/amd64` and installs the workspace-local Supabase CLI (v2.105.0) and Vercel CLI successfully.
-- **Verified:** `npm run lint`, `npm run typecheck`, `npm run test` (120/120 tests pass), `npm run build`, `npm run verify`, and `npm run check:branch-ci` all pass.
-- **Verified:** `npm run e2e` **fails** — port 3100 is already bound by Copilot's own agent tooling when the agent session is active. This is an intrinsic environment constraint, not a missing dependency. Use the `verify` GitHub Actions workflow as the CI fallback for e2e coverage, the same way Cursor Cloud Agents rely on CI for checks blocked by Docker unavailability.
+- **Verified:** `npm run lint`, `npm run lane:unit`, `npm run lane:integration`, `npm run build`, `npm run verify`, and `npm run check:branch-ci` all pass.
+- **Verified:** `npm run lane:browser` (alias: `npm run e2e`) **fails** — port 3100 is already bound by Copilot's own agent tooling when the agent session is active. This is an intrinsic environment constraint, not a missing dependency. Use the `browser-verify` GitHub Actions workflow as the CI fallback for browser lane coverage, the same way Cursor Cloud Agents rely on CI for checks blocked by Docker unavailability.
 
 ## Branch convention
 

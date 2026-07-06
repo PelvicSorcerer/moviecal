@@ -40,14 +40,17 @@ Supabase helper notes:
 
 Local verification commands:
 
-- `npm run verify` runs the baseline lint, typecheck, unit test, and build contract.
+- Testing lanes are documented in `docs/planning/testing-lanes.md`. The default fast PR gate is `npm run verify` (baseline, unit, and integration lanes).
+- `npm run lane:baseline` runs lint, typecheck, and build.
+- `npm run lane:unit` and `npm run lane:integration` run the deterministic Vitest suites separately.
+- `npm run lane:browser` (alias: `npm run e2e`) installs the required Playwright browser automatically and runs against deterministic auth/watchlist fixtures plus Playwright API stubs, so it does not require real Supabase or TMDb secrets.
+- `npm run lane:real-stack` (alias: `npm run db:lint`) is the repo wrapper for `supabase db lint`. It uses `SUPABASE_DB_URL` when you provide a disposable database URL; otherwise it attempts `supabase db lint --local`.
+- `.github/workflows/supabase-verify.yml` (`lane-real-stack` job) is the authoritative infra-backed Supabase schema gate for PRs that change database schema verification surfaces.
+- `npm run test` still runs the full Vitest suite (unit and integration) for ad hoc local runs.
 - `npm run agent:check` validates the post-cutover project dispatch invariant and issue contract before worker implementation.
 - `npm run agent:handoff` validates the same project dispatch invariant plus local git handoff readiness after merge.
 - `npm run agent:project-check` runs the shared project queue validator (`scripts/project-queue-check.sh`) in post-cutover mode.
-- `npm run db:lint` is the repo wrapper for `supabase db lint`. It uses `SUPABASE_DB_URL` when you provide a disposable database URL; otherwise it attempts `supabase db lint --local`.
-- `.github/workflows/supabase-verify.yml` is the authoritative infra-backed Supabase schema gate for PRs that change database schema verification surfaces.
 - `npm run build` may require elevated execution in Codex because Next.js/Turbopack can hit sandbox restrictions even when the project itself builds correctly.
-- `npm run e2e` installs the required Playwright browser automatically before running tests and runs against deterministic auth/watchlist fixtures plus Playwright API stubs, so it does not require real Supabase or TMDb secrets.
 - `npm run tool:install` installs workspace-local `vercel`, plus a repo-local Supabase binary. It detects OS/arch and supports macOS (Intel/Apple Silicon) and Linux (amd64/arm64); Windows is not supported.
 - The Supabase portion of `npm run tool:install` downloads the matching platform archive and, on macOS, may ad-hoc re-sign the binary locally so it can run without a full system-wide install (a no-op on Linux).
 - In Codex, `bash scripts/agent-check.sh` may need elevated execution because sandboxed `gh` cannot always see the macOS keychain-backed login even when `gh auth status` succeeds in your normal terminal.

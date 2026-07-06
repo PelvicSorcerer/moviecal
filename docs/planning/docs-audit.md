@@ -10,6 +10,7 @@ Use this checklist when updating docs before or during feature work. It describe
 - `docs/design/*`: page map, app flow, UI principles.
 - `docs/technical/*`: architecture, auth/security, data model, API design, calendar feed, TMDb, deployment.
 - `docs/planning/repository-testing-strategy.md`: authoritative repository testing policy and test-layer guidance.
+- `docs/planning/testing-lanes.md`: explicit lane commands, CI job names, and what each lane is expected to catch.
 - `docs/planning/manual-versus-automated-testing-policy.md`: manual-only, temporary-manual, and automated-required check classification; promotion rules for recurring manual regressions.
 - `docs/planning/*`: implementation plan, issue hygiene, and recommended sequence.
 
@@ -19,7 +20,7 @@ Use this checklist when updating docs before or during feature work. It describe
 - Environment variable names match `.env.example` and deployment docs.
 - Calendar docs consistently require unguessable tokens, `404` for invalid tokens, and stable event UIDs.
 - TMDb docs consistently keep API keys server-side only.
-- Testing docs distinguish baseline CI checks from later deterministic E2E coverage.
+- Testing docs distinguish baseline, unit, integration, browser, real-stack, and smoke lanes (see `docs/planning/testing-lanes.md`).
 - Planning docs describe what to do next without embedding stale progress tracking.
 
 ## Required updates when behavior changes

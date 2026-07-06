@@ -234,8 +234,8 @@ Mitigation:
 
 ## Verification contract guidance
 
-- Treat `npm run verify` as the baseline agent-safe verification contract unless the issue explicitly says otherwise.
-- For Supabase schema work, use `npm run db:lint` when local infrastructure is available, but prefer the `supabase-verify` GitHub Actions workflow as the authoritative infra-backed DB gate for merge decisions.
+- Treat `npm run verify` as the baseline agent-safe verification contract unless the issue explicitly says otherwise. See `docs/planning/testing-lanes.md` for individual lane commands.
+- For Supabase schema work, use `npm run lane:real-stack` (alias: `npm run db:lint`) when local infrastructure is available, but prefer the `supabase-verify` GitHub Actions workflow (`lane-real-stack` job) as the authoritative infra-backed DB gate for merge decisions.
 - Do not block an otherwise-correct sandboxed implementation solely because local Docker or localhost database access is unavailable, as long as the PR documents the limitation and the CI DB gate covers the real execution path.
 
 ## Minimal automation boundary

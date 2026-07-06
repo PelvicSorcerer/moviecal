@@ -7,7 +7,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  verify:
+  lane-baseline:
+    name: lane-baseline
     runs-on: ubuntu-latest
     env:
       CI: true
@@ -21,11 +22,39 @@ jobs:
       - name: branch/CI convention drift check
         run: npm run check:branch-ci
       - run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
-      - name: lint
+      - name: lane:baseline (lint)
         run: npm run lint
-      - name: typecheck
+      - name: lane:baseline (typecheck)
         run: npm run typecheck
-      - name: test
-        run: npm run test -- --run
-      - name: build
+      - name: lane:baseline (build)
         run: npm run build
+
+  lane-unit:
+    name: lane-unit
+    runs-on: ubuntu-latest
+    env:
+      CI: true
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+      - name: lane:unit
+        run: npm run lane:unit
+
+  lane-integration:
+    name: lane-integration
+    runs-on: ubuntu-latest
+    env:
+      CI: true
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+      - name: lane:integration
+        run: npm run lane:integration

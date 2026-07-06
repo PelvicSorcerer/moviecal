@@ -1,0 +1,22 @@
+name: smoke-external
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 12 * * 1'
+
+jobs:
+  lane-smoke-external:
+    name: lane-smoke-external
+    runs-on: ubuntu-latest
+    env:
+      CI: true
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+      - name: lane:smoke-external
+        run: npm run lane:smoke-external

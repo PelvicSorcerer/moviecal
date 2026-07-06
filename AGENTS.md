@@ -57,9 +57,13 @@ The invariants below apply regardless of which doc currently governs procedural 
 
 ## Verification contract
 
-- Baseline verification: `npm run verify`
-- Production build: `npm run build`
-- E2E: `npm run e2e`
+- Testing lanes are defined in `docs/planning/testing-lanes.md`. The default fast pull-request gate is `npm run verify` (baseline, unit, and integration lanes).
+- Baseline verification: `npm run lane:baseline` or `npm run verify`
+- Unit tests: `npm run lane:unit`
+- Deterministic integration tests: `npm run lane:integration`
+- Browser E2E: `npm run lane:browser` (alias: `npm run e2e`)
+- Real-stack database validation: `npm run lane:real-stack` (alias: `npm run db:lint`; authoritative CI gate: `supabase-verify` workflow)
+- Production build: `npm run build` (included in `lane:baseline`)
 - Human local testing should happen on the pushed issue branch before the PR is promoted from draft or work-in-progress to ready for review.
 - Each implementation issue should produce an explicit manual testing checklist with setup assumptions, happy-path steps, edge cases, regression checks, and expected results. Classify checklist items and recurring regressions using `docs/planning/manual-versus-automated-testing-policy.md`.
 - Each implementation issue must include a **Testing Expectations** section that states the expected automated coverage (unit, integration, browser E2E) up front, using `docs/planning/repository-testing-strategy.md` as the capability-to-layer guide. See `.github/ISSUE_TEMPLATE/agent_task.md`.

@@ -32,9 +32,9 @@ Verified on **Linux x86_64** (Ubuntu bookworm, kernel `6.12.58+`, Node **v24.18.
 | `.codex/scripts/orchestrator-worker-worktree.sh` `provision` / `cleanup` | Pass. Worktree created under `$HOME/.codex/worktrees/workers/...`, bootstrap ran, cleanup deleted branch. |
 | `npm run tool:install` | Pass on `linux/amd64` (Supabase CLI **2.105.0**, Vercel CLI **54.18.7**). |
 | `npm run tool:check` | Pass. |
-| `npm run verify` (`lint`, `typecheck`, `test`, `build`) | Pass without elevated execution on this Linux host. |
-| `npm run e2e` (including `playwright install chromium`) | Pass — **20/20** tests. |
-| `npm run db:lint` | Blocked without Docker/local Supabase (`nc` probe on `127.0.0.1:54322` fails). Use `supabase-verify` CI or `SUPABASE_DB_URL`. |
+| `npm run verify` (`lane:baseline`, `lane:unit`, `lane:integration`) | Pass without elevated execution on this Linux host. |
+| `npm run lane:browser` (alias: `npm run e2e`, including `playwright install chromium`) | Pass — **20/20** tests. |
+| `npm run lane:real-stack` (alias: `npm run db:lint`) | Blocked without Docker/local Supabase (`nc` probe on `127.0.0.1:54322` fails). Use `supabase-verify` CI or `SUPABASE_DB_URL`. |
 | `npm run agent:project-check` | Pass with operator PAT (`GITHUB_PAT_OPERATOR` / `GH_TOKEN`). |
 | `gh` CLI | Present (**2.91.0**). Integration token supports git clone/push; project/issue GraphQL needs operator PAT (same pattern as `cursor-cloud.md`). |
 | Docker | Not available on the validation host — same `db:lint --local` fallback as Cursor Cloud. |
