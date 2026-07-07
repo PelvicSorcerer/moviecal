@@ -1,4 +1,13 @@
 import { expect, test as base } from '@playwright/test';
+import path from 'node:path';
+
+import {
+  buildPlaywrightTestId,
+  getQuarantineSkipReason,
+  loadQuarantineRegistry,
+  resolveQuarantineMode,
+  shouldRunTestInQuarantineMode,
+} from '../src/lib/test-stability';
 
 import {
   createE2ESharedWatchlist,
@@ -39,6 +48,7 @@ type SeedArgs =
     };
 
 type SmokeFixtures = {
+  _quarantineGate: void;
   assertRedirectsToSignIn(
     protectedPath: '/watchlist' | '/settings/calendar',
   ): Promise<void>;
@@ -55,7 +65,36 @@ type SmokeFixtures = {
   stubMovieSearch(tmdbIds?: number[]): Promise<void>;
 };
 
+const quarantineRegistry = loadQuarantineRegistry();
+
 export const test = base.extend<SmokeFixtures>({
+  _quarantineGate: [
+    async ({}, use, testInfo) => {
+      const quarantineMode = resolveQuarantineMode();
+      const specFile = path
+        .relative(process.cwd(), testInfo.file)
+        .replaceAll(path.sep, '/');
+      const shouldRun = shouldRunTestInQuarantineMode({
+        mode: quarantineMode,
+        title: testInfo.title,
+        specFile,
+        registry: quarantineRegistry,
+      });
+
+      if (!shouldRun) {
+        const testId = buildPlaywrightTestId(specFile, testInfo.title);
+        const reason =
+          quarantineMode === 'blocking'
+            ? getQuarantineSkipReason(quarantineRegistry, testId)
+            : 'Not quarantined; excluded from quarantine-only lane.';
+
+        testInfo.skip(true, reason);
+      }
+
+      await use();
+    },
+    { auto: true },
+  ],
   assertRedirectsToSignIn: async ({ page }, use) => {
     await use(async (protectedPath) => {
       await page.goto(protectedPath);

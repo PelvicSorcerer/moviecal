@@ -24,3 +24,40 @@ jobs:
         run: cp .env.example .env.local
       - name: lane:browser
         run: npm run lane:browser
+      - name: Upload browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-failure-artifacts
+          path: |
+            test-results/playwright
+            playwright-report
+          if-no-files-found: ignore
+
+  lane-browser-quarantine:
+    name: lane-browser-quarantine
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      CI: true
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --version && npm --version
+      - run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+      - name: Prepare disposable local env for browser lane
+        run: cp .env.example .env.local
+      - name: lane:browser:quarantine
+        run: npm run lane:browser:quarantine
+      - name: Upload quarantined browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-quarantine-failure-artifacts
+          path: |
+            test-results/playwright
+            playwright-report
+          if-no-files-found: ignore

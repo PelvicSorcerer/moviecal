@@ -8,6 +8,8 @@ For what belongs in manual testing versus automation, how recurring manual regre
 
 For explicit lane commands, CI job names, and what each lane is expected to catch, see [testing-lanes.md](./testing-lanes.md).
 
+For browser/runtime startup conventions, failure artifacts, retry policy, and quarantine rules, see [browser-runtime-test-stability.md](./browser-runtime-test-stability.md).
+
 ## Goals
 
 - Keep pull-request validation fast, deterministic, and safe to run without production secrets.

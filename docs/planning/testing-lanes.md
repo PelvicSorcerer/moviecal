@@ -14,6 +14,7 @@ For the environment contract behind each lane, including disposable credential r
 | Unit | `npm run lane:unit` | `verify` → `lane-unit` | Fast | Yes — default PR gate |
 | Integration | `npm run lane:integration` | `verify` → `lane-integration` | Fast | Yes — default PR gate |
 | Browser | `npm run lane:browser` | `browser-verify` → `lane-browser` | Medium | Yes — default PR gate |
+| Browser quarantine | `npm run lane:browser:quarantine` | `browser-verify` → `lane-browser-quarantine` | Medium | No — informational flake tracking |
 | Real-stack | `npm run lane:real-stack` | `supabase-verify` → `lane-real-stack` | Heavy | Conditional — path-filtered |
 | External smoke | `npm run lane:smoke-external` | `smoke-external` → `lane-smoke-external` | Heavy | No — scheduled/manual (stub until #139) |
 | Post-deploy smoke | `npm run lane:smoke-post-deploy` | `smoke-post-deploy` → `lane-smoke-post-deploy` | Heavy | No — post-deploy/scheduled (stub until #140) |
@@ -83,6 +84,21 @@ The default fast pull-request gate is `npm run verify`, which runs the **baselin
 
 Alias: `npm run e2e` (kept for backward compatibility).
 
+Stability policy for startup conventions, failure artifacts, retries, and quarantine lives in [browser-runtime-test-stability.md](./browser-runtime-test-stability.md).
+
+### Browser quarantine (`lane:browser:quarantine`)
+
+**Purpose:** Run only quarantined browser specs so unstable coverage stays visible without blocking pull requests.
+
+**Runs:** Playwright with `PLAYWRIGHT_QUARANTINE_MODE=quarantine-only` against specs tagged `@quarantine` or listed in `e2e/quarantine.json`.
+
+**Expected to catch:**
+
+- recurring flakes while a linked follow-up issue tracks remediation
+- regressions inside already-quarantined coverage
+
+**Merge policy:** Non-blocking. Failures surface in CI for triage but do not fail the default PR gate.
+
 ### Real-stack (`lane:real-stack`)
 
 **Purpose:** Validate database schema, migrations, and Postgres-specific constraints against a real Supabase stack.
@@ -137,7 +153,7 @@ The authoritative CI gate is `.github/workflows/supabase-verify.yml`, which star
 GitHub Actions workflows and jobs use the `lane-*` prefix so a failing check names the lane directly:
 
 - `verify.yml`: `lane-baseline`, `lane-unit`, `lane-integration`
-- `browser-verify.yml`: `lane-browser`
+- `browser-verify.yml`: `lane-browser`, `lane-browser-quarantine`
 - `supabase-verify.yml`: `lane-real-stack`
 - `smoke-external.yml`: `lane-smoke-external` (stub)
 - `smoke-post-deploy.yml`: `lane-smoke-post-deploy` (stub)
