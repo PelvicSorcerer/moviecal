@@ -185,4 +185,31 @@ describe('WatchlistPageClient', () => {
     expect(screen.getByText('Personal watchlist')).toBeTruthy();
     expect(screen.getByText('The Matrix')).toBeTruthy();
   });
+
+  it('shows the personal items error without hiding the watchlist overview', () => {
+    render(
+      <WatchlistPageClient
+        initialItems={[]}
+        initialWatchlists={[
+          buildWatchlistSummary(),
+          buildWatchlistSummary({
+            id: 'shared-watchlist-1',
+            kind: 'shared',
+            name: 'Friday movie night',
+          }),
+        ]}
+        overviewErrorMessage={null}
+        personalItemsErrorMessage="Could not load your personal watchlist right now."
+        personalWatchlistId="personal-watchlist-1"
+      />,
+    );
+
+    expect(screen.getByText('Personal watchlist unavailable')).toBeTruthy();
+    expect(
+      screen.getByText('Could not load your personal watchlist right now.'),
+    ).toBeTruthy();
+    expect(screen.getAllByText('Friday movie night').length).toBeGreaterThan(0);
+    expect(screen.getByText('Watchlists you can access')).toBeTruthy();
+    expect(screen.queryByText('Your watchlist is empty')).toBeNull();
+  });
 });

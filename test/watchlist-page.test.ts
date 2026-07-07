@@ -162,4 +162,18 @@ describe('watchlist page', () => {
     expect(markup).toContain('Remove');
     expect(markup).toContain('Personal watchlist');
   });
+
+  it('renders the personal items error while keeping the overview available', async () => {
+    mocks.listPersonalWatchlistItems.mockRejectedValue(
+      new Error('Could not load your personal watchlist right now.'),
+    );
+
+    const { default: WatchlistPage } = await import('../src/app/watchlist/page');
+    const markup = renderToStaticMarkup(await WatchlistPage());
+
+    expect(markup).toContain('Personal watchlist unavailable');
+    expect(markup).toContain('Could not load your personal watchlist right now.');
+    expect(markup).toContain('Friday movie night');
+    expect(markup).not.toContain('The Matrix');
+  });
 });
