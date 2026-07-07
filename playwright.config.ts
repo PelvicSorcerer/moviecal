@@ -1,25 +1,43 @@
 import { defineConfig } from '@playwright/test';
 
-const appUrl = process.env.APP_URL || 'http://localhost:3100';
+import {
+  getPlaywrightArtifactSettings,
+  resolveAppUrl,
+  resolveRetryPolicy,
+  WEB_SERVER_STARTUP_TIMEOUT_MS,
+  BROWSER_TEST_TIMEOUT_MS,
+  buildWebServerCommand,
+  buildWebServerEnv,
+} from './src/lib/test-stability';
+
+const appUrl = resolveAppUrl();
+const isCi = Boolean(process.env.CI);
+const retryPolicy = resolveRetryPolicy();
+const artifactSettings = getPlaywrightArtifactSettings(isCi);
 
 export default defineConfig({
   testDir: 'e2e',
-  timeout: 30000,
-  retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  timeout: BROWSER_TEST_TIMEOUT_MS,
+  retries: retryPolicy.retries,
+  workers: 1,
+  outputDir: artifactSettings.outputDir,
+  reporter: [
+    ['list'],
+    ['html', { open: 'never', outputFolder: 'playwright-report' }],
+    ['./e2e/reporters/failure-summary-reporter.ts'],
+  ],
   use: {
     headless: true,
     baseURL: appUrl,
-    trace: 'on-first-retry',
+    screenshot: artifactSettings.screenshot,
+    video: artifactSettings.video,
+    trace: artifactSettings.trace,
   },
   webServer: {
-    command: 'npm run dev -- --hostname 127.0.0.1 --port 3100',
-    env: {
-      ...process.env,
-      MOVIECAL_E2E_TEST_MODE: '1',
-    },
+    command: buildWebServerCommand(),
+    env: buildWebServerEnv(),
     url: appUrl,
     reuseExistingServer: false,
-    timeout: 120000,
+    timeout: WEB_SERVER_STARTUP_TIMEOUT_MS,
   },
 });

@@ -51,3 +51,4 @@ Add new movies to `src/lib/test-data/catalog.ts` first, then use `buildWatchlist
 
 - [Repository testing strategy](../../docs/planning/repository-testing-strategy.md) — capability-to-layer map and mocking policy
 - [Testing lanes](../../docs/planning/testing-lanes.md) — `npm run lane:unit`, `lane:integration`, `lane:browser`
+- [Browser/runtime test stability](../../docs/planning/browser-runtime-test-stability.md) — artifacts, retries, and quarantine policy
