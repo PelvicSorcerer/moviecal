@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 
 import {
+  isE2ETestModeEnabled,
+  searchE2EMovieCatalog,
+} from '../../../../lib/e2e/fixtures';
+import {
   searchMovies,
   TMDbEnvironmentError,
   TMDbRequestError,
@@ -18,6 +22,23 @@ export async function GET(request: Request) {
   }
 
   try {
+    if (isE2ETestModeEnabled()) {
+      try {
+        const results = searchE2EMovieCatalog(query);
+
+        return NextResponse.json({ results });
+      } catch (error) {
+        return NextResponse.json(
+          {
+            error: error instanceof Error
+              ? error.message
+              : 'Movie search is unavailable right now.',
+          },
+          { status: 503 },
+        );
+      }
+    }
+
     const results = await searchMovies(query);
 
     return NextResponse.json({ results });

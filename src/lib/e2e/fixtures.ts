@@ -6,6 +6,7 @@ import {
 } from '../auth/cookies';
 import {
   getTestMovieCatalogEntry,
+  listTestMovieTmdbIds,
   TEST_TIMESTAMPS,
   TEST_TMDB_IDS,
   TEST_USER_IDS,
@@ -147,6 +148,37 @@ export function getE2EMovieSummaries(
     const movie = getE2EMovieFixture(tmdbId);
 
     return movie
+      ? [
+          {
+            tmdbId: movie.tmdbId,
+            title: movie.title,
+            releaseDate: movie.releaseDate,
+            posterPath: movie.posterPath,
+            overview: movie.overview,
+          },
+        ]
+      : [];
+  });
+}
+
+export const E2E_SEARCH_UNAVAILABLE_QUERY = '__e2e_search_unavailable__';
+
+export function searchE2EMovieCatalog(query: string): NormalizedMovieSummary[] {
+  const trimmedQuery = query.trim();
+  const normalizedQuery = trimmedQuery.toLowerCase();
+
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  if (normalizedQuery === E2E_SEARCH_UNAVAILABLE_QUERY) {
+    throw new Error('Movie search is unavailable right now.');
+  }
+
+  return listTestMovieTmdbIds().flatMap((tmdbId) => {
+    const movie = getE2EMovieFixture(tmdbId);
+
+    return movie && movie.title.toLowerCase().includes(normalizedQuery)
       ? [
           {
             tmdbId: movie.tmdbId,

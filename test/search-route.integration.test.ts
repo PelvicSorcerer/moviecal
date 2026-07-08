@@ -120,4 +120,63 @@ describe('movie search route integration seam', () => {
       error: 'Movie search is temporarily unavailable.',
     });
   });
+
+  it('returns deterministic catalog results in E2E test mode without calling TMDb', async () => {
+    vi.stubEnv('MOVIECAL_E2E_TEST_MODE', '1');
+
+    const { GET } = await import('../src/app/api/movies/search/route');
+    const response = await GET(
+      new NextRequest('https://moviecal.test/api/movies/search?q=matrix'),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      results: [
+        {
+          tmdbId: TEST_TMDB_IDS.MATRIX,
+          title: 'The Matrix',
+          releaseDate: '1999-03-31',
+          posterPath: '/matrix.jpg',
+          overview: 'A hacker discovers the truth.',
+        },
+      ],
+    });
+    expect(mocks.searchMovies).not.toHaveBeenCalled();
+
+    vi.unstubAllEnvs();
+  });
+
+  it('returns an empty result set for unmatched E2E catalog queries', async () => {
+    vi.stubEnv('MOVIECAL_E2E_TEST_MODE', '1');
+
+    const { GET } = await import('../src/app/api/movies/search/route');
+    const response = await GET(
+      new NextRequest('https://moviecal.test/api/movies/search?q=unknown-title'),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ results: [] });
+    expect(mocks.searchMovies).not.toHaveBeenCalled();
+
+    vi.unstubAllEnvs();
+  });
+
+  it('returns a safe 503 for handled E2E search failures', async () => {
+    vi.stubEnv('MOVIECAL_E2E_TEST_MODE', '1');
+
+    const { GET } = await import('../src/app/api/movies/search/route');
+    const response = await GET(
+      new NextRequest(
+        'https://moviecal.test/api/movies/search?q=__e2e_search_unavailable__',
+      ),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Movie search is unavailable right now.',
+    });
+    expect(mocks.searchMovies).not.toHaveBeenCalled();
+
+    vi.unstubAllEnvs();
+  });
 });

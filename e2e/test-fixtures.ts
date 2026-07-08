@@ -30,6 +30,7 @@ import {
 } from '../src/lib/e2e/fixtures';
 import { TEST_CALENDAR_TOKENS } from '../src/lib/test-data/catalog';
 import type { WatchlistSummary } from '../src/lib/watchlist';
+import type { NormalizedMovieSummary } from '../src/lib/tmdb/client';
 
 type SeedArgs =
   | number[]
@@ -51,11 +52,16 @@ type PersonalWatchlistApiResponse = {
   items: WatchlistItem[];
 };
 
+type MovieSearchApiResponse = {
+  results: NormalizedMovieSummary[];
+};
+
 type SmokeFixtures = {
   _quarantineGate: void;
   assertRedirectsToSignIn(
     protectedPath: '/watchlist' | '/settings/calendar',
   ): Promise<void>;
+  getMovieSearchViaApi(query: string): Promise<MovieSearchApiResponse>;
   getPersonalWatchlistViaApi(): Promise<PersonalWatchlistApiResponse>;
   stubMovieSearchWithScenario(args?: {
     delayMs?: number;
@@ -119,6 +125,17 @@ export const test = base.extend<SmokeFixtures>({
       expect(response.ok()).toBeTruthy();
 
       return (await response.json()) as PersonalWatchlistApiResponse;
+    });
+  },
+  getMovieSearchViaApi: async ({ page }, use) => {
+    await use(async (query) => {
+      const response = await page.request.get(
+        `/api/movies/search?q=${encodeURIComponent(query)}`,
+      );
+
+      expect(response.ok()).toBeTruthy();
+
+      return (await response.json()) as MovieSearchApiResponse;
     });
   },
   seedAuthenticatedSession: async ({ baseURL, context, request }, use) => {

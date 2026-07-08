@@ -2,7 +2,94 @@ import { expect, test } from './test-fixtures';
 import {
   createE2ESharedWatchlist,
   createE2EWatchlistMember,
+  E2E_SEARCH_UNAVAILABLE_QUERY,
 } from '../src/lib/e2e/fixtures';
+import { TEST_TMDB_IDS } from '../src/lib/test-data/catalog';
+
+test.describe('full-stack search through the app backend path', () => {
+  test('anonymous visitors receive catalog results from the real search endpoint', async ({
+    page,
+    getMovieSearchViaApi,
+  }) => {
+    await page.goto('/search');
+    await page.getByRole('searchbox', { name: 'Search for a movie' }).fill('matrix');
+    await page.getByRole('button', { name: 'Search' }).click();
+
+    await expect(page.getByRole('heading', { name: 'Search results' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'The Matrix' })).toBeVisible();
+    await expect(page.getByText('Mar 31, 1999')).toBeVisible();
+    await expect(
+      page.getByRole('link', { name: 'Sign in to add movies to your watchlist' }),
+    ).toBeVisible();
+    await expect(page).toHaveURL(/\/search\?q=matrix$/);
+
+    const payload = await getMovieSearchViaApi('matrix');
+
+    expect(payload.results.map((movie) => movie.tmdbId)).toEqual([TEST_TMDB_IDS.MATRIX]);
+  });
+
+  test('empty catalog matches show the handled empty state without crashing', async ({
+    page,
+    getMovieSearchViaApi,
+  }) => {
+    await page.goto('/search');
+    await page.getByRole('searchbox', { name: 'Search for a movie' }).fill('unknown');
+    await page.getByRole('button', { name: 'Search' }).click();
+
+    await expect(page.getByRole('heading', { name: 'No matches yet' })).toBeVisible();
+    await expect(page.getByText('No movies matched')).toContainText('unknown');
+    await expect(page).toHaveURL(/\/search\?q=unknown$/);
+    await expect(page.getByText('Search unavailable')).toHaveCount(0);
+
+    const payload = await getMovieSearchViaApi('unknown');
+
+    expect(payload.results).toEqual([]);
+  });
+
+  test('authenticated visitors can add a search result through the real backend path', async ({
+    page,
+    getMovieSearchViaApi,
+    getPersonalWatchlistViaApi,
+    seedAuthenticatedSession,
+  }) => {
+    await seedAuthenticatedSession([TEST_TMDB_IDS.INCEPTION]);
+
+    await page.goto('/search');
+    await page.getByRole('searchbox', { name: 'Search for a movie' }).fill('matrix');
+    await page.getByRole('button', { name: 'Search' }).click();
+
+    await expect(page.getByRole('heading', { name: 'Search results' })).toBeVisible();
+    await expect(
+      (await getMovieSearchViaApi('matrix')).results.map((movie) => movie.tmdbId),
+    ).toEqual([TEST_TMDB_IDS.MATRIX]);
+
+    await page.getByRole('button', { name: 'Add to watchlist' }).click();
+
+    await expect(page.getByRole('button', { name: 'Added' })).toBeVisible();
+    await expect(page.getByText('Saved to My watchlist.')).toBeVisible();
+    await expect(
+      (await getPersonalWatchlistViaApi()).items.map((item) => item.movie.tmdbId).sort(),
+    ).toEqual([TEST_TMDB_IDS.INCEPTION, TEST_TMDB_IDS.MATRIX].sort());
+  });
+
+  test('handled search endpoint failures show a degraded error state instead of a hard crash', async ({
+    page,
+  }) => {
+    await page.goto('/search');
+    await page
+      .getByRole('searchbox', { name: 'Search for a movie' })
+      .fill(E2E_SEARCH_UNAVAILABLE_QUERY);
+    await page.getByRole('button', { name: 'Search' }).click();
+
+    await expect(page.getByText('Search unavailable')).toBeVisible();
+    await expect(
+      page.getByText('Movie search is unavailable right now.'),
+    ).toBeVisible();
+    await expect(page).toHaveURL(
+      new RegExp(`/search\\?q=${encodeURIComponent(E2E_SEARCH_UNAVAILABLE_QUERY)}$`),
+    );
+  });
+});
 
 test('anonymous search visitors see deterministic results and a sign-in CTA', async ({
   page,
