@@ -14,8 +14,8 @@ This file is the generic contract every agent and human contributor reads. Platf
 
 ## Start conditions
 
-- **Dispatch-eligible work (Codex workers):** start implementation only from the single open GitHub issue whose `moviecal Delivery` project item has `Agent Dispatch = Yes` and `Status = Ready`. Dispatch-eligible tracks are `Product` and `Future`; see `docs/operators/multi-platform-dispatch-policy.md`.
-- **Platform-track, governance, or directly assigned work (any platform):** start only when a human assigns the task or delegates the issue; these items keep `Agent Dispatch = No`. See `docs/operators/multi-platform-dispatch-policy.md`.
+- **Dispatch-slot work (Codex workers only):** start implementation only from the single open GitHub issue whose `moviecal Delivery` project item has `Agent Dispatch = Yes` and `Status = Ready`. Dispatch-eligible tracks are `Product` and `Future`; see `docs/operators/multi-platform-dispatch-policy.md`.
+- **Direct assignment (any platform, any track):** start implementation when a human assigns the task or delegates the issue directly to you. The issue keeps `Agent Dispatch = No` — direct assignment does not consume the dispatch slot. You may implement `Product`, `Future`, `Platform`, or governance work when directly assigned. Migration-track items follow the separate restriction in `docs/operators/multi-platform-dispatch-policy.md` (humans only, or agents on explicit human assignment for doc-only items). See the "Direct assignment path" section in `docs/operators/multi-platform-dispatch-policy.md`.
 - Treat the GitHub Project as the operational source of truth for live queue state, status, and ordering.
 - Do not start feature work from detached `HEAD`; branch from `master`.
 - Branch name format is platform-specific. See `docs/operators/branch-and-ci-conventions.md` for the exact prefix each platform uses; do not rename a platform-assigned branch to match a different platform's convention.
@@ -47,7 +47,7 @@ The invariants below apply regardless of which doc currently governs procedural 
 - A ready handoff means: a local branch tracking `origin/master` contains the merged change; there are no stray open PRs for the same issue; exactly one open issue has `Agent Dispatch = Yes` and `Status = Ready`, unless the queue is intentionally blocked; and the promoted issue has current acceptance criteria, verification steps, and security notes when applicable.
 - If the next issue depends on missing tooling, secrets, or infrastructure, mark the queue blocked instead of promoting a speculative dispatch issue.
 - When multiple open dispatch-eligible issues (`Product` or `Future`) could look ready, use the project `Queue Order` field as the deterministic tie-breaker. `Queue Order` is global across the project, but only dispatch-eligible tracks may hold the dispatch slot.
-- Multi-platform dispatch rights are documented in `docs/operators/multi-platform-dispatch-policy.md`. Only Codex workers may receive `Agent Dispatch = Yes` on dispatch-eligible tracks (`Product` or `Future`); Cursor Cloud Agents and GitHub Copilot implement platform/governance work via direct assignment only.
+- Multi-platform dispatch rights are documented in `docs/operators/multi-platform-dispatch-policy.md`. Only Codex workers may receive `Agent Dispatch = Yes` on dispatch-eligible tracks (`Product` or `Future`); other platforms implement work via direct assignment (any track, per the restrictions in that doc).
 
 ## Environment policy
 

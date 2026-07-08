@@ -26,11 +26,11 @@ Two project tracks may hold the single dispatch slot when intentionally promoted
 
 ## Policy summary
 
-| Project `Track` | Who may receive `Agent Dispatch = Yes` | Who may implement without the dispatch slot |
+| Project `Track` | Who may receive `Agent Dispatch = Yes` | Who may implement via direct assignment |
 |---|---|---|
-| **Product** (feature delivery) | **Codex workers only** | — (dispatch-slot work requires the slot) |
-| **Future** (non-product executable workstreams) | **Codex workers only** | — (dispatch-slot work requires the slot) |
-| **Platform** (compatibility, governance, process) | **Nobody** — always `Agent Dispatch = No` | Codex, Cursor Cloud Agent, GitHub Copilot, or humans via direct assignment |
+| **Product** (feature delivery) | **Codex workers only** | Any platform or human (when directly assigned, without requiring the dispatch slot) |
+| **Future** (non-product executable workstreams) | **Codex workers only** | Any platform or human (when directly assigned, without requiring the dispatch slot) |
+| **Platform** (compatibility, governance, process) | **Nobody** — always `Agent Dispatch = No` | Any platform or human via direct assignment |
 | **Migration** (cutover work) | **Nobody** — always `Agent Dispatch = No` | Humans (or agents on explicit human assignment for doc-only migration items) |
 
 ### Dispatch-slot work (Product and Future tracks)
@@ -43,6 +43,18 @@ Rationale:
 - The dispatch slot exists to give exactly one fresh Codex worker a deterministic start signal. Other platforms do not participate in that handshake.
 
 Codex workers use `agent/<issue-number>-<short-slug>` branches. The Codex orchestrator uses `orchestrator/live` (or similar) and does not consume the dispatch slot for feature work.
+
+### Direct assignment path (Product and Future tracks)
+
+Any agent platform (Claude Code, Cursor Cloud Agent, GitHub Copilot) or human may implement a **Product** or **Future** track issue when **directly assigned by a human**, without requiring or competing for the dispatch slot. Direct assignment means:
+
+- A human (engineer, lead, or orchestrator) explicitly assigns the issue to a specific agent or delegates the issue to them.
+- The issue remains at `Agent Dispatch = No` — it does not consume the single dispatch slot.
+- The implementing agent uses its platform-assigned branch prefix (e.g., `claude/**` for Claude Code, `cursor/**` for Cursor, `copilot/**` for Copilot).
+
+**This is distinct from dispatch-slot work:** the slot is a Codex-only formal handshake where an orchestrator promotes exactly one issue and provisions a worker. Direct assignment is a lightweight human-initiated alternative available to every platform on every track.
+
+Direct assignment does not affect the queue invariant that exactly one open issue may have `Agent Dispatch = Yes` at any time.
 
 ### Platform-track and governance work
 
@@ -59,13 +71,13 @@ Direct assignment is not the same as consuming `Agent Dispatch = Yes`. Agents on
 ### Cursor Cloud Agent
 
 - **May not** receive `Agent Dispatch = Yes` on any project item.
-- **May** implement platform-track issues, governance/docs work, and other tasks when a human assigns them directly.
+- **May** implement Product, Future, Platform, or other work when a human assigns them directly (see "Direct assignment path" above).
 - Uses `cursor/<slug>-<run-id>` branches (platform-assigned). See `docs/operators/cursor-cloud.md`.
 
 ### GitHub Copilot coding agent
 
 - **May not** receive `Agent Dispatch = Yes` on any project item.
-- **May** implement work when GitHub assigns an issue or PR to Copilot, or when a human delegates a platform/governance task.
+- **May** implement Product, Future, Platform, or other work when a human assigns them directly, or when GitHub assigns an issue or PR to Copilot (see "Direct assignment path" above).
 - Uses `copilot/**` branches (platform-assigned). See `docs/operators/github-copilot.md`.
 
 ### Governance branch prefixes

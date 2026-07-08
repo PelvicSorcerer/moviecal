@@ -37,8 +37,9 @@ Items marked **verified** were observed in an actual Claude Code session against
 
 ## Queue / dispatch interaction
 
-- **Claude Code may not receive `Agent Dispatch = Yes` on any project item.** Dispatch-slot work on `Product` or `Future` tracks is owned by Codex workers. See `docs/operators/multi-platform-dispatch-policy.md`.
-- Claude Code **may** implement platform-track issues (`Track = Platform`), governance/docs work (`docs/**`, `chore/**`), and other tasks when a human assigns the issue or delegates it directly. Direct assignment is not dispatch-slot consumption — do not set or assume `Agent Dispatch = Yes`.
+- **Claude Code may not receive the dispatch slot** (`Agent Dispatch = Yes`) on dispatch-eligible tracks (`Product` or `Future`). The formal handshake model (dispatch slot + orchestrator-provisioned worktrees) is Codex-only. See `docs/operators/multi-platform-dispatch-policy.md`.
+- Claude Code **may** implement **any track** (Product, Future, Platform, or Migration) when a human assigns the issue or delegates it directly, without requiring `Agent Dispatch = Yes`. This is called **direct assignment** and is available to every agent platform. See the "Direct assignment path" section in `docs/operators/multi-platform-dispatch-policy.md`.
+- Direct assignment means: a human explicitly assigns or delegates the issue (for example, "Claude Code, implement issue #174"), the issue stays at `Agent Dispatch = No`, and the worker uses the `claude/**` branch prefix. Direct assignment does not consume the dispatch slot.
 - Treat the `moviecal Delivery` GitHub Project as the source of truth for queue state, even though Claude Code cannot update project fields natively. If a project update is needed, note it in the PR description and ask the human to update the project field.
 
 ## Secrets
