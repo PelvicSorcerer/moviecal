@@ -16,6 +16,7 @@ This directory holds one guide per agent platform that develops this repo (Codex
 - If your tooling reads `.codex/environments/*.toml`, or you were launched via Codex Desktop/CLI, read `codex.md`.
 - If your tooling reads `.cursor/environment.json`, or you were launched as a Cursor Cloud Agent (`cursor.com/agents` or the Cloud tab in Cursor), read `cursor-cloud.md`.
 - If you are GitHub Copilot's coding agent (assigned via a GitHub issue delegated to Copilot, or an `@copilot` mention), read `github-copilot.md`.
+- If you are Claude Code (CLI, web app, IDE extension, or managed remote execution environment), read `claude-code.md`.
 - If you are a human contributor, or a platform not listed here, follow the generic `AGENTS.md` contract directly. Nothing in this directory is required reading for you, though `branch-and-ci-conventions.md` is worth a skim before you add a new CI trigger.
 
 ## A note on scope: platforms vs procedure
@@ -43,6 +44,7 @@ Then update `AGENTS.md`'s router table and `docs/operators/branch-and-ci-convent
 - `codex-worker-dispatch-prompt.md` — default worker dispatch prompt template for Codex orchestrators.
 - `cursor-cloud.md` — Cursor Cloud Agent environment notes.
 - `github-copilot.md` — GitHub Copilot coding agent notes.
+- `claude-code.md` — Claude Code environment and tooling notes.
 - `multi-platform-dispatch-policy.md` — which platforms may receive `Agent Dispatch = Yes` after project cutover.
 - `branch-and-ci-conventions.md` — single source of truth for branch-prefix-to-platform mapping and which CI workflows must reference each prefix.
 - `branch-prefixes.json` — machine-readable version of the same table, read by `scripts/check-branch-ci-conventions.py`.

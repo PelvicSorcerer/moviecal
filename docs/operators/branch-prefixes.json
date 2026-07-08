@@ -26,6 +26,12 @@
       "requiresPathRestrictedPushTrigger": true
     },
     {
+      "glob": "claude/**",
+      "example": "claude/<issue-number>-<short-slug>",
+      "platform": "Claude Code (CLI, web, IDE, or remote execution environment)",
+      "requiresPathRestrictedPushTrigger": true
+    },
+    {
       "glob": "docs/**",
       "example": "docs/**",
       "platform": "Governance/queue-maintenance work from any agent or human",

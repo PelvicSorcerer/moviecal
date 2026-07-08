@@ -9,6 +9,7 @@ This file is the generic contract every agent and human contributor reads. Platf
 - Codex (Desktop or CLI): read `docs/operators/codex.md`.
 - Cursor Cloud Agent: read `docs/operators/cursor-cloud.md`.
 - GitHub Copilot coding agent: read `docs/operators/github-copilot.md`.
+- Claude Code (CLI, web, IDE, or remote): read `docs/operators/claude-code.md`.
 - Human contributor, or a platform not listed here: the generic rules below are all you need; see `docs/operators/README.md` if you want to add a guide for a new platform.
 
 ## Start conditions

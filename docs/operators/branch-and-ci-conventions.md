@@ -10,6 +10,7 @@ This table is the single source of truth for branch-prefix-to-platform mapping. 
 | `orchestrator/live` (or similar) | Codex orchestrator's own attached branch | No | Tracks `origin/master`; never used for feature work |
 | `cursor/<slug>-<run-id>` | Cursor Cloud Agents | Yes | Prefix and suffix are assigned by the Cursor platform, not chosen by the agent; see `docs/operators/cursor-cloud.md` |
 | `copilot/**` | GitHub Copilot coding agent | Yes | Assigned by GitHub's Copilot agent platform; see `docs/operators/github-copilot.md` |
+| `claude/**` | Claude Code (CLI, web, IDE, or remote execution environment) | Yes | Assigned by the Claude Code platform or a human delegating work; see `docs/operators/claude-code.md` |
 | `docs/**`, `chore/**` | Governance/queue-maintenance work from any agent or human | No | Kept separate from `agent/**` feature branches per `AGENTS.md`'s Start conditions |
 
 "Requires a path-restricted push trigger" means: any GitHub Actions workflow that triggers on `push` to a subset of branches (as opposed to `[master]` only, or an unfiltered `pull_request` trigger) must include that prefix's glob if the workflow's guarded paths could plausibly be touched by that platform. `.github/workflows/supabase-verify.yml` is the only such workflow today; it's listed in `docs/operators/branch-prefixes.json`'s `pathRestrictedPushWorkflows` array so the automated check knows to validate it.
