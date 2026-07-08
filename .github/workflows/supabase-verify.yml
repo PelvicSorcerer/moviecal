@@ -11,15 +11,45 @@ on:
     paths:
       - 'supabase/**'
       - 'scripts/supabase-db-lint.sh'
+      - 'scripts/ci-full-stack-runtime.mjs'
       - '.github/workflows/supabase-verify.yml'
+      - 'playwright.full-stack.config.ts'
+      - 'e2e/full-stack-runtime.spec.ts'
+      - 'src/app/auth/sign-in/route.ts'
+      - 'src/app/settings/calendar/**'
+      - 'src/app/watchlist/**'
+      - 'src/app/api/calendar/**'
+      - 'src/app/api/watchlist/**'
+      - 'src/lib/auth/**'
+      - 'src/lib/calendar-feed.ts'
+      - 'src/lib/calendar-tokens.ts'
+      - 'src/lib/supabase/**'
+      - 'src/lib/test-stability/**'
+      - 'src/lib/watchlist.ts'
       - 'src/lib/supabase/database.ts'
+      - 'package.json'
       - 'test/supabase-schema.test.ts'
   pull_request:
     paths:
       - 'supabase/**'
       - 'scripts/supabase-db-lint.sh'
+      - 'scripts/ci-full-stack-runtime.mjs'
       - '.github/workflows/supabase-verify.yml'
+      - 'playwright.full-stack.config.ts'
+      - 'e2e/full-stack-runtime.spec.ts'
+      - 'src/app/auth/sign-in/route.ts'
+      - 'src/app/settings/calendar/**'
+      - 'src/app/watchlist/**'
+      - 'src/app/api/calendar/**'
+      - 'src/app/api/watchlist/**'
+      - 'src/lib/auth/**'
+      - 'src/lib/calendar-feed.ts'
+      - 'src/lib/calendar-tokens.ts'
+      - 'src/lib/supabase/**'
+      - 'src/lib/test-stability/**'
+      - 'src/lib/watchlist.ts'
       - 'src/lib/supabase/database.ts'
+      - 'package.json'
       - 'test/supabase-schema.test.ts'
   workflow_dispatch:
 
@@ -53,3 +83,26 @@ jobs:
 
       - name: lane:real-stack
         run: npm run lane:real-stack
+
+  lane-full-stack-runtime:
+    name: lane-full-stack-runtime
+    runs-on: ubuntu-latest
+    env:
+      CI: true
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - run: node --version && npm --version
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: lane:full-stack
+        run: npm run lane:full-stack

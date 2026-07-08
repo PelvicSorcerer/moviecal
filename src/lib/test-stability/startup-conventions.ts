@@ -25,7 +25,18 @@ export function buildWebServerCommand(): string {
 
 export function buildWebServerEnv(
   baseEnv: NodeJS.ProcessEnv = process.env,
+  options: {
+    enableE2ETestMode?: boolean;
+  } = {},
 ): NodeJS.ProcessEnv {
+  const { enableE2ETestMode = true } = options;
+
+  if (!enableE2ETestMode) {
+    return {
+      ...baseEnv,
+    };
+  }
+
   return {
     ...baseEnv,
     [E2E_TEST_MODE_ENV]: E2E_TEST_MODE_VALUE,

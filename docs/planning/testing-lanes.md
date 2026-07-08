@@ -16,6 +16,7 @@ For the environment contract behind each lane, including disposable credential r
 | Browser | `npm run lane:browser` | `browser-verify` → `lane-browser` | Medium | Yes — default PR gate |
 | Browser quarantine | `npm run lane:browser:quarantine` | `browser-verify` → `lane-browser-quarantine` | Medium | No — informational flake tracking |
 | Real-stack | `npm run lane:real-stack` | `supabase-verify` → `lane-real-stack` | Heavy | Conditional — path-filtered |
+| Full-stack runtime | `npm run lane:full-stack` | `supabase-verify` → `lane-full-stack-runtime` | Heavy | Conditional — path-filtered |
 | External smoke | `npm run lane:smoke-external` | `smoke-external` → `lane-smoke-external` | Heavy | No — scheduled/manual (stub until #139) |
 | Post-deploy smoke | `npm run lane:smoke-post-deploy` | `smoke-post-deploy` → `lane-smoke-post-deploy` | Heavy | No — post-deploy/scheduled (stub until #140) |
 
@@ -114,6 +115,23 @@ Stability policy for startup conventions, failure artifacts, retries, and quaran
 
 The authoritative CI gate is `.github/workflows/supabase-verify.yml`, which starts a local Supabase stack in GitHub Actions. Locally, Docker or a disposable `SUPABASE_DB_URL` is required.
 
+### Full-stack runtime (`lane:full-stack`)
+
+**Purpose:** Exercise one disposable real-backend browser path against Supabase auth, seeded watchlist data, and live calendar-token persistence without widening the deterministic `lane:browser` contract.
+
+**Runs:** `node scripts/ci-full-stack-runtime.mjs`, which seeds a disposable Supabase user and watchlist state, launches Playwright with `playwright.full-stack.config.ts`, then cleans the seeded runtime up.
+
+**Expected to catch:**
+
+- real Supabase email/password sign-in failures
+- seeded personal watchlist visibility regressions after a true authenticated redirect
+- calendar subscription URL retrieval and token rotation regressions against the live backend
+- watchlist deletion persistence bugs that only appear against real Supabase-backed state
+
+**Not expected to catch:** TMDb-dependent add-to-watchlist flows, third-party provider drift, or broad post-deploy wiring outside the disposable Supabase path.
+
+The authoritative CI gate is `.github/workflows/supabase-verify.yml`'s `lane-full-stack-runtime` job, which injects disposable Supabase secrets through GitHub Actions. Locally, the same command can run only when those disposable env vars are present.
+
 ### External smoke (`lane:smoke-external`)
 
 **Purpose:** Detect real third-party provider drift without destabilizing ordinary PR validation.
@@ -154,7 +172,7 @@ GitHub Actions workflows and jobs use the `lane-*` prefix so a failing check nam
 
 - `verify.yml`: `lane-baseline`, `lane-unit`, `lane-integration`
 - `browser-verify.yml`: `lane-browser`, `lane-browser-quarantine`
-- `supabase-verify.yml`: `lane-real-stack`
+- `supabase-verify.yml`: `lane-real-stack`, `lane-full-stack-runtime`
 - `smoke-external.yml`: `lane-smoke-external` (stub)
 - `smoke-post-deploy.yml`: `lane-smoke-post-deploy` (stub)
 

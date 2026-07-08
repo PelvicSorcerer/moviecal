@@ -34,6 +34,7 @@ This is the default gate for everyday feature work.
 Use this tier when the behavior depends on infrastructure that mocks cannot prove correctly.
 
 - Real database schema validation belongs here, using `npm run lane:real-stack` against a disposable database when available or the authoritative `supabase-verify` GitHub Actions workflow (`lane-real-stack` job).
+- Disposable Supabase-backed browser runtime checks also belong here when the behavior depends on real auth state or persisted watchlist/calendar data, using `npm run lane:full-stack` or the authoritative `supabase-verify` GitHub Actions workflow (`lane-full-stack-runtime` job).
 - External smoke checks, hosted-environment checks, and post-deploy verification belong here (`lane:smoke-external` and `lane:smoke-post-deploy`; see [testing-lanes.md](./testing-lanes.md)).
 - These checks may run less often than the default PR gate, but they remain required before trusting infrastructure-sensitive changes.
 
@@ -44,9 +45,9 @@ Use this tier when the behavior depends on infrastructure that mocks cannot prov
 | Pure utilities such as date formatting, iCalendar escaping, stable UID generation, and environment parsing | Unit | Keep inputs explicit and deterministic. |
 | TMDb normalization and provider error handling | Unit, deterministic integration | Mock TMDb HTTP responses; do not hit the live API in PR validation. |
 | Supabase helper configuration and server-side data-access branching | Unit, deterministic integration | Mock Supabase clients or responses when verifying application behavior. |
-| Auth gating, page protection, and request authorization flow | Deterministic integration, browser E2E | Use seeded or stubbed sessions for PR validation. |
-| Search, watchlist mutations, and protected UI flows | Browser E2E, deterministic integration | Prefer Playwright fixtures plus route interception over live third-party services. |
-| Calendar token rotation, private feed authorization, and feed rendering | Unit, deterministic integration, browser E2E where user-facing | Keep token examples disposable; invalid-token handling should stay deterministic. |
+| Auth gating, page protection, and request authorization flow | Deterministic integration, browser E2E, disposable full-stack runtime when real auth matters | Use seeded or stubbed sessions for PR validation; escalate to `lane:full-stack` only for real Supabase auth coverage. |
+| Search, watchlist mutations, and protected UI flows | Browser E2E, deterministic integration, disposable full-stack runtime for real Supabase persistence | Prefer Playwright fixtures plus route interception over live third-party services; reserve `lane:full-stack` for the narrow real-backend path in scope. |
+| Calendar token rotation, private feed authorization, and feed rendering | Unit, deterministic integration, browser E2E where user-facing, disposable full-stack runtime for live token persistence | Keep token examples disposable; invalid-token handling should stay deterministic outside the real-backend runtime lane. |
 | Supabase schema, migrations, and database-specific constraints | Real-stack validation | Use disposable databases or the `supabase-verify` workflow rather than mocks alone. |
 | Cron-triggered refresh flows and deployment wiring | Deterministic integration plus external smoke/post-deploy checks | Mock scheduler calls in PRs; verify deployed wiring separately. |
 

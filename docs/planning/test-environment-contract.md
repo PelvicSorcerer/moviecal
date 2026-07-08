@@ -91,16 +91,28 @@ This mode covers infrastructure-sensitive checks that mocks cannot prove, especi
 - Disposable local Supabase or Postgres instances.
 - Disposable `SUPABASE_DB_URL` targets.
 - CI-provisioned ephemeral services, including the `supabase-verify` workflow.
+- CI-injected disposable Supabase auth credentials for representative browser runtime checks.
 
 **Required constraints**
 
 - The database or stack must be disposable, resettable, or ephemeral.
 - Credentials must be dev-only and scoped to the test target.
 - Shared persistent environments may be used only if they are explicitly disposable for testing and safe to reset without impacting unrelated work.
+- Seeded browser-runtime data must be created by automation and cleaned up automatically after the run.
 
 **Typical lanes**
 
 - `lane:real-stack`
+- `lane:full-stack`
+
+**Seeded runtime contract for `lane:full-stack`**
+
+- Create one disposable Supabase auth user per run with a generated `@moviecal.test` email/password pair.
+- Seed that user's personal watchlist, one seeded movie row, and one seeded calendar token through trusted server-side Supabase access.
+- Prove only the real-backend path in scope for this issue: sign-in, seeded watchlist visibility, calendar URL retrieval, token rotation, and persisted movie removal after reload.
+- Do not widen this lane to TMDb-backed add-to-watchlist coverage; keep provider-dependent search/add flows in deterministic or future smoke coverage.
+- Delete the disposable auth user after the run and remove seeded movie rows that were created only for this runtime so later runs start cleanly.
+- Avoid screenshots, traces, or logs that would expose seeded private calendar URLs or bearer-like token values.
 
 ### Mode 4: External and post-deploy smoke validation
 
