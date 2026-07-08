@@ -129,7 +129,7 @@ Manual local testing is part of issue completion, not a later separate phase.
 
 ## Worker brief template
 
-Use `docs/operators/codex-worker-dispatch-prompt.md` when dispatching a worker. It is intentionally operational:
+Use `docs/operators/codex-worker-dispatch-prompt.md` when dispatching a Codex worker. Use `docs/operators/claude-worker-dispatch-prompt.md` when dispatching a Claude Code worker — it adds the required `Requested Claude model` field and model-checkpoint fields; see `docs/operators/claude-code.md` for the full model-aware dispatch contract. It is intentionally operational:
 
 - it tells the worker to acknowledge the assignment in its own thread first
 - it requires `BOOT_CHECKPOINT` from the worker's natural startup context and `STARTUP_CHECKPOINT` only after explicit retargeting to the assigned worktree
