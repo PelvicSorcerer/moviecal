@@ -239,6 +239,33 @@ project_queue_validate_worker_dispatch() {
   fi
 }
 
+project_queue_validate_claude_model_annotation() {
+  local issue_number="$1"
+  local issue_body="$2"
+  local model_value
+
+  model_value=$(echo "$issue_body" | grep -i "Requested Claude model" | head -1 | sed 's/.*Requested Claude model[[:space:]]*:[[:space:]]*//' | tr -d '`' | awk '{print $1}')
+
+  case "$model_value" in
+    ""|"<!--"*)
+      # No value or unfilled template comment — not a Claude worker issue; skip
+      return 0
+      ;;
+    default)
+      echo "Issue #$issue_number specifies 'Requested Claude model: default'. An explicit model ID is required; see docs/operators/claude-model-selection-policy.md." >&2
+      return 1
+      ;;
+    claude-haiku-4-5|claude-sonnet-4-6|claude-sonnet-5|claude-opus-4-8)
+      echo "Claude model annotation for #$issue_number: $model_value (valid)"
+      return 0
+      ;;
+    *)
+      echo "Issue #$issue_number specifies an unrecognized Claude model: '$model_value'. Valid options: claude-haiku-4-5 | claude-sonnet-4-6 | claude-sonnet-5 | claude-opus-4-8." >&2
+      return 1
+      ;;
+  esac
+}
+
 project_queue_validate_issue_contract() {
   local issue_number="$1"
   local issue_body="$2"
@@ -264,6 +291,8 @@ project_queue_validate_issue_contract() {
       return 1
     fi
   fi
+
+  project_queue_validate_claude_model_annotation "$issue_number" "$issue_body" || return 1
 
   echo "Issue body includes Relevant docs, Acceptance criteria, and Verification."
 }

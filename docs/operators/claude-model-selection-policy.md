@@ -2,21 +2,71 @@
 
 Read `AGENTS.md` and `docs/operators/claude-code.md` before this file. Those documents cover the generic queue contract and the mechanical surfaces (checkpoint fields, dispatch template, fallback error behavior). This document answers the policy question those mechanics left open: **how should the model for a Claude worker session be chosen?**
 
-## Decision: manual, task-complexity-based
+## Decision: cost-optimized, explicit, and rubric-driven
 
-Model selection is **manual and task-complexity-based**. The human orchestrator (or issue shaper) names a model explicitly in the issue brief when the complexity of the work justifies it. All other tasks default to the environment default.
+Model selection is **cost-optimized, explicit, and rubric-driven**. The orchestrator (or issue shaper) must name a specific model ID in every Claude worker issue brief. `"default"` is not a valid value — every issue must specify one of the four supported model IDs from the table below.
 
-This is not label-driven, cost-tier-driven, or rules-driven automation. The repo is small enough and issue volume low enough that a policy requiring human judgment on each issue is appropriate and preferred over fragile heuristics.
+The rubric defaults to the cheapest capable model and upgrades only when a named condition applies. It requires human judgment applied to a concrete scoring rubric, not label-driven or fully automated selection.
 
-## Worker-session model choice
+## A note on effort levels
 
-| Task complexity | Policy |
+`output_config.effort` (`low`/`medium`/`high`/`max`/`xhigh`) is an API-level parameter. Claude Code manages it internally for its own requests and does not expose it as a CLI flag. The `Agent` tool has no `effort` parameter. The orchestrator cannot tune effort per-issue in the dispatch brief. **Model selection is the only practical cost lever available to the orchestrator.**
+
+If Claude Code ever exposes effort as a configurable dispatch parameter, `claude-sonnet-4-6` at `max` effort may become a viable substitute for `claude-sonnet-5` at standard effort on some task types. Until then, effort is not a dispatch-time consideration.
+
+## Supported model IDs
+
+| Model ID | Price (in/out per MTok) | Tier |
+|---|---|---|
+| `claude-haiku-4-5` | $1 / $5 | 1 — cheapest |
+| `claude-sonnet-4-6` | $3 / $15 | 2 |
+| `claude-sonnet-5` | $3 / $15 (intro $2/$10 through 2026-08-31) | 3 |
+| `claude-opus-4-8` | $5 / $25 | 4 — most capable |
+
+`claude-sonnet-4-6` and `claude-sonnet-5` carry the same nominal token price. The tier difference reflects capability: sonnet-5 is more capable and appropriate for tasks where sonnet-4-6 is likely to mis-implement.
+
+## Default model assignments
+
+Start at the cheapest capable model. Use this table as the starting point before applying upgrade conditions.
+
+| Issue type | Default model |
 |---|---|
-| Docs, governance, policy, chores, small targeted changes | `requested_model: default` — no explicit model in brief |
-| Multi-file feature implementation, architectural changes, large refactors | Orchestrator may specify an explicit model ID in the brief (e.g., `claude-sonnet-5`) |
-| Security-sensitive or high-stakes production changes | Orchestrator should specify the most capable current model and document the rationale in the issue |
+| Docs, policy, governance, issue shaping, chores | `claude-haiku-4-5` |
+| Small code change: 1–3 files, clear spec, well-defined tests | `claude-sonnet-4-6` |
+| Multi-file feature, moderate architectural reasoning | `claude-sonnet-4-6` |
+| Cross-cutting refactor, ambiguous spec, complex state, 5+ interconnected systems | `claude-sonnet-5` |
+| Security-sensitive: auth, crypto, secrets, high-stakes production | `claude-sonnet-5` |
+| Proven sonnet-5 failure on prior attempt, or hardest architectural work | `claude-opus-4-8` |
 
-When no explicit model is stated in the brief, the worker records `requested_model: default` and proceeds on the environment's effective model.
+## Upgrade conditions
+
+Moving up one tier requires citing the specific condition in the issue brief. Record the condition inline with the model ID (see format below). Moving directly to opus requires citing `prior-failure` or `architecture` plus a one-sentence rationale.
+
+| Condition code | Meaning |
+|---|---|
+| `multi-system` | Implementation touches 5+ interconnected systems or modules |
+| `ambiguous-spec` | Acceptance criteria require significant inference from incomplete context |
+| `security-critical` | Auth, crypto, secrets, or high-stakes production paths |
+| `prior-failure` | A previous worker at a lower tier produced a materially incorrect implementation |
+| `architecture` | Fundamental design decisions the worker must reason through from first principles |
+
+## Worker-session model field format
+
+Every Claude worker issue brief must include a `Requested Claude model:` line with an exact model ID. Two valid formats:
+
+No upgrade (default tier):
+
+```
+Requested Claude model: claude-sonnet-4-6
+```
+
+Upgrade from default tier (condition required):
+
+```
+Requested Claude model: claude-sonnet-5 (upgrade condition: multi-system — touches auth, calendar feed, watchlist, cron, and DB migrations)
+```
+
+`"default"` is **not** a valid value. A worker that receives a brief with `default` or no model must stop and report a blocker before doing any substantive work.
 
 ## Fallback behavior
 
@@ -35,14 +85,14 @@ A subagent may only use a different model when:
 
 Ad-hoc subagent model changes without explicit approval are not permitted. The worker must record `subagent_model` (or `inherited`) in every checkpoint that mentions subagent use.
 
-## Issue shaping guidance
-
-When shaping an issue that will be dispatched to a Claude worker:
-
-- For straightforward docs/governance work: omit the model field or write `Requested Claude model: default`.
-- For complex implementation work where a more capable model is warranted: name the model ID explicitly (e.g., `Requested Claude model: claude-sonnet-5`) and add a one-sentence rationale in the brief.
-- Do not specify a model just to be explicit — `default` is a valid and preferred choice for most issues.
-
 ## Changing this policy
 
-If this policy proves too permissive or too restrictive in practice, update this file first, then reconcile `docs/operators/claude-code.md`, `docs/operators/claude-worker-dispatch-prompt.md`, and any issue templates in the same PR. Model-selection policy changes that affect checkpoint fields also require updating the checkpoint section in `claude-code.md`.
+If this policy proves too permissive or too restrictive in practice, update this file first, then reconcile all of the following in the same PR:
+
+- `docs/operators/claude-code.md` — checkpoint fields and model-mismatch rules
+- `docs/operators/claude-worker-dispatch-prompt.md` — dispatch template
+- `docs/operators/codex-orchestration.md` — orchestrator checklist model-evaluation step
+- `.github/ISSUE_TEMPLATE/agent_task.md` — `Requested Claude model:` field and upgrade-condition guidance
+- `scripts/lib/project-queue-common.sh` — `project_queue_validate_claude_model_annotation` valid model ID list
+
+Model-selection policy changes that affect checkpoint fields also require updating the checkpoint section in `claude-code.md`.
