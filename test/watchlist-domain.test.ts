@@ -414,6 +414,90 @@ describe('watchlist domain helpers', () => {
     expect(acceptInviteMembership).toHaveBeenCalledOnce();
   });
 
+  it('does not create a duplicate membership when the watchlist owner accepts their invite link', async () => {
+    const acceptInviteMembership = vi.fn();
+    const resolvedInvite = {
+      inviteLink: {
+        createdAt: '2026-06-20T00:00:00.000Z',
+        createdByUserId: 'user-1',
+        expiresAt: null,
+        id: 'invite-1',
+        revokedAt: null,
+        watchlistId: 'shared-watchlist-1',
+      },
+      watchlist: buildWatchlistSummary({
+        id: 'shared-watchlist-1',
+        kind: 'shared',
+        ownerUserId: 'user-1',
+      }),
+    };
+
+    await expect(
+      acceptWatchlistInvite({
+        actorUserId: 'user-1',
+        repository: createWatchlistRepository({
+          acceptInviteMembership,
+          async findInviteLinkByTokenHash() {
+            return resolvedInvite;
+          },
+        }),
+        token: 'secret-token',
+      }),
+    ).resolves.toEqual({
+      joined: false,
+      watchlist: resolvedInvite.watchlist,
+    });
+
+    expect(acceptInviteMembership).not.toHaveBeenCalled();
+  });
+
+  it('does not create a duplicate membership when an accepted member reuses an invite link', async () => {
+    const acceptInviteMembership = vi.fn();
+    const resolvedInvite = {
+      inviteLink: {
+        createdAt: '2026-06-20T00:00:00.000Z',
+        createdByUserId: 'user-1',
+        expiresAt: null,
+        id: 'invite-1',
+        revokedAt: null,
+        watchlistId: 'shared-watchlist-1',
+      },
+      watchlist: buildWatchlistSummary({
+        id: 'shared-watchlist-1',
+        kind: 'shared',
+        ownerUserId: 'user-1',
+      }),
+    };
+
+    await expect(
+      acceptWatchlistInvite({
+        actorUserId: 'user-2',
+        repository: createWatchlistRepository({
+          acceptInviteMembership,
+          async findInviteLinkByTokenHash() {
+            return resolvedInvite;
+          },
+          async findMembershipForUser() {
+            return {
+              acceptedAt: '2026-06-20T00:00:00.000Z',
+              id: 'membership-1',
+              invitedByUserId: 'user-1',
+              role: 'editor',
+              userId: 'user-2',
+              watchlistId: 'shared-watchlist-1',
+            };
+          },
+        }),
+        token: 'secret-token',
+      }),
+    ).resolves.toEqual({
+      joined: false,
+      watchlist: resolvedInvite.watchlist,
+    });
+
+    expect(acceptInviteMembership).not.toHaveBeenCalled();
+  });
+
   it('lists and removes shared watchlist members through owner-only helpers', async () => {
     const repository = createWatchlistRepository({
       async getWatchlistAccess() {
