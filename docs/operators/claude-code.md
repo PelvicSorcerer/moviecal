@@ -112,6 +112,57 @@ Requested Claude model: claude-sonnet-5
 
 See `docs/operators/claude-worker-dispatch-prompt.md` for the full Claude worker brief template.
 
+## Project-scoped subagents
+
+Two repo-tracked subagents live in `.claude/agents/`. Both were added to cover
+patterns that recur across sessions, not speculative future use.
+
+| Agent | File | Purpose |
+|---|---|---|
+| `Explore` | `.claude/agents/explore.md` | Read-only codebase search — finds files, symbols, and references without modifying state. Used in almost every implementation session. |
+| `code-reviewer` | `.claude/agents/code-reviewer.md` | Reviews diffs/files for correctness bugs, security issues, and simplification. Knows the repo's testing lanes and PR template requirements. |
+
+### Model behavior
+
+Both agents **inherit the parent session's effective model by default**. Neither
+definition pins an explicit model in its frontmatter. This is intentional: the
+repo's model-selection policy (`docs/operators/claude-model-selection-policy.md`)
+assigns models at the worker-session level; subagents should not override that
+choice unless the worker brief explicitly says so.
+
+Do not add a `model:` field to these agent definitions without a corresponding
+update to the model-selection policy doc and a rationale comment in the issue
+that drives the change.
+
+### Tool restrictions
+
+- `Explore` is limited to read-only tools (`Glob`, `Grep`, `Read`, `Bash`,
+  `WebFetch`, `WebSearch`). It must not be granted write tools.
+- `code-reviewer` is limited to read-only tools (`Glob`, `Grep`, `Read`,
+  `Bash`). It must not be granted write tools or network tools.
+
+Do not expand the tool lists without a concrete justification and a review of
+the security implications.
+
+### Worktree isolation
+
+Neither subagent requires worktree isolation (`isolation: worktree` frontmatter)
+because both are read-only. If a future subagent needs to run potentially
+destructive Bash commands in isolation, add `isolation: worktree` to its
+frontmatter and document the reason here.
+
+### Adding or removing subagents
+
+Before adding a new `.claude/agents/` definition:
+
+1. Confirm the workflow recurs across multiple sessions (not speculative).
+2. Keep the tool list minimal — only what the agent actually needs.
+3. Document the agent in the table above and update this section.
+4. If the agent pins a model, update `docs/operators/claude-model-selection-policy.md`.
+
+Before removing a definition, confirm it is no longer referenced in any worker
+brief or issue template.
+
 ## Known gaps / follow-ups
 
 - A full verification pass of `npm run verify`, `npm run lane:browser`, and `npm run tool:install` inside the managed remote execution environment has not been recorded yet. The platform-specific notes above should be updated once that pass is complete.
