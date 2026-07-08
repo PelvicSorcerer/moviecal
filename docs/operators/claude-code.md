@@ -49,6 +49,8 @@ Items marked **verified** were observed in an actual Claude Code session against
 
 ## Model-aware dispatch
 
+The **policy** for how a model is chosen for a given Claude task lives in `docs/operators/claude-model-selection-policy.md`. Read that document for the decision criteria (when to use `default` vs. a named model, subagent override rules, and issue-shaping guidance). This section covers the mechanical surfaces that implement whatever model choice that policy produces.
+
 Claude Code sessions can be started with an explicitly requested model. The dispatch contract distinguishes the *requested* model (what the orchestrator asked for) from the *effective* model (what the session actually runs on), because the two may differ.
 
 ### Selecting a model when launching a Claude worker
