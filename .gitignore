@@ -37,3 +37,6 @@ pnpm-debug.log*
 
 # local codex tooling cache
 .codex/tools/
+
+# Claude Code agent worktrees (runtime artifacts, not committed)
+.claude/worktrees/
