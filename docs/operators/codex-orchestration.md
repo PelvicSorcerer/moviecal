@@ -84,6 +84,16 @@ These states are represented in project fields. The minimum required invariant i
 - Use `bash scripts/agent-check.sh` before worker implementation and `bash scripts/agent-handoff-check.sh` after merge or when auditing repo readiness. `agent-check` requires exactly one open issue with `Agent Dispatch = Yes` and `Status = Ready`. `agent-handoff` and `project-queue-check` also accept an intentionally blocked queue with zero dispatchable issues.
 - Only Codex workers may receive `Agent Dispatch = Yes` on dispatch-eligible tracks (`Product` or `Future`). See `multi-platform-dispatch-policy.md`.
 
+### Updating project fields via comment command
+
+Any orchestrator (Codex or otherwise) and any repository collaborator with write or admin access can update `moviecal Delivery` project fields by posting a comment on an issue:
+
+```
+/project-update Status=Ready AgentDispatch=Yes
+```
+
+The `.github/workflows/project-update.yml` workflow handles the mutation. It validates all field names and option values before writing anything, rejects commands from users without write access, and posts a confirmation or error reply. This mechanism is intentionally not Codex-specific — it works from any platform or manual comment. See `docs/operators/claude-code.md` for the full field list and copy-paste examples for each governance step.
+
 ## Orchestrator workflow
 
 1. Check the repository default branch and current open PR state from an attached local branch that tracks `origin/master`, such as `orchestrator/live`.

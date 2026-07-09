@@ -40,7 +40,65 @@ Items marked **verified** were observed in an actual Claude Code session against
 - **Claude Code may not receive the dispatch slot** (`Agent Dispatch = Yes`) on dispatch-eligible tracks (`Product` or `Future`). The formal handshake model (dispatch slot + orchestrator-provisioned worktrees) is Codex-only. See `docs/operators/multi-platform-dispatch-policy.md`.
 - Claude Code **may** implement **any track** (Product, Future, Platform, or Migration) when a human assigns the issue or delegates it directly, without requiring `Agent Dispatch = Yes`. This is called **direct assignment** and is available to every agent platform. See the "Direct assignment path" section in `docs/operators/multi-platform-dispatch-policy.md`.
 - Direct assignment means: a human explicitly assigns or delegates the issue (for example, "Claude Code, implement issue #174"), the issue stays at `Agent Dispatch = No`, and the worker uses the `claude/**` branch prefix. Direct assignment does not consume the dispatch slot.
-- Treat the `moviecal Delivery` GitHub Project as the source of truth for queue state, even though Claude Code cannot update project fields natively. If a project update is needed, note it in the PR description and ask the human to update the project field.
+- Treat the `moviecal Delivery` GitHub Project as the source of truth for queue state. To update project fields, use the `/project-update` comment command documented below.
+
+### `/project-update` comment command
+
+Any repository collaborator with **write** or **admin** access can update `moviecal Delivery` project fields by posting a comment on an issue. The comment must contain a line starting with `/project-update` followed by space-separated `Key=Value` pairs.
+
+```
+/project-update Key=Value [Key=Value ...]
+```
+
+**Supported fields:**
+
+| Command key | Project field | Type |
+|---|---|---|
+| `Status` | Status | single-select |
+| `AgentDispatch` | Agent Dispatch | single-select |
+| `Track` | Track | single-select |
+| `QueueOrder` | Queue Order | number |
+| `Priority` | Priority | single-select |
+| `Risk` | Risk | single-select |
+| `ExecutionMode` | Execution Mode | single-select |
+| `TargetPRSize` | Target PR Size | single-select |
+
+Field names are case-sensitive (exactly as shown above). Option values are case-insensitive. The issue must already be linked to the `moviecal Delivery` project.
+
+If any field name or option value is invalid, the workflow replies with an error and makes **no changes**. All validation happens before any mutation.
+
+**Copy-paste examples for each governance step:**
+
+```
+# Triage: move a new issue into the backlog
+/project-update Status=Backlog Track=Product Priority=P2 AgentDispatch=No
+
+# Set queue position during triage
+/project-update QueueOrder=42
+
+# Promote to ready and open the dispatch slot (Codex orchestrator only)
+/project-update Status=Ready AgentDispatch=Yes
+
+# Mark in-progress when a worker starts (use underscore for spaces in option values)
+/project-update Status=In_Progress AgentDispatch=No
+
+# Move to review after PR is opened
+/project-update Status=Review
+
+# Post-merge: close out the dispatch slot
+/project-update Status=Done AgentDispatch=No
+
+# Demotion: block an issue that can't proceed
+/project-update Status=Blocked AgentDispatch=No
+
+# Reorder: shift a ready issue earlier in the queue
+/project-update QueueOrder=15
+
+# Full triage in one pass
+/project-update Status=Backlog Track=Future QueueOrder=45 Priority=P1 Risk=High ExecutionMode=Agent AgentDispatch=No
+```
+
+The workflow posts a confirmation comment on success listing each field updated and its new value. The bot uses `GITHUB_TOKEN` (appears as `github-actions[bot]`). Project mutations use the `PROJECT_UPDATE_PAT` secret (classic PAT, `project` scope); this token is never echoed in logs or comments.
 
 ## Secrets
 

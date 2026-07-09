@@ -1,0 +1,351 @@
+name: project-update
+
+# Slash-command workflow for updating GitHub Projects v2 fields from an issue comment.
+# Usage: post a comment on an issue containing a line like
+#   /project-update Status=Ready AgentDispatch=Yes
+# The commenter must have write or admin repository access.
+# This workflow requires the PROJECT_UPDATE_PAT secret (classic PAT, project scope).
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write    # post reply comments via GITHUB_TOKEN
+  contents: read   # checkout not needed but required by default permissions
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    # Fast-exit: skip entirely when the comment cannot contain the command
+    if: contains(github.event.comment.body, '/project-update')
+
+    steps:
+      - name: Run /project-update command
+        env:
+          # GITHUB_TOKEN is used for the collaborator-permission check and for
+          # posting reply comments so they appear as github-actions[bot].
+          # PROJECT_TOKEN is the PAT with project scope; used only for project
+          # GraphQL queries and mutations — never printed to logs.
+          ISSUES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROJECT_TOKEN: ${{ secrets.PROJECT_UPDATE_PAT }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          set -uo pipefail
+
+          # "moviecal Delivery" project location.
+          # PROJECT_NUMBER=1 was verified at implementation time (issue #176).
+          # Update this value if the project is ever deleted and recreated.
+          PROJECT_OWNER="PelvicSorcerer"
+          PROJECT_NUMBER=1
+
+          # ── Helper: post a reply comment via GITHUB_TOKEN ──────────────────────
+          # Comments posted this way appear as "github-actions[bot]".
+          post_reply() {
+            printf '%s' "$1" \
+              | jq -R -s '{"body": .}' \
+              | GH_TOKEN="$ISSUES_TOKEN" gh api \
+                  "repos/$REPO_OWNER/$REPO_NAME/issues/$ISSUE_NUMBER/comments" \
+                  --silent --input - \
+              || true
+          }
+
+          # ── 1. Find the /project-update command line ───────────────────────────
+          update_line=$(printf '%s\n' "$COMMENT_BODY" \
+            | grep -m1 '^[[:space:]]*/project-update' || true)
+
+          if [ -z "$update_line" ]; then
+            echo "No /project-update command line found."
+            exit 0
+          fi
+
+          pairs_str=$(printf '%s' "$update_line" \
+            | sed 's|^[[:space:]]*/project-update[[:space:]]*||')
+
+          if [ -z "$pairs_str" ]; then
+            post_reply $'**`/project-update` failed:** No `Key=Value` pairs provided.\n\nUsage: `` /project-update Status=Ready AgentDispatch=Yes ``'
+            exit 0
+          fi
+
+          echo "Command: /project-update $pairs_str"
+
+          # ── 2. Check commenter write/admin access via GITHUB_TOKEN ─────────────
+          # 404 from the API means not a collaborator at all; treat as "none".
+          perm=$(GH_TOKEN="$ISSUES_TOKEN" gh api \
+            "repos/$REPO_OWNER/$REPO_NAME/collaborators/$COMMENTER/permission" \
+            --jq '.permission' 2>/dev/null || echo "none")
+
+          echo "Permission for @$COMMENTER: $perm"
+
+          if [[ "$perm" != "write" && "$perm" != "admin" ]]; then
+            post_reply $'> `/project-update` rejected: only repository collaborators with **write** or **admin** access may use this command.'
+            exit 0
+          fi
+
+          # ── 3. Verify PAT is configured ────────────────────────────────────────
+          if [ -z "$PROJECT_TOKEN" ]; then
+            post_reply $'**`/project-update` failed:** The `PROJECT_UPDATE_PAT` secret is not configured. A repository admin must add it with `project` scope.'
+            exit 1
+          fi
+
+          # ── 4. Parse Key=Value pairs ───────────────────────────────────────────
+          # Supported fields: command-side key → project field name
+          declare -A FIELD_MAP=(
+            [Status]="Status"
+            [AgentDispatch]="Agent Dispatch"
+            [Track]="Track"
+            [QueueOrder]="Queue Order"
+            [Priority]="Priority"
+            [Risk]="Risk"
+            [ExecutionMode]="Execution Mode"
+            [TargetPRSize]="Target PR Size"
+          )
+
+          declare -A PROJ_KEYS   # project_field_name → raw user value
+          parse_errors=""
+
+          read -ra pairs_arr <<< "$pairs_str"
+          for pair in "${pairs_arr[@]}"; do
+            if [[ "$pair" != *=* ]]; then
+              parse_errors+="- \`$pair\` is not in \`Key=Value\` format.\n"
+              continue
+            fi
+            key="${pair%%=*}"
+            value="${pair#*=}"
+            value="${value//_/ }"   # allow underscore as space substitute in option values
+
+            if [[ -v FIELD_MAP[$key] ]]; then
+              PROJ_KEYS["${FIELD_MAP[$key]}"]="$value"
+            else
+              known="Status, AgentDispatch, Track, QueueOrder, Priority, Risk, ExecutionMode, TargetPRSize"
+              parse_errors+="- Unknown field \`$key\`. Valid fields: $known.\n"
+            fi
+          done
+
+          if [ -n "$parse_errors" ]; then
+            post_reply "$(printf '%b' "**\`/project-update\` failed — no changes made:**\n\n${parse_errors}")"
+            exit 0
+          fi
+
+          if [ "${#PROJ_KEYS[@]}" -eq 0 ]; then
+            post_reply $'**`/project-update` failed:** No recognized `Key=Value` pairs found.'
+            exit 0
+          fi
+
+          # ── 5. Query project: ID, fields, and items ────────────────────────────
+          # All project API calls use PROJECT_TOKEN (project scope PAT).
+          echo "Querying project $PROJECT_OWNER/$PROJECT_NUMBER..."
+
+          project_json=$(GH_TOKEN="$PROJECT_TOKEN" gh api graphql -f query="
+query {
+  user(login: \"$PROJECT_OWNER\") {
+    projectV2(number: $PROJECT_NUMBER) {
+      id
+      fields(first: 50) {
+        nodes {
+          ... on ProjectV2Field {
+            id
+            name
+            dataType
+          }
+          ... on ProjectV2SingleSelectField {
+            id
+            name
+            options {
+              id
+              name
+            }
+          }
+        }
+      }
+      items(first: 200) {
+        pageInfo { hasNextPage }
+        nodes {
+          id
+          content {
+            ... on Issue { number }
+            ... on PullRequest { number }
+          }
+        }
+      }
+    }
+  }
+}" 2>/dev/null) || {
+            post_reply $'**`/project-update` failed:** Could not query the project. Verify that `PROJECT_UPDATE_PAT` is configured with `project` scope.'
+            exit 1
+          }
+
+          gql_errs=$(printf '%s' "$project_json" \
+            | jq -r '[.errors[]?.message] | select(length > 0) | join("; ")' 2>/dev/null || true)
+
+          proj_id=$(printf '%s' "$project_json" \
+            | jq -r '.data.user.projectV2.id // empty' 2>/dev/null || true)
+
+          if [ -z "$proj_id" ]; then
+            errmsg="Could not find project **$PROJECT_OWNER** #$PROJECT_NUMBER."
+            [ -n "$gql_errs" ] && errmsg+=" GraphQL error: $gql_errs"
+            post_reply "**\`/project-update\` failed:** $errmsg"
+            exit 1
+          fi
+
+          # ── 6. Find the project item linked to this issue ──────────────────────
+          item_id=$(printf '%s' "$project_json" \
+            | jq -r --argjson n "$ISSUE_NUMBER" \
+              '[.data.user.projectV2.items.nodes[] | select(.content.number == $n)] | .[0].id // empty' \
+            2>/dev/null || true)
+
+          if [ -z "$item_id" ]; then
+            has_next=$(printf '%s' "$project_json" \
+              | jq -r '.data.user.projectV2.items.pageInfo.hasNextPage // false' 2>/dev/null || echo "false")
+            if [[ "$has_next" == "true" ]]; then
+              post_reply "**\`/project-update\` failed:** Issue #$ISSUE_NUMBER was not found in the first 200 project items and pagination is not yet implemented. Use the GitHub UI to update this item directly."
+            else
+              post_reply "**\`/project-update\` failed:** Issue #$ISSUE_NUMBER is not linked to the **moviecal Delivery** project. Add the issue to the project before using this command."
+            fi
+            exit 0
+          fi
+
+          echo "Project ID: $proj_id"
+          echo "Item ID:    $item_id"
+
+          # ── 7. Build field and option lookup tables ────────────────────────────
+          declare -A F_IDS    # field_name → field_id
+          declare -A F_TYPES  # field_name → "singleSelect" | "number" | "other"
+          declare -A O_IDS    # "field_name@@lower_option_name" → option_id
+
+          while IFS=$'\t' read -r fname fid ftype; do
+            [ -z "$fname" ] && continue
+            F_IDS["$fname"]="$fid"
+            F_TYPES["$fname"]="$ftype"
+          done < <(printf '%s' "$project_json" | jq -r '
+            .data.user.projectV2.fields.nodes[] |
+            if has("options") then
+              "\(.name)\t\(.id)\tsingleSelect"
+            elif (.dataType // "") == "NUMBER" then
+              "\(.name)\t\(.id)\tnumber"
+            else
+              "\(.name)\t\(.id)\tother"
+            end
+          ' 2>/dev/null || true)
+
+          while IFS=$'\t' read -r fname oname oid; do
+            [ -z "$fname" ] && continue
+            lower_oname=$(printf '%s' "$oname" | tr '[:upper:]' '[:lower:]')
+            O_IDS["${fname}@@${lower_oname}"]="$oid"
+          done < <(printf '%s' "$project_json" | jq -r '
+            .data.user.projectV2.fields.nodes[] |
+            if has("options") then
+              . as $f | $f.options[] | "\($f.name)\t\(.name)\t\(.id)"
+            else empty end
+          ' 2>/dev/null || true)
+
+          # ── 8. Validate ALL field names and values before any mutation ─────────
+          # No project fields are written until every field/value pair passes.
+          declare -A UPD_TYPE  # proj_field_name → "singleSelect" | "number"
+          declare -A UPD_VAL   # proj_field_name → option_id or numeric string
+          val_errors=""
+
+          for proj_name in "${!PROJ_KEYS[@]}"; do
+            value="${PROJ_KEYS[$proj_name]}"
+
+            if ! [[ -v F_IDS[$proj_name] ]]; then
+              val_errors+="- Field \`$proj_name\` not found in the project definition.\n"
+              continue
+            fi
+
+            ftype="${F_TYPES[$proj_name]}"
+
+            if [[ "$ftype" == "singleSelect" ]]; then
+              lower_val=$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')
+              okey="${proj_name}@@${lower_val}"
+              if ! [[ -v O_IDS[$okey] ]]; then
+                valid_opts=$(printf '%s' "$project_json" | jq -r \
+                  --arg fn "$proj_name" \
+                  '[.data.user.projectV2.fields.nodes[] | select(.name == $fn) | .options[]?.name] | join(", ")' \
+                  2>/dev/null || true)
+                val_errors+="- Invalid value \`$value\` for \`$proj_name\`. Valid options: $valid_opts.\n"
+              else
+                UPD_TYPE["$proj_name"]="singleSelect"
+                UPD_VAL["$proj_name"]="${O_IDS[$okey]}"
+              fi
+
+            elif [[ "$ftype" == "number" ]]; then
+              if ! [[ "$value" =~ ^-?[0-9]+(\.[0-9]+)?$ ]]; then
+                val_errors+="- \`$proj_name\` requires a numeric value; got \`$value\`.\n"
+              else
+                UPD_TYPE["$proj_name"]="number"
+                UPD_VAL["$proj_name"]="$value"
+              fi
+
+            else
+              val_errors+="- Field \`$proj_name\` has type \`$ftype\` which is not supported by this command.\n"
+            fi
+          done
+
+          if [ -n "$val_errors" ]; then
+            post_reply "$(printf '%b' "**\`/project-update\` failed — no changes made:**\n\n${val_errors}")"
+            exit 0
+          fi
+
+          # ── 9. Apply mutations (all validation passed) ─────────────────────────
+          echo "Applying ${#UPD_TYPE[@]} field update(s)..."
+          confirm_lines=""
+
+          for proj_name in "${!UPD_TYPE[@]}"; do
+            upd_type="${UPD_TYPE[$proj_name]}"
+            upd_val="${UPD_VAL[$proj_name]}"
+            fid="${F_IDS[$proj_name]}"
+            display_val="${PROJ_KEYS[$proj_name]}"
+
+            if [[ "$upd_type" == "singleSelect" ]]; then
+              mut_result=$(GH_TOKEN="$PROJECT_TOKEN" gh api graphql -f query="
+mutation {
+  updateProjectV2ItemFieldValue(input: {
+    projectId: \"$proj_id\"
+    itemId: \"$item_id\"
+    fieldId: \"$fid\"
+    value: { singleSelectOptionId: \"$upd_val\" }
+  }) {
+    projectV2Item { id }
+  }
+}" 2>/dev/null) || {
+                post_reply "$(printf '%b' "**\`/project-update\` mutation error** on \`$proj_name\`.\n\n⚠️ Some fields may have been updated before this error — check the project for current state.")"
+                exit 1
+              }
+            else
+              mut_result=$(GH_TOKEN="$PROJECT_TOKEN" gh api graphql -f query="
+mutation {
+  updateProjectV2ItemFieldValue(input: {
+    projectId: \"$proj_id\"
+    itemId: \"$item_id\"
+    fieldId: \"$fid\"
+    value: { number: $upd_val }
+  }) {
+    projectV2Item { id }
+  }
+}" 2>/dev/null) || {
+                post_reply "$(printf '%b' "**\`/project-update\` mutation error** on \`$proj_name\`.\n\n⚠️ Some fields may have been updated before this error — check the project for current state.")"
+                exit 1
+              }
+            fi
+
+            mut_errs=$(printf '%s' "$mut_result" \
+              | jq -r '[.errors[]?.message] | select(length > 0) | join("; ")' 2>/dev/null) \
+              || mut_errs="could not parse mutation response"
+
+            if [ -n "$mut_errs" ]; then
+              post_reply "$(printf '%b' "**\`/project-update\` failed** on \`$proj_name\`: $mut_errs\n\n⚠️ Some fields may have been updated before this error — check the project for current state.")"
+              exit 1
+            fi
+
+            confirm_lines+="- **${proj_name}** → \`${display_val}\`\n"
+            echo "  Updated: $proj_name = $display_val"
+          done
+
+          # ── 10. Post success confirmation ──────────────────────────────────────
+          post_reply "$(printf '%b' "**\`/project-update\` applied** to #$ISSUE_NUMBER:\n\n${confirm_lines}")"
+          echo "Done."
