@@ -190,3 +190,4 @@ When a lane fails, fix or investigate within that lane's scope before rerunning 
 - Keep fast deterministic lanes free of production secrets, live third-party traffic, and long-lived shared environments.
 - Defer real-provider and post-deploy coverage to the smoke lanes rather than widening the default PR gate.
 - State lane impact in PR **Test Impact** sections when a change adds, moves, or renames lane commands or CI jobs.
+- For which lanes are required per change class and what constitutes release confidence, see [release-quality-gates.md](./release-quality-gates.md).

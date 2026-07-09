@@ -10,6 +10,8 @@ For explicit lane commands, CI job names, and what each lane is expected to catc
 
 For browser/runtime startup conventions, failure artifacts, retry policy, and quarantine rules, see [browser-runtime-test-stability.md](./browser-runtime-test-stability.md).
 
+For merge-gate and release-gate expectations by change class, see [release-quality-gates.md](./release-quality-gates.md).
+
 ## Goals
 
 - Keep pull-request validation fast, deterministic, and safe to run without production secrets.
