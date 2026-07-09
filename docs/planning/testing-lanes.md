@@ -18,7 +18,7 @@ For the environment contract behind each lane, including disposable credential r
 | Real-stack | `npm run lane:real-stack` | `supabase-verify` → `lane-real-stack` | Heavy | Conditional — path-filtered |
 | Full-stack runtime | `npm run lane:full-stack` | `supabase-verify` → `lane-full-stack-runtime` | Heavy | Conditional — path-filtered |
 | External smoke | `npm run lane:smoke-external` | `smoke-external` → `lane-smoke-external` | Heavy | No — scheduled/manual |
-| Post-deploy smoke | `npm run lane:smoke-post-deploy` | `smoke-post-deploy` → `lane-smoke-post-deploy` | Heavy | No — post-deploy/scheduled (stub until #140) |
+| Post-deploy smoke | `npm run lane:smoke-post-deploy` | `smoke-post-deploy` → `lane-smoke-post-deploy` | Heavy | No — post-deploy/scheduled |
 
 The default fast pull-request gate is `npm run verify`, which runs the **baseline**, **unit**, and **integration** lanes in sequence. Browser, real-stack, and smoke lanes stay separate so failures are attributable to the lane that owns the behavior.
 
@@ -153,13 +153,15 @@ The authoritative CI gate is `.github/workflows/supabase-verify.yml`'s `lane-ful
 
 **Purpose:** Confirm critical deployed runtime paths after release or on a schedule.
 
-**Status:** Stub lane — implementation tracked in #140.
+**Runs:** `scripts/lane-smoke-post-deploy.sh`, which makes three HTTP requests against `SMOKE_URL`: a home page load check (GET `/` → expect 200), a search endpoint auth gate check (GET `/api/movies/search?query=test` without auth → expect 401), and a calendar feed authorization check (GET `/api/calendar/smoke-test-invalid-token` → expect 401).
 
-**Expected to catch (when implemented):**
+**Expected to catch:**
 
 - home page load failures in the hosted environment
 - auth-gated path breakage after deploy
 - watchlist, search, and feed surfaces that hard-fail only in production wiring
+
+**Pass/fail criteria:** exits 0 when `SMOKE_URL` is set and all three HTTP checks return the expected status codes; exits 1 with a diagnostic message on the first failing check. The `SMOKE_URL` value is never printed.
 
 **Merge policy:** Post-deploy or scheduled; not part of the default PR gate.
 
@@ -178,7 +180,7 @@ GitHub Actions workflows and jobs use the `lane-*` prefix so a failing check nam
 - `browser-verify.yml`: `lane-browser`, `lane-browser-quarantine`
 - `supabase-verify.yml`: `lane-real-stack`, `lane-full-stack-runtime`
 - `smoke-external.yml`: `lane-smoke-external`
-- `smoke-post-deploy.yml`: `lane-smoke-post-deploy` (stub)
+- `smoke-post-deploy.yml`: `lane-smoke-post-deploy`
 
 When a lane fails, fix or investigate within that lane's scope before rerunning unrelated lanes.
 
@@ -186,5 +188,5 @@ When a lane fails, fix or investigate within that lane's scope before rerunning 
 
 - Add or update tests in the lane that owns the behavior under change.
 - Keep fast deterministic lanes free of production secrets, live third-party traffic, and long-lived shared environments.
-- Defer real-provider and post-deploy coverage to the smoke lanes (#140 for post-deploy) rather than widening the default PR gate.
+- Defer real-provider and post-deploy coverage to the smoke lanes rather than widening the default PR gate.
 - State lane impact in PR **Test Impact** sections when a change adds, moves, or renames lane commands or CI jobs.

@@ -2,6 +2,8 @@ name: smoke-post-deploy
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 13 * * 1'
 
 jobs:
   lane-smoke-post-deploy:
@@ -10,6 +12,7 @@ jobs:
     env:
       CI: true
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      SMOKE_URL: ${{ secrets.SMOKE_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
