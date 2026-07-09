@@ -72,7 +72,7 @@ describe('TMDb wrapper', () => {
     ]);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/search/movie');
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/3/search/movie');
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
       'api_key=tmdb-key-for-tests',
     );
