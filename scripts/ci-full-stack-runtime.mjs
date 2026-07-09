@@ -76,11 +76,13 @@ async function seedRuntime(adminClient, runtime, seededState) {
   );
   seededState.userId = user.id;
 
-  const watchlistResponse = await adminClient.rpc('ensure_personal_watchlist_for_user', {
-    target_user_id: user.id,
-  });
+  const watchlistResponse = await adminClient
+    .from('watchlists')
+    .insert({ owner_user_id: user.id, kind: 'personal', name: 'My watchlist' })
+    .select('id')
+    .single();
   const watchlistId = assertResponse(
-    watchlistResponse.data,
+    watchlistResponse.data?.id,
     watchlistResponse.error,
     'Could not create the seeded personal watchlist',
   );
