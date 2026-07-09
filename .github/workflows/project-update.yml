@@ -141,40 +141,40 @@ jobs:
           echo "Querying project $PROJECT_OWNER/$PROJECT_NUMBER..."
 
           project_json=$(GH_TOKEN="$PROJECT_TOKEN" gh api graphql -f query="
-query {
-  user(login: \"$PROJECT_OWNER\") {
-    projectV2(number: $PROJECT_NUMBER) {
-      id
-      fields(first: 50) {
-        nodes {
-          ... on ProjectV2Field {
-            id
-            name
-            dataType
-          }
-          ... on ProjectV2SingleSelectField {
-            id
-            name
-            options {
-              id
-              name
+          query {
+            user(login: \"$PROJECT_OWNER\") {
+              projectV2(number: $PROJECT_NUMBER) {
+                id
+                fields(first: 50) {
+                  nodes {
+                    ... on ProjectV2Field {
+                      id
+                      name
+                      dataType
+                    }
+                    ... on ProjectV2SingleSelectField {
+                      id
+                      name
+                      options {
+                        id
+                        name
+                      }
+                    }
+                  }
+                }
+                items(first: 200) {
+                  pageInfo { hasNextPage }
+                  nodes {
+                    id
+                    content {
+                      ... on Issue { number }
+                      ... on PullRequest { number }
+                    }
+                  }
+                }
+              }
             }
-          }
-        }
-      }
-      items(first: 200) {
-        pageInfo { hasNextPage }
-        nodes {
-          id
-          content {
-            ... on Issue { number }
-            ... on PullRequest { number }
-          }
-        }
-      }
-    }
-  }
-}" 2>/dev/null) || {
+          }" 2>/dev/null) || {
             post_reply $'**`/project-update` failed:** Could not query the project. Verify that `PROJECT_UPDATE_PAT` is configured with `project` scope.'
             exit 1
           }
@@ -303,31 +303,31 @@ query {
 
             if [[ "$upd_type" == "singleSelect" ]]; then
               mut_result=$(GH_TOKEN="$PROJECT_TOKEN" gh api graphql -f query="
-mutation {
-  updateProjectV2ItemFieldValue(input: {
-    projectId: \"$proj_id\"
-    itemId: \"$item_id\"
-    fieldId: \"$fid\"
-    value: { singleSelectOptionId: \"$upd_val\" }
-  }) {
-    projectV2Item { id }
-  }
-}" 2>/dev/null) || {
+          mutation {
+            updateProjectV2ItemFieldValue(input: {
+              projectId: \"$proj_id\"
+              itemId: \"$item_id\"
+              fieldId: \"$fid\"
+              value: { singleSelectOptionId: \"$upd_val\" }
+            }) {
+              projectV2Item { id }
+            }
+          }" 2>/dev/null) || {
                 post_reply "$(printf '%b' "**\`/project-update\` mutation error** on \`$proj_name\`.\n\n⚠️ Some fields may have been updated before this error — check the project for current state.")"
                 exit 1
               }
             else
               mut_result=$(GH_TOKEN="$PROJECT_TOKEN" gh api graphql -f query="
-mutation {
-  updateProjectV2ItemFieldValue(input: {
-    projectId: \"$proj_id\"
-    itemId: \"$item_id\"
-    fieldId: \"$fid\"
-    value: { number: $upd_val }
-  }) {
-    projectV2Item { id }
-  }
-}" 2>/dev/null) || {
+          mutation {
+            updateProjectV2ItemFieldValue(input: {
+              projectId: \"$proj_id\"
+              itemId: \"$item_id\"
+              fieldId: \"$fid\"
+              value: { number: $upd_val }
+            }) {
+              projectV2Item { id }
+            }
+          }" 2>/dev/null) || {
                 post_reply "$(printf '%b' "**\`/project-update\` mutation error** on \`$proj_name\`.\n\n⚠️ Some fields may have been updated before this error — check the project for current state.")"
                 exit 1
               }
