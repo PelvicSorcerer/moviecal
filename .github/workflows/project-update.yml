@@ -37,11 +37,8 @@ jobs:
         run: |
           set -uo pipefail
 
-          # "moviecal Delivery" project location.
-          # PROJECT_NUMBER=1 was verified at implementation time (issue #176).
-          # Update this value if the project is ever deleted and recreated.
+          # "moviecal Delivery" project owner (must be a GitHub user login).
           PROJECT_OWNER="PelvicSorcerer"
-          PROJECT_NUMBER=1
 
           # ── Helper: post a reply comment via GITHUB_TOKEN ──────────────────────
           # Comments posted this way appear as "github-actions[bot]".
@@ -138,55 +135,72 @@ jobs:
 
           # ── 5. Query project: ID, fields, and items ────────────────────────────
           # All project API calls use PROJECT_TOKEN (project scope PAT).
-          echo "Querying project $PROJECT_OWNER/$PROJECT_NUMBER..."
+          # Queries by title instead of a hardcoded number so the workflow
+          # survives project recreation.
+          PROJECT_TITLE="moviecal Delivery"
+          echo "Querying projects for $PROJECT_OWNER..."
 
-          project_json=$(GH_TOKEN="$PROJECT_TOKEN" gh api graphql -f query="
+          projects_raw=$(GH_TOKEN="$PROJECT_TOKEN" gh api graphql -f query="
           query {
             user(login: \"$PROJECT_OWNER\") {
-              projectV2(number: $PROJECT_NUMBER) {
-                id
-                fields(first: 50) {
-                  nodes {
-                    ... on ProjectV2Field {
-                      id
-                      name
-                      dataType
-                    }
-                    ... on ProjectV2SingleSelectField {
-                      id
-                      name
-                      options {
+              projectsV2(first: 20) {
+                nodes {
+                  id
+                  title
+                  fields(first: 50) {
+                    nodes {
+                      ... on ProjectV2Field {
                         id
                         name
+                        dataType
+                      }
+                      ... on ProjectV2SingleSelectField {
+                        id
+                        name
+                        options {
+                          id
+                          name
+                        }
                       }
                     }
                   }
-                }
-                items(first: 200) {
-                  pageInfo { hasNextPage }
-                  nodes {
-                    id
-                    content {
-                      ... on Issue { number }
-                      ... on PullRequest { number }
+                  items(first: 200) {
+                    pageInfo { hasNextPage }
+                    nodes {
+                      id
+                      content {
+                        ... on Issue { number }
+                        ... on PullRequest { number }
+                      }
                     }
                   }
                 }
               }
             }
-          }" 2>/dev/null) || {
-            post_reply $'**`/project-update` failed:** Could not query the project. Verify that `PROJECT_UPDATE_PAT` is configured with `project` scope.'
+          }" 2>&1) || {
+            safe_err=$(printf '%s' "$projects_raw" | head -c 300 | tr -dc '[:print:]\n')
+            post_reply "**\`/project-update\` failed:** Could not query GitHub Projects. Verify that \`PROJECT_UPDATE_PAT\` is a classic PAT with \`project\` scope. API error: \`${safe_err}\`"
             exit 1
           }
 
-          gql_errs=$(printf '%s' "$project_json" \
+          # Normalise: wrap the matching project node under .data.user.projectV2
+          # so all subsequent jq paths are unchanged.
+          project_json=$(printf '%s' "$projects_raw" \
+            | jq --arg t "$PROJECT_TITLE" \
+              '{"data":{"user":{"projectV2":(.data.user.projectsV2.nodes | map(select(.title == $t)) | .[0])}}}' \
+            2>/dev/null) || {
+            post_reply "**\`/project-update\` failed:** Could not parse the GitHub Projects API response."
+            exit 1
+          }
+
+          gql_errs=$(printf '%s' "$projects_raw" \
             | jq -r '[.errors[]?.message] | select(length > 0) | join("; ")' 2>/dev/null || true)
 
           proj_id=$(printf '%s' "$project_json" \
             | jq -r '.data.user.projectV2.id // empty' 2>/dev/null || true)
 
           if [ -z "$proj_id" ]; then
-            errmsg="Could not find project **$PROJECT_OWNER** #$PROJECT_NUMBER."
+            errmsg="Could not find a project named **${PROJECT_TITLE}** for \`$PROJECT_OWNER\`."
             [ -n "$gql_errs" ] && errmsg+=" GraphQL error: $gql_errs"
             post_reply "**\`/project-update\` failed:** $errmsg"
             exit 1
@@ -204,7 +218,7 @@ jobs:
             if [[ "$has_next" == "true" ]]; then
               post_reply "**\`/project-update\` failed:** Issue #$ISSUE_NUMBER was not found in the first 200 project items and pagination is not yet implemented. Use the GitHub UI to update this item directly."
             else
-              post_reply "**\`/project-update\` failed:** Issue #$ISSUE_NUMBER is not linked to the **moviecal Delivery** project. Add the issue to the project before using this command."
+              post_reply "**\`/project-update\` failed:** Issue #$ISSUE_NUMBER is not linked to the **${PROJECT_TITLE}** project. Add the issue to the project before using this command."
             fi
             exit 0
           fi
