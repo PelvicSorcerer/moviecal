@@ -16,6 +16,7 @@ This file is the generic contract every agent and human contributor reads. Platf
 
 - **Dispatch-slot work (Codex workers only):** start implementation only from the single open GitHub issue whose `moviecal Delivery` project item has `Agent Dispatch = Yes` and `Status = Ready`. Dispatch-eligible tracks are `Product` and `Future`; see `docs/operators/multi-platform-dispatch-policy.md`.
 - **Direct assignment (any platform, any track):** start implementation when a human assigns the task or delegates the issue directly to you. The issue keeps `Agent Dispatch = No` — direct assignment does not consume the dispatch slot. You may implement `Product`, `Future`, `Platform`, or governance work when directly assigned. Migration-track items follow the separate restriction in `docs/operators/multi-platform-dispatch-policy.md` (humans only, or agents on explicit human assignment for doc-only items). See the "Direct assignment path" section in `docs/operators/multi-platform-dispatch-policy.md`.
+- **Orchestrator role (any platform):** any platform may act as orchestrator — reading queue state, promoting issues, setting `Agent Dispatch = Yes` on the next ready issue, and running post-merge handoff — using its native tool set. The Codex spawn_agent/worktree mechanics are Codex-specific, but the governance lifecycle (queue intake → dispatch promotion → post-merge handoff) is available to every platform. See each platform's operator guide under `docs/operators/` for the platform-specific orchestrator procedure.
 - Treat the GitHub Project as the operational source of truth for live queue state, status, and ordering.
 - Do not start feature work from detached `HEAD`; branch from `master`.
 - Branch name format is platform-specific. See `docs/operators/branch-and-ci-conventions.md` for the exact prefix each platform uses; do not rename a platform-assigned branch to match a different platform's convention.
@@ -40,14 +41,14 @@ This file is the generic contract every agent and human contributor reads. Platf
 
 ## Queue governance and the orchestrator/worker contract
 
-The full Codex orchestrator/worker procedure (roles, worktree provisioning, `spawn_agent`, checkpoint gates, detailed post-merge handoff steps, session workflow) lives in `docs/operators/codex-orchestration.md`, not in this file.
+The full Codex orchestrator/worker procedure (roles, worktree provisioning, `spawn_agent`, checkpoint gates, detailed post-merge handoff steps, session workflow) lives in `docs/operators/codex-orchestration.md`, not in this file. Each non-Codex platform's orchestrator procedure lives in its own `docs/operators/*.md` guide.
 
-The invariants below apply regardless of which doc currently governs procedural detail:
+The invariants below apply regardless of which platform governs the queue:
 
 - A ready handoff means: a local branch tracking `origin/master` contains the merged change; there are no stray open PRs for the same issue; exactly one open issue has `Agent Dispatch = Yes` and `Status = Ready`, unless the queue is intentionally blocked; and the promoted issue has current acceptance criteria, verification steps, and security notes when applicable.
 - If the next issue depends on missing tooling, secrets, or infrastructure, mark the queue blocked instead of promoting a speculative dispatch issue.
 - When multiple open dispatch-eligible issues (`Product` or `Future`) could look ready, use the project `Queue Order` field as the deterministic tie-breaker. `Queue Order` is global across the project, but only dispatch-eligible tracks may hold the dispatch slot.
-- Multi-platform dispatch rights are documented in `docs/operators/multi-platform-dispatch-policy.md`. Only Codex workers may receive `Agent Dispatch = Yes` on dispatch-eligible tracks (`Product` or `Future`); other platforms implement work via direct assignment (any track, per the restrictions in that doc).
+- Multi-platform dispatch rights are documented in `docs/operators/multi-platform-dispatch-policy.md`. Any platform may act as orchestrator (promote issues, set `Agent Dispatch = Yes`, run post-merge handoff). The formal Codex dispatch slot (where a Codex worker starts from `Agent Dispatch = Yes`) remains Codex-specific; other platforms implement work via direct assignment. See that doc for the full policy and per-platform orchestrator notes.
 
 ## Environment policy
 

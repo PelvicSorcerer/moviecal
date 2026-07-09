@@ -222,6 +222,93 @@ Before adding a new `.claude/agents/` definition:
 Before removing a definition, confirm it is no longer referenced in any worker
 brief or issue template.
 
+## Orchestrator role
+
+A Claude Code session may act as orchestrator: reading queue state, promoting issues, setting `Agent Dispatch = Yes`, and running post-merge handoff. This section documents the full governance cycle a Claude Code session can run using its native tools.
+
+See `docs/operators/multi-platform-dispatch-policy.md` for the platform-neutral policy, and `docs/operators/codex-orchestration.md` for the Codex-specific orchestrator contract (unchanged).
+
+### Native tools for queue governance
+
+| Task | Preferred tool |
+|---|---|
+| Read project queue state | `mcp__github__*` tools (e.g. `mcp__github__issue_read`, `mcp__github__list_issues`) |
+| Update project fields | `/project-update` comment command (see "Queue / dispatch interaction" above) |
+| Read and write issue comments | `mcp__github__add_issue_comment`, `mcp__github__issue_read` |
+| Read PRs and check merge status | `mcp__github__pull_request_read`, `mcp__github__list_pull_requests` |
+| List branches | `mcp__github__list_branches` |
+| Dispatch a Claude worker subagent | `Agent` tool (pass `model: "sonnet"` unless the issue brief specifies otherwise) |
+
+### Queue intake
+
+Before promoting the next issue, run this preflight from a session that has pulled `origin/master`:
+
+1. Confirm the current dispatched issue's PR has merged (`mcp__github__pull_request_read` or `mcp__github__list_pull_requests`).
+2. Confirm the completed GitHub issue is closed (`mcp__github__issue_read`).
+3. Confirm no stray open PR remains for the same issue.
+4. Run `bash scripts/agent-handoff-check.sh` (if `jq` is available in the environment) or verify the queue invariants manually via the GitHub MCP tools.
+
+### Dispatch promotion
+
+After confirming the handoff state is clean:
+
+1. Demote the merged issue by posting a comment on it:
+   ```
+   /project-update Status=Done AgentDispatch=No
+   ```
+
+2. Query open issues on dispatch-eligible tracks (`Product` or `Future`) with `Status = Ready`. Use `mcp__github__list_issues` or `mcp__github__search_issues` to enumerate candidates, then identify the one with the lowest `Queue Order` project field value.
+
+3. Verify the selected issue has current acceptance criteria, verification steps, and a **Testing Expectations** section. If the issue has been open through later merged work, spot-check the repo state against the acceptance criteria before promoting.
+
+4. Promote exactly one issue:
+   ```
+   /project-update Status=Ready AgentDispatch=Yes
+   ```
+   Post this comment on the selected issue.
+
+5. If no qualifying issue exists, post a blocker note on the project or a relevant issue instead of promoting speculatively.
+
+### Worker dispatch
+
+A Claude Code orchestrator may dispatch a Claude Code worker for the promoted issue using the `Agent` tool:
+
+- Pass `model: "sonnet"` unless the issue explicitly requires a different model (see `docs/operators/claude-model-selection-policy.md`).
+- Use `docs/operators/claude-worker-dispatch-prompt.md` as the worker brief template. Fill in: issue number and title, assigned branch, docs to read first, exact verification commands, Testing Expectations, manual testing checklist, and known constraints.
+- Record `subagent_model` in the orchestrator checkpoint.
+
+Workers for other platforms (Codex, Cursor, Copilot) are dispatched by those platforms' own mechanisms; a Claude Code orchestrator session may instead post a direct-assignment comment on the issue.
+
+### Post-merge handoff checklist
+
+Run this after the worker PR lands on `master`:
+
+1. Pull or confirm `origin/master` contains the merged commit.
+2. Confirm the completed issue is closed.
+3. Confirm no stray open PR remains for the same issue.
+4. Demote the merged issue: `/project-update Status=Done AgentDispatch=No`.
+5. Re-evaluate the next dependency-correct issue by `Queue Order`.
+6. Promote exactly one issue to `Agent Dispatch = Yes`, or document the blocker.
+7. Update planning or guidance docs if the merge changed queue assumptions.
+
+This is the same checklist as the platform-neutral one in `multi-platform-dispatch-policy.md`, implemented here using `/project-update` and the GitHub MCP server tools.
+
+### Full governance cycle (self-contained reference)
+
+A fresh Claude Code orchestrator session can run the full lifecycle without reading the Codex guide:
+
+1. **Pull state:** confirm `origin/master` is current; read open issues and PRs with `mcp__github__*` tools.
+2. **Queue intake:** confirm the last dispatched issue's PR merged and the issue is closed.
+3. **Demote:** post `/project-update Status=Done AgentDispatch=No` on the completed issue.
+4. **Select next:** find the open `Ready` issue on `Product` or `Future` with the lowest `Queue Order`.
+5. **Validate:** confirm the selected issue has current acceptance criteria, verification steps, and a Testing Expectations section.
+6. **Promote:** post `/project-update Status=Ready AgentDispatch=Yes` on the selected issue.
+7. **Dispatch or assign:** use the `Agent` tool to launch a Claude worker, or post a direct-assignment comment for another platform.
+8. **Supervise (if Claude worker):** collect `BOOT_CHECKPOINT`, then `REVIEW_CHECKPOINT`, then `PUBLISH_CHECKPOINT` from the worker session. Merge an acceptable PR.
+9. **Repeat from step 1.**
+
+If the queue is blocked at any step, record the blocker on the issue or project item and stop rather than promoting speculatively.
+
 ## Known gaps / follow-ups
 
 - A full verification pass of `npm run verify`, `npm run lane:browser`, and `npm run tool:install` inside the managed remote execution environment has not been recorded yet. The platform-specific notes above should be updated once that pass is complete.

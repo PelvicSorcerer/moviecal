@@ -53,8 +53,72 @@ npm run agent:project-check
 ## Queue governance
 
 - The Codex orchestrator/worker contract (`spawn_agent`, worktree provisioning, `BOOT_CHECKPOINT`/`STARTUP_CHECKPOINT` gates — see `docs/operators/codex-orchestration.md`) is specific to Codex's multi-agent tooling and does not apply to Cursor Cloud Agents, which run as a single agent per task/PR with no equivalent orchestrator step.
-- **Cursor Cloud Agents may not receive `Agent Dispatch = Yes` on any project item.** Dispatch-slot work on `Product` or `Future` tracks is owned by Codex workers via the single dispatch slot. See `docs/operators/multi-platform-dispatch-policy.md`.
-- Cursor Cloud Agents **may** implement platform-track issues (`Track = Platform`), governance/docs work (`docs/**`, `chore/**`), and other tasks when a human assigns them directly (for example, a Cursor Cloud Agent task or an explicitly delegated issue). Direct assignment is not dispatch-slot consumption — do not set or assume `Agent Dispatch = Yes`.
+- **Cursor Cloud Agents may not start from `Agent Dispatch = Yes` as a worker** (the formal Codex spawn_agent handshake is Codex-only). Dispatch-slot work on `Product` or `Future` tracks starts via the Codex handshake. See `docs/operators/multi-platform-dispatch-policy.md`.
+- **Cursor Cloud Agents may act as orchestrator**: they may promote issues, set `Agent Dispatch = Yes`, and run post-merge handoff using `gh` CLI with the operator PAT and the `/project-update` comment command. See the "Orchestrator role" section below.
+- Cursor Cloud Agents **may** implement platform-track issues (`Track = Platform`), governance/docs work (`docs/**`, `chore/**`), and other tasks when a human assigns them directly (for example, a Cursor Cloud Agent task or an explicitly delegated issue). Direct assignment is not dispatch-slot consumption.
+
+## Orchestrator role
+
+A Cursor Cloud Agent session may act as orchestrator: reading queue state, promoting issues, setting `Agent Dispatch = Yes`, and running post-merge handoff. This requires `GITHUB_PAT_OPERATOR` to be configured (see "Tool availability quirks" above).
+
+See `docs/operators/multi-platform-dispatch-policy.md` for the platform-neutral policy.
+
+### Tool gaps and fallbacks
+
+Cursor does not have a multi-agent orchestrator mechanism analogous to Codex's `spawn_agent`. Governance operations use `gh` CLI with the operator PAT and the `/project-update` comment command.
+
+| Task | Cursor tool | Notes |
+|---|---|---|
+| Read queue state | `npm run agent:project-check` | Requires `jq` and `GITHUB_PAT_OPERATOR` |
+| Update project fields | `/project-update` comment on the issue via `gh issue comment` | Requires `GITHUB_PAT_OPERATOR` |
+| Read issue / PR state | `GH_TOKEN=$GITHUB_PAT_OPERATOR gh issue view <N>` | Standard `gh` CLI |
+| Check PR merge status | `GH_TOKEN=$GITHUB_PAT_OPERATOR gh pr view <N>` | Standard `gh` CLI |
+| Dispatch a worker | Post a direct-assignment comment on the issue | No `spawn_agent` equivalent; human or another platform runs the worker |
+
+**Human fallback:** If `GITHUB_PAT_OPERATOR` is not available, a Cursor orchestrator session cannot make GitHub project or issue writes. In that case, post the intended `/project-update` commands to the human operator for manual execution before proceeding.
+
+### Queue intake
+
+Before promoting the next issue:
+
+1. Confirm `GITHUB_PAT_OPERATOR` is set: `echo "${GITHUB_PAT_OPERATOR:+set}"`.
+2. Run `npm run agent:project-check` to validate the current dispatch invariants.
+3. Check whether the current dispatched issue's PR has merged: `GH_TOKEN=$GITHUB_PAT_OPERATOR gh pr list --state merged`.
+4. Confirm the completed GitHub issue is closed.
+5. Confirm no stray open PR remains for the same issue.
+
+### Dispatch promotion
+
+After confirming the handoff state is clean:
+
+1. Demote the merged issue:
+   ```bash
+   GH_TOKEN=$GITHUB_PAT_OPERATOR gh issue comment <issue-number> \
+     --body "/project-update Status=Done AgentDispatch=No"
+   ```
+
+2. Identify the next open issue on `Product` or `Future` with `Status = Ready` and the lowest `Queue Order`. Use `npm run agent:project-check` or query via `gh api graphql`.
+
+3. Validate the selected issue has current acceptance criteria and a Testing Expectations section.
+
+4. Promote exactly one issue:
+   ```bash
+   GH_TOKEN=$GITHUB_PAT_OPERATOR gh issue comment <next-issue-number> \
+     --body "/project-update Status=Ready AgentDispatch=Yes"
+   ```
+
+5. If no qualifying issue exists, post a blocker note on the issue or project item.
+
+### Post-merge handoff checklist
+
+1. Confirm `origin/master` contains the merged commit (`git pull origin master`).
+2. Confirm the completed issue is closed and no stray PR remains.
+3. Demote the merged issue: post `/project-update Status=Done AgentDispatch=No`.
+4. Select the next issue by `Queue Order` on dispatch-eligible tracks.
+5. Promote exactly one issue: post `/project-update Status=Ready AgentDispatch=Yes`.
+6. Post a direct-assignment comment or notify the human to assign a worker for the promoted issue.
+
+This mirrors the platform-neutral checklist in `multi-platform-dispatch-policy.md`, implemented with Cursor's available tools.
 
 ## Secrets
 

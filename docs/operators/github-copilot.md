@@ -35,14 +35,80 @@ Everything marked **verified** below was observed in an actual GitHub Copilot co
 ## Queue governance
 
 - Copilot's coding agent runs one agent per assigned issue/PR, similar to Cursor Cloud Agents; it does not participate in Codex's orchestrator/worker worktree handshake described in `docs/operators/codex-orchestration.md`.
-- **GitHub Copilot may not receive `Agent Dispatch = Yes` on any project item.** Dispatch-slot work on `Product` or `Future` tracks is owned by Codex workers via the single dispatch slot. See `docs/operators/multi-platform-dispatch-policy.md`.
-- Copilot **may** implement platform-track issues (`Track = Platform`), governance/docs work (`docs/**`, `chore/**`), and other tasks when GitHub assigns an issue/PR to Copilot or a human delegates the work. Direct assignment is not dispatch-slot consumption — do not set or assume `Agent Dispatch = Yes`.
+- **GitHub Copilot may not start from `Agent Dispatch = Yes` as a worker** (the formal Codex spawn_agent handshake is Codex-only). Dispatch-slot work on `Product` or `Future` tracks starts via the Codex handshake. See `docs/operators/multi-platform-dispatch-policy.md`.
+- **GitHub Copilot may act as orchestrator**: it may promote issues, set `Agent Dispatch = Yes`, and run post-merge handoff using `gh` CLI with a PAT and the `/project-update` comment command. See the "Orchestrator role" section below.
+- Copilot **may** implement platform-track issues (`Track = Platform`), governance/docs work (`docs/**`, `chore/**`), and other tasks when GitHub assigns an issue/PR to Copilot or a human delegates the work. Direct assignment is not dispatch-slot consumption.
+
+## Orchestrator role
+
+A GitHub Copilot coding-agent session may act as orchestrator: reading queue state, promoting issues, setting `Agent Dispatch = Yes`, and running post-merge handoff. This requires a PAT with `project` and `repo` scopes (see "Secrets" section below).
+
+See `docs/operators/multi-platform-dispatch-policy.md` for the platform-neutral policy.
+
+### Tool gaps and fallbacks
+
+Copilot does not have a multi-agent orchestrator mechanism analogous to Codex's `spawn_agent`. The default `GITHUB_TOKEN` does not authenticate `gh` CLI for project/issue writes. A PAT configured via the `copilot` environment is required for GitHub API governance calls.
+
+| Task | Copilot tool | Notes / fallback |
+|---|---|---|
+| Read queue state | `npm run agent:project-check` (requires `jq` and PAT) | `jq` is available; PAT must be configured in the `copilot` environment |
+| Update project fields | `/project-update` comment via `GH_TOKEN=<PAT> gh issue comment` | Requires PAT; see Secrets section |
+| Read issue / PR state | `GH_TOKEN=<PAT> gh issue view <N>` / `gh pr view <N>` | Standard `gh` CLI; PAT preferred |
+| Check PR merge status | `GH_TOKEN=<PAT> gh pr view <N> --json merged` | Standard `gh` CLI |
+| Dispatch a worker | Assign the issue to Copilot or post a direct-assignment comment | No `spawn_agent` equivalent |
+| Browser lane | Use `browser-verify` CI workflow | Port 3100 conflict blocks `npm run lane:browser` in agent sessions |
+
+**Human fallback:** If the PAT is not available, a Copilot orchestrator session cannot make GitHub project or issue writes. In that case, surface the intended `/project-update` commands to the human operator for manual execution before continuing.
+
+### Queue intake
+
+Before promoting the next issue:
+
+1. Confirm the PAT is available: `echo "${GH_TOKEN:+set}"` (the `copilot` environment should inject it — see Secrets).
+2. Run `npm run agent:project-check` to validate current dispatch invariants.
+3. Check whether the current dispatched issue's PR has merged.
+4. Confirm the completed GitHub issue is closed.
+5. Confirm no stray open PR remains for the same issue.
+
+### Dispatch promotion
+
+After confirming the handoff state is clean:
+
+1. Demote the merged issue:
+   ```bash
+   gh issue comment <issue-number> \
+     --body "/project-update Status=Done AgentDispatch=No"
+   ```
+
+2. Identify the next open issue on `Product` or `Future` with `Status = Ready` and the lowest `Queue Order`. Use `npm run agent:project-check` or query via `gh api graphql`.
+
+3. Validate the selected issue has current acceptance criteria and a Testing Expectations section.
+
+4. Promote exactly one issue:
+   ```bash
+   gh issue comment <next-issue-number> \
+     --body "/project-update Status=Ready AgentDispatch=Yes"
+   ```
+
+5. If no qualifying issue exists, post a blocker note on the issue or project item.
+
+### Post-merge handoff checklist
+
+1. Confirm `origin/master` contains the merged commit.
+2. Confirm the completed issue is closed and no stray PR remains.
+3. Demote the merged issue: post `/project-update Status=Done AgentDispatch=No`.
+4. Select the next issue by `Queue Order` on dispatch-eligible tracks.
+5. Promote exactly one issue: post `/project-update Status=Ready AgentDispatch=Yes`.
+6. Assign the issue to the appropriate platform (GitHub Copilot, another platform, or human) for the next implementation session.
+
+This mirrors the platform-neutral checklist in `multi-platform-dispatch-policy.md`, implemented with Copilot's available tools.
 
 ## Secrets
 
 - The `GITHUB_TOKEN` injected by the Copilot platform is not a usable `gh` CLI credential for project/issue API calls. If a task requires `gh` API calls, use a PAT configured via the `copilot` environment in the repository's GitHub Actions secrets; see [GitHub docs on setting environment variables](https://docs.github.com/en/copilot/customizing-copilot/customizing-copilots-development-environment#setting-environment-variables-in-copilots-environment). This is the same pattern as `GITHUB_PAT_OPERATOR` in `docs/operators/cursor-cloud.md`, but it has not been tested in this repo yet.
+- For orchestrator sessions: the PAT must have `project` and `repo` scopes to write project fields and issue comments via `gh api graphql`.
 
 ## Known gaps / follow-ups
 
 - Local Supabase stack (`supabase start` via Docker) has not been tested in a Copilot coding-agent session. Docker is available but the full stack was not started during the #105 verification run. Use `supabase-verify` CI workflow as the authoritative check for schema/migration correctness.
-- The `copilot` environment PAT mechanism for `gh` API calls has not been tested in this repo yet.
+- The `copilot` environment PAT mechanism for `gh` API calls has not been tested in this repo yet. The orchestrator role above is documented based on the tool availability known from the #105 session; validate PAT injection before relying on it in a live governance session.
