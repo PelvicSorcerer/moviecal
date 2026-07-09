@@ -34,7 +34,7 @@ test('disposable Supabase runtime proves real auth, calendar rotation, and watch
   await page.getByRole('button', { name: 'Sign in' }).click();
 
   await expect(page).toHaveURL('/watchlist');
-  await expect(page.getByText(email)).toBeVisible();
+  await expect(page.getByRole('main').getByText(email)).toBeVisible();
   await expect(page.getByRole('heading', { name: movieTitle })).toBeVisible();
 
   await page.goto('/settings/calendar');
