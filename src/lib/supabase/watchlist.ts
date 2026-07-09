@@ -327,7 +327,7 @@ export function createSupabaseWatchlistRepository(args: {
     },
 
     async ensurePersonalWatchlist(userId) {
-      const { data: watchlistId, error: watchlistIdError } = await args.adminClient.rpc(
+      const { data: watchlistId, error: watchlistIdError } = await args.userClient.rpc(
         'ensure_personal_watchlist_for_user',
         {
           target_user_id: userId,
