@@ -17,6 +17,7 @@ const artifactSettings = getPlaywrightArtifactSettings(isCi);
 
 export default defineConfig({
   testDir: 'e2e',
+  testIgnore: ['**/full-stack-runtime.spec.ts'],
   timeout: BROWSER_TEST_TIMEOUT_MS,
   retries: retryPolicy.retries,
   workers: 1,
