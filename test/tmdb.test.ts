@@ -72,7 +72,7 @@ describe('TMDb wrapper', () => {
     ]);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/search/movie');
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/3/search/movie');
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
       'api_key=tmdb-key-for-tests',
     );
@@ -107,6 +107,11 @@ describe('TMDb wrapper', () => {
         overview: 'A hacker discovers the truth.',
       },
     });
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/3/movie/603');
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      'api_key=tmdb-key-for-tests',
+    );
   });
 
   it('maps upstream failures to safe errors without leaking the TMDb key', async () => {

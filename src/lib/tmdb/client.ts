@@ -83,7 +83,7 @@ function createTMDbUrl(
   path: string,
   searchParams: Record<string, string | number>,
 ): URL {
-  const url = new URL(path, TMDB_API_BASE_URL);
+  const url = new URL(`${TMDB_API_BASE_URL}${path}`);
   const { apiKey } = getServerTMDbEnv();
 
   url.searchParams.set('api_key', apiKey);
