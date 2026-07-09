@@ -81,7 +81,11 @@ export function createSupabaseCalendarTokenRepository(args: {
     },
 
     async updateTokenForUser(userId, token) {
-      const { data, error } = await args.userClient
+      // Use adminClient so RLS USING clause does not silently filter the row
+      // when auth.uid() is unavailable in a server-action context. The userId
+      // always comes from an authenticated session, so the WHERE clause is the
+      // sole enforcement boundary here.
+      const { data, error } = await args.adminClient
         .from('calendar_tokens')
         .update({ token })
         .eq('user_id', userId)
