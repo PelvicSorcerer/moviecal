@@ -12,6 +12,8 @@ For browser/runtime startup conventions, failure artifacts, retry policy, and qu
 
 For merge-gate and release-gate expectations by change class, see [release-quality-gates.md](./release-quality-gates.md).
 
+For surface-drift detection (verifying all API routes are covered), see [`scripts/check-surface-drift.sh`](../../scripts/check-surface-drift.sh) (run via `npm run check:surface-drift`).
+
 ## Goals
 
 - Keep pull-request validation fast, deterministic, and safe to run without production secrets.

@@ -44,7 +44,8 @@
         "agent:project-check": "bash scripts/project-queue-check.sh",
         "agent:project-platform-sync": "bash scripts/project-platform-track-sync.sh",
         "agent:project-metadata-sync": "bash scripts/project-post-cutover-metadata-sync.sh",
-        "check:testing-governance": "bash scripts/testing-governance-check.sh"
+        "check:testing-governance": "bash scripts/testing-governance-check.sh",
+        "check:surface-drift": "bash scripts/check-surface-drift.sh"
     },
     "keywords": [],
     "author": "",
