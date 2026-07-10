@@ -129,3 +129,22 @@ jobs:
 
       - name: lane:full-stack
         run: npm run lane:full-stack
+
+  lane-migrate-prod:
+    name: lane-migrate-prod
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    env:
+      CI: true
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v2
+        with:
+          version: '2.106.0'
+
+      - name: Apply migrations to production
+        run: supabase db push --db-url "$SUPABASE_DB_URL_PROD"
+        env:
+          SUPABASE_DB_URL_PROD: ${{ secrets.SUPABASE_DB_URL_PROD }}
