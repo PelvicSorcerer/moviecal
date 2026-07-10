@@ -14,16 +14,22 @@ import {
 } from './lib/auth/session';
 import { SupabaseEnvironmentError } from './lib/supabase/env';
 
+// Routes where expired tokens should be refreshed but unauthenticated visitors
+// must NOT be redirected to sign-in (the page is publicly accessible).
+const PUBLIC_REFRESH_PATHNAMES = new Set(['/search']);
+
 export async function middleware(request: NextRequest) {
   if (hasE2EAuthenticatedSession(request.cookies)) {
     return NextResponse.next();
   }
 
+  const isPublicRoute = PUBLIC_REFRESH_PATHNAMES.has(request.nextUrl.pathname);
+
   try {
     const auth = await resolveAuthTokens(readAuthTokens(request.cookies));
 
     if (!auth.user) {
-      const response = redirectToSignIn(request);
+      const response = isPublicRoute ? NextResponse.next() : redirectToSignIn(request);
 
       if (auth.shouldClearCookies) {
         clearAuthCookies(response);
@@ -41,6 +47,10 @@ export async function middleware(request: NextRequest) {
     return response;
   } catch (error) {
     if (error instanceof SupabaseEnvironmentError) {
+      if (isPublicRoute) {
+        return NextResponse.next();
+      }
+
       if (isE2ETestModeEnabled()) {
         return redirectToSignIn(request);
       }
@@ -53,5 +63,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/watchlist/:path*', '/settings/calendar/:path*'],
+  matcher: ['/watchlist/:path*', '/settings/calendar/:path*', '/search'],
 };
