@@ -14,6 +14,8 @@ For merge-gate and release-gate expectations by change class, see [release-quali
 
 For surface-drift detection (verifying all API routes are covered), see [`scripts/check-surface-drift.sh`](../../scripts/check-surface-drift.sh) (run via `npm run check:surface-drift`).
 
+For the recurring cadence that reviews flaky tests, promotion candidates, surface drift, and lane performance, see [testing-audit-cadence.md](./testing-audit-cadence.md).
+
 ## Goals
 
 - Keep pull-request validation fast, deterministic, and safe to run without production secrets.
