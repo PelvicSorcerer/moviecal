@@ -6,7 +6,7 @@ For the check classifications (automated-required, temporary-manual, manual-only
 
 ## Trigger
 
-An audit is due on every **tenth merged PR** — that is, any PR whose number ends in `0` (e.g. #200, #210, #220).
+An audit is due on every **tenth merged PR** — that is, any PR whose number ends in `0` (e.g. #200, #210, #220). GitHub issues and PRs share a counter, so this is an approximation; the actual interval between `0`-ending PRs varies.
 
 The agent that merges that PR is responsible for running the audit as part of post-merge handoff, immediately after the normal handoff checklist. No separate scheduling is needed.
 
@@ -18,14 +18,10 @@ Work through each area in order. Each area has a concrete command or inspection 
 
 ### 1. Quarantined tests
 
-```bash
-npm run lane:browser -- --reporter=verbose 2>&1 | grep -i "skip\|quarantine\|xtest\|xit\|todo" || echo "none found"
-```
-
-Also scan `test/` and `playwright/` for any `.skip(`, `xtest(`, `xit(`, or `// quarantine` markers:
+Scan `test/` and `e2e/` for any `.skip(` or `@quarantine` markers:
 
 ```bash
-grep -rn "\.skip\|xtest\|xit\|quarantine" test/ playwright/ --include="*.ts" || echo "none found"
+grep -rn "\.skip\|@quarantine" test/ e2e/ --include="*.ts" || echo "none found"
 ```
 
 **Fail criterion:** Any test that has been quarantined (skipped or marked) across two or more consecutive audit cycles without a named blocker issue. File a follow-up issue for each.
@@ -44,7 +40,7 @@ Concretely: scan the bodies of PRs merged since PR `N-10` (where `N` is the curr
 npm run check:surface-drift
 ```
 
-This script compares registered API routes against the capability-to-layer map in `repository-testing-strategy.md`. Any route with no corresponding test reference is a coverage gap.
+This script compares registered API routes against the capability-to-layer map in `repository-testing-strategy.md`. Any route not referenced in either `docs/planning/repository-testing-strategy.md` or a test file is flagged as a gap.
 
 **Fail criterion:** Any uncovered route that is not already tracked in an open issue. File one.
 
