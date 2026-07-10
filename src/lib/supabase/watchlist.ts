@@ -299,7 +299,8 @@ function mapInviteLinkRow(row: WatchlistInviteLinkRow): WatchlistInviteLink {
   };
 }
 
-function throwSupabaseError(_error: PostgrestError | null): never {
+function throwSupabaseError(error: PostgrestError | null): never {
+  console.error('[watchlist] Supabase request failed', error);
   throw new WatchlistDataError('Supabase request failed.');
 }
 
@@ -327,6 +328,12 @@ export function createSupabaseWatchlistRepository(args: {
     },
 
     async ensurePersonalWatchlist(userId) {
+      // RPC requires EXECUTE on ensure_personal_watchlist_for_user. When
+      // userClient carries an authenticated JWT this is granted by the
+      // original schema migration. Callers that pass adminClient (service_role)
+      // as userClient — e.g. cron and calendar-feed routes — still rely on the
+      // service_role EXECUTE grant from migration
+      // 20260709000001_issue_138_service_role_function_grants.sql.
       const { data: watchlistId, error: watchlistIdError } = await args.userClient.rpc(
         'ensure_personal_watchlist_for_user',
         {
