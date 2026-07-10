@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
-import { ACCESS_TOKEN_COOKIE } from '../src/lib/auth/cookies';
+import { ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE } from '../src/lib/auth/cookies';
 import { SupabaseEnvironmentError } from '../src/lib/supabase/env';
 
 // Mocks are declared with vi.hoisted so they are available before imports resolve.
@@ -39,7 +39,10 @@ vi.mock('../src/lib/e2e/fixtures', async () => {
 import { middleware } from '../src/middleware';
 
 function isPassThrough(response: { status: number }): boolean {
-  return response.status !== 302 && response.status !== 307 && response.status !== 308;
+  return response.status !== 301
+    && response.status !== 302
+    && response.status !== 307
+    && response.status !== 308;
 }
 
 describe('middleware public-route pass-through', () => {
@@ -97,6 +100,9 @@ describe('middleware public-route pass-through', () => {
       const accessCookie = response.cookies.get(ACCESS_TOKEN_COOKIE);
       expect(accessCookie).toBeDefined();
       expect(accessCookie?.value).toBe('new-access-token');
+      const refreshCookie = response.cookies.get(REFRESH_TOKEN_COOKIE);
+      expect(refreshCookie).toBeDefined();
+      expect(refreshCookie?.value).toBe('new-refresh-token');
     });
 
     it('passes through and clears stale cookies when both tokens are expired', async () => {
@@ -114,6 +120,11 @@ describe('middleware public-route pass-through', () => {
       const accessCookie = response.cookies.get(ACCESS_TOKEN_COOKIE);
       expect(accessCookie).toBeDefined();
       expect(accessCookie?.value).toBe('');
+      const refreshCookie = response.cookies.get(REFRESH_TOKEN_COOKIE);
+      expect(refreshCookie).toBeDefined();
+      expect(refreshCookie?.value).toBe('');
+      const setCookie = response.headers.get('set-cookie') ?? '';
+      expect(setCookie).toMatch(/max-age=0/i);
     });
 
     it('passes through on SupabaseEnvironmentError without redirecting', async () => {
