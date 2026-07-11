@@ -3,7 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { getServerCronEnv, CronEnvironmentError } from '../../../../lib/cron/env';
-import { refreshTrackedMovies } from '../../../../lib/release-refresh';
+import { runRefreshPipeline } from '../../../../lib/release-refresh';
 import {
   createServerSupabaseServiceRoleClient,
 } from '../../../../lib/supabase/server';
@@ -57,22 +57,26 @@ async function handleRefreshRequest(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
     }
 
-    const result = await refreshTrackedMovies({
+    const result = await runRefreshPipeline({
       getMovieDetails,
       repository: createRefreshRepository(),
     });
 
-    if (result.failedMovies > 0) {
+    const { trackedMovies, refreshedMovies, failedMovies } = result;
+
+    if (failedMovies > 0) {
       return NextResponse.json(
         {
           error: 'One or more movie refreshes failed.',
-          ...result,
+          trackedMovies,
+          refreshedMovies,
+          failedMovies,
         },
         { status: 502 },
       );
     }
 
-    return NextResponse.json(result);
+    return NextResponse.json({ trackedMovies, refreshedMovies, failedMovies });
   } catch (error) {
     if (error instanceof CronEnvironmentError) {
       return NextResponse.json(

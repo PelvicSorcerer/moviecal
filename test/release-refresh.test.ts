@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { refreshTrackedMovies } from '../src/lib/release-refresh';
+import {
+  fetchMovieDetail,
+  persistMovieUpdate,
+  runRefreshPipeline,
+  selectTrackedMovieIds,
+} from '../src/lib/release-refresh';
 import { TMDbEnvironmentError } from '../src/lib/tmdb/env';
 import { TMDbRequestError } from '../src/lib/tmdb/client';
+import type { NormalizedMovieDetail } from '../src/lib/tmdb/client';
 import type { WatchlistMovieRow, WatchlistRepository } from '../src/lib/watchlist';
 
 function buildMovieRow(overrides: Partial<WatchlistMovieRow> = {}): WatchlistMovieRow {
@@ -20,6 +26,20 @@ function buildMovieRow(overrides: Partial<WatchlistMovieRow> = {}): WatchlistMov
   };
 }
 
+function buildMovieDetail(
+  overrides: Partial<NormalizedMovieDetail> = {},
+): NormalizedMovieDetail {
+  return {
+    tmdbId: 603,
+    title: 'The Matrix',
+    releaseDate: '1999-03-31',
+    posterPath: null,
+    overview: null,
+    rawJson: { id: 603 },
+    ...overrides,
+  };
+}
+
 function createRepository(
   overrides: Partial<WatchlistRepository> = {},
 ): WatchlistRepository {
@@ -29,6 +49,7 @@ function createRepository(
     },
     async ensurePersonalWatchlist() {
       return {
+        canEdit: true,
         id: 'watchlist-1',
         kind: 'personal',
         name: 'My watchlist',
@@ -42,6 +63,7 @@ function createRepository(
       return {
         status: 'authorized',
         watchlist: {
+          canEdit: true,
           id: 'watchlist-1',
           kind: 'personal',
           name: 'My watchlist',
@@ -51,10 +73,7 @@ function createRepository(
       };
     },
     async insertItemForWatchlist() {
-      return {
-        row: null,
-        errorCode: null,
-      };
+      return { row: null, errorCode: null };
     },
     async listItemsForWatchlist() {
       return [];
@@ -69,11 +88,113 @@ function createRepository(
       return { id: 42 };
     },
     ...overrides,
-  };
+  } as WatchlistRepository;
 }
 
-describe('release refresh helper', () => {
-  it('refreshes each tracked TMDb movie only once', async () => {
+describe('selectTrackedMovieIds', () => {
+  it('returns deduplicated valid tmdb_ids', async () => {
+    const repository = createRepository({
+      async listTrackedMovies() {
+        return [
+          buildMovieRow(),
+          buildMovieRow({ id: 43, updated_at: '2026-06-23T01:00:00.000Z' }),
+          buildMovieRow({ id: 44, tmdb_id: 27205, title: 'Inception' }),
+        ];
+      },
+    });
+
+    await expect(selectTrackedMovieIds(repository)).resolves.toEqual([603, 27205]);
+  });
+
+  it('filters out non-positive and non-integer tmdb_ids', async () => {
+    const repository = createRepository({
+      async listTrackedMovies() {
+        return [
+          buildMovieRow({ tmdb_id: 0 }),
+          buildMovieRow({ id: 43, tmdb_id: -1 }),
+          buildMovieRow({ id: 44, tmdb_id: 603 }),
+        ];
+      },
+    });
+
+    await expect(selectTrackedMovieIds(repository)).resolves.toEqual([603]);
+  });
+
+  it('returns empty array when no tracked movies exist', async () => {
+    const repository = createRepository({
+      async listTrackedMovies() {
+        return [];
+      },
+    });
+
+    await expect(selectTrackedMovieIds(repository)).resolves.toEqual([]);
+  });
+});
+
+describe('fetchMovieDetail', () => {
+  it('returns success result when getMovieDetails resolves', async () => {
+    const detail = buildMovieDetail();
+    const getMovieDetails = vi.fn().mockResolvedValue(detail);
+
+    await expect(fetchMovieDetail(603, getMovieDetails)).resolves.toEqual({
+      success: true,
+      detail,
+    });
+    expect(getMovieDetails).toHaveBeenCalledWith(603);
+  });
+
+  it('returns failure result when getMovieDetails rejects with non-environment error', async () => {
+    const error = new TMDbRequestError('TMDb request failed.', 502);
+    const getMovieDetails = vi.fn().mockRejectedValue(error);
+
+    await expect(fetchMovieDetail(603, getMovieDetails)).resolves.toEqual({
+      success: false,
+      tmdbId: 603,
+      error,
+    });
+  });
+
+  it('rethrows TMDbEnvironmentError instead of swallowing it', async () => {
+    const error = new TMDbEnvironmentError('TMDb is not configured.');
+    const getMovieDetails = vi.fn().mockRejectedValue(error);
+
+    await expect(fetchMovieDetail(603, getMovieDetails)).rejects.toBeInstanceOf(
+      TMDbEnvironmentError,
+    );
+  });
+
+  it('returns failure result when getMovieDetails rejects with a generic error', async () => {
+    const error = new Error('network timeout');
+    const getMovieDetails = vi.fn().mockRejectedValue(error);
+
+    const result = await fetchMovieDetail(603, getMovieDetails);
+    expect(result).toEqual({ success: false, tmdbId: 603, error });
+  });
+});
+
+describe('persistMovieUpdate', () => {
+  it('calls upsertMovie with the provided detail', async () => {
+    const upsertMovie = vi.fn().mockResolvedValue({ id: 42 });
+    const repository = createRepository({ upsertMovie });
+    const detail = buildMovieDetail();
+
+    await expect(persistMovieUpdate(detail, repository)).resolves.toBeUndefined();
+    expect(upsertMovie).toHaveBeenCalledWith(detail);
+  });
+
+  it('propagates errors from upsertMovie', async () => {
+    const error = new Error('db write failed');
+    const upsertMovie = vi.fn().mockRejectedValue(error);
+    const repository = createRepository({ upsertMovie });
+
+    await expect(persistMovieUpdate(buildMovieDetail(), repository)).rejects.toThrow(
+      'db write failed',
+    );
+  });
+});
+
+describe('runRefreshPipeline', () => {
+  it('refreshes all tracked movies and returns correct result on happy path', async () => {
     const getMovieDetails = vi.fn(async (tmdbId: number) => ({
       tmdbId,
       title: tmdbId === 603 ? 'The Matrix' : 'Inception',
@@ -85,7 +206,7 @@ describe('release refresh helper', () => {
     const upsertMovie = vi.fn(async () => ({ id: 42 }));
 
     await expect(
-      refreshTrackedMovies({
+      runRefreshPipeline({
         getMovieDetails,
         repository: createRepository({
           async listTrackedMovies() {
@@ -99,9 +220,10 @@ describe('release refresh helper', () => {
         }),
       }),
     ).resolves.toEqual({
-      trackedMovies: 2,
-      refreshedMovies: 2,
+      failedMovieIds: [],
       failedMovies: 0,
+      refreshedMovies: 2,
+      trackedMovies: 2,
     });
 
     expect(getMovieDetails).toHaveBeenCalledTimes(2);
@@ -110,7 +232,7 @@ describe('release refresh helper', () => {
     expect(upsertMovie).toHaveBeenCalledTimes(2);
   });
 
-  it('continues after per-movie TMDb or persistence failures', async () => {
+  it('records failing movie ids and continues processing remaining movies', async () => {
     const getMovieDetails = vi
       .fn()
       .mockRejectedValueOnce(new TMDbRequestError('TMDb request failed.', 502))
@@ -136,7 +258,7 @@ describe('release refresh helper', () => {
       .mockResolvedValueOnce({ id: 44 });
 
     await expect(
-      refreshTrackedMovies({
+      runRefreshPipeline({
         getMovieDetails,
         repository: createRepository({
           async listTrackedMovies() {
@@ -150,15 +272,16 @@ describe('release refresh helper', () => {
         }),
       }),
     ).resolves.toEqual({
-      trackedMovies: 3,
-      refreshedMovies: 1,
+      failedMovieIds: [603, 27205],
       failedMovies: 2,
+      refreshedMovies: 1,
+      trackedMovies: 3,
     });
   });
 
-  it('surfaces missing TMDb configuration instead of masking it as a partial failure', async () => {
+  it('surfaces TMDbEnvironmentError instead of masking it as a partial failure', async () => {
     await expect(
-      refreshTrackedMovies({
+      runRefreshPipeline({
         getMovieDetails: async () => {
           throw new TMDbEnvironmentError('TMDb is not configured.');
         },
