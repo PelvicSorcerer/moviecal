@@ -15,8 +15,6 @@ import {
   addPersonalWatchlistItem,
   addWatchlistItem,
   listPersonalWatchlistItems,
-  WatchlistAccessError,
-  WatchlistDataError,
   WatchlistInputError,
 } from '../../../lib/watchlist';
 import {
@@ -29,6 +27,7 @@ import {
   TMDbEnvironmentError,
   TMDbRequestError,
 } from '../../../lib/tmdb/client';
+import { apiError, handleDomainError } from '../../../lib/api/response';
 
 function applyAuthCookies(
   auth: Exclude<Awaited<ReturnType<typeof authenticateApiRequest>>, NextResponse>,
@@ -46,29 +45,6 @@ function createRepositoryForRequest(
     userClient: createServerSupabaseClient(auth.accessToken),
     adminClient: createServerSupabaseServiceRoleClient(),
   });
-}
-
-function handleWatchlistError(error: unknown): NextResponse {
-  if (
-    error instanceof WatchlistAccessError ||
-    error instanceof WatchlistInputError ||
-    error instanceof WatchlistDataError
-  ) {
-    return NextResponse.json({ error: error.message }, { status: error.status });
-  }
-
-  if (error instanceof TMDbEnvironmentError) {
-    return NextResponse.json(
-      { error: 'Watchlist updates are unavailable until TMDb is configured.' },
-      { status: 503 },
-    );
-  }
-
-  if (error instanceof TMDbRequestError) {
-    return NextResponse.json({ error: error.message }, { status: error.status });
-  }
-
-  throw error;
 }
 
 export async function GET(request: NextRequest) {
@@ -92,7 +68,7 @@ export async function GET(request: NextRequest) {
 
     return applyAuthCookies(auth, NextResponse.json({ items }));
   } catch (error) {
-    return applyAuthCookies(auth, handleWatchlistError(error));
+    return applyAuthCookies(auth, handleDomainError(error));
   }
 }
 
@@ -138,11 +114,11 @@ export async function POST(request: NextRequest) {
       const targetWatchlist = findE2EWatchlist(request.cookies, targetWatchlistId);
 
       if (!targetWatchlist) {
-        return NextResponse.json({ error: 'Watchlist not found.' }, { status: 404 });
+        return apiError('Watchlist not found.', 404);
       }
 
       if (!getE2EMovieFixture(tmdbId)) {
-        return NextResponse.json({ error: 'Movie not found.' }, { status: 404 });
+        return apiError('Movie not found.', 404);
       }
 
       const result = addE2EWatchlistItemToTarget(
@@ -192,6 +168,17 @@ export async function POST(request: NextRequest) {
       ),
     );
   } catch (error) {
-    return applyAuthCookies(auth, handleWatchlistError(error));
+    if (error instanceof TMDbEnvironmentError) {
+      return applyAuthCookies(
+        auth,
+        apiError('Watchlist updates are unavailable until TMDb is configured.', 503),
+      );
+    }
+
+    if (error instanceof TMDbRequestError) {
+      return applyAuthCookies(auth, apiError(error.message, error.status));
+    }
+
+    return applyAuthCookies(auth, handleDomainError(error));
   }
 }

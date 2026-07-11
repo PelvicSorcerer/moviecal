@@ -12,14 +12,13 @@ import {
 import {
   removeWatchlistItem,
   removePersonalWatchlistItem,
-  WatchlistAccessError,
-  WatchlistNotFoundError,
 } from '../../../../lib/watchlist';
 import {
   createServerSupabaseClient,
   createServerSupabaseServiceRoleClient,
 } from '../../../../lib/supabase/server';
 import { createSupabaseWatchlistRepository } from '../../../../lib/supabase/watchlist';
+import { apiError, handleDomainError } from '../../../../lib/api/response';
 
 function applyAuthCookies(
   auth: Exclude<Awaited<ReturnType<typeof authenticateApiRequest>>, NextResponse>,
@@ -49,10 +48,7 @@ export async function DELETE(
     const targetWatchlist = findE2EWatchlist(request.cookies, targetWatchlistId);
 
     if (!targetWatchlist) {
-      return NextResponse.json(
-        { error: 'Watchlist not found.' },
-        { status: 404 },
-      );
+      return apiError('Watchlist not found.', 404);
     }
 
     const result = removeE2EWatchlistItemFromTarget(
@@ -62,10 +58,7 @@ export async function DELETE(
     );
 
     if (!result.deleted) {
-      return NextResponse.json(
-        { error: 'Watchlist item not found.' },
-        { status: 404 },
-      );
+      return apiError('Watchlist item not found.', 404);
     }
 
     const response = NextResponse.json({ deleted: true, id });
@@ -97,16 +90,6 @@ export async function DELETE(
 
     return applyAuthCookies(auth, NextResponse.json({ deleted: true, id }));
   } catch (error) {
-    if (
-      error instanceof WatchlistAccessError ||
-      error instanceof WatchlistNotFoundError
-    ) {
-      return applyAuthCookies(
-        auth,
-        NextResponse.json({ error: error.message }, { status: error.status }),
-      );
-    }
-
-    throw error;
+    return applyAuthCookies(auth, handleDomainError(error));
   }
 }

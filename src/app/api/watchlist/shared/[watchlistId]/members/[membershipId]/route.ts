@@ -5,14 +5,13 @@ import { hasE2EAuthenticatedSession } from '../../../../../../../lib/e2e/fixture
 import { removeE2EWatchlistMember } from '../../../../../../../lib/e2e/shared-watchlists';
 import {
   removeSharedWatchlistMember,
-  WatchlistAccessError,
-  WatchlistNotFoundError,
 } from '../../../../../../../lib/watchlist';
 import {
   createServerSupabaseClient,
   createServerSupabaseServiceRoleClient,
 } from '../../../../../../../lib/supabase/server';
 import { createSupabaseWatchlistRepository } from '../../../../../../../lib/supabase/watchlist';
+import { apiError, handleDomainError } from '../../../../../../../lib/api/response';
 
 function applyAuthCookies(
   auth: Exclude<Awaited<ReturnType<typeof authenticateApiRequest>>, NextResponse>,
@@ -47,10 +46,7 @@ export async function DELETE(
       });
 
       if (!removed) {
-        return NextResponse.json(
-          { error: 'Watchlist member not found.' },
-          { status: 404 },
-        );
+        return apiError('Watchlist member not found.', 404);
       }
 
       return response;
@@ -71,16 +67,6 @@ export async function DELETE(
       NextResponse.json({ deleted: true, membershipId }),
     );
   } catch (error) {
-    if (
-      error instanceof WatchlistAccessError
-      || error instanceof WatchlistNotFoundError
-    ) {
-      return applyAuthCookies(
-        auth,
-        NextResponse.json({ error: error.message }, { status: error.status }),
-      );
-    }
-
-    throw error;
+    return applyAuthCookies(auth, handleDomainError(error));
   }
 }

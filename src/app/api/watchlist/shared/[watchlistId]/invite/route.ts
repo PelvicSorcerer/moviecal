@@ -6,14 +6,13 @@ import { hasE2EAuthenticatedSession } from '../../../../../../lib/e2e/fixtures';
 import {
   createSharedWatchlistInviteLink,
   createWatchlistInviteToken,
-  WatchlistAccessError,
-  WatchlistNotFoundError,
 } from '../../../../../../lib/watchlist';
 import {
   createServerSupabaseClient,
   createServerSupabaseServiceRoleClient,
 } from '../../../../../../lib/supabase/server';
 import { createSupabaseWatchlistRepository } from '../../../../../../lib/supabase/watchlist';
+import { apiError, handleDomainError } from '../../../../../../lib/api/response';
 
 function applyAuthCookies(
   auth: Exclude<Awaited<ReturnType<typeof authenticateApiRequest>>, NextResponse>,
@@ -49,10 +48,7 @@ export async function POST(
       });
 
       if (!result) {
-        return NextResponse.json(
-          { error: 'Watchlist access denied.' },
-          { status: 403 },
-        );
+        return apiError('Watchlist access denied.', 403);
       }
 
       return NextResponse.json(result, {
@@ -73,16 +69,6 @@ export async function POST(
 
     return applyAuthCookies(auth, NextResponse.json(result, { status: 201 }));
   } catch (error) {
-    if (
-      error instanceof WatchlistAccessError
-      || error instanceof WatchlistNotFoundError
-    ) {
-      return applyAuthCookies(
-        auth,
-        NextResponse.json({ error: error.message }, { status: error.status }),
-      );
-    }
-
-    throw error;
+    return applyAuthCookies(auth, handleDomainError(error));
   }
 }

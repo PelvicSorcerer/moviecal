@@ -10,6 +10,7 @@ import {
 import { createSupabaseWatchlistRepository } from '../../../../lib/supabase/watchlist';
 import { getMovieDetails } from '../../../../lib/tmdb/client';
 import { TMDbEnvironmentError } from '../../../../lib/tmdb/env';
+import { apiError, handleDomainError } from '../../../../lib/api/response';
 
 function readCronSecret(request: NextRequest): string | null {
   const authorization = request.headers.get('authorization')?.trim();
@@ -54,7 +55,7 @@ function createRefreshRepository() {
 async function handleRefreshRequest(request: NextRequest) {
   try {
     if (!isAuthorizedRequest(request)) {
-      return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
+      return apiError('Unauthorized.', 401);
     }
 
     const result = await refreshTrackedMovies({
@@ -75,24 +76,14 @@ async function handleRefreshRequest(request: NextRequest) {
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof CronEnvironmentError) {
-      return NextResponse.json(
-        {
-          error: 'Release refresh is unavailable until cron auth is configured.',
-        },
-        { status: 503 },
-      );
+      return apiError('Release refresh is unavailable until cron auth is configured.', 503);
     }
 
     if (error instanceof TMDbEnvironmentError) {
-      return NextResponse.json(
-        {
-          error: 'Release refresh is unavailable until TMDb is configured.',
-        },
-        { status: 503 },
-      );
+      return apiError('Release refresh is unavailable until TMDb is configured.', 503);
     }
 
-    throw error;
+    return handleDomainError(error);
   }
 }
 

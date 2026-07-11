@@ -5,13 +5,13 @@ import { acceptE2EInvite } from '../../../../../lib/e2e/shared-watchlists';
 import { hasE2EAuthenticatedSession } from '../../../../../lib/e2e/fixtures';
 import {
   acceptWatchlistInvite,
-  WatchlistNotFoundError,
 } from '../../../../../lib/watchlist';
 import {
   createServerSupabaseClient,
   createServerSupabaseServiceRoleClient,
 } from '../../../../../lib/supabase/server';
 import { createSupabaseWatchlistRepository } from '../../../../../lib/supabase/watchlist';
+import { apiError, handleDomainError } from '../../../../../lib/api/response';
 
 function applyAuthCookies(
   auth: Exclude<Awaited<ReturnType<typeof authenticateApiRequest>>, NextResponse>,
@@ -59,10 +59,7 @@ export async function POST(request: NextRequest) {
       });
 
       if (!result) {
-        return NextResponse.json(
-          { error: 'Invite link is invalid or expired.' },
-          { status: 404 },
-        );
+        return apiError('Invite link is invalid or expired.', 404);
       }
 
       return NextResponse.json(result, {
@@ -82,13 +79,6 @@ export async function POST(request: NextRequest) {
 
     return applyAuthCookies(auth, NextResponse.json(result));
   } catch (error) {
-    if (error instanceof WatchlistNotFoundError) {
-      return applyAuthCookies(
-        auth,
-        NextResponse.json({ error: error.message }, { status: error.status }),
-      );
-    }
-
-    throw error;
+    return applyAuthCookies(auth, handleDomainError(error));
   }
 }

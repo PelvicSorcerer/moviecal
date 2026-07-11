@@ -9,16 +9,14 @@ import {
   TMDbEnvironmentError,
   TMDbRequestError,
 } from '../../../../lib/tmdb/client';
+import { apiError, handleDomainError } from '../../../../lib/api/response';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('q')?.trim() ?? '';
 
   if (!query) {
-    return NextResponse.json(
-      { error: 'Search query "q" is required.' },
-      { status: 400 },
-    );
+    return apiError('Search query "q" is required.', 400);
   }
 
   try {
@@ -28,13 +26,9 @@ export async function GET(request: Request) {
 
         return NextResponse.json({ results });
       } catch (error) {
-        return NextResponse.json(
-          {
-            error: error instanceof Error
-              ? error.message
-              : 'Movie search is unavailable right now.',
-          },
-          { status: 503 },
+        return apiError(
+          error instanceof Error ? error.message : 'Movie search is unavailable right now.',
+          503,
         );
       }
     }
@@ -44,16 +38,13 @@ export async function GET(request: Request) {
     return NextResponse.json({ results });
   } catch (error) {
     if (error instanceof TMDbEnvironmentError) {
-      return NextResponse.json(
-        { error: 'Movie search is unavailable until TMDb is configured.' },
-        { status: 503 },
-      );
+      return apiError('Movie search is unavailable until TMDb is configured.', 503);
     }
 
     if (error instanceof TMDbRequestError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
+      return apiError(error.message, error.status);
     }
 
-    throw error;
+    return handleDomainError(error);
   }
 }

@@ -9,7 +9,6 @@ import {
 } from '../../../../lib/e2e/fixtures';
 import {
   createSharedWatchlist,
-  WatchlistDataError,
   WatchlistInputError,
 } from '../../../../lib/watchlist';
 import {
@@ -17,6 +16,7 @@ import {
   createServerSupabaseServiceRoleClient,
 } from '../../../../lib/supabase/server';
 import { createSupabaseWatchlistRepository } from '../../../../lib/supabase/watchlist';
+import { handleDomainError } from '../../../../lib/api/response';
 
 function applyAuthCookies(
   auth: Exclude<Awaited<ReturnType<typeof authenticateApiRequest>>, NextResponse>,
@@ -100,16 +100,6 @@ export async function POST(request: NextRequest) {
       ),
     );
   } catch (error) {
-    if (
-      error instanceof WatchlistInputError
-      || error instanceof WatchlistDataError
-    ) {
-      return applyAuthCookies(
-        auth,
-        NextResponse.json({ error: error.message }, { status: error.status }),
-      );
-    }
-
-    throw error;
+    return applyAuthCookies(auth, handleDomainError(error));
   }
 }
