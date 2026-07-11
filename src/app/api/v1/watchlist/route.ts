@@ -25,14 +25,15 @@ import {
  *
  * Auth: `Authorization: Bearer <access-token>` only. These handlers never read
  * cookies (the Next.js cookie transport module is intentionally not imported).
- * The bearer token builds a user-scoped Supabase client used for auth
- * resolution and RLS-scoped `watchlist_items` access — that user-scoped client
- * is the authorization boundary, with no application-level ownership checks. A
- * service-role client is used ONLY for the trusted server-side `movies`
- * metadata upsert (the same pattern as the unversioned routes), never for an
- * authorization decision. Expired/invalid tokens receive a `401`; the handlers
- * never silently refresh or extend a token, leaving refresh to the mobile
- * client.
+ * The bearer token builds a user-scoped client (`userClient`) used solely for
+ * identity resolution (`resolveAuthTokensWithClient`) and the
+ * `ensurePersonalWatchlist` RPC. A service-role client (`adminClient`) is used
+ * for all data-access operations on `watchlist_items`, `movies`, `watchlists`,
+ * and memberships — the same design as the unversioned routes. User isolation is
+ * enforced by the application-level ownership check in `getWatchlistAccess`
+ * (which verifies `watchlist.ownerUserId === actorUserId`), not by RLS on
+ * `watchlist_items`. Expired/invalid tokens receive a `401`; the handlers never
+ * silently refresh or extend a token, leaving refresh to the mobile client.
  *
  * The existing unversioned routes under `src/app/api/watchlist/` are unchanged;
  * this surface is purely additive.
@@ -44,14 +45,16 @@ interface ResolvedRequest {
 }
 
 /**
- * Resolves the bearer token to an authenticated user and a user-scoped
- * watchlist repository. Returns a `401` `NextResponse` when the token is
- * missing, malformed, or does not resolve to a user.
+ * Resolves the bearer token to an authenticated user and a watchlist
+ * repository. Returns a `401` `NextResponse` when the token is missing,
+ * malformed, or does not resolve to a user.
  *
- * The user-scoped client resolves identity and backs all RLS-scoped
- * `watchlist_items` queries — it is the access-control boundary. A service-role
- * client backs only the `movies` metadata upsert, a trusted server-side write
- * with no authorization component.
+ * The user-scoped client (`userClient`) is used only for identity resolution
+ * via `resolveAuthTokensWithClient` and the `ensurePersonalWatchlist` RPC. The
+ * service-role client (`adminClient`) backs all `watchlist_items`, `movies`,
+ * `watchlists`, and membership data-access operations. Authorization is
+ * enforced at the application level by the ownership check in
+ * `getWatchlistAccess`, not by RLS on `watchlist_items`.
  */
 async function resolveRequest(
   request: Request,
@@ -79,10 +82,11 @@ async function resolveRequest(
 
   const repository = createSupabaseWatchlistRepository({
     userClient,
-    // Service-role client used only for the trusted server-side `movies` upsert
-    // of TMDb metadata (same as the existing routes). Authorization stays with
-    // the user-scoped `userClient` above and RLS on `watchlist_items`; this is
-    // not an authorization bypass.
+    // Service-role client used for all data-access operations: watchlist_items
+    // queries/mutations, movies upsert, watchlists lookup (getWatchlistAccess),
+    // and membership operations. This matches the unversioned routes. User
+    // isolation is enforced by the application-level ownership check in
+    // getWatchlistAccess, not by RLS on watchlist_items.
     adminClient: createServerSupabaseServiceRoleClient(),
   });
 
