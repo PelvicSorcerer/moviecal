@@ -19,6 +19,10 @@ export function apiError(message: string, status: number): NextResponse {
  * Returns 400 for WatchlistInputError, 404 for WatchlistNotFoundError,
  * 403 for WatchlistAccessError, 500 for WatchlistDataError, and a generic
  * 500 for any other error.
+ *
+ * Unexpected exceptions are absorbed here and mapped to a generic 500 JSON response.
+ * They are not re-thrown, so Next.js error propagation does not fire for these cases.
+ * If monitoring is added later, instrument this fallback branch.
  */
 export function handleDomainError(error: unknown): NextResponse {
   if (
