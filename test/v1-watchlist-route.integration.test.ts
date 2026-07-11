@@ -17,6 +17,7 @@ import {
 const mocks = vi.hoisted(() => ({
   resolveAuthTokensWithClient: vi.fn(),
   createServerSupabaseClient: vi.fn(),
+  createServerSupabaseServiceRoleClient: vi.fn(),
   createSupabaseWatchlistRepository: vi.fn(),
   getMovieDetails: vi.fn(),
 }));
@@ -27,6 +28,8 @@ vi.mock('../src/lib/auth/identity', () => ({
 
 vi.mock('../src/lib/supabase/server', () => ({
   createServerSupabaseClient: mocks.createServerSupabaseClient,
+  createServerSupabaseServiceRoleClient:
+    mocks.createServerSupabaseServiceRoleClient,
 }));
 
 vi.mock('../src/lib/supabase/watchlist', () => ({
@@ -121,6 +124,9 @@ function setupAuthenticatedRouteMocks(
 ): void {
   authenticateAs(TEST_USER_IDS.OWNER);
   mocks.createServerSupabaseClient.mockReturnValue({ name: 'user-client' });
+  mocks.createServerSupabaseServiceRoleClient.mockReturnValue({
+    name: 'service-role-client',
+  });
   mocks.createSupabaseWatchlistRepository.mockReturnValue(repository);
   mocks.getMovieDetails.mockImplementation(async (tmdbId: number) =>
     buildNormalizedMovieDetail(tmdbId),
@@ -156,7 +162,7 @@ describe('v1 watchlist route (mobile Bearer surface)', () => {
     vi.resetModules();
   });
 
-  it('source never references the service-role client, next/headers, or token logging', async () => {
+  it('route source never imports Next.js cookie transport or logs tokens', async () => {
     const { readFileSync } = await import('node:fs');
     const { fileURLToPath } = await import('node:url');
     const routeSource = readFileSync(
@@ -166,9 +172,27 @@ describe('v1 watchlist route (mobile Bearer surface)', () => {
       'utf8',
     );
 
-    expect(routeSource).not.toContain('createServerSupabaseServiceRoleClient');
+    // The service-role client is permitted for the trusted `movies` upsert, but
+    // the cookie transport module must never be imported and tokens must never
+    // be logged.
     expect(routeSource).not.toContain('next/headers');
     expect(routeSource).not.toMatch(/console\.[a-z]+\(/);
+  });
+
+  it('bearer transport helper never imports Next.js transport or logs', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const bearerSource = readFileSync(
+      fileURLToPath(new URL('../src/lib/auth/bearer.ts', import.meta.url)),
+      'utf8',
+    );
+
+    // Assert on imports specifically — the module docstring names these paths
+    // in prose to explain that it deliberately does NOT import them.
+    expect(bearerSource).not.toMatch(
+      /from ['"]next\/(headers|server|navigation)['"]/,
+    );
+    expect(bearerSource).not.toMatch(/console\.[a-z]+\(/);
   });
 
   describe('GET /api/v1/watchlist', () => {
@@ -197,11 +221,11 @@ describe('v1 watchlist route (mobile Bearer surface)', () => {
           },
         ],
       });
-      // The user-scoped client is used for BOTH repository roles — no
-      // service-role client is ever constructed for the v1 surface.
+      // The user-scoped client backs identity + RLS-scoped queries; the
+      // service-role client backs only the trusted `movies` metadata upsert.
       expect(mocks.createSupabaseWatchlistRepository).toHaveBeenCalledWith({
         userClient: { name: 'user-client' },
-        adminClient: { name: 'user-client' },
+        adminClient: { name: 'service-role-client' },
       });
     });
 
@@ -237,9 +261,11 @@ describe('v1 watchlist route (mobile Bearer surface)', () => {
       expect(mocks.createServerSupabaseClient).toHaveBeenCalledWith(
         'mobile-access-token',
       );
+      // Bearer-only auth carries no refresh token: refreshToken is empty and
+      // refresh is disabled.
       expect(mocks.resolveAuthTokensWithClient).toHaveBeenCalledWith(
         { name: 'user-client' },
-        { accessToken: 'mobile-access-token', refreshToken: 'mobile-access-token' },
+        { accessToken: 'mobile-access-token', refreshToken: '' },
         { allowRefresh: false },
       );
     });
