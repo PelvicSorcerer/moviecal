@@ -139,6 +139,32 @@ The orchestrator should verify that `effective_model` matches `requested_model` 
 - If `requested_model` is `default` and the account's default model changes over time, the worker must still record whichever `effective_model` it actually started on.
 - The orchestrator must not treat a mismatch between `requested_model` and `effective_model` as a warning to dismiss. A mismatch is a blocker that requires explicit orchestrator acknowledgment before any implementation work begins.
 
+### CCR environment: model alias resolution and upgrade workaround
+
+In the Claude Code remote execution (CCR) environment (Claude Platform on AWS), the
+`Agent` tool's `model` parameter accepts only enum aliases, not full model IDs:
+
+| Alias | Resolves to in CCR |
+|---|---|
+| `sonnet` | `claude-sonnet-4-6` |
+| `opus` | `claude-opus-4-8` |
+| `haiku` | `claude-haiku-4-5-20251001` (verify at dispatch time) |
+| `fable` | `claude-fable-5` (verify at dispatch time) |
+
+Full model IDs (e.g. `claude-sonnet-5`) are **not accepted** by the `model` parameter
+in CCR — the Agent tool will error if one is passed.
+
+**Upgrade workaround:** When an issue requests `claude-sonnet-5` (for a
+security-critical or architecture-heavy task), dispatch with `model: "opus"`
+(`claude-opus-4-8`) instead. This satisfies the upgrade intent (more capable than
+the default `sonnet` alias in CCR) and avoids the enum constraint.
+
+**Worker behavior:** A worker whose `effective_model` is `claude-opus-4-8` and whose
+`requested_model` is `claude-sonnet-5` should record `model_match: ccr-substitution`
+in its checkpoint and proceed. This is not a mismatch to block on — it is a known
+platform constraint. See the model-match rule in
+`docs/operators/claude-worker-dispatch-prompt.md`.
+
 ### Worker-to-subagent model-handoff rule
 
 When a Claude worker spawns a subagent via the `Agent` tool:
@@ -273,7 +299,7 @@ After confirming the handoff state is clean:
 
 A Claude Code orchestrator may dispatch a Claude Code worker for the promoted issue using the `Agent` tool:
 
-- Pass `model: "sonnet"` unless the issue explicitly requires a different model (see `docs/operators/claude-model-selection-policy.md`).
+- Pass `model: "sonnet"` unless the issue explicitly requires a different model (see `docs/operators/claude-model-selection-policy.md`). In CCR, `"sonnet"` resolves to `claude-sonnet-4-6`; pass `model: "opus"` (`claude-opus-4-8`) when the issue requests `claude-sonnet-5`.
 - Use `docs/operators/claude-worker-dispatch-prompt.md` as the worker brief template. Fill in: issue number and title, assigned branch, docs to read first, exact verification commands, Testing Expectations, manual testing checklist, and known constraints.
 - Record `subagent_model` in the orchestrator checkpoint.
 
