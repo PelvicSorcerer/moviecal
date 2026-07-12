@@ -4,8 +4,8 @@
 # The GitHub Project is authoritative for dispatch state; issue bodies remain
 # authoritative for implementation contracts.
 
-PROJECT_QUEUE_REPO="${PROJECT_QUEUE_REPO:-PelvicSorcerer/moviecal}"
-PROJECT_QUEUE_OWNER="${PROJECT_QUEUE_OWNER:-PelvicSorcerer}"
+PROJECT_QUEUE_REPO="${PROJECT_QUEUE_REPO:-PelvicSorcerer-Software/moviecal}"
+PROJECT_QUEUE_OWNER="${PROJECT_QUEUE_OWNER:-PelvicSorcerer-Software}"
 PROJECT_QUEUE_NUMBER="${PROJECT_QUEUE_NUMBER:-1}"
 PROJECT_QUEUE_LIST_LIMIT="${PROJECT_QUEUE_LIST_LIMIT:-200}"
 
@@ -38,18 +38,12 @@ project_queue_require_gh() {
   fi
 }
 
-project_queue_fetch_project_items_json() {
-  local response graphql_limit=100
-  if [ "$PROJECT_QUEUE_LIST_LIMIT" -lt "$graphql_limit" ]; then
-    graphql_limit="$PROJECT_QUEUE_LIST_LIMIT"
-  fi
+project_queue_graphql_project_items_query() {
+  local owner_kind="$1"
+  local graphql_limit="$2"
 
-  if PROJECT_ITEMS_JSON=$(gh project item-list "$PROJECT_QUEUE_NUMBER" --owner "$PROJECT_QUEUE_OWNER" --limit "$PROJECT_QUEUE_LIST_LIMIT" --format json 2>/dev/null); then
-    return 0
-  fi
-
-  response=$(gh api graphql -f query="query {
-    user(login: \"$PROJECT_QUEUE_OWNER\") {
+  gh api graphql -f query="query {
+    ${owner_kind}(login: \"$PROJECT_QUEUE_OWNER\") {
       projectV2(number: $PROJECT_QUEUE_NUMBER) {
         items(first: $graphql_limit) {
           nodes {
@@ -74,11 +68,16 @@ project_queue_fetch_project_items_json() {
         }
       }
     }
-  }")
+  }"
+}
 
-  PROJECT_ITEMS_JSON=$(echo "$response" | jq '{
+project_queue_normalize_project_items_response() {
+  local response="$1"
+  local owner_kind="$2"
+
+  echo "$response" | jq --arg owner_kind "$owner_kind" '{
     items: [
-      .data.user.projectV2.items.nodes[]
+      .data[$owner_kind].projectV2.items.nodes[]
       | {
           title: .content.title,
           labels: ((.content.labels.nodes // []) | map(.name)),
@@ -102,7 +101,29 @@ project_queue_fetch_project_items_json() {
           )
         }
     ]
-  }')
+  }'
+}
+
+project_queue_fetch_project_items_json() {
+  local response graphql_limit=100 owner_kind
+  if [ "$PROJECT_QUEUE_LIST_LIMIT" -lt "$graphql_limit" ]; then
+    graphql_limit="$PROJECT_QUEUE_LIST_LIMIT"
+  fi
+
+  if PROJECT_ITEMS_JSON=$(gh project item-list "$PROJECT_QUEUE_NUMBER" --owner "$PROJECT_QUEUE_OWNER" --limit "$PROJECT_QUEUE_LIST_LIMIT" --format json 2>/dev/null); then
+    return 0
+  fi
+
+  for owner_kind in organization user; do
+    response=$(project_queue_graphql_project_items_query "$owner_kind" "$graphql_limit")
+    if echo "$response" | jq -e --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.items.nodes' >/dev/null 2>&1; then
+      PROJECT_ITEMS_JSON=$(project_queue_normalize_project_items_response "$response" "$owner_kind")
+      return 0
+    fi
+  done
+
+  echo "Could not read project items for $PROJECT_QUEUE_OWNER/$PROJECT_QUEUE_NUMBER via gh project or GraphQL." >&2
+  return 1
 }
 
 project_queue_fetch_open_issues_json() {

@@ -8,6 +8,8 @@ This doc covers what's specific to Codex (Desktop app or CLI) when it develops t
 
 ## Queue model
 
+- Repository: `PelvicSorcerer-Software/moviecal`
+- Project: `PelvicSorcerer-Software/1` (`moviecal Delivery`)
 - Use the `moviecal Delivery` GitHub Project as the live queue source of truth.
 - Start implementation only from the single open issue whose project item has `Agent Dispatch = Yes` and `Status = Ready`.
 - Use the project `Queue Order` field when multiple issues could plausibly become the next dispatch candidate.

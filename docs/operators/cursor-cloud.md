@@ -38,13 +38,13 @@ Everything below marked "verified" was actually run against this repo on a real 
 
 ### Project queue validation on Cursor Cloud
 
-With `GITHUB_PAT_OPERATOR` configured and `jq` available, platform/governance agents can validate live queue state:
+With `GITHUB_PAT_OPERATOR` configured and `jq` available, platform/governance agents can validate live queue state against `PelvicSorcerer-Software/moviecal` and the organization project `PelvicSorcerer-Software/1` (`moviecal Delivery`):
 
 ```bash
 npm run agent:project-check
 ```
 
-`gh project item-list` may return `unknown owner type` on Cursor Cloud VMs even with a valid operator PAT. Queue scripts already fall back to `gh api graphql` for project item reads (`scripts/lib/project-queue-common.sh`), so use `npm run agent:project-check` rather than ad hoc `gh project` subcommands when validating dispatch invariants.
+`gh project item-list` may return `unknown owner type` on Cursor Cloud VMs even with a valid operator PAT. Queue scripts already fall back to `gh api graphql` for project item reads (`scripts/lib/project-queue-common.sh`), trying `organization(login:)` first and then `user(login:)`, so use `npm run agent:project-check` rather than ad hoc `gh project` subcommands when validating dispatch invariants.
 
 ## Branch convention
 
