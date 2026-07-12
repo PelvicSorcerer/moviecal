@@ -27,7 +27,9 @@ All errors use `{ "error": string }` with an appropriate HTTP status:
 
 ## Endpoints
 
-Base path: `/api/v1/watchlist`. All endpoints operate on the authenticated user's **personal** watchlist.
+### Watchlist
+
+Base path: `/api/v1/watchlist`. All watchlist endpoints operate on the authenticated user's **personal** watchlist.
 
 ### `GET /api/v1/watchlist`
 
@@ -71,6 +73,26 @@ Removes a movie from the personal watchlist.
 - Response `204`: no body.
 - `400` if `watchlistItemId` is missing or not a non-empty string.
 - `404` if the item does not exist in the caller's personal watchlist.
+
+### Calendar
+
+### `GET /api/v1/calendar-token`
+
+Returns the authenticated user's private calendar subscription URL — the canonical `/api/calendar/[token]` feed URL that iCal/Google Calendar clients subscribe to. This is the bearer-authenticated equivalent of the value the cookie-based `/settings/calendar` page renders.
+
+- Request body: none.
+- The token is created on demand when the user has none. The endpoint is idempotent: repeated calls return the same URL until the token is rotated (rotation is a separate endpoint).
+- Response `200`:
+
+  ```json
+  {
+    "subscriptionUrl": "https://moviecal.example/api/calendar/AbC123..."
+  }
+  ```
+
+- `401` if the bearer token is missing, malformed, expired, or otherwise invalid.
+
+**Security:** the returned `subscriptionUrl` embeds the calendar token, which is a bearer credential for the feed. Treat the whole URL like a password; the server never logs the token or the response body. The token always resolves strictly to the authenticated user (the get/create runs through the user-scoped, RLS-enforced client), so a caller can never obtain another user's URL.
 
 ## Compatibility notes
 
