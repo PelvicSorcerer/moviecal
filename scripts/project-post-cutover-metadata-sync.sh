@@ -3,7 +3,7 @@
 # Idempotent: skips only when both the short description and readme match the canonical post-cutover text.
 set -euo pipefail
 
-owner="${PROJECT_QUEUE_OWNER:-PelvicSorcerer}"
+owner="${PROJECT_QUEUE_OWNER:-PelvicSorcerer-Software}"
 project_number="${PROJECT_QUEUE_NUMBER:-1}"
 
 read -r -d '' POST_CUTOVER_SHORT_DESCRIPTION <<'EOF' || true
@@ -75,22 +75,30 @@ describe_metadata_drift() {
 }
 
 load_project_metadata() {
-  local response
-  response=$(gh api graphql -f query="query {
-    user(login: \"$owner\") {
-      projectV2(number: $project_number) {
-        id
-        title
-        shortDescription
-        readme
+  local response owner_kind
+  for owner_kind in organization user; do
+    response=$(gh api graphql -f query="query {
+      ${owner_kind}(login: \"$owner\") {
+        projectV2(number: $project_number) {
+          id
+          title
+          shortDescription
+          readme
+        }
       }
-    }
-  }")
+    }")
 
-  PROJECT_ID=$(echo "$response" | jq -r '.data.user.projectV2.id')
-  PROJECT_TITLE=$(echo "$response" | jq -r '.data.user.projectV2.title')
-  CURRENT_SHORT_DESCRIPTION=$(echo "$response" | jq -r '.data.user.projectV2.shortDescription // ""')
-  CURRENT_README=$(echo "$response" | jq -r '.data.user.projectV2.readme // ""')
+    if [ "$(echo "$response" | jq -r --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.id // empty')" != "" ]; then
+      PROJECT_ID=$(echo "$response" | jq -r --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.id')
+      PROJECT_TITLE=$(echo "$response" | jq -r --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.title')
+      CURRENT_SHORT_DESCRIPTION=$(echo "$response" | jq -r --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.shortDescription // ""')
+      CURRENT_README=$(echo "$response" | jq -r --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.readme // ""')
+      return 0
+    fi
+  done
+
+  echo "Cannot access project $owner/$project_number." >&2
+  exit 1
 }
 
 update_project_metadata() {

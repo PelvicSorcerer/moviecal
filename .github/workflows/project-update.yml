@@ -37,8 +37,8 @@ jobs:
         run: |
           set -uo pipefail
 
-          # "moviecal Delivery" project owner (must be a GitHub user login).
-          PROJECT_OWNER="PelvicSorcerer"
+          # "moviecal Delivery" project owner (organization login after repo transfer).
+          PROJECT_OWNER="PelvicSorcerer-Software"
 
           # ── Helper: post a reply comment via GITHUB_TOKEN ──────────────────────
           # Comments posted this way appear as "github-actions[bot]".
@@ -142,6 +142,46 @@ jobs:
 
           projects_raw=$(GH_TOKEN="$PROJECT_TOKEN" gh api graphql -f query="
           query {
+            organization(login: \"$PROJECT_OWNER\") {
+              projectsV2(first: 20) {
+                nodes {
+                  id
+                  title
+                  fields(first: 50) {
+                    nodes {
+                      ... on ProjectV2Field {
+                        id
+                        name
+                        dataType
+                      }
+                      ... on ProjectV2SingleSelectField {
+                        id
+                        name
+                        options {
+                          id
+                          name
+                        }
+                      }
+                    }
+                  }
+                  items(first: 100) {
+                    pageInfo { hasNextPage }
+                    nodes {
+                      id
+                      content {
+                        ... on Issue { number }
+                        ... on PullRequest { number }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }" 2>&1) || projects_raw=""
+
+          if ! printf '%s' "$projects_raw" | jq -e '.data.organization.projectsV2.nodes | length > 0' >/dev/null 2>&1; then
+            projects_raw=$(GH_TOKEN="$PROJECT_TOKEN" gh api graphql -f query="
+          query {
             user(login: \"$PROJECT_OWNER\") {
               projectsV2(first: 20) {
                 nodes {
@@ -182,12 +222,18 @@ jobs:
             post_reply "**\`/project-update\` failed:** Could not query GitHub Projects. Verify that \`PROJECT_UPDATE_PAT\` is a classic PAT with \`project\` scope. API error: \`${safe_err}\`"
             exit 1
           }
+          fi
+
+          if [ -z "$projects_raw" ]; then
+            post_reply "**\`/project-update\` failed:** Could not query GitHub Projects. Verify that \`PROJECT_UPDATE_PAT\` is a classic PAT with \`project\` scope."
+            exit 1
+          fi
 
           # Normalise: wrap the matching project node under .data.user.projectV2
-          # so all subsequent jq paths are unchanged.
+          # so all subsequent jq paths are unchanged. Supports org- or user-owned projects.
           project_json=$(printf '%s' "$projects_raw" \
             | jq --arg t "$PROJECT_TITLE" \
-              '{"data":{"user":{"projectV2":(.data.user.projectsV2.nodes | map(select(.title == $t)) | .[0])}}}' \
+              '{"data":{"user":{"projectV2":((.data.organization.projectsV2.nodes // .data.user.projectsV2.nodes) | map(select(.title == $t)) | .[0])}}}' \
             2>/dev/null) || {
             post_reply "**\`/project-update\` failed:** Could not parse the GitHub Projects API response."
             exit 1
