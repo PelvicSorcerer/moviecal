@@ -94,6 +94,17 @@ Returns the authenticated user's private calendar subscription URL — the canon
 
 **Security:** the returned `subscriptionUrl` embeds the calendar token, which is a bearer credential for the feed. Treat the whole URL like a password; the server never logs the token or the response body. The token always resolves strictly to the authenticated user (the get/create runs through the user-scoped, RLS-enforced client), so a caller can never obtain another user's URL.
 
+### `POST /api/v1/calendar-token`
+
+Rotates the authenticated user's calendar token, immediately invalidating the previous subscription URL and returning the new one.
+
+- Request body: none.
+- Response `200`: `{ "subscriptionUrl": "https://moviecal.example/api/calendar/NewToken..." }` — same shape as `GET`, but the embedded token is new.
+- The previous token stops resolving at `/api/calendar/[token]` immediately upon rotation.
+- `401` if the bearer token is missing, malformed, expired, or otherwise invalid.
+
+**Security:** rotation revokes the previous token server-side. The new `subscriptionUrl` embeds the new calendar token (a bearer credential). Treat the whole URL like a password; the server never logs the token or the response body. Scoped strictly to the authenticated user via the user-scoped, RLS-enforced client.
+
 ### Movie search
 
 Base path: `/api/v1/movies/search`. Bearer-authenticated TMDb movie search for native/mobile clients. The response shape is identical to the unversioned `/api/movies/search` route (which is unchanged); the difference is authentication (bearer, no cookies) and the v1 error shape.

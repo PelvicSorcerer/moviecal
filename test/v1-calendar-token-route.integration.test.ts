@@ -118,6 +118,28 @@ function bearerRequest(
   });
 }
 
+function postRequest(init: { token?: string | null } = {}): Request {
+  const headers = new Headers();
+
+  if (init.token !== null) {
+    headers.set('authorization', `Bearer ${init.token ?? 'valid-token'}`);
+  }
+
+  headers.set('x-forwarded-host', 'moviecal.test');
+  headers.set('x-forwarded-proto', 'https');
+
+  return new Request('https://moviecal.test/api/v1/calendar-token', {
+    method: 'POST',
+    headers,
+  });
+}
+
+function embeddedTokenOf(subscriptionUrl: string): string {
+  return decodeURIComponent(
+    new URL(subscriptionUrl).pathname.replace('/api/calendar/', ''),
+  );
+}
+
 describe('v1 calendar-token route (mobile Bearer surface)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -265,5 +287,122 @@ describe('v1 calendar-token route (mobile Bearer surface)', () => {
     });
     // The E2E branch must not build the Supabase-backed repository.
     expect(mocks.createSupabaseCalendarTokenRepository).not.toHaveBeenCalled();
+  });
+
+  describe('POST (rotation)', () => {
+    function seededRepository(): {
+      repository: CalendarTokenRepository;
+      existing: CalendarTokenRow;
+    } {
+      const existing: CalendarTokenRow = {
+        created_at: '2026-06-13T05:00:00.000Z',
+        id: 'calendar-token-existing',
+        token: 'existing-token-value',
+        user_id: TEST_USER_IDS.OWNER,
+      };
+
+      return {
+        existing,
+        repository: createInMemoryCalendarTokenRepository(existing),
+      };
+    }
+
+    it('rotates the token and returns a new subscriptionUrl', async () => {
+      const { repository, existing } = seededRepository();
+      setupAuthenticatedRouteMocks(repository);
+
+      const { POST } = await import('../src/app/api/v1/calendar-token/route');
+      const response = await POST(postRequest());
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { subscriptionUrl: string };
+
+      expect(
+        body.subscriptionUrl.startsWith('https://moviecal.test/api/calendar/'),
+      ).toBe(true);
+
+      const newToken = embeddedTokenOf(body.subscriptionUrl);
+      // The rotated token differs from the previous one.
+      expect(newToken).not.toBe(existing.token);
+      // The new token resolves strictly to the authenticated user.
+      await expect(repository.findUserIdByToken(newToken)).resolves.toBe(
+        TEST_USER_IDS.OWNER,
+      );
+      // Rotation runs through the user-scoped (RLS) client seam.
+      expect(mocks.createSupabaseCalendarTokenRepository).toHaveBeenCalledWith({
+        userClient: { name: 'user-client' },
+        adminClient: { name: 'service-role-client' },
+      });
+    });
+
+    it('invalidates the previous token (old token no longer resolves)', async () => {
+      const { repository, existing } = seededRepository();
+      setupAuthenticatedRouteMocks(repository);
+
+      const { POST } = await import('../src/app/api/v1/calendar-token/route');
+      await POST(postRequest());
+
+      // The previous token value is gone from the repository.
+      await expect(
+        repository.findUserIdByToken(existing.token),
+      ).resolves.toBeNull();
+    });
+
+    it('returns 401 { error: Unauthorized. } when the Authorization header is missing', async () => {
+      setupAuthenticatedRouteMocks();
+
+      const { POST } = await import('../src/app/api/v1/calendar-token/route');
+      const response = await POST(postRequest({ token: null }));
+
+      expect(response.status).toBe(401);
+      await expect(response.json()).resolves.toEqual({ error: 'Unauthorized.' });
+      // A missing token must short-circuit before any auth resolution.
+      expect(mocks.resolveAuthTokensWithClient).not.toHaveBeenCalled();
+    });
+
+    it('returns 401 when the bearer token does not resolve to a user', async () => {
+      setupAuthenticatedRouteMocks();
+      authenticateAs(null);
+
+      const { POST } = await import('../src/app/api/v1/calendar-token/route');
+      const response = await POST(postRequest());
+
+      expect(response.status).toBe(401);
+      await expect(response.json()).resolves.toEqual({ error: 'Unauthorized.' });
+      // A token that resolves to no user must never rotate a calendar token.
+      expect(mocks.createSupabaseCalendarTokenRepository).not.toHaveBeenCalled();
+    });
+
+    it('resolves the bearer token without allowing a silent refresh', async () => {
+      setupAuthenticatedRouteMocks();
+
+      const { POST } = await import('../src/app/api/v1/calendar-token/route');
+      await POST(postRequest({ token: 'mobile-access-token' }));
+
+      expect(mocks.createServerSupabaseClient).toHaveBeenCalledWith(
+        'mobile-access-token',
+      );
+      expect(mocks.resolveAuthTokensWithClient).toHaveBeenCalledWith(
+        { name: 'user-client' },
+        { accessToken: 'mobile-access-token', refreshToken: '' },
+        { allowRefresh: false },
+      );
+    });
+
+    it('honours the E2E path for the E2E user without touching the database', async () => {
+      process.env.MOVIECAL_E2E_TEST_MODE = '1';
+      setupAuthenticatedRouteMocks();
+      authenticateAs(E2E_USER.id);
+
+      const { POST } = await import('../src/app/api/v1/calendar-token/route');
+      const response = await POST(postRequest());
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        subscriptionUrl: `https://moviecal.test/api/calendar/${E2E_DEFAULT_CALENDAR_TOKEN}`,
+      });
+      // The E2E branch must not build the Supabase-backed repository.
+      expect(mocks.createSupabaseCalendarTokenRepository).not.toHaveBeenCalled();
+    });
   });
 });

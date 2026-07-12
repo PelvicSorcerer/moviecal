@@ -7,6 +7,7 @@ import { resolveAuthTokensWithClient } from '../../../../lib/auth/identity';
 import {
   buildCalendarSubscriptionUrl,
   getOrCreateCalendarToken,
+  rotateCalendarToken,
 } from '../../../../lib/calendar-tokens';
 import { syncE2ECalendarToken } from '../../../../lib/e2e/calendar-token-state';
 import { E2E_USER, isE2ETestModeEnabled } from '../../../../lib/e2e/fixtures';
@@ -84,6 +85,67 @@ export async function GET(request: Request): Promise<NextResponse> {
         ? syncE2ECalendarToken(EMPTY_COOKIE_READER)
         : (
             await getOrCreateCalendarToken({
+              repository: createSupabaseCalendarTokenRepository({
+                adminClient: createServerSupabaseServiceRoleClient(),
+                userClient,
+              }),
+              userId: auth.user.id,
+            })
+          ).token;
+
+    const subscriptionUrl = buildCalendarSubscriptionUrl(origin, calendarToken);
+
+    return NextResponse.json({ subscriptionUrl });
+  } catch (error) {
+    return handleDomainError(error);
+  }
+}
+
+/**
+ * Rotates the authenticated user's calendar token, replacing the previous token
+ * in the repository so its `/api/calendar/[token]` feed URL stops resolving
+ * immediately, and returns the new `{ subscriptionUrl }`.
+ *
+ * Auth and transport match `GET`: `Authorization: Bearer <access-token>` only,
+ * no cookies, no silent refresh (`allowRefresh: false`). Rotation runs through
+ * the user-scoped, RLS-enforced client, so a caller can only rotate their own
+ * token. The response body embeds the new calendar token (a bearer credential)
+ * and is therefore never logged. Expired/invalid/missing tokens receive a `401`.
+ *
+ * For the E2E test user, rotation is a no-op: the E2E path returns the stable
+ * E2E token URL without touching the database, mirroring the `GET` behaviour.
+ */
+export async function POST(request: Request): Promise<NextResponse> {
+  const token = extractBearerToken(request);
+
+  if (!token) {
+    return apiError('Unauthorized.', 401);
+  }
+
+  const userClient = createServerSupabaseClient(token);
+
+  const auth = await resolveAuthTokensWithClient(
+    userClient,
+    // Bearer-only auth: no refresh token on the header, and with
+    // `allowRefresh: false` the refresh branch never runs or reads it.
+    { accessToken: token, refreshToken: '' },
+    { allowRefresh: false },
+  );
+
+  if (!auth.user) {
+    return apiError('Unauthorized.', 401);
+  }
+
+  try {
+    const origin = readRequestOrigin(request.headers);
+
+    // Honour the E2E path the same way `GET` does: rotation is a no-op for the
+    // E2E user — return the stable E2E token URL without touching the database.
+    const calendarToken =
+      isE2ETestModeEnabled() && auth.user.id === E2E_USER.id
+        ? syncE2ECalendarToken(EMPTY_COOKIE_READER)
+        : (
+            await rotateCalendarToken({
               repository: createSupabaseCalendarTokenRepository({
                 adminClient: createServerSupabaseServiceRoleClient(),
                 userClient,
