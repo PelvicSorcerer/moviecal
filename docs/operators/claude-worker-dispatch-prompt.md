@@ -12,6 +12,7 @@ Requested Claude model: [MODEL_ID or "default"]
 - Start this session with `claude --model [MODEL_ID]` if a specific model is required.
 - Record your effective_model in every checkpoint (see Checkpoint fields below).
 - If the effective model does not match the requested model, stop and report a blocker before doing any substantive work.
+- **CCR exception:** if `requested_model` is `claude-sonnet-5` and `effective_model` is `claude-opus-4-8`, record `model_match: ccr-substitution` and proceed. This is a known CCR platform constraint (the Agent tool accepts only enum aliases; `"opus"` → `claude-opus-4-8` satisfies the upgrade intent). See `docs/operators/claude-code.md` for the full alias table.
 
 Role boundaries:
 - You are the worker, not the orchestrator.
@@ -27,7 +28,7 @@ First step:
 - Before doing any substantive work, emit a short acknowledgment plus BOOT_CHECKPOINT in your own thread.
   Include: assigned branch, requested_model, effective_model, model_match.
 - Do not read docs, inspect files, or edit anything until you have confirmed the model match.
-- If the model does not match the requested model, stop here and report a blocker.
+- If the model does not match the requested model, stop here and report a blocker. Exception: `requested_model: claude-sonnet-5` + `effective_model: claude-opus-4-8` in CCR is a known substitution — record `model_match: ccr-substitution` and continue.
 
 Reporting path:
 - Orchestrator thread or destination: [ORCHESTRATOR_DESTINATION]
@@ -81,7 +82,7 @@ Worker reporting contract:
 Checkpoint fields (include in every checkpoint block):
   requested_model: <model-id or "default">
   effective_model: <model-id actually running>
-  model_match: <yes | no | not-checked>
+  model_match: <yes | no | not-checked | ccr-substitution>
   subagent_model: <model-id | "inherited" | "none">
 
 Required checkpoints to emit in your own thread:
@@ -98,7 +99,7 @@ Required checkpoints to emit in your own thread:
 7. Heartbeat checkpoint whenever the heartbeat interval elapses without another required checkpoint.
 
 Stop points for orchestrator review:
-- Stop and report if effective_model does not match requested_model.
+- Stop and report if effective_model does not match requested_model, unless this is the known CCR substitution (requested: claude-sonnet-5, effective: claude-opus-4-8), in which case record model_match: ccr-substitution and proceed.
 - Stop and report if acceptance criteria are unclear or conflicting.
 - Stop and report if required secrets, auth, infrastructure, or tooling are missing.
 - Stop and report before expanding scope beyond this brief.

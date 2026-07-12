@@ -20,7 +20,7 @@ State the expected automated coverage up front. Use `docs/planning/repository-te
 - Verification commands: <!-- e.g. npm run verify, npm run lane:browser -->
 - Deferred coverage follow-up: <!-- if any layer above is deferred, name the concrete follow-up issue number (for example #NNN) that must exist before merge; do not defer to a vague umbrella testing issue -->
 
-- Requested Claude model: <!-- claude-haiku-4-5 | claude-sonnet-4-6 | claude-sonnet-5 | claude-opus-4-8; required for Claude Code workers; N/A for Codex/Cursor/Copilot; see docs/operators/claude-model-selection-policy.md for the cost-optimized rubric -->
+- Requested Claude model: <!-- claude-haiku-4-5 | claude-sonnet-4-6 | claude-sonnet-5 | claude-opus-4-8; required for Claude Code workers; N/A for Codex/Cursor/Copilot; see docs/operators/claude-model-selection-policy.md for the cost-optimized rubric. CCR note: the Agent tool only accepts enum aliases (sonnet/opus/haiku/fable); if this field is claude-sonnet-5, the orchestrator dispatches model: "opus" (claude-opus-4-8) as the CCR upgrade workaround — workers should record model_match: ccr-substitution and proceed. -->
   - Upgrade condition: <!-- required if above claude-sonnet-4-6: multi-system | ambiguous-spec | security-critical | prior-failure | architecture + one-sentence rationale; opus requires prior-failure or architecture -->
 - Manual testing checklist: issue-specific local verification steps for the human tester, including setup assumptions, happy path, edge cases, regression checks, and expected results
 - Security notes: required for auth, database, calendar, cron, tokens, or secrets work
