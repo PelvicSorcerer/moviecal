@@ -162,13 +162,12 @@ describe.skipIf(!supabaseReachable || !credentialsPresent)(
       return data.id;
     }
 
-    describe('acceptInviteMembership — pending-to-accepted update via adminClient', () => {
+    describe('acceptInviteMembership — pending row: sets accepted_at to supplied value', () => {
       let watchlistId = '';
-      let membershipId = '';
 
       beforeAll(async () => {
         watchlistId = await createSharedWatchlist(randomUUID().slice(0, 8));
-        membershipId = await insertPendingMembership(watchlistId);
+        await insertPendingMembership(watchlistId);
       });
 
       afterAll(async () => {
@@ -177,7 +176,7 @@ describe.skipIf(!supabaseReachable || !credentialsPresent)(
         }
       });
 
-      it('sets accepted_at on a pending membership row', async () => {
+      it('sets accepted_at to the caller-supplied value', async () => {
         const repository = createSupabaseWatchlistRepository({
           adminClient,
           userClient: adminClient,
@@ -194,7 +193,23 @@ describe.skipIf(!supabaseReachable || !credentialsPresent)(
         expect(result.userId).toBe(memberUserId);
         expect(result.watchlistId).toBe(watchlistId);
         expect(result.role).toBe('editor');
-        expect(result.acceptedAt).not.toBeNull();
+        expect(result.acceptedAt).toBe(acceptedAt);
+      });
+    });
+
+    describe('acceptInviteMembership — already-accepted row: returns without overwriting accepted_at', () => {
+      let watchlistId = '';
+      let membershipId = '';
+
+      beforeAll(async () => {
+        watchlistId = await createSharedWatchlist(randomUUID().slice(0, 8));
+        membershipId = await insertAcceptedMembership(watchlistId);
+      });
+
+      afterAll(async () => {
+        if (watchlistId) {
+          await adminClient.from('watchlists').delete().eq('id', watchlistId);
+        }
       });
 
       it('returns the already-accepted membership without overwriting accepted_at', async () => {
@@ -208,8 +223,6 @@ describe.skipIf(!supabaseReachable || !credentialsPresent)(
           .select('accepted_at')
           .eq('id', membershipId)
           .single();
-
-        expect(before?.accepted_at).not.toBeNull();
 
         const result = await repository.acceptInviteMembership({
           acceptedAt: new Date(Date.now() + 60_000).toISOString(),
@@ -349,12 +362,12 @@ describe.skipIf(!supabaseReachable || !credentialsPresent)(
       let watchlistId = '';
       let membershipId = '';
 
-      beforeAll(async () => {
+      beforeEach(async () => {
         watchlistId = await createSharedWatchlist(randomUUID().slice(0, 8));
         membershipId = await insertPendingMembership(watchlistId);
       });
 
-      afterAll(async () => {
+      afterEach(async () => {
         if (watchlistId) {
           await adminClient.from('watchlists').delete().eq('id', watchlistId);
         }
