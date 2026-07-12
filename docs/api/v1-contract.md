@@ -18,12 +18,12 @@ All errors use `{ "error": string }` with an appropriate HTTP status:
 
 | Status | Meaning |
 |---|---|
-| `400` | Invalid request body (`WatchlistInputError`). |
+| `400` | Invalid request body (`WatchlistInputError`) or missing/empty search query `q`. |
 | `401` | Missing, malformed, expired, or otherwise invalid bearer token — `{ "error": "Unauthorized." }`. |
 | `403` | Access denied by domain/RLS (`WatchlistAccessError`). |
 | `404` | Item or watchlist not found (`WatchlistNotFoundError`). |
 | `500` | Unexpected/data error. |
-| `503` | TMDb not configured (on write paths that fetch movie metadata). |
+| `503` | TMDb not configured (write paths that fetch movie metadata, and the movie search path). |
 
 ## Endpoints
 
@@ -93,6 +93,39 @@ Returns the authenticated user's private calendar subscription URL — the canon
 - `401` if the bearer token is missing, malformed, expired, or otherwise invalid.
 
 **Security:** the returned `subscriptionUrl` embeds the calendar token, which is a bearer credential for the feed. Treat the whole URL like a password; the server never logs the token or the response body. The token always resolves strictly to the authenticated user (the get/create runs through the user-scoped, RLS-enforced client), so a caller can never obtain another user's URL.
+
+### Movie search
+
+Base path: `/api/v1/movies/search`. Bearer-authenticated TMDb movie search for native/mobile clients. The response shape is identical to the unversioned `/api/movies/search` route (which is unchanged); the difference is authentication (bearer, no cookies) and the v1 error shape.
+
+Search does not touch user-owned data — there is no service-role client and no RLS concern — but a valid bearer token is still required.
+
+### `GET /api/v1/movies/search`
+
+Searches TMDb for movies matching the `q` query parameter.
+
+- Query parameter: `q` (required, non-empty after trimming).
+- Request body: none.
+- Response `200`:
+
+  ```json
+  {
+    "results": [
+      {
+        "tmdbId": 603,
+        "title": "The Matrix",
+        "releaseDate": "1999-03-31",
+        "posterPath": "/matrix.jpg",
+        "overview": "A hacker discovers the truth."
+      }
+    ]
+  }
+  ```
+
+- `400` if `q` is missing or empty — `{ "error": "Search query \"q\" is required." }`.
+- `401` if the bearer token is missing, malformed, expired, or invalid — `{ "error": "Unauthorized." }`.
+- `503` if TMDb is not configured — `{ "error": "Movie search is unavailable until TMDb is configured." }`.
+
 
 ## Compatibility notes
 
