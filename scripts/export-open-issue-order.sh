@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Exports a generated compatibility artifact for product-track queue ordering only.
-# Dispatch promotion uses live project fields and considers both Product and Future tracks.
-# This export intentionally excludes Future, Platform, Migration, process, and docs items.
+# Exports a generated compatibility artifact for product-board queue ordering only.
+# Dispatch promotion uses live project domain tracks and Future; see docs/planning/project-field-taxonomy.md.
+# This export intentionally excludes Future, Platform, Migration, process, and docs areas.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/project-queue-common.sh

@@ -14,7 +14,7 @@ This file is the generic contract every agent and human contributor reads. Platf
 
 ## Start conditions
 
-- **Dispatch-slot work (Codex workers only):** start implementation only from the single open GitHub issue whose `moviecal Delivery` project item has `Agent Dispatch = Yes` and `Status = Ready`. Dispatch-eligible tracks are `Product` and `Future`; see `docs/operators/multi-platform-dispatch-policy.md`.
+- **Dispatch-slot work (Codex workers only):** start implementation only from the single open GitHub issue whose `moviecal Delivery` project item has `Agent Dispatch = Yes` and `Status = Ready`. Dispatch-eligible project tracks are the product-delivery domain tracks (`Shared Watchlists`, `Calendar`, `Docs`) and `Future`; see `docs/planning/project-field-taxonomy.md` and `docs/operators/multi-platform-dispatch-policy.md`.
 - **Direct assignment (any platform, any track):** start implementation when a human assigns the task or delegates the issue directly to you. The issue keeps `Agent Dispatch = No` — direct assignment does not consume the dispatch slot. You may implement `Product`, `Future`, `Platform`, or governance work when directly assigned. Migration-track items follow the separate restriction in `docs/operators/multi-platform-dispatch-policy.md` (humans only, or agents on explicit human assignment for doc-only items). See the "Direct assignment path" section in `docs/operators/multi-platform-dispatch-policy.md`.
 - **Orchestrator role (any platform):** any platform may act as orchestrator — reading queue state, promoting issues, setting `Agent Dispatch = Yes` on the next ready issue, and running post-merge handoff — using its native tool set. The Codex spawn_agent/worktree mechanics are Codex-specific, but the governance lifecycle (queue intake → dispatch promotion → post-merge handoff) is available to every platform. See each platform's operator guide under `docs/operators/` for the platform-specific orchestrator procedure.
 - Treat the GitHub Project as the operational source of truth for live queue state, status, and ordering.
@@ -26,6 +26,7 @@ This file is the generic contract every agent and human contributor reads. Platf
 ## Queue authority
 
 - The `moviecal Delivery` GitHub Project is authoritative for live queue state, workflow status, queue ordering, and dispatch selection.
+- Canonical allowed values for project `Track` and `Area` are defined in `docs/planning/project-field-taxonomy.md`. Do not copy unsupported values (for example `Track = Product` or `Area = backend`) from issue bodies into the project; stop and report taxonomy mismatches instead of substituting the closest option.
 - GitHub issues remain authoritative for background, acceptance criteria, verification steps, security notes, out-of-scope boundaries, and dependency notes.
 - The project field `Agent Dispatch` is the dispatch authority surface. `Yes` marks the one issue a fresh implementation agent may start; `No` marks every other issue.
 - If project state, issue labels, and planning docs disagree, reconcile the GitHub Project first, then update the issue state, then update docs.
@@ -47,7 +48,7 @@ The invariants below apply regardless of which platform governs the queue:
 
 - A ready handoff means: a local branch tracking `origin/master` contains the merged change; there are no stray open PRs for the same issue; exactly one open issue has `Agent Dispatch = Yes` and `Status = Ready`, unless the queue is intentionally blocked; and the promoted issue has current acceptance criteria, verification steps, and security notes when applicable.
 - If the next issue depends on missing tooling, secrets, or infrastructure, mark the queue blocked instead of promoting a speculative dispatch issue.
-- When multiple open dispatch-eligible issues (`Product` or `Future`) could look ready, use the project `Queue Order` field as the deterministic tie-breaker. `Queue Order` is global across the project, but only dispatch-eligible tracks may hold the dispatch slot.
+- When multiple open dispatch-eligible issues (product-delivery domain tracks or `Future`) could look ready, use the project `Queue Order` field as the deterministic tie-breaker. `Queue Order` is global across the project, but only dispatch-eligible tracks may hold the dispatch slot.
 - Multi-platform dispatch rights are documented in `docs/operators/multi-platform-dispatch-policy.md`. Any platform may act as orchestrator (promote issues, set `Agent Dispatch = Yes`, run post-merge handoff). The formal Codex dispatch slot (where a Codex worker starts from `Agent Dispatch = Yes`) remains Codex-specific; other platforms implement work via direct assignment. See that doc for the full policy and per-platform orchestrator notes.
 
 ## Environment policy

@@ -31,14 +31,16 @@ See each platform's operator guide for the platform-specific orchestrator proced
 
 ## Dispatch-eligible tracks
 
-Two project tracks may hold the single dispatch slot when intentionally promoted:
+Two policy categories may hold the single dispatch slot when intentionally promoted:
 
-| Track | Meaning | Dispatch eligible |
+| Policy category | Live project `Track` values | Dispatch eligible |
 |---|---|---|
-| **Product** | User-facing feature delivery | **Yes** — see dispatch-slot section below |
-| **Future** | Executable non-product workstreams (testing programs, architecture hardening, strategic infrastructure) | **Yes** — see dispatch-slot section below |
-| **Platform** | Compatibility, governance, process | **No** — always `Agent Dispatch = No` |
-| **Migration** | Cutover work | **No** — always `Agent Dispatch = No` |
+| **Product delivery** | `Shared Watchlists`, `Calendar`, `Docs` | **Yes** — see dispatch-slot section below |
+| **Future** | `Future` | **Yes** — see dispatch-slot section below |
+| **Platform** | `Platform` | **No** — always `Agent Dispatch = No` |
+| **Migration** | `Migration` | **No** — always `Agent Dispatch = No` |
+
+There is no project `Track` option named `Product`. Issue bodies that say `Track = Product` use policy shorthand; orchestrators must map work to a domain track using `docs/planning/project-field-taxonomy.md` and must stop rather than guess when mapping is unclear.
 
 `Future` is not a parking lot for vague ideas. A `Future`-track issue must still have a normal executable issue contract (acceptance criteria, verification steps, **Testing Expectations**, relevant docs) before it can be promoted to `Status = Ready` and receive dispatch.
 
@@ -46,14 +48,14 @@ Two project tracks may hold the single dispatch slot when intentionally promoted
 
 | Project `Track` | Who may set `Agent Dispatch = Yes` (as orchestrator) | Who may start from `Agent Dispatch = Yes` (as worker) | Who may implement via direct assignment |
 |---|---|---|---|
-| **Product** (feature delivery) | Any platform or human acting as orchestrator | **Codex workers only** (formal spawn_agent handshake) | Any platform or human (when directly assigned, without the dispatch slot) |
+| **Product delivery** (domain tracks) | Any platform or human acting as orchestrator | **Codex workers only** (formal spawn_agent handshake) | Any platform or human (when directly assigned, without the dispatch slot) |
 | **Future** (non-product executable workstreams) | Any platform or human acting as orchestrator | **Codex workers only** (formal spawn_agent handshake) | Any platform or human (when directly assigned, without the dispatch slot) |
 | **Platform** (compatibility, governance, process) | Not applicable — always `Agent Dispatch = No` | Not applicable | Any platform or human via direct assignment |
 | **Migration** (cutover work) | Not applicable — always `Agent Dispatch = No` | Not applicable | Humans (or agents on explicit human assignment for doc-only migration items) |
 
-### Dispatch-slot work (Product and Future tracks)
+### Dispatch-slot work (product-delivery domain tracks and Future)
 
-Only **Codex workers** may start implementation from the single `Agent Dispatch = Yes` / `Status = Ready` slot, regardless of whether the promoted issue is on `Product` or `Future`. This restriction applies to the *worker* role only — any orchestrating platform may set the dispatch slot.
+Only **Codex workers** may start implementation from the single `Agent Dispatch = Yes` / `Status = Ready` slot when the promoted item is on a dispatch-eligible project `Track` (`Shared Watchlists`, `Calendar`, `Docs`, or `Future`). This restriction applies to the *worker* role only — any orchestrating platform may set the dispatch slot.
 
 Rationale:
 
@@ -62,9 +64,9 @@ Rationale:
 
 Codex workers use `agent/<issue-number>-<short-slug>` branches. The Codex orchestrator uses `orchestrator/live` (or similar) and does not consume the dispatch slot for feature work.
 
-### Direct assignment path (Product and Future tracks)
+### Direct assignment path (product-delivery domain tracks and Future)
 
-Any agent platform (Claude Code, Cursor Cloud Agent, GitHub Copilot) or human may implement a **Product** or **Future** track issue when **directly assigned**, without requiring or competing for the dispatch slot. Direct assignment means:
+Any agent platform (Claude Code, Cursor Cloud Agent, GitHub Copilot) or human may implement a **product-delivery** (`Shared Watchlists`, `Calendar`, or `Docs`) or **Future** project item when **directly assigned**, without requiring or competing for the dispatch slot. Direct assignment means:
 
 - A human (engineer, lead, or orchestrator session) explicitly assigns the issue to a specific agent or delegates the issue to them.
 - The issue remains at `Agent Dispatch = No` — it does not consume the single dispatch slot.
@@ -117,7 +119,7 @@ Governance and queue-maintenance changes that are not tied to a product implemen
 
 Dispatch promotion uses a narrower filter. When selecting the next dispatchable issue, consider only open issues that are:
 
-1. on a dispatch-eligible track (`Product` or `Future`)
+1. on a dispatch-eligible project `Track` (`Shared Watchlists`, `Calendar`, `Docs`, or `Future`)
 2. `Status = Ready`
 3. unblocked, with a current executable issue contract
 4. small enough for one focused PR
@@ -131,7 +133,7 @@ The following steps apply regardless of which platform ran the orchestrator sess
 1. Pull or confirm an attached local branch tracking `origin/master` contains the merged work.
 2. Confirm the completed issue is closed and no duplicate or stale PR remains open for the same work.
 3. Demote the merged issue: post `/project-update Status=Done AgentDispatch=No` on the issue, or use the platform's equivalent GitHub API call.
-4. Scan open issues on dispatch-eligible tracks (`Product` or `Future`) with `Status = Ready`, ordered by `Queue Order` ascending.
+4. Scan open issues on dispatch-eligible project tracks (`Shared Watchlists`, `Calendar`, `Docs`, or `Future`) with `Status = Ready`, ordered by `Queue Order` ascending.
 5. Promote exactly one qualifying issue: post `/project-update Status=Ready AgentDispatch=Yes` on that issue. If no issue qualifies, record the blocker instead.
 6. Update planning or guidance docs only if the merge changed queue assumptions.
 7. Optionally dispatch or assign a worker for the promoted issue using the platform's native mechanism.
@@ -142,10 +144,10 @@ For Codex-specific post-merge detail (worktree cleanup, `wait_agent` collection)
 
 | Field | Role in this policy |
 |---|---|
-| `Track` | Separates dispatch-eligible work (`Product`, `Future`) from non-dispatchable work (`Platform`, `Migration`) |
+| `Track` | Separates dispatch-eligible work (product-delivery domain tracks and `Future`) from non-dispatchable work (`Platform`, `Migration`) |
 | `Agent Dispatch` | `Yes` only on the single dispatch-eligible issue; any orchestrating platform may set this field |
 | `Status` | The dispatchable issue must be `Ready` |
-| `Queue Order` | Global preferred execution order; dispatch promotion uses the lowest value among open `Ready` issues on `Product` or `Future` |
+| `Queue Order` | Global preferred execution order; dispatch promotion uses the lowest value among open `Ready` issues on dispatch-eligible tracks |
 | `Execution Mode` | `Human` items are never dispatch candidates; `Agent`/`Either` dispatch-eligible items may eventually receive dispatch |
 
 ## What this policy does not change
@@ -156,7 +158,7 @@ For Codex-specific post-merge detail (worktree cleanup, `wait_agent` collection)
 
 ## Automation alignment
 
-`scripts/project-queue-check.sh` and `scripts/lib/project-queue-common.sh` validate that the single `Agent Dispatch = Yes` item is on a dispatch-eligible track (`Product` or `Future`). Platform and migration items must keep `Agent Dispatch = No`.
+`scripts/project-queue-check.sh` and `scripts/lib/project-queue-common.sh` validate that the single `Agent Dispatch = Yes` item is on a dispatch-eligible project `Track` (`Shared Watchlists`, `Calendar`, `Docs`, or `Future`). Platform and migration items must keep `Agent Dispatch = No`.
 
 ## Changing this policy
 

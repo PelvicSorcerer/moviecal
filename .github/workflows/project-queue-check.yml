@@ -16,6 +16,7 @@ on:
       - 'scripts/export-open-issue-order.sh'
       - '.github/workflows/project-queue-check.yml'
       - 'docs/operators/multi-platform-dispatch-policy.md'
+      - 'docs/planning/project-field-taxonomy.md'
       - 'docs/planning/github-project-migration-plan.md'
       - 'AGENTS.md'
       - 'package.json'
@@ -29,6 +30,7 @@ on:
       - 'scripts/export-open-issue-order.sh'
       - '.github/workflows/project-queue-check.yml'
       - 'docs/operators/multi-platform-dispatch-policy.md'
+      - 'docs/planning/project-field-taxonomy.md'
       - 'docs/planning/github-project-migration-plan.md'
       - 'AGENTS.md'
       - 'package.json'
@@ -65,7 +67,7 @@ jobs:
               {
                 "agent Dispatch":"Yes",
                 "status":"Ready",
-                "track":"Product",
+                "track":"Shared Watchlists",
                 "title":"Dispatch issue",
                 "labels":[],
                 "content":{"type":"Issue","number":74}
@@ -73,7 +75,7 @@ jobs:
               {
                 "agent Dispatch":"No",
                 "status":"Backlog",
-                "track":"Product",
+                "track":"Shared Watchlists",
                 "title":"Non-dispatch issue",
                 "labels":[],
                 "content":{"type":"Issue","number":91}
@@ -93,7 +95,7 @@ jobs:
               {
                 "agent Dispatch":"No",
                 "status":"Backlog",
-                "track":"Product",
+                "track":"Shared Watchlists",
                 "title":"Blocked queue issue",
                 "labels":[],
                 "content":{"type":"Issue","number":95}
@@ -112,7 +114,7 @@ jobs:
               {
                 "agent Dispatch":"Yes",
                 "status":"Backlog",
-                "track":"Product",
+                "track":"Shared Watchlists",
                 "title":"Dispatch issue with wrong status",
                 "labels":[],
                 "content":{"type":"Issue","number":74}
@@ -139,7 +141,7 @@ jobs:
               {
                 "agent Dispatch":"Yes",
                 "status":"Ready",
-                "track":"Product",
+                "track":"Shared Watchlists",
                 "title":"Dispatch issue",
                 "labels":[],
                 "content":{"type":"Issue","number":74}
@@ -162,7 +164,7 @@ jobs:
               {
                 "agent Dispatch":"Yes",
                 "status":"Backlog",
-                "track":"Product",
+                "track":"Shared Watchlists",
                 "title":"Dispatch issue",
                 "labels":[],
                 "content":{"type":"Issue","number":74}
@@ -204,6 +206,52 @@ jobs:
               {"number":123,"title":"Future dispatch issue"}
             ]
         run: bash scripts/project-queue-check.sh
+      - name: Validate fixture-based Calendar track dispatch path
+        env:
+          PROJECT_QUEUE_MODE: post-cutover
+          PROJECT_QUEUE_ITEMS_JSON: |
+            {"items":[
+              {
+                "agent Dispatch":"Yes",
+                "status":"Ready",
+                "track":"Calendar",
+                "title":"Calendar dispatch issue",
+                "labels":[],
+                "content":{"type":"Issue","number":223}
+              }
+            ]}
+          PROJECT_QUEUE_OPEN_ISSUES_JSON: |
+            [
+              {"number":223,"title":"Calendar dispatch issue"}
+            ]
+        run: bash scripts/project-queue-check.sh
+      - name: Validate fixture-based Product shorthand dispatch failure path
+        env:
+          PROJECT_QUEUE_MODE: post-cutover
+          PROJECT_QUEUE_ITEMS_JSON: |
+            {"items":[
+              {
+                "agent Dispatch":"Yes",
+                "status":"Ready",
+                "track":"Product",
+                "title":"Invalid Product shorthand dispatch issue",
+                "labels":[],
+                "content":{"type":"Issue","number":222}
+              }
+            ]}
+          PROJECT_QUEUE_OPEN_ISSUES_JSON: |
+            [
+              {"number":222,"title":"Invalid Product shorthand dispatch issue"}
+            ]
+        run: |
+          set +e
+          bash scripts/project-queue-check.sh
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "Expected Product shorthand dispatch fixture to fail, but it passed." >&2
+            exit 1
+          fi
       - name: Validate fixture-based Platform track dispatch failure path
         env:
           PROJECT_QUEUE_MODE: post-cutover

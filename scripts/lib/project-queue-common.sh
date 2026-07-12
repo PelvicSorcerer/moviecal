@@ -164,11 +164,15 @@ project_queue_validate_dispatch_track() {
   local issue_number="$2"
 
   case "$track" in
-    Product|Future)
+    "Shared Watchlists"|Calendar|Docs|Future)
       return 0
       ;;
+    Product)
+      echo "Issue #$issue_number has Track = Product, which is not a live project option. Map product-delivery work to a domain Track per docs/planning/project-field-taxonomy.md before setting Agent Dispatch = Yes." >&2
+      return 1
+      ;;
     Platform|Migration)
-      echo "Issue #$issue_number has Agent Dispatch = Yes but Track = $track. Only Product and Future tracks are dispatch-eligible." >&2
+      echo "Issue #$issue_number has Agent Dispatch = Yes but Track = $track. Only dispatch-eligible domain tracks and Future may hold the dispatch slot." >&2
       return 1
       ;;
     "")
@@ -176,10 +180,30 @@ project_queue_validate_dispatch_track() {
       return 1
       ;;
     *)
-      echo "Issue #$issue_number has Agent Dispatch = Yes with unknown Track = $track. Only Product and Future tracks are dispatch-eligible." >&2
+      echo "Issue #$issue_number has Agent Dispatch = Yes with unknown Track = $track. See docs/planning/project-field-taxonomy.md for allowed values." >&2
       return 1
       ;;
   esac
+}
+
+project_queue_validate_issue_taxonomy_hints() {
+  local issue_number="$1"
+  local issue_body="$2"
+  local failures=0
+
+  if echo "$issue_body" | grep -Eq 'Track[[:space:]]*=[[:space:]]*Product'; then
+    echo "Issue #$issue_number uses Track = Product in its body. Product is a policy category, not a project Track option. See docs/planning/project-field-taxonomy.md and stop before writing project fields." >&2
+    failures=$((failures + 1))
+  fi
+
+  if echo "$issue_body" | grep -Eq 'Area[[:space:]]*=[[:space:]]*backend'; then
+    echo "Issue #$issue_number uses Area = backend in its body. backend is not a project Area option. See docs/planning/project-field-taxonomy.md and stop before writing project fields." >&2
+    failures=$((failures + 1))
+  fi
+
+  if [ "$failures" -gt 0 ]; then
+    return 1
+  fi
 }
 
 project_queue_validate_post_cutover() {

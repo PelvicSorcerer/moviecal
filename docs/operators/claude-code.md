@@ -70,8 +70,8 @@ If any field name or option value is invalid, the workflow replies with an error
 **Copy-paste examples for each governance step:**
 
 ```
-# Triage: move a new issue into the backlog
-/project-update Status=Backlog Track=Product Priority=P2 AgentDispatch=No
+# Triage: move a new issue into the backlog (use a canonical domain Track; see docs/planning/project-field-taxonomy.md)
+/project-update Status=Backlog Track=Shared_Watchlists Priority=P2 AgentDispatch=No
 
 # Set queue position during triage
 /project-update QueueOrder=42

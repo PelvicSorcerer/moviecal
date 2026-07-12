@@ -27,5 +27,5 @@ State the expected automated coverage up front. Use `docs/planning/repository-te
 - Out of scope: prevent adjacent backlog creep
 - Constraints: (e.g., no secrets, TypeScript strict, keep changes small)
 - Branch to start from: (e.g., master)
-- Queue note: whether this issue is eligible for `Status = Ready`, whether it could receive `Agent Dispatch = Yes` (dispatch-eligible tracks `Product` or `Future`, Codex workers only), whether it could be implemented by non-Codex platforms via direct assignment, and where it should sit in the GitHub Project `Queue Order`
+- Queue note: suggested canonical project `Track` and `Area` values from `docs/planning/project-field-taxonomy.md` (do not use `Track = Product` or `Area = backend`); whether the issue could eventually receive `Agent Dispatch = Yes` on a dispatch-eligible domain track or `Future` (Codex workers only); whether non-Codex platforms may implement it via direct assignment; note that the orchestrator owns `Status`, `Queue Order`, and other workflow fields
 - Manual verification steps / notes for reviewer
