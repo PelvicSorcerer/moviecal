@@ -1,0 +1,57 @@
+name: ios-verify
+
+on:
+  push:
+    branches:
+      - master
+      - agent/**
+      - orchestrator/**
+      - cursor/**
+      - copilot/**
+      - claude/**
+      - docs/**
+      - chore/**
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios-verify.yml'
+      - 'AGENTS.md'
+      - 'docs/operators/multi-platform-dispatch-policy.md'
+      - 'docs/operators/branch-and-ci-conventions.md'
+      - 'docs/operators/branch-prefixes.json'
+      - 'docs/operators/codex-orchestration.md'
+      - 'docs/planning/testing-lanes.md'
+      - 'docs/planning/native-ios-app-plan.md'
+      - 'docs/planning/issue-236-implementation-brief.md'
+  pull_request:
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios-verify.yml'
+      - 'AGENTS.md'
+      - 'docs/operators/multi-platform-dispatch-policy.md'
+      - 'docs/operators/branch-and-ci-conventions.md'
+      - 'docs/operators/branch-prefixes.json'
+      - 'docs/operators/codex-orchestration.md'
+      - 'docs/planning/testing-lanes.md'
+      - 'docs/planning/native-ios-app-plan.md'
+      - 'docs/planning/issue-236-implementation-brief.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios-verify-bootstrap:
+    runs-on:
+      - self-hosted
+      - macOS
+      - ios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show host and toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+      - name: Verify bootstrap policy
+        run: |
+          echo "ios-verify is in bootstrap mode until ios/ contains the real app scaffold."
+          echo "This successful no-op proves branch/path routing and toolchain availability."

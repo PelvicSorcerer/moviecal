@@ -11,8 +11,9 @@ This doc covers what's specific to Codex (Desktop app or CLI) when it develops t
 - Use the `moviecal Delivery` GitHub Project as the live queue source of truth.
 - Start implementation only from the single open issue whose project item has `Agent Dispatch = Yes` and `Status = Ready`.
 - Use the project `Queue Order` field when multiple issues could plausibly become the next dispatch candidate.
+- Treat the project `Dependencies` field as the authoritative machine-readable blocker surface and use the canonical queue algorithm in `docs/operators/codex-orchestration.md`.
 - Use the GitHub issue body as the execution contract for acceptance criteria, verification steps, security notes, dependency details, and **Testing Expectations**.
-- The GitHub Project is the dispatch authority. Use `Agent Dispatch = Yes` and `Status = Ready` on exactly one open dispatch-eligible issue (`Product` or `Future`) when the queue is ready for a fresh Codex worker. See `docs/operators/multi-platform-dispatch-policy.md` for platform-specific dispatch rights.
+- The GitHub Project is the dispatch authority. Use `Agent Dispatch = Yes` and `Status = Ready` on exactly one open dispatch-eligible issue when the queue is ready. Product and Future use the formal Codex handshake; iOS is the mixed-execution exception documented in `docs/operators/multi-platform-dispatch-policy.md`.
 
 ## What's verified vs assumed
 
@@ -81,5 +82,5 @@ Verified on **Linux x86_64** (Ubuntu bookworm, kernel `6.12.58+`, Node **v24.18.
 
 ## Known gaps / follow-ups
 
-- Multi-platform dispatch policy is documented in `docs/operators/multi-platform-dispatch-policy.md`. Only Codex workers may consume `Agent Dispatch = Yes` on dispatch-eligible tracks (`Product` or `Future`).
+- Multi-platform dispatch policy is documented in `docs/operators/multi-platform-dispatch-policy.md`. Product and Future remain Codex-only dispatch-slot tracks; iOS is main-queue eligible under the self-hosted runner gate.
 - Re-validate inside Codex Desktop's Linux sandbox if Codex-on-Linux becomes a supported worker host — this issue's pass used a plain Linux VM, not Codex's sandbox layer.

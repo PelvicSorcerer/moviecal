@@ -45,6 +45,16 @@
     }
   ],
   "pathRestrictedPushWorkflows": [
-    ".github/workflows/supabase-verify.yml"
+    ".github/workflows/supabase-verify.yml",
+    ".github/workflows/ios-verify.yml"
+  ],
+  "trustedSelfHostedExecutionGlobs": [
+    "agent/**",
+    "orchestrator/**",
+    "cursor/**",
+    "copilot/**",
+    "claude/**",
+    "docs/**",
+    "chore/**"
   ]
 }

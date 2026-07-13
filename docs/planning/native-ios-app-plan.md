@@ -13,11 +13,11 @@ for shipping a native iOS app to the App Store.
   work) or from a direct assignment.
 - When this plan conflicts with active queue scope, the GitHub Project and issue
   state win.
-- The governance proposal in the "Governance and testing" section is **not yet
-  ratified**. The authoritative edits to `docs/operators/multi-platform-dispatch-policy.md`
-  and `docs/operators/branch-and-ci-conventions.md` must land as a separate
-  governance PR once the new track name is agreed, per `AGENTS.md` (governance
-  changes stay separate from feature delivery).
+- Governance and testing policy for the iOS track is now ratified through issue
+  #236 and the operator docs it updates. This plan should stay aligned with
+  `docs/operators/multi-platform-dispatch-policy.md`,
+  `docs/operators/branch-and-ci-conventions.md`, and
+  `docs/planning/testing-lanes.md`.
 
 ## Goal
 
@@ -78,7 +78,7 @@ time, so begin them in parallel with backend work:
 |-------|------|-----|------------|
 | 0 | Foundations | Human (Apple enrollment) + agent (this doc) | This planning PR + human account setup |
 | 1 | Close the API gap | Agent-driven | **Product track, existing governance, full `npm run verify` coverage** |
-| 2 | iOS skeleton | Human and/or agent in a **macOS context** (local Mac agent or human), plus cloud agents for non-Swift authoring | Proposed iOS track (non-dispatch-eligible; Mac CI gate) |
+| 2 | iOS skeleton | Any agent platform or human; merge readiness Mac-gated | iOS track (main-queue eligible; self-hosted macOS runner gate) |
 | 3 | Feature-parity MVP | Same as Phase 2 | Same |
 | 4 | First-party polish (HIG) | Same as Phase 2 | Same |
 | 5 | Release engineering | Human-led (TestFlight, App Review) + agent support | Same |
@@ -119,38 +119,25 @@ service-role exposure, no token logging), and a **Test Impact** section on the P
 All are additive under the `v1` stability boundary — breaking shape changes would
 require a `v2` prefix.
 
-## Governance and testing (proposal — ratify in a separate governance PR)
+## Governance and testing
 
-The existing model has four tracks (Product / Future / Platform / Migration), a
-Codex-only dispatch slot, and a `check:branch-ci` drift check binding branch
-prefixes to workflow triggers. iOS work needs the following additions.
+The repo now treats iOS as a first-class delivery track with a dedicated
+self-hosted macOS runner lane and a repo-wide dependency-field contract.
 
-### New track: iOS (Mac-gated, non-dispatch-eligible)
+### New track: iOS (Mac-gated, main-queue eligible)
 
 - **Phase 1 backend work stays on the Product track** — no change; fully
   dispatch-eligible and agent-verifiable.
-- **Swift/iOS work (Phases 2–5) belongs on a new `iOS` track that is NOT
-  eligible for the cloud dispatch slot** (`Agent Dispatch = No` always, like
-  Platform/Migration).
-  Rationale — the binding constraint is the **execution environment (macOS vs
-  Linux), not agent-vs-human**. Swift builds, simulators, and XCUITest require a
-  macOS toolchain (Xcode):
-  - **Cloud/Linux agent sessions cannot verify Swift.** This includes Claude
-    Code on the web (remote Linux containers), Codex Cloud workers, Cursor, and
-    Copilot's hosted agents. The Codex dispatch slot presumes a worker that can
-    run verification; that assumption fails for Swift on Linux. Hence
-    non-dispatch-eligible.
-  - **Agents running in a macOS context *can* implement and verify Swift.** The
-    Claude Code CLI or Codex CLI running locally on a Mac (terminal or IDE
-    extension) inherits the full Xcode toolchain and can build, run simulators,
-    and UI-test. So iOS work is genuinely agent-executable — just not from the
-    cloud dispatch slot.
-- iOS issues are implemented via **direct assignment** (any platform may author
-  Swift on its own branch prefix, e.g. `claude/**`), and verified in a **macOS
-  execution context** — a locally-run Mac agent for the interactive dev/verify
-  loop, backed by an unattended **Mac CI gate** (below) as the authoritative
-  definition of done. A locally-run Mac agent needs the Mac awake and the session
-  launched, so it is a dev loop, not the enforceable gate.
+- **Swift/iOS work (Phases 2–5) belongs on the `iOS` track and is main-queue
+  eligible.**
+- The binding constraint is the **verification environment**, not who writes
+  Swift. Any agent platform or human may implement a promoted iOS issue.
+- Merge readiness is gated by the self-hosted macOS runner lane.
+- The orchestrator must check runner availability both when promoting an iOS
+  issue and immediately before work starts.
+- If the runner is unavailable at start-time, the orchestrator removes
+  `Agent Dispatch = Yes`, keeps `Status = Ready`, and skips forward through the
+  queue to the next eligible issue.
 
 ### CI and testing lanes
 
@@ -199,9 +186,6 @@ prefixes to workflow triggers. iOS work needs the following additions.
 
 ## Next actions
 
-1. **Human:** begin Apple Developer Program enrollment and reserve the App ID.
-2. **Agent (existing governance):** open the Phase 1 backend issues (v1 search,
-   v1 calendar-token get + rotate) on the Product track.
-3. **Governance PR (separate):** ratify the new `iOS` track and the CI
-   path-filtering + self-hosted macOS runner wiring (including its addition to
-   `check:branch-ci`) in the operator docs once the track name is agreed.
+1. Keep the operator docs and queue tooling aligned with the ratified iOS policy.
+2. Land the Phase 2 iOS issues in sequence: `#237`, `#238`, `#239`, `#240`.
+3. Complete the queue-tooling follow-up in `#241` so the repo scripts enforce the new `Dependencies` and iOS-runner rules automatically.

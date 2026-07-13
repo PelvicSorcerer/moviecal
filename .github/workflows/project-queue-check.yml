@@ -5,8 +5,12 @@ on:
     branches:
       - master
       - agent/**
+      - orchestrator/**
       - copilot/**
       - cursor/**
+      - claude/**
+      - docs/**
+      - chore/**
     paths:
       - 'scripts/project-queue-check.sh'
       - 'scripts/agent-check.sh'
@@ -15,6 +19,8 @@ on:
       - 'scripts/project-platform-track-sync.sh'
       - 'scripts/export-open-issue-order.sh'
       - '.github/workflows/project-queue-check.yml'
+      - 'docs/operators/branch-and-ci-conventions.md'
+      - 'docs/operators/branch-prefixes.json'
       - 'docs/operators/multi-platform-dispatch-policy.md'
       - 'docs/planning/github-project-migration-plan.md'
       - 'AGENTS.md'
