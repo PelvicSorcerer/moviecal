@@ -1,38 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Exports a generated compatibility artifact for product-track queue ordering only.
-# Dispatch promotion uses live project fields and considers both Product and Future tracks.
-# This export intentionally excludes Future, Platform, Migration, process, and docs items.
+# Exports a generated compatibility artifact for product-board queue ordering only.
+# Dispatch promotion uses live project domain tracks and Future; see docs/planning/project-field-taxonomy.md.
+# This export intentionally excludes Future, Platform, Migration, process, and docs areas.
 
-repo="${PROJECT_QUEUE_REPO:-PelvicSorcerer/moviecal}"
-owner="${PROJECT_QUEUE_OWNER:-PelvicSorcerer}"
-project_number="${PROJECT_QUEUE_NUMBER:-1}"
-list_limit="${PROJECT_QUEUE_LIST_LIMIT:-200}"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/project-queue-common.sh
+source "$repo_root/scripts/lib/project-queue-common.sh"
+
 output_path="${1:-docs/planning/open-issue-order.json}"
 
-if ! command -v gh >/dev/null 2>&1; then
-  echo "gh CLI is not installed. Install/authenticate gh before exporting queue compatibility data." >&2
-  exit 1
-fi
+project_queue_require_gh
+project_queue_require_jq
 
-if ! command -v jq >/dev/null 2>&1; then
-  echo "jq is not installed. Install jq before exporting queue compatibility data." >&2
-  exit 1
-fi
+project_queue_fetch_project_items_json
+project_queue_fetch_open_issues_json
 
-if ! gh auth status >/dev/null 2>&1; then
-  echo "gh CLI is not authenticated. Run 'gh auth login -h github.com' before exporting queue compatibility data." >&2
-  exit 1
-fi
-
-project_items_json=$(gh project item-list "$project_number" --owner "$owner" --limit "$list_limit" --format json)
-open_issues_json=$(gh issue list --repo "$repo" --state open --limit "$list_limit" --json number)
+project_items_json="$PROJECT_ITEMS_JSON"
+open_issues_json="$OPEN_ISSUES_JSON"
 
 generated_json=$(jq -n \
-  --arg repo "$repo" \
-  --arg owner "$owner" \
-  --argjson project_number "$project_number" \
+  --arg repo "$PROJECT_QUEUE_REPO" \
+  --arg owner "$PROJECT_QUEUE_OWNER" \
+  --argjson project_number "$PROJECT_QUEUE_NUMBER" \
   --arg generated_at "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
   --argjson items "$project_items_json" \
   --argjson open_issues "$open_issues_json" '

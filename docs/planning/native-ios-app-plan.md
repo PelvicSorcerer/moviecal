@@ -77,7 +77,7 @@ time, so begin them in parallel with backend work:
 | Phase | Name | Who | Governance |
 |-------|------|-----|------------|
 | 0 | Foundations | Human (Apple enrollment) + agent (this doc) | This planning PR + human account setup |
-| 1 | Close the API gap | Agent-driven | **Product track, existing governance, full `npm run verify` coverage** |
+| 1 | Close the API gap | Agent-driven | **Existing dispatch-eligible domain-track governance, full `npm run verify` coverage** |
 | 2 | iOS skeleton | Any agent platform or human; merge readiness Mac-gated | iOS track (main-queue eligible; self-hosted macOS runner gate) |
 | 3 | Feature-parity MVP | Same as Phase 2 | Same |
 | 4 | First-party polish (HIG) | Same as Phase 2 | Same |
@@ -106,7 +106,7 @@ against the code as of this document:
 | Get calendar subscription URL | cookie settings page only | not present | **Yes (required for D3)** | Add `GET /api/v1/calendar-token` returning the user's subscription URL (create-on-demand) |
 | Rotate calendar token | cookie settings page only | not present | **Yes** | Add `POST /api/v1/calendar-token/rotate`; rotation invalidates the previous URL (breaks the old subscription — surface this in the app UX) |
 
-**Phase 1 backend backlog (Product-track issues, agent-executable):**
+**Phase 1 backend backlog (dispatch-eligible domain-track issues, agent-executable):**
 
 1. `v1` movie search endpoint (or a documented decision to reuse the public route).
 2. `v1` calendar-token retrieval endpoint. **Required for the calendar feature.**
@@ -126,7 +126,7 @@ self-hosted macOS runner lane and a repo-wide dependency-field contract.
 
 ### New track: iOS (Mac-gated, main-queue eligible)
 
-- **Phase 1 backend work stays on the Product track** — no change; fully
+- **Phase 1 backend work stays on the existing dispatch-eligible domain tracks** — no change to the Codex handshake model there; fully
   dispatch-eligible and agent-verifiable.
 - **Swift/iOS work (Phases 2–5) belongs on the `iOS` track and is main-queue
   eligible.**

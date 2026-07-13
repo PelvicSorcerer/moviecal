@@ -38,13 +38,13 @@ Everything below marked "verified" was actually run against this repo on a real 
 
 ### Project queue validation on Cursor Cloud
 
-With `GITHUB_PAT_OPERATOR` configured and `jq` available, platform/governance agents can validate live queue state:
+With `GITHUB_PAT_OPERATOR` configured and `jq` available, platform/governance agents can validate live queue state against `PelvicSorcerer-Software/moviecal` and the organization project `PelvicSorcerer-Software/1` (`moviecal Delivery`):
 
 ```bash
 npm run agent:project-check
 ```
 
-`gh project item-list` may return `unknown owner type` on Cursor Cloud VMs even with a valid operator PAT. Queue scripts already fall back to `gh api graphql` for project item reads (`scripts/lib/project-queue-common.sh`), so use `npm run agent:project-check` rather than ad hoc `gh project` subcommands when validating dispatch invariants.
+`gh project item-list` may return `unknown owner type` on Cursor Cloud VMs even with a valid operator PAT. Queue scripts already fall back to `gh api graphql` for project item reads (`scripts/lib/project-queue-common.sh`), trying `organization(login:)` first and then `user(login:)`, so use `npm run agent:project-check` rather than ad hoc `gh project` subcommands when validating dispatch invariants.
 
 ## Branch convention
 
@@ -53,7 +53,7 @@ npm run agent:project-check
 ## Queue governance
 
 - The Codex orchestrator/worker contract (`spawn_agent`, worktree provisioning, `BOOT_CHECKPOINT`/`STARTUP_CHECKPOINT` gates — see `docs/operators/codex-orchestration.md`) is specific to Codex's multi-agent tooling and does not apply to Cursor Cloud Agents, which run as a single agent per task/PR with no equivalent orchestrator step.
-- **Cursor Cloud Agents may not start from `Agent Dispatch = Yes` on `Product` or `Future` as workers** (the formal Codex spawn_agent handshake is Codex-only there). The iOS track is the mixed-execution exception: a promoted iOS issue may be implemented from Cursor, but merge readiness is still gated by the self-hosted macOS runner. See `docs/operators/multi-platform-dispatch-policy.md`.
+- **Cursor Cloud Agents may not start from `Agent Dispatch = Yes` on a product-delivery domain track or `Future` as workers** (the formal Codex spawn_agent handshake is Codex-only there). The iOS track is the mixed-execution exception: a promoted iOS issue may be implemented from Cursor, but merge readiness is still gated by the self-hosted macOS runner. See `docs/operators/multi-platform-dispatch-policy.md`.
 - **Cursor Cloud Agents may act as orchestrator**: they may promote issues, set `Agent Dispatch = Yes`, and run post-merge handoff using `gh` CLI with the operator PAT and the `/project-update` comment command. See the "Orchestrator role" section below.
 - Cursor Cloud Agents **may** implement platform-track issues (`Track = Platform`), governance/docs work (`docs/**`, `chore/**`), and other tasks when a human assigns them directly (for example, a Cursor Cloud Agent task or an explicitly delegated issue). Direct assignment is not dispatch-slot consumption.
 

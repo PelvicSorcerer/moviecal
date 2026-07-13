@@ -4,8 +4,8 @@
 # The GitHub Project is authoritative for dispatch state; issue bodies remain
 # authoritative for implementation contracts.
 
-PROJECT_QUEUE_REPO="${PROJECT_QUEUE_REPO:-PelvicSorcerer/moviecal}"
-PROJECT_QUEUE_OWNER="${PROJECT_QUEUE_OWNER:-PelvicSorcerer}"
+PROJECT_QUEUE_REPO="${PROJECT_QUEUE_REPO:-PelvicSorcerer-Software/moviecal}"
+PROJECT_QUEUE_OWNER="${PROJECT_QUEUE_OWNER:-PelvicSorcerer-Software}"
 PROJECT_QUEUE_NUMBER="${PROJECT_QUEUE_NUMBER:-1}"
 PROJECT_QUEUE_LIST_LIMIT="${PROJECT_QUEUE_LIST_LIMIT:-200}"
 
@@ -38,18 +38,12 @@ project_queue_require_gh() {
   fi
 }
 
-project_queue_fetch_project_items_json() {
-  local response graphql_limit=100
-  if [ "$PROJECT_QUEUE_LIST_LIMIT" -lt "$graphql_limit" ]; then
-    graphql_limit="$PROJECT_QUEUE_LIST_LIMIT"
-  fi
+project_queue_graphql_project_items_query() {
+  local owner_kind="$1"
+  local graphql_limit="$2"
 
-  if PROJECT_ITEMS_JSON=$(gh project item-list "$PROJECT_QUEUE_NUMBER" --owner "$PROJECT_QUEUE_OWNER" --limit "$PROJECT_QUEUE_LIST_LIMIT" --format json 2>/dev/null); then
-    return 0
-  fi
-
-  response=$(gh api graphql -f query="query {
-    user(login: \"$PROJECT_QUEUE_OWNER\") {
+  gh api graphql -f query="query {
+    ${owner_kind}(login: \"$PROJECT_QUEUE_OWNER\") {
       projectV2(number: $PROJECT_QUEUE_NUMBER) {
         items(first: $graphql_limit) {
           nodes {
@@ -74,11 +68,16 @@ project_queue_fetch_project_items_json() {
         }
       }
     }
-  }")
+  }"
+}
 
-  PROJECT_ITEMS_JSON=$(echo "$response" | jq '{
+project_queue_normalize_project_items_response() {
+  local response="$1"
+  local owner_kind="$2"
+
+  echo "$response" | jq --arg owner_kind "$owner_kind" '{
     items: [
-      .data.user.projectV2.items.nodes[]
+      .data[$owner_kind].projectV2.items.nodes[]
       | {
           title: .content.title,
           labels: ((.content.labels.nodes // []) | map(.name)),
@@ -102,7 +101,29 @@ project_queue_fetch_project_items_json() {
           )
         }
     ]
-  }')
+  }'
+}
+
+project_queue_fetch_project_items_json() {
+  local response graphql_limit=100 owner_kind
+  if [ "$PROJECT_QUEUE_LIST_LIMIT" -lt "$graphql_limit" ]; then
+    graphql_limit="$PROJECT_QUEUE_LIST_LIMIT"
+  fi
+
+  if PROJECT_ITEMS_JSON=$(gh project item-list "$PROJECT_QUEUE_NUMBER" --owner "$PROJECT_QUEUE_OWNER" --limit "$PROJECT_QUEUE_LIST_LIMIT" --format json 2>/dev/null); then
+    return 0
+  fi
+
+  for owner_kind in organization user; do
+    response=$(project_queue_graphql_project_items_query "$owner_kind" "$graphql_limit")
+    if echo "$response" | jq -e --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.items.nodes' >/dev/null 2>&1; then
+      PROJECT_ITEMS_JSON=$(project_queue_normalize_project_items_response "$response" "$owner_kind")
+      return 0
+    fi
+  done
+
+  echo "Could not read project items for $PROJECT_QUEUE_OWNER/$PROJECT_QUEUE_NUMBER via gh project or GraphQL." >&2
+  return 1
 }
 
 project_queue_fetch_open_issues_json() {
@@ -143,11 +164,15 @@ project_queue_validate_dispatch_track() {
   local issue_number="$2"
 
   case "$track" in
-    Product|Future)
+    "Shared Watchlists"|Calendar|Docs|Future)
       return 0
       ;;
+    Product)
+      echo "Issue #$issue_number has Track = Product, which is not a live project option. Map product-delivery work to a domain Track per docs/planning/project-field-taxonomy.md before setting Agent Dispatch = Yes." >&2
+      return 1
+      ;;
     Platform|Migration)
-      echo "Issue #$issue_number has Agent Dispatch = Yes but Track = $track. Only Product and Future tracks are dispatch-eligible." >&2
+      echo "Issue #$issue_number has Agent Dispatch = Yes but Track = $track. Only dispatch-eligible domain tracks and Future may hold the dispatch slot." >&2
       return 1
       ;;
     "")
@@ -155,10 +180,30 @@ project_queue_validate_dispatch_track() {
       return 1
       ;;
     *)
-      echo "Issue #$issue_number has Agent Dispatch = Yes with unknown Track = $track. Only Product and Future tracks are dispatch-eligible." >&2
+      echo "Issue #$issue_number has Agent Dispatch = Yes with unknown Track = $track. See docs/planning/project-field-taxonomy.md for allowed values." >&2
       return 1
       ;;
   esac
+}
+
+project_queue_validate_issue_taxonomy_hints() {
+  local issue_number="$1"
+  local issue_body="$2"
+  local failures=0
+
+  if echo "$issue_body" | grep -Eq 'Track[[:space:]]*=[[:space:]]*Product'; then
+    echo "Issue #$issue_number uses Track = Product in its body. Product is a policy category, not a project Track option. See docs/planning/project-field-taxonomy.md and stop before writing project fields." >&2
+    failures=$((failures + 1))
+  fi
+
+  if echo "$issue_body" | grep -Eq 'Area[[:space:]]*=[[:space:]]*backend'; then
+    echo "Issue #$issue_number uses Area = backend in its body. backend is not a project Area option. See docs/planning/project-field-taxonomy.md and stop before writing project fields." >&2
+    failures=$((failures + 1))
+  fi
+
+  if [ "$failures" -gt 0 ]; then
+    return 1
+  fi
 }
 
 project_queue_validate_post_cutover() {

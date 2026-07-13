@@ -11,7 +11,8 @@ This doc covers what's specific to Claude Code (CLI, web, IDE extensions, or rem
 Items marked **verified** were observed in an actual Claude Code session against this repo. Items marked **assumed** have not been independently confirmed in this repo yet.
 
 - **Verified (issue #163):** `CLAUDE.md` at repo root loads via the `@AGENTS.md` import directive, so a fresh Claude Code session reads repo instructions through this file.
-- **Assumed:** Tool availability and environment details below are based on Claude Code's published documentation and the managed remote execution environment, not a full local-validation pass.
+- **Verified (post-transfer audit):** In the CCR web/cloud environment: `gh` CLI is not installed (no binary in `$PATH`); `curl` and `wget` are present; `https://api.github.com/` (REST) is reachable; `https://api.github.com/graphql` is blocked by the Anthropic proxy regardless of authentication; `GITHUB_PAT_OPERATOR` cannot bypass that block; GitHub MCP tools work via the proxy's pre-authorized operation set; GitHub Projects v2 custom fields are not readable or writable from the CCR container directly.
+- **Assumed (local Claude Code CLI/IDE environments):** Tool availability details for local deployments (desktop app, IDE extensions) are based on Claude Code's published documentation and have not been independently confirmed for this repo. Local environments may have `gh` and direct GraphQL access depending on the host machine; the restrictions documented below apply specifically to the CCR managed web/cloud container.
 
 ## Bootstrap / environment config
 
@@ -22,7 +23,9 @@ Items marked **verified** were observed in an actual Claude Code session against
 
 ## Tool availability quirks
 
-- **`gh` CLI:** Available in the managed remote execution environment. The environment's GitHub App token supports clone/push but richer API calls (`gh project`, `gh issue comment`) require the GitHub MCP server tools instead (prefixed `mcp__github__`); do not use `gh` for project or issue API calls.
+- **`gh` CLI (web/cloud CCR — verified not installed):** `gh` is **not** present in the managed CCR web/cloud container; no binary was found in `$PATH`. Git clone, branch, commit, and push use the environment's ordinary Git credentials and do not require `gh`. GitHub repository, issue, PR, review, and comment operations must use the `mcp__github__*` MCP server tools. Do not invoke `gh` in CCR web/cloud sessions. Local Claude Code environments (desktop app, IDE extensions) may have `gh` available on the host machine; that restriction applies specifically to the CCR managed container.
+- **GitHub GraphQL proxy (web/cloud CCR — verified blocked):** Direct requests from the CCR container to `https://api.github.com/graphql` are intercepted and blocked by the Anthropic-managed network proxy. Both authenticated and unauthenticated requests return a proxy-generated `403` with the message "only the pinned set of PR-review operations is served." Providing `GITHUB_PAT_OPERATOR` as a Bearer token does not bypass the block — the proxy intercepts before GitHub evaluates the credential. The `mcp__github__*` tools work because they route through the proxy's pre-authorized operation set, not raw curl GraphQL.
+- **GitHub Projects v2 (web/cloud CCR — verified inaccessible):** Because the GraphQL endpoint is proxy-blocked and no `mcp__github__project*` tools are exposed by the MCP server, Claude web/cloud **cannot directly read or mutate `moviecal Delivery` project v2 custom fields** (Status, Agent Dispatch, Track, Queue Order, etc.) from the CCR container. When current project-field state is needed and cannot be safely inferred from issue comments or prior workflow reply confirmations, report the visibility limitation rather than guess. `/project-update` remains the supported Project-field write path: post a comment on the issue via `mcp__github__add_issue_comment` and wait for the GitHub Actions workflow to reply. Do not claim a project change succeeded until the workflow posts a successful confirmation comment. The workflow now auto-links unlinked issues to the project before applying fields, so Claude web/cloud can use `/project-update` on a freshly created issue without any prior manual linking step.
 - **Docker:** Not available in the default managed remote execution environment. `supabase db lint --local` is therefore unavailable. Use the `supabase-verify` GitHub Actions workflow as the authoritative DB gate, or point `SUPABASE_DB_URL` at a disposable database.
 - **Browser/Playwright:** Chromium is pre-installed (`PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers`). `npm run lane:browser` (alias: `npm run e2e`) should work without a separate `playwright install` step. Do not run `playwright install`.
 - **`jq`:** Assumed available; required for `scripts/lib/project-queue-common.sh` and related governance scripts.
@@ -37,8 +40,8 @@ Items marked **verified** were observed in an actual Claude Code session against
 
 ## Queue / dispatch interaction
 
-- **Claude Code may not receive the dispatch slot** (`Agent Dispatch = Yes`) on `Product` or `Future`. The formal handshake model (dispatch slot + orchestrator-provisioned worktrees) is Codex-only there. The iOS track is the mixed-execution exception: a promoted iOS issue may be implemented from Claude Code, but merge readiness is still gated by the self-hosted macOS runner. See `docs/operators/multi-platform-dispatch-policy.md`.
-- Claude Code **may** implement **any track** (Product, Future, Platform, or Migration) when a human assigns the issue or delegates it directly, without requiring `Agent Dispatch = Yes`. This is called **direct assignment** and is available to every agent platform. See the "Direct assignment path" section in `docs/operators/multi-platform-dispatch-policy.md`.
+- **Claude Code may not receive the dispatch slot** (`Agent Dispatch = Yes`) on a product-delivery domain track or `Future`. The formal handshake model (dispatch slot + orchestrator-provisioned worktrees) is Codex-only there. The iOS track is the mixed-execution exception: a promoted iOS issue may be implemented from Claude Code, but merge readiness is still gated by the self-hosted macOS runner. See `docs/operators/multi-platform-dispatch-policy.md`.
+- Claude Code **may** implement **any track** (product-delivery domain tracks, `Future`, `iOS`, `Platform`, or `Migration`) when a human assigns the issue or delegates it directly, without requiring `Agent Dispatch = Yes`. This is called **direct assignment** and is available to every agent platform. See the "Direct assignment path" section in `docs/operators/multi-platform-dispatch-policy.md`.
 - Direct assignment means: a human explicitly assigns or delegates the issue (for example, "Claude Code, implement issue #174"), the issue stays at `Agent Dispatch = No`, and the worker uses the `claude/**` branch prefix. Direct assignment does not consume the dispatch slot.
 - Treat the `moviecal Delivery` GitHub Project as the source of truth for queue state. To update project fields, use the `/project-update` comment command documented below.
 
@@ -63,15 +66,19 @@ Any repository collaborator with **write** or **admin** access can update `movie
 | `ExecutionMode` | Execution Mode | single-select |
 | `TargetPRSize` | Target PR Size | single-select |
 
-Field names are case-sensitive (exactly as shown above). Option values are case-insensitive. The issue must already be linked to the `moviecal Delivery` project.
+Field names are case-sensitive (exactly as shown above). Option values are case-insensitive.
 
-If any field name or option value is invalid, the workflow replies with an error and makes **no changes**. All validation happens before any mutation.
+**Auto-linking:** if the issue is not yet linked to `moviecal Delivery`, the workflow adds it automatically before applying the requested field updates. You do not need to manually link the issue first — a single `/project-update` comment handles both steps.
+
+If any field name or option value is invalid, the workflow replies with an error and makes **no changes** — it will not add the issue to the project either. Validation always runs before any mutation.
+
+If the add-to-project step succeeds but a subsequent field mutation fails, the reply will clearly state that the issue was added and which update failed. Check the project for current state in that case.
 
 **Copy-paste examples for each governance step:**
 
 ```
-# Triage: move a new issue into the backlog
-/project-update Status=Backlog Track=Product Priority=P2 AgentDispatch=No
+# Triage: move a new issue into the backlog (use a canonical domain Track; see docs/planning/project-field-taxonomy.md)
+/project-update Status=Backlog Track=Shared_Watchlists Priority=P2 AgentDispatch=No
 
 # Set queue position during triage
 /project-update QueueOrder=42

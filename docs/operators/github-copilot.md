@@ -35,7 +35,7 @@ Everything marked **verified** below was observed in an actual GitHub Copilot co
 ## Queue governance
 
 - Copilot's coding agent runs one agent per assigned issue/PR, similar to Cursor Cloud Agents; it does not participate in Codex's orchestrator/worker worktree handshake described in `docs/operators/codex-orchestration.md`.
-- **GitHub Copilot may not start from `Agent Dispatch = Yes` on `Product` or `Future` as a worker** (the formal Codex spawn_agent handshake is Codex-only there). The iOS track is the mixed-execution exception: a promoted iOS issue may be implemented from Copilot, but merge readiness is still gated by the self-hosted macOS runner. See `docs/operators/multi-platform-dispatch-policy.md`.
+- **GitHub Copilot may not start from `Agent Dispatch = Yes` on a product-delivery domain track or `Future` as a worker** (the formal Codex spawn_agent handshake is Codex-only there). The iOS track is the mixed-execution exception: a promoted iOS issue may be implemented from Copilot, but merge readiness is still gated by the self-hosted macOS runner. See `docs/operators/multi-platform-dispatch-policy.md`.
 - **GitHub Copilot may act as orchestrator**: it may promote issues, set `Agent Dispatch = Yes`, and run post-merge handoff using `gh` CLI with a PAT and the `/project-update` comment command. See the "Orchestrator role" section below.
 - Copilot **may** implement platform-track issues (`Track = Platform`), governance/docs work (`docs/**`, `chore/**`), and other tasks when GitHub assigns an issue/PR to Copilot or a human delegates the work. Direct assignment is not dispatch-slot consumption.
 

@@ -3,10 +3,10 @@
 # Uses the Projects GraphQL API so a classic PAT with project+repo scopes works without read:org.
 set -euo pipefail
 
-repo="${PROJECT_QUEUE_REPO:-PelvicSorcerer/moviecal}"
+repo="${PROJECT_QUEUE_REPO:-PelvicSorcerer-Software/moviecal}"
 repo_owner="${repo%%/*}"
 repo_name="${repo##*/}"
-owner="${PROJECT_QUEUE_OWNER:-PelvicSorcerer}"
+owner="${PROJECT_QUEUE_OWNER:-PelvicSorcerer-Software}"
 project_number="${PROJECT_QUEUE_NUMBER:-1}"
 
 declare -A QUEUE_ORDER=(
@@ -84,42 +84,47 @@ gh_graphql() {
 }
 
 load_project() {
-  local response
-  response=$(gh_graphql -f query="query {
-    user(login: \"$owner\") {
-      projectV2(number: $project_number) {
-        id
-        title
-        fields(first: 50) {
-          nodes {
-            ... on ProjectV2FieldCommon { id name }
-            ... on ProjectV2SingleSelectField { id name options { id name } }
+  local response owner_kind
+  for owner_kind in organization user; do
+    response=$(gh_graphql -f query="query {
+      ${owner_kind}(login: \"$owner\") {
+        projectV2(number: $project_number) {
+          id
+          title
+          fields(first: 50) {
+            nodes {
+              ... on ProjectV2FieldCommon { id name }
+              ... on ProjectV2SingleSelectField { id name options { id name } }
+            }
           }
-        }
-        items(first: 100) {
-          nodes {
-            id
-            content {
-              ... on Issue { number }
-              ... on PullRequest { number }
+          items(first: 100) {
+            nodes {
+              id
+              content {
+                ... on Issue { number }
+                ... on PullRequest { number }
+              }
             }
           }
         }
       }
-    }
-  }")
+    }")
 
-  if [ "$(echo "$response" | jq -r '.data.user.projectV2.id // empty')" = "" ]; then
-    echo "Cannot access project $owner/$project_number." >&2
-    echo "Ensure GITHUB_PAT_OPERATOR is set with classic PAT scopes: project, repo." >&2
-    echo "Verify with: GH_TOKEN=\$GITHUB_PAT_OPERATOR gh api graphql -f query='{ viewer { login } }'" >&2
-    exit 1
-  fi
+    if [ "$(echo "$response" | jq -r --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.id // empty')" = "" ]; then
+      continue
+    fi
 
-  project_id=$(echo "$response" | jq -r '.data.user.projectV2.id')
-  project_title=$(echo "$response" | jq -r '.data.user.projectV2.title')
-  fields_json=$(echo "$response" | jq '.data.user.projectV2.fields.nodes')
-  items_json=$(echo "$response" | jq '.data.user.projectV2.items.nodes')
+    project_id=$(echo "$response" | jq -r --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.id')
+    project_title=$(echo "$response" | jq -r --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.title')
+    fields_json=$(echo "$response" | jq --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.fields.nodes')
+    items_json=$(echo "$response" | jq --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.items.nodes')
+    return 0
+  done
+
+  echo "Cannot access project $owner/$project_number." >&2
+  echo "Ensure GITHUB_PAT_OPERATOR is set with classic PAT scopes: project, repo." >&2
+  echo "Verify with: GH_TOKEN=\$GITHUB_PAT_OPERATOR gh api graphql -f query='{ viewer { login } }'" >&2
+  exit 1
 }
 
 field_id() {

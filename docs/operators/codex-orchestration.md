@@ -127,7 +127,7 @@ Promotion is not the final gate. Re-run the relevant live operational checks imm
 - Run post-merge orchestrator audits from an attached local branch that tracks `origin/master`; the local branch name does not need to be `master`.
 - When no issue is actually ready, leave the queue empty and document the blocker in GitHub instead of forcing a guess.
 - Use `bash scripts/agent-check.sh` before worker implementation and `bash scripts/agent-handoff-check.sh` after merge or when auditing repo readiness. `agent-check` requires exactly one open issue with `Agent Dispatch = Yes` and `Status = Ready`. `agent-handoff` and `project-queue-check` also accept an intentionally blocked queue with zero dispatchable issues.
-- Codex workers may receive `Agent Dispatch = Yes` on Product and Future tracks. iOS is the mixed-execution exception documented in `multi-platform-dispatch-policy.md`.
+- Codex workers may receive `Agent Dispatch = Yes` on product-delivery domain tracks and `Future`. iOS is the mixed-execution exception documented in `multi-platform-dispatch-policy.md`.
 
 ### Updating project fields via comment command
 

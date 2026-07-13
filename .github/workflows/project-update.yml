@@ -5,6 +5,9 @@ name: project-update
 #   /project-update Status=Ready AgentDispatch=Yes
 # The commenter must have write or admin repository access.
 # This workflow requires the PROJECT_UPDATE_PAT secret (classic PAT, project scope).
+#
+# If the issue is not yet linked to the project, it will be added automatically
+# before the field updates are applied.
 
 on:
   issue_comment:
@@ -37,8 +40,8 @@ jobs:
         run: |
           set -uo pipefail
 
-          # "moviecal Delivery" project owner (must be a GitHub user login).
-          PROJECT_OWNER="PelvicSorcerer"
+          # "moviecal Delivery" project owner (organization login after repo transfer).
+          PROJECT_OWNER="PelvicSorcerer-Software"
 
           # ── Helper: post a reply comment via GITHUB_TOKEN ──────────────────────
           # Comments posted this way appear as "github-actions[bot]".
@@ -133,7 +136,8 @@ jobs:
             exit 0
           fi
 
-          # ── 5. Query project: ID, fields, and items ────────────────────────────
+          # ── 5. Query project: ID and fields ───────────────────────────────────
+          # Separate from item lookup so we can validate fields before fetching items.
           # All project API calls use PROJECT_TOKEN (project scope PAT).
           # Queries by title instead of a hardcoded number so the workflow
           # survives project recreation.
@@ -141,6 +145,36 @@ jobs:
           echo "Querying projects for $PROJECT_OWNER..."
 
           projects_raw=$(GH_TOKEN="$PROJECT_TOKEN" gh api graphql -f query="
+          query {
+            organization(login: \"$PROJECT_OWNER\") {
+              projectsV2(first: 20) {
+                nodes {
+                  id
+                  title
+                  fields(first: 50) {
+                    nodes {
+                      ... on ProjectV2Field {
+                        id
+                        name
+                        dataType
+                      }
+                      ... on ProjectV2SingleSelectField {
+                        id
+                        name
+                        options {
+                          id
+                          name
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }" 2>&1) || projects_raw=""
+
+          if ! printf '%s' "$projects_raw" | jq -e '.data.organization.projectsV2.nodes | length > 0' >/dev/null 2>&1; then
+            projects_raw=$(GH_TOKEN="$PROJECT_TOKEN" gh api graphql -f query="
           query {
             user(login: \"$PROJECT_OWNER\") {
               projectsV2(first: 20) {
@@ -164,16 +198,6 @@ jobs:
                       }
                     }
                   }
-                  items(first: 100) {
-                    pageInfo { hasNextPage }
-                    nodes {
-                      id
-                      content {
-                        ... on Issue { number }
-                        ... on PullRequest { number }
-                      }
-                    }
-                  }
                 }
               }
             }
@@ -182,12 +206,18 @@ jobs:
             post_reply "**\`/project-update\` failed:** Could not query GitHub Projects. Verify that \`PROJECT_UPDATE_PAT\` is a classic PAT with \`project\` scope. API error: \`${safe_err}\`"
             exit 1
           }
+          fi
+
+          if [ -z "$projects_raw" ]; then
+            post_reply "**\`/project-update\` failed:** Could not query GitHub Projects. Verify that \`PROJECT_UPDATE_PAT\` is a classic PAT with \`project\` scope."
+            exit 1
+          fi
 
           # Normalise: wrap the matching project node under .data.user.projectV2
-          # so all subsequent jq paths are unchanged.
+          # so all subsequent jq paths are unchanged. Supports org- or user-owned projects.
           project_json=$(printf '%s' "$projects_raw" \
             | jq --arg t "$PROJECT_TITLE" \
-              '{"data":{"user":{"projectV2":(.data.user.projectsV2.nodes | map(select(.title == $t)) | .[0])}}}' \
+              '{"data":{"user":{"projectV2":((.data.organization.projectsV2.nodes // .data.user.projectsV2.nodes) | map(select(.title == $t)) | .[0])}}}' \
             2>/dev/null) || {
             post_reply "**\`/project-update\` failed:** Could not parse the GitHub Projects API response."
             exit 1
@@ -206,27 +236,7 @@ jobs:
             exit 1
           fi
 
-          # ── 6. Find the project item linked to this issue ──────────────────────
-          item_id=$(printf '%s' "$project_json" \
-            | jq -r --argjson n "$ISSUE_NUMBER" \
-              '[.data.user.projectV2.items.nodes[] | select(.content.number == $n)] | .[0].id // empty' \
-            2>/dev/null || true)
-
-          if [ -z "$item_id" ]; then
-            has_next=$(printf '%s' "$project_json" \
-              | jq -r '.data.user.projectV2.items.pageInfo.hasNextPage // false' 2>/dev/null || echo "false")
-            if [[ "$has_next" == "true" ]]; then
-              post_reply "**\`/project-update\` failed:** Issue #$ISSUE_NUMBER was not found in the first 100 project items and pagination is not yet implemented. Use the GitHub UI to update this item directly."
-            else
-              post_reply "**\`/project-update\` failed:** Issue #$ISSUE_NUMBER is not linked to the **${PROJECT_TITLE}** project. Add the issue to the project before using this command."
-            fi
-            exit 0
-          fi
-
-          echo "Project ID: $proj_id"
-          echo "Item ID:    $item_id"
-
-          # ── 7. Build field and option lookup tables ────────────────────────────
+          # ── 6. Build field and option lookup tables ────────────────────────────
           declare -A F_IDS    # field_name → field_id
           declare -A F_TYPES  # field_name → "singleSelect" | "number" | "other"
           declare -A O_IDS    # "field_name@@lower_option_name" → option_id
@@ -257,8 +267,10 @@ jobs:
             else empty end
           ' 2>/dev/null || true)
 
-          # ── 8. Validate ALL field names and values before any mutation ─────────
+          # ── 7. Validate ALL field names and values before any mutation ─────────
           # No project fields are written until every field/value pair passes.
+          # Validation also happens before we add an unlinked issue to the project,
+          # preventing malformed commands from creating unwanted project items.
           declare -A UPD_TYPE  # proj_field_name → "singleSelect" | "number"
           declare -A UPD_VAL   # proj_field_name → option_id or numeric string
           val_errors=""
@@ -305,7 +317,133 @@ jobs:
             exit 0
           fi
 
-          # ── 9. Apply mutations (all validation passed) ─────────────────────────
+          # ── 8. Find the project item linked to this issue (with pagination) ────
+          # Uses a cursor-based loop so issues beyond the first 100 project items
+          # are not mistakenly treated as unlinked.
+          item_id=""
+          has_next_page="true"
+          cursor=""
+
+          while [[ "$has_next_page" == "true" && -z "$item_id" ]]; do
+            if [ -z "$cursor" ]; then
+              items_page=$(GH_TOKEN="$PROJECT_TOKEN" gh api graphql -f query="
+          query {
+            node(id: \"$proj_id\") {
+              ... on ProjectV2 {
+                items(first: 100) {
+                  pageInfo { hasNextPage endCursor }
+                  nodes {
+                    id
+                    content {
+                      ... on Issue { number }
+                      ... on PullRequest { number }
+                    }
+                  }
+                }
+              }
+            }
+          }" 2>/dev/null) || {
+                post_reply "**\`/project-update\` failed:** Could not query project items."
+                exit 1
+              }
+            else
+              items_page=$(GH_TOKEN="$PROJECT_TOKEN" gh api graphql -f query="
+          query {
+            node(id: \"$proj_id\") {
+              ... on ProjectV2 {
+                items(first: 100, after: \"$cursor\") {
+                  pageInfo { hasNextPage endCursor }
+                  nodes {
+                    id
+                    content {
+                      ... on Issue { number }
+                      ... on PullRequest { number }
+                    }
+                  }
+                }
+              }
+            }
+          }" 2>/dev/null) || {
+                post_reply "**\`/project-update\` failed:** Could not query project items (pagination)."
+                exit 1
+              }
+            fi
+
+            item_id=$(printf '%s' "$items_page" \
+              | jq -r --argjson n "$ISSUE_NUMBER" \
+                '[.data.node.items.nodes[] | select(.content.number == $n)] | .[0].id // empty' \
+              2>/dev/null || true)
+
+            has_next_page=$(printf '%s' "$items_page" \
+              | jq -r '.data.node.items.pageInfo.hasNextPage // false' 2>/dev/null || echo "false")
+            cursor=$(printf '%s' "$items_page" \
+              | jq -r '.data.node.items.pageInfo.endCursor // empty' 2>/dev/null || true)
+          done
+
+          # ── 9. If not linked, look up the issue node ID and add it ────────────
+          issue_was_added="false"
+          if [ -z "$item_id" ]; then
+            echo "Issue #$ISSUE_NUMBER is not in the project; looking up its node ID..."
+
+            issue_node_raw=$(GH_TOKEN="$PROJECT_TOKEN" gh api graphql -f query="
+          query {
+            repository(owner: \"$REPO_OWNER\", name: \"$REPO_NAME\") {
+              issue(number: $ISSUE_NUMBER) {
+                id
+              }
+            }
+          }" 2>/dev/null) || {
+              post_reply "**\`/project-update\` failed:** Could not look up node ID for issue #$ISSUE_NUMBER."
+              exit 1
+            }
+
+            issue_node_id=$(printf '%s' "$issue_node_raw" \
+              | jq -r '.data.repository.issue.id // empty' 2>/dev/null || true)
+
+            if [ -z "$issue_node_id" ]; then
+              post_reply "**\`/project-update\` failed:** Issue #$ISSUE_NUMBER not found in repository \`$REPO_OWNER/$REPO_NAME\`."
+              exit 1
+            fi
+
+            echo "Adding issue #$ISSUE_NUMBER (node $issue_node_id) to project..."
+
+            add_result=$(GH_TOKEN="$PROJECT_TOKEN" gh api graphql -f query="
+          mutation {
+            addProjectV2ItemById(input: {
+              projectId: \"$proj_id\"
+              contentId: \"$issue_node_id\"
+            }) {
+              item { id }
+            }
+          }" 2>/dev/null) || {
+              post_reply "**\`/project-update\` failed:** Could not add issue #$ISSUE_NUMBER to **${PROJECT_TITLE}**. Field updates were not applied."
+              exit 1
+            }
+
+            add_errs=$(printf '%s' "$add_result" \
+              | jq -r '[.errors[]?.message] | select(length > 0) | join("; ")' 2>/dev/null || true)
+
+            if [ -n "$add_errs" ]; then
+              post_reply "**\`/project-update\` failed:** Could not add issue #$ISSUE_NUMBER to **${PROJECT_TITLE}**: $add_errs. Field updates were not applied."
+              exit 1
+            fi
+
+            item_id=$(printf '%s' "$add_result" \
+              | jq -r '.data.addProjectV2ItemById.item.id // empty' 2>/dev/null || true)
+
+            if [ -z "$item_id" ]; then
+              post_reply "**\`/project-update\` failed:** Add mutation returned no item ID for issue #$ISSUE_NUMBER."
+              exit 1
+            fi
+
+            issue_was_added="true"
+            echo "Issue #$ISSUE_NUMBER added to project; item ID: $item_id"
+          fi
+
+          echo "Project ID: $proj_id"
+          echo "Item ID:    $item_id"
+
+          # ── 10. Apply mutations (all validation passed) ────────────────────────
           echo "Applying ${#UPD_TYPE[@]} field update(s)..."
           confirm_lines=""
 
@@ -327,7 +465,9 @@ jobs:
               projectV2Item { id }
             }
           }" 2>/dev/null) || {
-                post_reply "$(printf '%b' "**\`/project-update\` mutation error** on \`$proj_name\`.\n\n⚠️ Some fields may have been updated before this error — check the project for current state.")"
+                added_note=""
+                [[ "$issue_was_added" == "true" ]] && added_note=$'\n\n⚠️ Issue #'"$ISSUE_NUMBER"' was added to **'"${PROJECT_TITLE}"'** but the field update failed — check the project for current state.'
+                post_reply "$(printf '%b' "**\`/project-update\` mutation error** on \`$proj_name\`.${added_note}")"
                 exit 1
               }
             else
@@ -342,7 +482,9 @@ jobs:
               projectV2Item { id }
             }
           }" 2>/dev/null) || {
-                post_reply "$(printf '%b' "**\`/project-update\` mutation error** on \`$proj_name\`.\n\n⚠️ Some fields may have been updated before this error — check the project for current state.")"
+                added_note=""
+                [[ "$issue_was_added" == "true" ]] && added_note=$'\n\n⚠️ Issue #'"$ISSUE_NUMBER"' was added to **'"${PROJECT_TITLE}"'** but the field update failed — check the project for current state.'
+                post_reply "$(printf '%b' "**\`/project-update\` mutation error** on \`$proj_name\`.${added_note}")"
                 exit 1
               }
             fi
@@ -352,7 +494,9 @@ jobs:
               || mut_errs="could not parse mutation response"
 
             if [ -n "$mut_errs" ]; then
-              post_reply "$(printf '%b' "**\`/project-update\` failed** on \`$proj_name\`: $mut_errs\n\n⚠️ Some fields may have been updated before this error — check the project for current state.")"
+              added_note=""
+              [[ "$issue_was_added" == "true" ]] && added_note=$'\n\n⚠️ Issue #'"$ISSUE_NUMBER"' was added to **'"${PROJECT_TITLE}"'** but the field update failed — check the project for current state.'
+              post_reply "$(printf '%b' "**\`/project-update\` failed** on \`$proj_name\`: $mut_errs.${added_note}")"
               exit 1
             fi
 
@@ -360,6 +504,10 @@ jobs:
             echo "  Updated: $proj_name = $display_val"
           done
 
-          # ── 10. Post success confirmation ──────────────────────────────────────
-          post_reply "$(printf '%b' "**\`/project-update\` applied** to #$ISSUE_NUMBER:\n\n${confirm_lines}")"
+          # ── 11. Post success confirmation ──────────────────────────────────────
+          if [[ "$issue_was_added" == "true" ]]; then
+            post_reply "$(printf '%b' "**\`/project-update\` succeeded.**\n\nAdded issue #$ISSUE_NUMBER to **${PROJECT_TITLE}**.\nUpdated:\n${confirm_lines}")"
+          else
+            post_reply "$(printf '%b' "**\`/project-update\` applied** to #$ISSUE_NUMBER:\n\n${confirm_lines}")"
+          fi
           echo "Done."
