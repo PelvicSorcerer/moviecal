@@ -62,6 +62,10 @@ project_queue_graphql_project_items_query() {
                   number
                   field { ... on ProjectV2FieldCommon { name } }
                 }
+                ... on ProjectV2ItemFieldTextValue {
+                  text
+                  field { ... on ProjectV2FieldCommon { name } }
+                }
               }
             }
           }
@@ -98,6 +102,9 @@ project_queue_normalize_project_items_response() {
           ),
           "agent Dispatch": (
             [.fieldValues.nodes[] | select(.field.name == "Agent Dispatch") | .name][0] // ""
+          ),
+          dependencies: (
+            [.fieldValues.nodes[] | select(.field.name == "Dependencies") | .text][0] // ""
           )
         }
     ]
@@ -164,7 +171,7 @@ project_queue_validate_dispatch_track() {
   local issue_number="$2"
 
   case "$track" in
-    "Shared Watchlists"|Calendar|Docs|Future)
+    "Shared Watchlists"|Calendar|Docs|Future|iOS)
       return 0
       ;;
     Product)
@@ -204,6 +211,168 @@ project_queue_validate_issue_taxonomy_hints() {
   if [ "$failures" -gt 0 ]; then
     return 1
   fi
+}
+
+project_queue_validate_dependencies() {
+  local deps_value="$1"
+  local open_issues_json="$2"
+  local project_items_json="$3"
+  local self_number="${4:-}"
+
+  # Blank means no dependencies — always passes.
+  if [ -z "$deps_value" ]; then
+    return 0
+  fi
+
+  # Syntax check: must be comma-separated integers only (no #, no spaces, no other chars).
+  if ! echo "$deps_value" | grep -Eq '^[0-9]+(,[0-9]+)*$'; then
+    echo "Invalid Dependencies field value: '$deps_value'" >&2
+    echo "Expected comma-separated numeric issue numbers with no '#', no spaces, and no non-numeric tokens." >&2
+    echo "Correct the Dependencies field in the GitHub Project before setting Agent Dispatch = Yes." >&2
+    return 1
+  fi
+
+  # Split into individual numbers.
+  local dep_numbers
+  IFS=',' read -ra dep_numbers <<< "$deps_value"
+
+  # Self-dependency check.
+  if [ -n "$self_number" ]; then
+    local dep
+    for dep in "${dep_numbers[@]}"; do
+      if [ "$dep" = "$self_number" ]; then
+        echo "Invalid Dependencies field: issue #$self_number lists itself as a dependency (self-dependency)." >&2
+        echo "Remove #$self_number from the Dependencies field before setting Agent Dispatch = Yes." >&2
+        return 1
+      fi
+    done
+  fi
+
+  # For each dependency, check satisfaction.
+  local unsatisfied=()
+  local dep
+  for dep in "${dep_numbers[@]}"; do
+    # Is this issue number referenced by any other item that itself depends on the current issue?
+    # We'll do cycle detection as part of this loop below via a separate helper.
+
+    # Is the dep a closed issue? A closed issue is not in OPEN_ISSUES_JSON.
+    local is_open
+    is_open=$(echo "$open_issues_json" | jq --argjson n "$dep" 'map(select(.number == $n)) | length')
+
+    if [ "$is_open" -eq 0 ]; then
+      # Not in open issues. Per contract: a closed GitHub issue → satisfied.
+      # Check whether the dep appears in project items; if so, it's clearly a closed issue.
+      local in_project
+      in_project=$(echo "$project_items_json" | jq --argjson n "$dep" \
+        '[.items[] | select(.content.type == "Issue" and .content.number == $n)] | length')
+
+      if [ "$in_project" -eq 0 ]; then
+        # Not in open issues, not in project items.
+        # Nonexistent detection requires a live gh call; fixture mode cannot distinguish
+        # a closed issue that was never added to the project from a genuinely nonexistent one.
+        # In fixture mode: assume closed → satisfied (callers control the fixture data).
+        # In live mode: confirm via gh issue view; error only if the issue truly doesn't exist.
+        local using_fixture=false
+        if [ -n "${PROJECT_QUEUE_ITEMS_JSON:-}" ] || [ -n "${PROJECT_QUEUE_OPEN_ISSUES_JSON:-}" ]; then
+          using_fixture=true
+        fi
+
+        if [ "$using_fixture" = "false" ] && command -v gh >/dev/null 2>&1; then
+          if ! gh issue view "$dep" --repo "$PROJECT_QUEUE_REPO" >/dev/null 2>&1; then
+            echo "Invalid Dependencies field: referenced issue #$dep does not exist." >&2
+            echo "Verify that issue #$dep exists and update the Dependencies field accordingly." >&2
+            return 1
+          fi
+        fi
+        # Closed (confirmed via gh or assumed in fixture mode) → satisfied.
+        continue
+      fi
+
+      # It's in the project but not in open issues → it was closed; satisfied.
+      continue
+    fi
+
+    # Issue is open — check its project Status.
+    local status
+    status=$(echo "$project_items_json" | jq -r --argjson n "$dep" \
+      '[.items[] | select(.content.type == "Issue" and .content.number == $n) | .status][0] // ""')
+
+    if [ "$status" = "Done" ]; then
+      # Open but Status = Done → satisfied.
+      continue
+    fi
+
+    # Open and Status ≠ Done → unsatisfied blocker.
+    unsatisfied+=("$dep")
+  done
+
+  # Cycle detection: build a simple dependency graph from project items and check for cycles.
+  # We detect cycles involving the current dispatch candidate's dependency set.
+  if [ -n "$self_number" ]; then
+    local cycle_result
+    cycle_result=$(echo "$project_items_json" | jq -r \
+      --argjson self_num "$self_number" \
+      --arg deps_value "$deps_value" '
+      # Build adjacency map: issue_number -> [dep_numbers]
+      # Include the dispatch candidate itself.
+      def parse_deps(s):
+        if s == "" then []
+        else (s | split(",") | map(tonumber))
+        end;
+
+      # Build map from project items
+      (reduce .items[] as $item (
+        {};
+        if ($item.content.type == "Issue" and $item.content.number != null) then
+          . + {($item.content.number | tostring): parse_deps($item.dependencies // "")}
+        else . end
+      )) as $graph |
+
+      # Override/add the dispatch candidate with the provided deps
+      ($graph + {($self_num | tostring): parse_deps($deps_value)}) as $graph |
+
+      # DFS cycle detection starting from self_num.
+      # Capture node as $node immediately: jq passes args as filter thunks, so
+      # "node" re-evaluates "." in each piped context. Without capturing first,
+      # "stack | index(node)" becomes "stack | index(stack)" (always found).
+      def has_cycle(node; visited; stack):
+        node as $node |
+        if (stack | index($node)) != null then true
+        elif (visited | index($node)) != null then false
+        else
+          ($graph[($node | tostring)] // []) as $neighbors |
+          ($neighbors | length) > 0 and
+          ($neighbors | any(. as $n | has_cycle($n; visited + [$node]; stack + [$node])))
+        end;
+
+      if has_cycle($self_num; []; []) then
+        "CYCLE"
+      else
+        "OK"
+      end
+    ')
+
+    if [ "$cycle_result" = "CYCLE" ]; then
+      echo "Invalid Dependencies field: a dependency cycle was detected involving issue #$self_number." >&2
+      echo "Inspect the Dependencies fields of the referenced issues and break the cycle before setting Agent Dispatch = Yes." >&2
+      return 1
+    fi
+  fi
+
+  if [ "${#unsatisfied[@]}" -gt 0 ]; then
+    echo "Issue #${self_number:-?} has unsatisfied dependencies: ${unsatisfied[*]}" >&2
+    local u
+    for u in "${unsatisfied[@]}"; do
+      local u_status
+      u_status=$(echo "$project_items_json" | jq -r --argjson n "$u" \
+        '[.items[] | select(.content.type == "Issue" and .content.number == $n) | .status][0] // "(unknown)"')
+      echo "  - #$u is open with Status = $u_status (must be Done or closed to satisfy dependency)" >&2
+    done
+    echo "Resolve the above issues before setting Agent Dispatch = Yes on issue #${self_number:-?}." >&2
+    return 1
+  fi
+
+  return 0
 }
 
 project_queue_validate_post_cutover() {
@@ -267,6 +436,10 @@ project_queue_validate_post_cutover() {
   DISPATCH_NUMBER=$(echo "$dispatch_open_json" | jq -r '.[0].content.number')
   dispatch_track=$(echo "$dispatch_open_json" | jq -r '.[0].track // ""')
   project_queue_validate_dispatch_track "$dispatch_track" "$DISPATCH_NUMBER" || return 1
+
+  local dispatch_deps
+  dispatch_deps=$(echo "$dispatch_open_json" | jq -r '.[0].dependencies // ""')
+  project_queue_validate_dependencies "$dispatch_deps" "$OPEN_ISSUES_JSON" "$PROJECT_ITEMS_JSON" "$DISPATCH_NUMBER" || return 1
 
   DISPATCH_TITLE=$(echo "$dispatch_open_json" | jq -r '.[0].title')
   DISPATCH_ISSUE_BODY=$(echo "$OPEN_ISSUES_JSON" | jq -r --argjson issue "$DISPATCH_NUMBER" '.[] | select(.number == $issue) | .body')
