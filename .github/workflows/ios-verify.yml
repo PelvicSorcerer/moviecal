@@ -41,6 +41,8 @@ permissions:
 
 jobs:
   ios-verify-bootstrap:
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
     runs-on:
       - self-hosted
       - macOS
