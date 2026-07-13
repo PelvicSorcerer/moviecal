@@ -33,7 +33,8 @@ Use the GitHub Project to make the queue machine-readable.
 - `Agent Dispatch = Yes`: exactly one open issue should have this when the repo is ready for a fresh worker.
 - no open issue with `Agent Dispatch = Yes`: valid only when the queue is intentionally blocked and the blocker is recorded.
 - `Status`: use `Backlog`, `Ready`, `In Progress`, `Review`, `Blocked`, and `Done` for workflow state.
-- `Queue Order`: the deterministic preferred execution order across the whole project. When promoting the next dispatch issue, filter to open `Ready` issues on dispatch-eligible tracks (`Product` or `Future`) and use the lowest `Queue Order` as the tie-breaker.
+- `Queue Order`: the deterministic preferred execution order across the whole project. Use the lowest eligible value as the tie-breaker when promoting the next issue.
+- `Dependencies`: comma-separated issue numbers with no `#` and no spaces. Blank means no dependencies.
 - domain labels such as `database`, `auth`, `tests`, `calendar`, `watchlist`, `deployment`, or `tmdb`: use these for routing, not readiness.
 
 Recommended operational states:
@@ -46,6 +47,50 @@ Recommended operational states:
 6. `done`
 
 These states are represented in project fields. The minimum required invariant is still a single open dispatch issue.
+
+## Dependency field contract
+
+Treat the project `Dependencies` field as the machine-readable blocker authority for queue eligibility.
+
+- Allowed format: comma-separated numeric issue numbers such as `237` or `237,239`.
+- Invalid format: `#237`, `237, 239`, any non-numeric token, self-reference, cycle, or nonexistent issue number.
+- Blank means the issue has no dependencies.
+- A referenced closed issue counts as satisfied.
+- A referenced open issue counts as satisfied only when its project `Status = Done`.
+- Invalid dependency data blocks eligibility. When that happens, the agent should inspect surrounding issue and project context, tell the human what the dependency likely should be, and ask the human to decide the correction. The tool must not silently normalize and continue.
+
+## Canonical queue algorithm
+
+Use this flow whenever the orchestrator decides whether an issue may receive `Agent Dispatch = Yes` or whether a previously promoted issue may actually start.
+
+1. Sort open candidate issues by `Queue Order` ascending.
+2. For each candidate in order, confirm the issue is still open and its project `Status = Ready`.
+3. Validate the `Dependencies` field syntax.
+4. Resolve the dependency graph and fail the candidate immediately if the graph contains a self-reference, cycle, or nonexistent issue.
+5. Confirm every dependency is satisfied: closed issues count as satisfied; open issues count as satisfied only when `Status = Done`.
+6. Evaluate live operational gates that cannot be represented as completed issue work.
+7. If the candidate is on the iOS track, confirm the GitHub Actions self-hosted runner is online and carries the required labels before promotion.
+8. If the candidate fails dependency validation, dependency satisfaction, or a live operational gate, do not promote it. Continue scanning the full open queue for the next eligible issue.
+9. Promote the first candidate that passes every check by setting `Agent Dispatch = Yes`.
+10. If no candidate passes, leave the dispatch slot empty and record the blocker.
+
+## Start-time revalidation
+
+Promotion is not the final gate. Re-run the relevant live operational checks immediately before implementation starts.
+
+1. Reconfirm the promoted issue is still open and still `Status = Ready`.
+2. Reconfirm live operational gates that can change after promotion. The primary example today is iOS runner availability.
+3. If the issue still passes, work may start.
+4. If the issue fails a live operational gate at start-time, remove `Agent Dispatch = Yes`, keep `Status = Ready`, and continue scanning the queue for the next eligible issue.
+5. Do not move the skipped issue to `Blocked` solely because a live operational gate was temporarily unavailable. Keep it re-promotable once the gate recovers.
+
+## iOS runner gate
+
+- The iOS track is main-queue eligible once the lane exists.
+- Execution is mixed: any platform may implement a promoted iOS issue.
+- Merge readiness is gated by the self-hosted macOS runner lane.
+- The workflow targets runner labels `self-hosted`, `macOS`, and `ios`.
+- Use trusted in-repo branches only for self-hosted iOS execution. Fork-triggered Mac execution is out of scope for the initial policy.
 
 ## Mandatory preflight checks (worker)
 
@@ -82,7 +127,7 @@ These states are represented in project fields. The minimum required invariant i
 - Run post-merge orchestrator audits from an attached local branch that tracks `origin/master`; the local branch name does not need to be `master`.
 - When no issue is actually ready, leave the queue empty and document the blocker in GitHub instead of forcing a guess.
 - Use `bash scripts/agent-check.sh` before worker implementation and `bash scripts/agent-handoff-check.sh` after merge or when auditing repo readiness. `agent-check` requires exactly one open issue with `Agent Dispatch = Yes` and `Status = Ready`. `agent-handoff` and `project-queue-check` also accept an intentionally blocked queue with zero dispatchable issues.
-- Only Codex workers may receive `Agent Dispatch = Yes` on dispatch-eligible tracks (`Product` or `Future`). See `multi-platform-dispatch-policy.md`.
+- Codex workers may receive `Agent Dispatch = Yes` on product-delivery domain tracks and `Future`. iOS is the mixed-execution exception documented in `multi-platform-dispatch-policy.md`.
 
 ### Updating project fields via comment command
 
@@ -99,9 +144,9 @@ The `.github/workflows/project-update.yml` workflow handles the mutation. It val
 1. Check the repository default branch and current open PR state from an attached local branch that tracks `origin/master`, such as `orchestrator/live`.
 2. Confirm whether an implementation issue just merged or whether the queue is already idle.
 3. Inspect open issues against project order, issue comments, and blocking notes.
-4. Use the project `Queue Order` field to identify the earliest still-open dispatch-eligible issue (`Product` or `Future`) with `Status = Ready`, then confirm its blocker notes are clear.
+4. Use the project `Queue Order` field and the canonical queue algorithm above to identify the earliest still-open eligible issue, then confirm its execution contract is current.
 5. If that issue has remained open through later merged feature work, do a quick repo-state spot check against the live acceptance criteria before promotion so stale issues are reconciled instead of handed to a worker.
-6. Set `Agent Dispatch = Yes` on exactly one issue only if it is current, unblocked, small enough for one PR, and still has `Status = Ready`.
+6. Set `Agent Dispatch = Yes` on exactly one issue only if it is current, unblocked, small enough for one PR, still has `Status = Ready`, and passes the canonical queue algorithm.
 7. If no issue qualifies, leave the queue unready and record why.
 8. Provision the worker through the main repo Codex environment profile, run the worker environment readiness check, and create a deterministic issue-centric worktree that is clearly separate from the orchestrator worktree.
 9. Launch the worker with `spawn_agent`, let it boot naturally, and collect `BOOT_CHECKPOINT` from that natural startup context before retargeting anything.

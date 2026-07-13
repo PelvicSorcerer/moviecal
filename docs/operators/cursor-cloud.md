@@ -53,7 +53,7 @@ npm run agent:project-check
 ## Queue governance
 
 - The Codex orchestrator/worker contract (`spawn_agent`, worktree provisioning, `BOOT_CHECKPOINT`/`STARTUP_CHECKPOINT` gates — see `docs/operators/codex-orchestration.md`) is specific to Codex's multi-agent tooling and does not apply to Cursor Cloud Agents, which run as a single agent per task/PR with no equivalent orchestrator step.
-- **Cursor Cloud Agents may not start from `Agent Dispatch = Yes` as a worker** (the formal Codex spawn_agent handshake is Codex-only). Dispatch-slot work on `Product` or `Future` tracks starts via the Codex handshake. See `docs/operators/multi-platform-dispatch-policy.md`.
+- **Cursor Cloud Agents may not start from `Agent Dispatch = Yes` on a product-delivery domain track or `Future` as workers** (the formal Codex spawn_agent handshake is Codex-only there). The iOS track is the mixed-execution exception: a promoted iOS issue may be implemented from Cursor, but merge readiness is still gated by the self-hosted macOS runner. See `docs/operators/multi-platform-dispatch-policy.md`.
 - **Cursor Cloud Agents may act as orchestrator**: they may promote issues, set `Agent Dispatch = Yes`, and run post-merge handoff using `gh` CLI with the operator PAT and the `/project-update` comment command. See the "Orchestrator role" section below.
 - Cursor Cloud Agents **may** implement platform-track issues (`Track = Platform`), governance/docs work (`docs/**`, `chore/**`), and other tasks when a human assigns them directly (for example, a Cursor Cloud Agent task or an explicitly delegated issue). Direct assignment is not dispatch-slot consumption.
 
@@ -97,7 +97,7 @@ After confirming the handoff state is clean:
      --body "/project-update Status=Done AgentDispatch=No"
    ```
 
-2. Identify the next open issue on `Product` or `Future` with `Status = Ready` and the lowest `Queue Order`. Use `npm run agent:project-check` or query via `gh api graphql`.
+2. Identify the next open queue-eligible issue with `Status = Ready` and the lowest `Queue Order`. Apply the repo's dependency and live-gate rules from `docs/operators/codex-orchestration.md`; iOS is eligible only when the self-hosted macOS runner is online.
 
 3. Validate the selected issue has current acceptance criteria and a Testing Expectations section.
 
@@ -114,7 +114,7 @@ After confirming the handoff state is clean:
 1. Confirm `origin/master` contains the merged commit (`git pull origin master`).
 2. Confirm the completed issue is closed and no stray PR remains.
 3. Demote the merged issue: post `/project-update Status=Done AgentDispatch=No`.
-4. Select the next issue by `Queue Order` on dispatch-eligible tracks.
+4. Select the next eligible issue by `Queue Order`, honoring dependency validity and any live operational gates such as iOS runner availability.
 5. Promote exactly one issue: post `/project-update Status=Ready AgentDispatch=Yes`.
 6. Post a direct-assignment comment or notify the human to assign a worker for the promoted issue.
 

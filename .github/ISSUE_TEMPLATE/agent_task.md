@@ -6,7 +6,7 @@ Use this template when creating tasks for any coding agent (Codex, Cursor, GitHu
 - Background: context and why this change is needed
 - Goal: one clear outcome for a single PR
 - Relevant docs: exact repo docs the worker must read first
-- Dependencies / blocked by: upstream issues, infra, or tooling prerequisites
+- Dependencies / blocked by: upstream issues, infra, or tooling prerequisites; issue-number blockers must also be mirrored in the project `Dependencies` field so automation does not rely on prose alone
 - Goal / Acceptance criteria: explicit, testable criteria (pass/fail)
 - Files to change: list of file paths to inspect or modify
 
@@ -27,5 +27,5 @@ State the expected automated coverage up front. Use `docs/planning/repository-te
 - Out of scope: prevent adjacent backlog creep
 - Constraints: (e.g., no secrets, TypeScript strict, keep changes small)
 - Branch to start from: (e.g., master)
-- Queue note: suggested canonical project `Track` and `Area` values from `docs/planning/project-field-taxonomy.md` (do not use `Track = Product` or `Area = backend`); whether the issue could eventually receive `Agent Dispatch = Yes` on a dispatch-eligible domain track or `Future` (Codex workers only); whether non-Codex platforms may implement it via direct assignment; note that the orchestrator owns `Status`, `Queue Order`, and other workflow fields
+- Queue note: suggested canonical project `Track` and `Area` values from `docs/planning/project-field-taxonomy.md` (do not use `Track = Product` or `Area = backend`); whether the issue could eventually receive `Agent Dispatch = Yes` on a dispatch-eligible domain track, `Future`, or `iOS`; whether non-Codex platforms may implement it via direct assignment; any live operational gate that must be rechecked before work starts (for example the iOS runner); note that the orchestrator owns `Status`, `Queue Order`, and other workflow fields
 - Manual verification steps / notes for reviewer

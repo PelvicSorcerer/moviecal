@@ -40,8 +40,8 @@ Items marked **verified** were observed in an actual Claude Code session against
 
 ## Queue / dispatch interaction
 
-- **Claude Code may not receive the dispatch slot** (`Agent Dispatch = Yes`) on dispatch-eligible tracks (`Product` or `Future`). The formal handshake model (dispatch slot + orchestrator-provisioned worktrees) is Codex-only. See `docs/operators/multi-platform-dispatch-policy.md`.
-- Claude Code **may** implement **any track** (Product, Future, Platform, or Migration) when a human assigns the issue or delegates it directly, without requiring `Agent Dispatch = Yes`. This is called **direct assignment** and is available to every agent platform. See the "Direct assignment path" section in `docs/operators/multi-platform-dispatch-policy.md`.
+- **Claude Code may not receive the dispatch slot** (`Agent Dispatch = Yes`) on a product-delivery domain track or `Future`. The formal handshake model (dispatch slot + orchestrator-provisioned worktrees) is Codex-only there. The iOS track is the mixed-execution exception: a promoted iOS issue may be implemented from Claude Code, but merge readiness is still gated by the self-hosted macOS runner. See `docs/operators/multi-platform-dispatch-policy.md`.
+- Claude Code **may** implement **any track** (product-delivery domain tracks, `Future`, `iOS`, `Platform`, or `Migration`) when a human assigns the issue or delegates it directly, without requiring `Agent Dispatch = Yes`. This is called **direct assignment** and is available to every agent platform. See the "Direct assignment path" section in `docs/operators/multi-platform-dispatch-policy.md`.
 - Direct assignment means: a human explicitly assigns or delegates the issue (for example, "Claude Code, implement issue #174"), the issue stays at `Agent Dispatch = No`, and the worker uses the `claude/**` branch prefix. Direct assignment does not consume the dispatch slot.
 - Treat the `moviecal Delivery` GitHub Project as the source of truth for queue state. To update project fields, use the `/project-update` comment command documented below.
 
@@ -290,7 +290,7 @@ After confirming the handoff state is clean:
    /project-update Status=Done AgentDispatch=No
    ```
 
-2. Query open issues on dispatch-eligible tracks (`Product` or `Future`) with `Status = Ready`. Use `mcp__github__list_issues` or `mcp__github__search_issues` to enumerate candidates, then identify the one with the lowest `Queue Order` project field value.
+2. Query open queue-eligible issues with `Status = Ready`. Use `mcp__github__list_issues` or `mcp__github__search_issues` to enumerate candidates, then identify the one with the lowest `Queue Order` project field value that also passes the dependency and live-gate rules from `docs/operators/codex-orchestration.md`.
 
 3. Verify the selected issue has current acceptance criteria, verification steps, and a **Testing Expectations** section. If the issue has been open through later merged work, spot-check the repo state against the acceptance criteria before promoting.
 
@@ -333,7 +333,7 @@ A fresh Claude Code orchestrator session can run the full lifecycle without read
 1. **Pull state:** confirm `origin/master` is current; read open issues and PRs with `mcp__github__*` tools.
 2. **Queue intake:** confirm the last dispatched issue's PR merged and the issue is closed.
 3. **Demote:** post `/project-update Status=Done AgentDispatch=No` on the completed issue.
-4. **Select next:** find the open `Ready` issue on `Product` or `Future` with the lowest `Queue Order`.
+4. **Select next:** find the open `Ready` issue with the lowest `Queue Order` that also passes the dependency and live-gate rules from `docs/operators/codex-orchestration.md`.
 5. **Validate:** confirm the selected issue has current acceptance criteria, verification steps, and a Testing Expectations section.
 6. **Promote:** post `/project-update Status=Ready AgentDispatch=Yes` on the selected issue.
 7. **Dispatch or assign:** use the `Agent` tool to launch a Claude worker, or post a direct-assignment comment for another platform.

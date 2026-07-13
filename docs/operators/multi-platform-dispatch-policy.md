@@ -1,164 +1,164 @@
 # Multi-platform agent dispatch policy
 
-This document is the single source of truth for which agent platforms may receive `Agent Dispatch = Yes` on a `moviecal Delivery` GitHub Project item after the project cutover (#92–#95).
+This document is the single source of truth for which agent platforms may receive `Agent Dispatch = Yes` on a `moviecal Delivery` GitHub Project item after the project cutover.
 
-Read `AGENTS.md` first for the generic queue contract. This policy answers the platform-specific question left open during the agent-environment compatibility refactor (Phase 5, issue **#102**) and reconciles live project usage of `Track = Future` (issue **#147**).
+Read `AGENTS.md` first for the generic queue contract.
 
-## Queue authority (unchanged)
+## Queue authority
 
 - The `moviecal Delivery` GitHub Project is authoritative for live queue state, workflow status, queue ordering, and dispatch selection.
 - GitHub issues are authoritative for scoped execution contracts: background, acceptance criteria, verification steps, security notes, dependency notes, and out-of-scope boundaries.
 - Exactly one open issue may have `Agent Dispatch = Yes` at any time, and that issue must also have `Status = Ready`. If no such issue exists, the queue is intentionally blocked.
+- The `Dependencies` project field is the authoritative machine-readable blocker surface for queue eligibility. Invalid dependency data blocks eligibility and requires human correction.
 - The `agent-ready` label is a derived compatibility surface only. After cutover, do not dispatch from labels alone — reconcile project fields first.
 
 ## Orchestrator role
 
-**Any platform may act as orchestrator.** The orchestrator role — reading queue state, promoting issues, setting `Agent Dispatch = Yes`, and running post-merge handoff — is not restricted to Codex. Claude Code, Cursor Cloud Agent, and GitHub Copilot may each run a full governance cycle using their own native tools.
+Any platform may act as orchestrator: reading queue state, promoting issues, setting `Agent Dispatch = Yes`, and running post-merge handoff.
 
-What differs per platform is the *mechanics*: Codex uses `spawn_agent` with provisioned worktrees and a formal two-step checkpoint gate; Claude Code uses the `Agent` tool with GitHub MCP server calls; Cursor uses `gh` CLI with a PAT; Copilot uses `gh` CLI via PAT or the `/project-update` comment command. The lifecycle steps are equivalent across all platforms:
+The mechanics differ by platform, but the lifecycle is the same:
 
-1. Read current queue state (identify the merged issue and confirm it is closed).
+1. Read current queue state.
 2. Demote the merged issue (`Agent Dispatch = No`, `Status = Done`).
-3. Select the next ready issue by `Queue Order` on dispatch-eligible tracks.
+3. Select the next ready issue by `Queue Order`, then apply dependency and live-gate checks.
 4. Promote exactly one issue (`Agent Dispatch = Yes`, `Status = Ready`), or record a blocker.
 5. Optionally dispatch or assign a worker for the promoted issue.
 
 See each platform's operator guide for the platform-specific orchestrator procedure:
-- Claude Code: `docs/operators/claude-code.md` — Orchestrator role section
-- Cursor: `docs/operators/cursor-cloud.md` — Orchestrator role section
-- Copilot: `docs/operators/github-copilot.md` — Orchestrator role section
-- Codex: `docs/operators/codex-orchestration.md` (the original, unchanged reference)
+- Claude Code: `docs/operators/claude-code.md`
+- Cursor: `docs/operators/cursor-cloud.md`
+- Copilot: `docs/operators/github-copilot.md`
+- Codex: `docs/operators/codex-orchestration.md`
 
 ## Dispatch-eligible tracks
 
-Two policy categories may hold the single dispatch slot when intentionally promoted:
-
-| Policy category | Live project `Track` values | Dispatch eligible |
-|---|---|---|
-| **Product delivery** | `Shared Watchlists`, `Calendar`, `Docs` | **Yes** — see dispatch-slot section below |
-| **Future** | `Future` | **Yes** — see dispatch-slot section below |
-| **Platform** | `Platform` | **No** — always `Agent Dispatch = No` |
-| **Migration** | `Migration` | **No** — always `Agent Dispatch = No` |
+| Policy category | Live project `Track` values | Dispatch eligible | Worker model | Extra gate |
+|---|---|---|---|---|
+| Product delivery | `Shared Watchlists`, `Calendar`, `Docs` | Yes | Codex worker handshake | None beyond normal queue eligibility |
+| Future | `Future` | Yes | Codex worker handshake | None beyond normal queue eligibility |
+| iOS | `iOS` | Yes | Mixed execution | Self-hosted macOS runner must be online and correctly labeled |
+| Platform | `Platform` | No | Direct assignment only | n/a |
+| Migration | `Migration` | No | Direct assignment only | n/a |
 
 There is no project `Track` option named `Product`. Issue bodies that say `Track = Product` use policy shorthand; orchestrators must map work to a domain track using `docs/planning/project-field-taxonomy.md` and must stop rather than guess when mapping is unclear.
 
-`Future` is not a parking lot for vague ideas. A `Future`-track issue must still have a normal executable issue contract (acceptance criteria, verification steps, **Testing Expectations**, relevant docs) before it can be promoted to `Status = Ready` and receive dispatch.
+`Future` is not a parking lot for vague ideas. A `Future`-track issue must still have a normal executable issue contract before it can be promoted to `Status = Ready` and receive dispatch.
 
 ## Policy summary
 
-| Project `Track` | Who may set `Agent Dispatch = Yes` (as orchestrator) | Who may start from `Agent Dispatch = Yes` (as worker) | Who may implement via direct assignment |
+| Project `Track` | Who may set `Agent Dispatch = Yes` | Who may start from `Agent Dispatch = Yes` | Who may implement via direct assignment |
 |---|---|---|---|
-| **Product delivery** (domain tracks) | Any platform or human acting as orchestrator | **Codex workers only** (formal spawn_agent handshake) | Any platform or human (when directly assigned, without the dispatch slot) |
-| **Future** (non-product executable workstreams) | Any platform or human acting as orchestrator | **Codex workers only** (formal spawn_agent handshake) | Any platform or human (when directly assigned, without the dispatch slot) |
-| **Platform** (compatibility, governance, process) | Not applicable — always `Agent Dispatch = No` | Not applicable | Any platform or human via direct assignment |
-| **Migration** (cutover work) | Not applicable — always `Agent Dispatch = No` | Not applicable | Humans (or agents on explicit human assignment for doc-only migration items) |
+| Product delivery domain tracks | Any platform or human acting as orchestrator | Codex workers only | Any platform or human |
+| Future | Any platform or human acting as orchestrator | Codex workers only | Any platform or human |
+| iOS | Any platform or human acting as orchestrator | Any platform or human on a promoted issue | Any platform or human |
+| Platform | Not applicable | Not applicable | Any platform or human |
+| Migration | Not applicable | Not applicable | Humans, or agents only on explicit human assignment for doc-only migration work |
 
-### Dispatch-slot work (product-delivery domain tracks and Future)
+## Dispatch-slot work on product-delivery domain tracks and Future
 
-Only **Codex workers** may start implementation from the single `Agent Dispatch = Yes` / `Status = Ready` slot when the promoted item is on a dispatch-eligible project `Track` (`Shared Watchlists`, `Calendar`, `Docs`, or `Future`). This restriction applies to the *worker* role only — any orchestrating platform may set the dispatch slot.
+Only Codex workers may start implementation from the single `Agent Dispatch = Yes` / `Status = Ready` slot when the promoted item is on a product-delivery domain track (`Shared Watchlists`, `Calendar`, `Docs`) or `Future`.
 
-Rationale:
+This restriction applies to the worker role only. Any orchestrating platform may set the dispatch slot.
 
-- The formal Codex dispatch slot is a Codex orchestrator/worker handshake: the orchestrator provisions worker worktrees and validates checkpoint gates (see `codex-orchestration.md` and `codex.md`). Non-Codex platforms lack the `spawn_agent` mechanism needed for that handshake.
-- The dispatch slot exists to give exactly one fresh Codex worker a deterministic start signal. Non-Codex platforms implement work via direct assignment instead.
+## iOS track
 
-Codex workers use `agent/<issue-number>-<short-slug>` branches. The Codex orchestrator uses `orchestrator/live` (or similar) and does not consume the dispatch slot for feature work.
+- `iOS` is main-queue eligible once the iOS lane exists.
+- iOS work is not permanently direct-assignment-only.
+- Execution is mixed: any platform may implement a promoted iOS issue.
+- Merge readiness is gated by the self-hosted macOS runner lane.
+- Runner availability is checked at promotion time and again immediately before work starts.
+- If the runner is unavailable at start-time, remove `Agent Dispatch = Yes`, keep `Status = Ready`, and continue scanning the queue for the next eligible issue.
 
-### Direct assignment path (product-delivery domain tracks and Future)
+## Direct assignment path
 
-Any agent platform (Claude Code, Cursor Cloud Agent, GitHub Copilot) or human may implement a **product-delivery** (`Shared Watchlists`, `Calendar`, or `Docs`) or **Future** project item when **directly assigned**, without requiring or competing for the dispatch slot. Direct assignment means:
+Any agent platform or human may implement a product-delivery, `Future`, `iOS`, or `Platform` issue when directly assigned, without requiring or competing for the dispatch slot.
 
-- A human (engineer, lead, or orchestrator session) explicitly assigns the issue to a specific agent or delegates the issue to them.
-- The issue remains at `Agent Dispatch = No` — it does not consume the single dispatch slot.
-- The implementing agent uses its platform-assigned branch prefix (e.g., `claude/**` for Claude Code, `cursor/**` for Cursor, `copilot/**` for Copilot).
+Direct assignment means:
 
-**This is distinct from dispatch-slot work:** the slot is a Codex-only formal handshake where an orchestrator promotes exactly one issue and provisions a worker. Direct assignment is a lightweight alternative available to every platform on every track.
+- A human explicitly assigns or delegates the issue.
+- The issue remains at `Agent Dispatch = No`.
+- The implementing agent uses its platform-assigned branch prefix.
 
-Direct assignment does not affect the queue invariant that exactly one open issue may have `Agent Dispatch = Yes` at any time.
+Direct assignment does not change the queue invariant that exactly one open issue may have `Agent Dispatch = Yes` at any time.
 
-### Platform-track and governance work
+## Queue Order, eligibility, and skip-forward behavior
 
-Platform-track issues (`Track = Platform`, including compatibility issues **#102–#106**) always keep `Agent Dispatch = No`. They are not eligible for the dispatch slot regardless of platform.
+`Queue Order` is a global field across the whole board. It expresses the orchestrator's preferred execution sequence, including non-dispatchable items.
 
-Any agent platform or human may implement platform-track or governance work when **directly assigned** — for example:
+When selecting the next dispatchable issue, consider only open issues that are:
 
-- a Cursor Cloud Agent task such as "handle issue #102"
-- a GitHub issue delegated to Copilot
-- a human opening a `docs/**` or `chore/**` PR
+1. on a dispatch-eligible project `Track` (`Shared Watchlists`, `Calendar`, `Docs`, `Future`, or `iOS`)
+2. `Status = Ready`
+3. dependency-valid and dependency-satisfied
+4. operationally eligible, including any live runner or tooling gate the issue contract requires
+5. small enough for one focused PR
 
-Direct assignment is not the same as consuming `Agent Dispatch = Yes`. Agents on direct assignment must not set, assume, or compete for the dispatch slot.
+Among those candidates, use the lowest `Queue Order` value as the deterministic tie-breaker.
+
+When a higher-priority issue is not dependency-valid or not operationally eligible, the orchestrator may skip forward to the next valid issue. The orchestrator uses full-queue scanning rather than a bounded skip window.
+
+## Trusted self-hosted iOS execution
+
+- The self-hosted iOS workflow runs only on trusted in-repo branches.
+- Fork-triggered execution on the self-hosted Mac is out of scope for the initial policy.
+- The branch families allowed to trigger the iOS workflow are documented in `docs/operators/branch-and-ci-conventions.md` and `docs/operators/branch-prefixes.json`.
+
+## Platform-specific notes
+
+### Codex
+
+- May orchestrate any track.
+- May consume `Agent Dispatch = Yes` on product-delivery domain tracks and `Future`.
+- May implement promoted iOS issues.
 
 ### Cursor Cloud Agent
 
-- **May not** start from `Agent Dispatch = Yes` on any project item (as worker).
-- **May** act as orchestrator: promote issues, set `Agent Dispatch = Yes`, run post-merge handoff. See the orchestrator section in `docs/operators/cursor-cloud.md`.
-- **May** implement Product, Future, Platform, or other work when a human assigns them directly (see "Direct assignment path" above).
-- Uses `cursor/<slug>-<run-id>` branches (platform-assigned). See `docs/operators/cursor-cloud.md`.
+- May orchestrate any track.
+- May not consume `Agent Dispatch = Yes` on product-delivery domain tracks or `Future`.
+- May implement promoted iOS issues.
 
 ### GitHub Copilot coding agent
 
-- **May not** start from `Agent Dispatch = Yes` on any project item (as worker).
-- **May** act as orchestrator: promote issues, set `Agent Dispatch = Yes`, run post-merge handoff. See the orchestrator section in `docs/operators/github-copilot.md`.
-- **May** implement Product, Future, Platform, or other work when a human assigns them directly, or when GitHub assigns an issue or PR to Copilot (see "Direct assignment path" above).
-- Uses `copilot/**` branches (platform-assigned). See `docs/operators/github-copilot.md`.
+- May orchestrate any track.
+- May not consume `Agent Dispatch = Yes` on product-delivery domain tracks or `Future`.
+- May implement promoted iOS issues.
 
 ### Claude Code
 
-- **May not** start from `Agent Dispatch = Yes` on any project item (as worker) via the formal Codex dispatch handshake.
-- **May** act as orchestrator: promote issues, set `Agent Dispatch = Yes`, run post-merge handoff. See the orchestrator section in `docs/operators/claude-code.md`.
-- **May** implement any track when a human assigns the issue or delegates it directly.
-- Uses `claude/**` branches. See `docs/operators/claude-code.md`.
+- May orchestrate any track.
+- May not consume `Agent Dispatch = Yes` on product-delivery domain tracks or `Future`.
+- May implement promoted iOS issues.
 
 ### Governance branch prefixes
 
-Governance and queue-maintenance changes that are not tied to a product implementation issue use `docs/**` or `chore/**` branches. These branches are available to any agent platform or human and do not require `Agent Dispatch = Yes`. See `docs/operators/branch-and-ci-conventions.md`.
+Governance and queue-maintenance changes that are not tied to a product implementation issue use `docs/**` or `chore/**` branches. These branches are available to any agent platform or human and do not require `Agent Dispatch = Yes`.
 
-## Queue Order and dispatch promotion
-
-`Queue Order` is a **global** field across every project item. It expresses the orchestrator's preferred execution sequence for the whole board, including `Platform`, `Migration`, and non-dispatchable items.
-
-Dispatch promotion uses a narrower filter. When selecting the next dispatchable issue, consider only open issues that are:
-
-1. on a dispatch-eligible project `Track` (`Shared Watchlists`, `Calendar`, `Docs`, or `Future`)
-2. `Status = Ready`
-3. unblocked, with a current executable issue contract
-4. small enough for one focused PR
-
-Among those candidates, use the lowest `Queue Order` value as the deterministic tie-breaker. Items on `Platform` or `Migration` may have `Queue Order` values for board sorting, but they must never receive `Agent Dispatch = Yes`.
-
-## Post-merge handoff (any orchestrating platform)
+## Post-merge handoff
 
 The following steps apply regardless of which platform ran the orchestrator session:
 
-1. Pull or confirm an attached local branch tracking `origin/master` contains the merged work.
+1. Confirm an attached local branch tracking `origin/master` contains the merged work.
 2. Confirm the completed issue is closed and no duplicate or stale PR remains open for the same work.
 3. Demote the merged issue: post `/project-update Status=Done AgentDispatch=No` on the issue, or use the platform's equivalent GitHub API call.
-4. Scan open issues on dispatch-eligible project tracks (`Shared Watchlists`, `Calendar`, `Docs`, or `Future`) with `Status = Ready`, ordered by `Queue Order` ascending.
+4. Scan open issues on dispatch-eligible project tracks with `Status = Ready`, ordered by `Queue Order` ascending, and apply dependency plus live-gate checks.
 5. Promote exactly one qualifying issue: post `/project-update Status=Ready AgentDispatch=Yes` on that issue. If no issue qualifies, record the blocker instead.
-6. Update planning or guidance docs only if the merge changed queue assumptions.
-7. Optionally dispatch or assign a worker for the promoted issue using the platform's native mechanism.
-
-For Codex-specific post-merge detail (worktree cleanup, `wait_agent` collection) see `codex-orchestration.md` — that contract is unchanged.
+6. Optionally dispatch or assign a worker for the promoted issue using the platform's native mechanism.
 
 ## Project fields used together
 
 | Field | Role in this policy |
 |---|---|
-| `Track` | Separates dispatch-eligible work (product-delivery domain tracks and `Future`) from non-dispatchable work (`Platform`, `Migration`) |
-| `Agent Dispatch` | `Yes` only on the single dispatch-eligible issue; any orchestrating platform may set this field |
+| `Track` | Separates dispatch-eligible work (product-delivery domain tracks, `Future`, and `iOS`) from non-dispatchable work (`Platform`, `Migration`) |
+| `Agent Dispatch` | `Yes` only on the single dispatch-eligible issue |
 | `Status` | The dispatchable issue must be `Ready` |
+| `Dependencies` | Hard eligibility gate; invalid data blocks promotion until corrected |
 | `Queue Order` | Global preferred execution order; dispatch promotion uses the lowest value among open `Ready` issues on dispatch-eligible tracks |
 | `Execution Mode` | `Human` items are never dispatch candidates; `Agent`/`Either` dispatch-eligible items may eventually receive dispatch |
 
-## What this policy does not change
-
-- Codex orchestrator/worker procedure is documented in `codex-orchestration.md` and is preserved unchanged. Non-Codex platforms add parallel governance paths alongside it.
-- Branch prefixes and CI trigger conventions remain in `docs/operators/branch-and-ci-conventions.md`.
-- `docs/planning/open-issue-order.json` remains a generated **product-track-only** compatibility artifact. It intentionally excludes `Future`, `Platform`, and `Migration` items. Do not treat it as dispatch authority — use live project fields instead.
-
 ## Automation alignment
 
-`scripts/project-queue-check.sh` and `scripts/lib/project-queue-common.sh` validate that the single `Agent Dispatch = Yes` item is on a dispatch-eligible project `Track` (`Shared Watchlists`, `Calendar`, `Docs`, or `Future`). Platform and migration items must keep `Agent Dispatch = No`.
+- Queue-tooling enforcement for the `Dependencies` field and iOS live-runner gate is tracked separately in issue `#241`.
+- Until that follow-up lands, the repo docs define the target policy and the live GitHub Project fields remain the human source of truth for dependency correctness and iOS runner-gated promotion.
 
 ## Changing this policy
 

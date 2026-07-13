@@ -165,6 +165,40 @@ The authoritative CI gate is `.github/workflows/supabase-verify.yml`'s `lane-ful
 
 **Merge policy:** Post-deploy or scheduled; not part of the default PR gate.
 
+## iOS lane
+
+The iOS lane is a separate GitHub Actions workflow, `ios-verify`, that runs on the self-hosted macOS runner.
+
+### Bootstrap state (before `ios/` exists)
+
+- `ios-verify` runs as a successful no-op/config-validation workflow.
+- It must still prove runner routing and basic toolchain presence, including `xcodebuild -version`.
+
+### `#237` cutover state
+
+- `#237` switches `ios-verify` from bootstrap mode to real CI.
+- Minimum required coverage at that point:
+  - simulator build
+  - at least one trivial XCTest smoke test
+
+### `#238` and `#239`
+
+- API-client and auth work add XCTest coverage appropriate to their scopes.
+- These issues do not require XCUITest or snapshot coverage by default.
+
+### `#240` strengthened lane
+
+- `#240` is the first issue that must require the full lane:
+  - build
+  - XCTest
+  - XCUITest
+  - snapshot coverage for the stable app-shell screens added there
+
+## Deferred coverage rule
+
+- Deferred future testing must never remain implicit.
+- If a test layer is intentionally deferred, an existing issue must be updated to carry it or a new follow-up issue must be created before the parent governance issue is considered complete.
+
 ## Composite commands
 
 | Command | Lanes included |

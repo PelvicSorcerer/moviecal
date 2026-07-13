@@ -24,6 +24,7 @@ These are the only valid values for the project `Track` single-select field:
 | `Calendar` | Yes | User-facing calendar feed / subscription product delivery |
 | `Docs` | Yes | User-facing or repo-facing documentation delivery that belongs on the product board (not governance-only `docs/**` PRs) |
 | `Future` | Yes | Executable non-product workstreams (testing programs, architecture hardening, strategic infrastructure) |
+| `iOS` | Yes | Native iOS delivery work; mixed execution, with promotion and start-time eligibility gated by the self-hosted macOS runner policy |
 | `Platform` | No | Compatibility, governance, process |
 | `Migration` | No | Cutover work |
 
@@ -39,6 +40,7 @@ Docs and issue bodies often say **product delivery** or `Track = Product`. That 
 | Calendar feeds, calendar tokens, `.ics` subscription work | `Calendar` |
 | Documentation shipped as a tracked delivery item | `Docs` |
 | Testing programs, hardening, or infrastructure not tied to one product domain | `Future` |
+| Native iOS app work under `ios/` and related mobile delivery issues | `iOS` |
 | Governance, operator tooling, queue mechanics | `Platform` |
 | Project cutover / migration | `Migration` |
 
@@ -121,7 +123,7 @@ Do not write `Track = Product` or `Area = backend` in new issues.
 
 ## Automation alignment
 
-`scripts/lib/project-queue-common.sh` treats these project `Track` values as dispatch-eligible: `Shared Watchlists`, `Calendar`, `Docs`, and `Future`. `Platform` and `Migration` must keep `Agent Dispatch = No`.
+`scripts/lib/project-queue-common.sh` currently treats these project `Track` values as dispatch-eligible: `Shared Watchlists`, `Calendar`, `Docs`, and `Future`. The iOS mixed-execution runner gate and the authoritative `Dependencies` field are tracked as follow-up automation work in issue `#241`; until then, the live project fields and operator docs remain authoritative for iOS queue eligibility. `Platform` and `Migration` must keep `Agent Dispatch = No`.
 
 `scripts/export-open-issue-order.sh` exports ordering for open product-board items by excluding `Future`, `Platform`, `Migration`, and non-product areas — see that script for the compatibility artifact filter.
 

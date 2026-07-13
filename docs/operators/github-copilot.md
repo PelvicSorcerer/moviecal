@@ -35,7 +35,7 @@ Everything marked **verified** below was observed in an actual GitHub Copilot co
 ## Queue governance
 
 - Copilot's coding agent runs one agent per assigned issue/PR, similar to Cursor Cloud Agents; it does not participate in Codex's orchestrator/worker worktree handshake described in `docs/operators/codex-orchestration.md`.
-- **GitHub Copilot may not start from `Agent Dispatch = Yes` as a worker** (the formal Codex spawn_agent handshake is Codex-only). Dispatch-slot work on `Product` or `Future` tracks starts via the Codex handshake. See `docs/operators/multi-platform-dispatch-policy.md`.
+- **GitHub Copilot may not start from `Agent Dispatch = Yes` on a product-delivery domain track or `Future` as a worker** (the formal Codex spawn_agent handshake is Codex-only there). The iOS track is the mixed-execution exception: a promoted iOS issue may be implemented from Copilot, but merge readiness is still gated by the self-hosted macOS runner. See `docs/operators/multi-platform-dispatch-policy.md`.
 - **GitHub Copilot may act as orchestrator**: it may promote issues, set `Agent Dispatch = Yes`, and run post-merge handoff using `gh` CLI with a PAT and the `/project-update` comment command. See the "Orchestrator role" section below.
 - Copilot **may** implement platform-track issues (`Track = Platform`), governance/docs work (`docs/**`, `chore/**`), and other tasks when GitHub assigns an issue/PR to Copilot or a human delegates the work. Direct assignment is not dispatch-slot consumption.
 
@@ -80,7 +80,7 @@ After confirming the handoff state is clean:
      --body "/project-update Status=Done AgentDispatch=No"
    ```
 
-2. Identify the next open issue on `Product` or `Future` with `Status = Ready` and the lowest `Queue Order`. Use `npm run agent:project-check` or query via `gh api graphql`.
+2. Identify the next open queue-eligible issue with `Status = Ready` and the lowest `Queue Order`. Apply the repo's dependency and live-gate rules from `docs/operators/codex-orchestration.md`; iOS is eligible only when the self-hosted macOS runner is online.
 
 3. Validate the selected issue has current acceptance criteria and a Testing Expectations section.
 
@@ -97,7 +97,7 @@ After confirming the handoff state is clean:
 1. Confirm `origin/master` contains the merged commit.
 2. Confirm the completed issue is closed and no stray PR remains.
 3. Demote the merged issue: post `/project-update Status=Done AgentDispatch=No`.
-4. Select the next issue by `Queue Order` on dispatch-eligible tracks.
+4. Select the next eligible issue by `Queue Order`, honoring dependency validity and any live operational gates such as iOS runner availability.
 5. Promote exactly one issue: post `/project-update Status=Ready AgentDispatch=Yes`.
 6. Assign the issue to the appropriate platform (GitHub Copilot, another platform, or human) for the next implementation session.
 
