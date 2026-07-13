@@ -22,18 +22,6 @@ on:
       - 'docs/planning/testing-lanes.md'
       - 'docs/planning/native-ios-app-plan.md'
       - 'docs/planning/issue-236-implementation-brief.md'
-  pull_request:
-    paths:
-      - 'ios/**'
-      - '.github/workflows/ios-verify.yml'
-      - 'AGENTS.md'
-      - 'docs/operators/multi-platform-dispatch-policy.md'
-      - 'docs/operators/branch-and-ci-conventions.md'
-      - 'docs/operators/branch-prefixes.json'
-      - 'docs/operators/codex-orchestration.md'
-      - 'docs/planning/testing-lanes.md'
-      - 'docs/planning/native-ios-app-plan.md'
-      - 'docs/planning/issue-236-implementation-brief.md'
   workflow_dispatch:
 
 permissions:

@@ -56,5 +56,6 @@
     "claude/**",
     "docs/**",
     "chore/**"
-  ]
+  ],
+  "$comment_trustedSelfHostedExecutionGlobs": "Documentation-only until follow-up issue #241 teaches repo tooling to enforce trusted self-hosted execution policy."
 }

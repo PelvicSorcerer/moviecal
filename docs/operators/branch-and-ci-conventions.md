@@ -41,7 +41,8 @@ The dedicated iOS workflow is `.github/workflows/ios-verify.yml`.
   - `claude/**`
   - `docs/**`
   - `chore/**`
-- It should trigger on both:
+- It should trigger on trusted in-repo branch pushes and manual dispatch, not on `pull_request`.
+- Its push trigger paths should cover both:
   - `ios/**` changes
   - shared docs/config/workflow files that affect iOS dispatch, branch filtering, runner policy, or testing-lane policy
 - Before `ios/` exists, `ios-verify` runs as a successful no-op/config-validation workflow and must still prove runner routing plus basic toolchain presence, including `xcodebuild -version`.

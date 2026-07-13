@@ -104,7 +104,7 @@ against the code as of this document:
 | Movie search | `GET /api/movies/search` (**unversioned, unauthenticated public GET**) | not present | **Yes** | Add `GET /api/v1/movies/search` (bearer-auth) for consistency, auth, and future rate-limiting; or formally bless the public route for the app |
 | Movie details (detail screen) | fetched server-side inside add flow | not present | **Maybe** | Add `GET /api/v1/movies/{tmdbId}` only if the detail screen needs richer data than the search payload provides; otherwise defer |
 | Get calendar subscription URL | cookie settings page only | not present | **Yes (required for D3)** | Add `GET /api/v1/calendar-token` returning the user's subscription URL (create-on-demand) |
-| Rotate calendar token | cookie settings page only | not present | **Yes** | Add `POST /api/v1/calendar-token/rotate`; rotation invalidates the previous URL (breaks the old subscription — surface this in the app UX) |
+| Rotate calendar token | cookie settings page only | not present | **Yes** | Add `POST /api/v1/calendar-token`; rotation invalidates the previous URL (breaks the old subscription — surface this in the app UX) |
 
 **Phase 1 backend backlog (dispatch-eligible domain-track issues, agent-executable):**
 
