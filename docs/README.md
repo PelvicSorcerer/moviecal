@@ -16,6 +16,10 @@ Recommended reading order for contributors and agents:
 10. `docs/planning/recommended-issue-sequence.md`
 11. `docs/planning/agent-environment-compatibility-plan.md` (audit of agent/environment-specific artifacts; remaining work tracked as issues #105–#106)
 12. `docs/planning/github-project-migration-plan.md` (migration + Platform track queue order for #92–#106)
+13. `docs/planning/agent-platform-pilot-development-workflow.md` (experimental branch, milestone-PR, validation, and final-merge workflow for the platform pilots)
+14. `docs/planning/agent-platform-comparison-plan.md` (shared quality, cost, evidence, and decision contract for coding-agent platform pilots)
+15. `docs/planning/github-native-agent-pilot-plan.md` (progressive GitHub-native pilot: visible setup, manual canary, automation, and native routing trial)
+16. `docs/planning/openhands-agent-pilot-plan.md` (progressive provider-neutral OpenHands pilot with observable canaries, automated triggers, and tiered routing)
 
 Keep docs updated when behavior, routes, environment variables, or security assumptions change. Planning docs should describe the intended execution plan and issue hygiene; they should not be used as a historical progress tracker.
 
