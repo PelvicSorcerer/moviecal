@@ -88,22 +88,22 @@ below as REQUIRES MAINTAINER / ASSUMPTION rather than as fact.
   browser surface. Confirm the agent and a fixed model can be chosen at
   assignment time.
 
-### 4. Branch protection and required PR checks remain enabled
+### 4. Branch protection and required PR checks — enable before canary
 
-- **OBSERVED / NEEDS CONFIRMATION:** the GitHub branches API reports
-  `master` as `"protected": false`. That flag reflects *classic* branch
-  protection only and does **not** reflect repository **rulesets**, so it is not
-  conclusive — protection may still be enforced via a ruleset this session
-  cannot read.
-- **VERIFIED (CI gate wiring):** the acceptance-check workflows fire on the PR
-  itself regardless of source branch — `verify.yml` and `browser-verify.yml`
-  both use `on: pull_request:` with **no branch filter**. So a canary PR into
-  `master` will run baseline (lint/typecheck/build), unit, integration, and
-  browser lanes. Whether those checks are *required* for merge is a
-  Settings/ruleset property → **REQUIRES MAINTAINER**.
-- Maintainer action: in repo Settings → Branches / Rules, confirm (a) `master`
-  is protected (classic or ruleset), and (b) the intended verify checks are
-  marked *required* and that a PR cannot merge while they fail.
+- **VERIFIED:** classic branch protection on `master` is `enabled: false`
+  (`enforcement_level: off`, zero required status checks). The rulesets array
+  is also empty. `master` is currently unprotected — a PR can be merged
+  without CI passing.
+- **VERIFIED (CI gate wiring):** `verify.yml` and `browser-verify.yml` both
+  use `on: pull_request:` with no branch filter, so the full
+  baseline/unit/integration/browser gate runs on every canary PR. The checks
+  exist; they are just not *required*.
+- **ACTION REQUIRED (before Milestone 1):** enable branch protection on
+  `master` — at minimum a required-status-checks rule covering
+  `lane-baseline`, `lane-unit`, and `lane-integration` — so a canary PR
+  cannot be merged while CI fails. This can be done in repo Settings →
+  Branches (classic) or Settings → Rules (ruleset). Complete after the other
+  account/org settings steps below.
 
 ### 5. Review permissions granted to the installed agent app
 
@@ -192,10 +192,10 @@ using your signed-in GitHub session:
    the repository permission set. Confirm it is minimal (branch + PR + read
    issues) with no unexpected admin/secret/org-write scope.
 
-4. **Branch protection / required checks (work item 4).**
-   Repo Settings → Branches and Settings → Rules. Confirm `master` is protected
-   (the API `protected:false` flag ignores rulesets, so check both), and that
-   the intended verify checks are **required** and block merge on failure.
+4. **Branch protection / required checks (work item 4) — enable, don't just confirm.**
+   `master` is verified unprotected (no classic rule, no rulesets). Repo
+   Settings → Branches or Rules: add a required-status-checks rule covering at
+   minimum `lane-baseline`, `lane-unit`, `lane-integration`. Do after steps 1–3.
 
 5. **Secret store (work item 6).**
    Repo/org Settings → Secrets and variables → Actions, and any `copilot`
