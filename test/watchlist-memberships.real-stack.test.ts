@@ -388,7 +388,7 @@ describe.skipIf(!supabaseReachable || !credentialsPresent)(
           .single();
 
         expect(error).toBeNull();
-        expect(new Date(data?.accepted_at ?? '').toISOString()).toBe(
+        expect(new Date(data!.accepted_at).toISOString()).toBe(
           new Date(acceptedAt).toISOString()
         );
       });
