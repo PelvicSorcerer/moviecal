@@ -467,9 +467,11 @@ project_queue_validate_claude_model_annotation() {
 
   model_value=$(echo "$issue_body" | grep -i "Requested Claude model" | head -1 | sed 's/.*Requested Claude model[[:space:]]*:[[:space:]]*//' | tr -d '`' | awk '{print $1}')
 
-  if echo "$issue_body" | grep -iq "Maintainer authorization: GitHub-native agent pilot"; then
-    is_github_native_pilot=1
-  fi
+  case "$issue_body" in
+    *"Maintainer authorization: GitHub-native agent pilot"*)
+      is_github_native_pilot=1
+      ;;
+  esac
 
   case "$model_value" in
     ""|"<!--"*)
