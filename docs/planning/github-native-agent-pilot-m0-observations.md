@@ -336,36 +336,80 @@ session_status:       Failed during session (MCP error) — details TBD
   touched. ✓
 - **No queue mutations:** `Agent Dispatch` and Project fields unchanged. ✓
 
-### What went wrong
+### What went wrong — "Running Claude" session (run 29308647090)
 
-- **Session failed while using MCP.** The agent opened the PR and made the
-  correct code change, then encountered an MCP error. The PR description was
-  not updated to a completion summary. Session status shows `in_progress` in
-  the API at time of recording; the UI reported a failure to the maintainer.
-  Root cause and exact error TBD — maintainer to provide session log or error
-  message.
+**Root cause: Copilot inference API 403 on the very first request.**
 
-### Open questions from this run
+```
+copilot: API Error: 403 Access to this endpoint is forbidden.
+Please review our Terms of Service.
+· Please run /login
+ClaudeError: Claude Code process exited with code 1
+```
 
-- What was the exact MCP error? (Error message, which MCP tool, at what point
-  in the session.)
-- Was the session using any MCP server that isn't provisioned in the GitHub
-  agent environment?
-- Does the cancellation surface appear on the issue page or in a Copilot
-  dashboard now that the session is active?
-- What model was actually selected/used? (The PR body doesn't report it.)
-- Do the required CI checks (`lane-baseline`, `lane-unit`, `lane-integration`)
-  pass on the branch?
+Timeline from the job log:
+- Steps 1–28: setup, checkout, `npm install`, MCP server start — all success.
+- MCP servers connected: `github-mcp-server` ✓, `playwright` ✓, `runtime-tools` ✓
+- Model configured: `sweagent-capi:claude-haiku-4.5` → "Using configured model: claude-haiku-4.5" ✓
+- Requests #1–#10 sent to `POST /v1/messages?beta=true` via the Copilot inference
+  proxy at `api.individual.githubcopilot.com`.
+- **403 returned.** The Copilot API rejected the inference request. The "Please
+  run /login" message is Claude Code's authentication-failure response pattern.
+- Session exited with code 1 in 11 seconds. No code was read or changed.
+
+**The code diff on PR #250 was NOT produced by this session.** It was produced
+by the follow-up "Running Copilot cloud agent" session (run 29308900709), which
+is a different agent. The diff is correct (see "What went right" above) but was
+made by the built-in Copilot agent, not by Claude.
+
+**Likely cause of the 403:** The `claude-haiku-4.5` model endpoint at
+`api.individual.githubcopilot.com` returned "Access to this endpoint is
+forbidden." This may mean:
+- The individual Copilot plan does not grant Claude Code access to the
+  `sweagent-capi` inference endpoint even when the partner agent is enabled.
+- The authentication token injected by the GitHub Actions runner lacks the
+  scope required to call the Claude Code cloud inference API via the Copilot
+  proxy.
+- There is a plan-tier or preview-access gate on this endpoint.
+
+**This is a stop condition for the Claude agent path** per the pilot plan:
+"the supported agent or automation interface is unavailable." The built-in
+Copilot agent works; the Claude partner agent does not reach inference.
+
+### What the Copilot agent did (run 29308900709)
+
+The follow-up "Running Copilot cloud agent" session (currently in-progress at
+time of writing) produced the correct diff:
+
+```diff
+-  expect(result.acceptedAt).toBe(acceptedAt);
++  expect(new Date(result.acceptedAt).toISOString()).toBe(new Date(acceptedAt).toISOString());
+```
+
+Both assertions normalised on both sides. Fix is correct and within scope.
+This was not the intended pilot run (it used the Copilot agent, not Claude),
+but the output is usable as a baseline observation.
+
+### Open questions
+
+- What Copilot plan tier is active on the PelvicSorcerer account? Does the
+  partner-agent API access require a higher tier or a separate preview opt-in
+  beyond the "Allow Claude coding agent" toggle?
+- Is the 403 on `api.individual.githubcopilot.com` a known limitation of the
+  individual plan vs. the business/enterprise plan?
+- Does the cancellation surface appear anywhere now that sessions are active?
 
 ### Next decision
 
-The code change is correct. Options:
-1. **Merge as-is** after human review confirms the diff — counts as M1 success
-   with a note that the session ended in an MCP error after completing the work.
-2. **Re-run** the session on the existing branch to see if the agent can
-   complete the PR description and CI without the MCP error.
-3. **Human merges** the correct diff directly, recording the MCP failure as an
-   infrastructure observation.
+The Claude agent path is blocked by a 403 inference error. Options:
+1. **Investigate the plan tier** — check whether Business/Enterprise Copilot
+   is required for the Claude partner agent to reach inference. If so, this is
+   a hard blocker for the personal-account pilot.
+2. **Accept the Copilot-agent result** — merge the correct diff from PR #250,
+   record the Claude session failure as the M1 finding, and decide whether to
+   retry with a different plan configuration or stop the pilot.
+3. **Stop M1** — record the 403 as an infrastructure failure per the plan's
+   stop conditions and hold until the plan-tier question is resolved.
 
 ## References
 
