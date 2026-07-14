@@ -162,7 +162,7 @@ below as REQUIRES MAINTAINER / ASSUMPTION rather than as fact.
 | Permissions and repository access acceptable | OPACITY GAP — Claude is an OAuth authorization (Authorized GitHub Apps), not a GitHub App installation; no per-repo scope or permission list is visible |
 | Branch protection and required CI checks in place | ✓ DONE — ruleset `master-protection` active |
 | No production secrets in worker environment | ✓ DONE — no Actions secrets, no copilot environment |
-| Maintainer understands how to cancel a session | OPEN — to be confirmed during checkpoint walkthrough |
+| Maintainer understands how to cancel a session | DEFERRED — cancel controls not visible without an active session; to be observed at start of Milestone 1 before implementation work begins |
 | Safe first-canary task profile agreed | OPEN — proposed profile in this doc; awaiting maintainer agreement |
 
 ---
@@ -201,11 +201,13 @@ using your signed-in GitHub session:
    - **Branch name format:** not shown in the modal. Record observed prefix
      once the first session starts.
 
-6. **Cancellation path. OPEN.**
-   With the assignment UI open (or after the above inspection), record:
-   - Is there a stop/cancel control visible in the assignment form?
-   - How do you stop an in-flight session (a session that has already started)?
-   - Can a session be cancelled from the issue page? From a separate dashboard?
+6. **Cancellation path. DEFERRED to Milestone 1 start.**
+   Cancel/stop controls are not visible in the assignment modal before a session
+   is started. The maintainer must assign the issue to observe them. Agreed
+   action: at the very start of Milestone 1, before any implementation work is
+   expected, locate and record the stop/cancel surface — then confirm it works
+   before letting the session proceed. Do not advance through Milestone 1 until
+   cancellation is understood.
 
 7. **Decide.** Proceed to Milestone 1 only with an explicit go. If Anthropic
    Claude is not separately selectable in the assignment UI, record the result
