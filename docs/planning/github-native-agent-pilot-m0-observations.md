@@ -484,6 +484,17 @@ GitHub-native Claude path" — the failure is operation-specific and
 independent of model tier. Investigation of the exact failing operation is
 deferred to a follow-up run with more logging.
 
+**Possible root cause — missing GitHub app connection (MAINTAINER-REPORTED,
+2026-07-14):** After M1 completed, the maintainer found that the Claude app
+GitHub connection was not fully set up at the time of the failing run. This
+may be the actual cause of the operation-specific 403 rather than an
+endpoint scope or token permission gap. If the app connection is now
+established, the Claude partner agent path may work without any other
+changes. **Recommended action:** retry the Claude partner agent on a
+future canary (after the Copilot workflow is solidified as the primary
+path) to confirm whether the connection gap was the root cause. Record
+the retry as a separate comparison run.
+
 ### Decision: amend M1 to use Copilot agent with Claude models
 
 The built-in Copilot agent works (confirmed by PR #251, now merged). The
