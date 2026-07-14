@@ -482,7 +482,7 @@ project_queue_validate_claude_model_annotation() {
       ;;
     claude-haiku-4-5)
       if [ "$github_native_claude_pilot" -eq 1 ]; then
-        echo "Issue #$issue_number requests claude-haiku-4-5 for the GitHub-native Claude pilot. That runner currently exits with a Copilot 403/login error instead of surfacing a clean model blocker; request claude-sonnet-4-6 or higher instead." >&2
+        echo "Issue #$issue_number cannot request claude-haiku-4-5 for the GitHub-native Claude pilot. Use claude-sonnet-4-6 or higher instead." >&2
         return 1
       fi
       echo "Claude model annotation for #$issue_number: $model_value (valid)"
