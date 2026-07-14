@@ -52,30 +52,32 @@ below as REQUIRES MAINTAINER / ASSUMPTION rather than as fact.
 
 ### 1. Paid Copilot plan exposes third-party coding agents
 
-- **REQUIRES MAINTAINER.** Copilot plan tier and the "third-party / partner
-  coding agents" exposure are billing/organization settings not readable from
-  this environment or via the available GitHub MCP tools.
-- **VERIFIED (supporting, not sufficient):** the repo is already provisioned for
-  a *GitHub Copilot coding-agent* environment generally — `.github/workflows/copilot-setup-steps.yml`
-  (correct `copilot-setup-steps` job name, Node 24 install) and
-  `.github/copilot-instructions.md` both exist, and `docs/operators/github-copilot.md`
-  records a prior verified Copilot coding-agent session (issue #105). This proves
-  the *default* Copilot coding agent has run here before; it does **not** prove
-  the *Anthropic Claude third-party agent* is exposed on the current plan.
-- Maintainer action: confirm the plan tier that includes third-party coding
-  agents and that the org policy exposes them.
+- **VERIFIED (partial):** personal account Settings → Copilot shows a "Copilot
+  cloud agent" setting, which is enabled. This confirms the coding-agent feature
+  surface exists on the current plan.
+- **UNRESOLVED:** it is unclear whether "Copilot cloud agent" is GitHub's own
+  built-in agent or the entry point for third-party/partner agents such as
+  Anthropic Claude. No model selection or Anthropic/Claude branding was visible
+  in the settings section. The pilot plan specifically requires "GitHub-hosted
+  Claude with an explicit standard model" — this needs to be resolved before
+  Milestone 1.
+- **NOTE:** no "Copilot" section exists in the org settings, confirming the
+  Copilot plan is on the personal account (PelvicSorcerer), not the org. This
+  is consistent with the prior #105 session and is fine for the pilot, but
+  means agent runs are scoped to the personal seat, not an org policy.
+- Open question: where does model selection (or Anthropic Claude selection)
+  appear? Likely at issue-assignment time in the UI, not in settings. To be
+  confirmed at the start of Milestone 1 before any issue is assigned.
 
 ### 2. Enable the Anthropic Claude coding agent and make it available to the repo
 
-- **REQUIRES MAINTAINER.** Enabling a partner agent and scoping it to
-  `PelvicSorcerer-Software/moviecal` is an organization Copilot setting. Not
-  inspectable here.
-- Note (interpretation, not fact): the pilot plan's "Initial platform decision"
-  requires **GitHub-hosted Claude with an explicit standard model**. If the
-  third-party Claude agent is not exposed, the plan says to **stop Milestone 1
-  and record the availability result** rather than substitute a different agent.
-- Maintainer action: confirm whether the Anthropic Claude agent can be enabled
-  org-wide and granted access to this repo; record the result either way.
+- **UNRESOLVED.** The plan requires a specific Anthropic Claude agent; the
+  available UI surface is "Copilot cloud agent" (enabled) with no visible
+  model or partner-agent selector in settings. Whether the assignment UI
+  exposes model/agent choice is unknown until an issue assignment is opened.
+- Per the pilot plan: if GitHub-hosted Claude is not separately selectable,
+  stop Milestone 1 and record the result. Do not silently substitute a
+  different agent.
 
 ### 3. GitHub UI exposes repository, `master`, agent, and model selection controls
 
@@ -83,27 +85,22 @@ below as REQUIRES MAINTAINER / ASSUMPTION rather than as fact.
   is accessible and `master` exists at `550bad9` (GitHub branches API + local
   fetch). Other live branches seen: `experiment/agent-platform-pilots`,
   `copilot/update-issue-fields`, `claude/pelvicsorcerer-repo-migration-52y71y`.
-- **REQUIRES MAINTAINER:** the *assignment UI* itself — the agent picker, the
-  per-session model-selection control, and the ability to target `master` — is a
-  browser surface. Confirm the agent and a fixed model can be chosen at
-  assignment time.
+- **UNRESOLVED:** the assignment UI's agent picker and model-selection control
+  were not inspected. These need to be checked at the start of Milestone 1
+  (look before assigning — just open the UI and record what appears).
 
-### 4. Branch protection and required PR checks — enable before canary
+### 4. Branch protection and required PR checks
 
-- **VERIFIED:** classic branch protection on `master` is `enabled: false`
-  (`enforcement_level: off`, zero required status checks). The rulesets array
-  is also empty. `master` is currently unprotected — a PR can be merged
-  without CI passing.
+- **VERIFIED (before):** classic branch protection `enabled: false`; rulesets
+  array empty. `master` was unprotected.
+- **VERIFIED (after):** ruleset `master-protection` (id 18903059) created,
+  `enforcement: active`, targeting `~DEFAULT_BRANCH`. Required status checks:
+  `lane-baseline`, `lane-unit`, `lane-integration` (integration_id 15368,
+  GitHub Actions). Also blocks deletion and non-fast-forward pushes.
+  `current_user_can_bypass: never`. ✓ Done.
 - **VERIFIED (CI gate wiring):** `verify.yml` and `browser-verify.yml` both
-  use `on: pull_request:` with no branch filter, so the full
-  baseline/unit/integration/browser gate runs on every canary PR. The checks
-  exist; they are just not *required*.
-- **ACTION REQUIRED (before Milestone 1):** enable branch protection on
-  `master` — at minimum a required-status-checks rule covering
-  `lane-baseline`, `lane-unit`, and `lane-integration` — so a canary PR
-  cannot be merged while CI fails. This can be done in repo Settings →
-  Branches (classic) or Settings → Rules (ruleset). Complete after the other
-  account/org settings steps below.
+  use `on: pull_request:` with no branch filter — the gate runs on every
+  canary PR and is now required for merge.
 
 ### 5. Review permissions granted to the installed agent app
 
@@ -122,12 +119,8 @@ below as REQUIRES MAINTAINER / ASSUMPTION rather than as fact.
   `AGENTS.md` "Environment policy" and `.github/copilot-instructions.md` both
   prohibit production secrets, long-lived personal credentials, and real user
   data, and require disposable/dev-only resources.
-- **REQUIRES MAINTAINER:** the *actual* secret store the agent's environment
-  would inherit — repository/organization Actions secrets and any `copilot`
-  environment secrets — must be confirmed to contain only disposable/dev values.
-  `docs/operators/github-copilot.md` notes a `copilot`-environment PAT pattern
-  that is documented but "not tested in this repo yet"; confirm no production
-  credential is wired there before a real run.
+- **VERIFIED (secret store):** Settings → Secrets and variables → Actions —
+  no secrets present. No `copilot` environment exists. ✓ Done.
 
 ### 7. Expected branch family is covered by relevant CI (or canary is path-gated)
 
@@ -155,17 +148,14 @@ below as REQUIRES MAINTAINER / ASSUMPTION rather than as fact.
 
 ## Milestone 0 exit criteria — status
 
-| Exit criterion | Status | Owner of remaining step |
-|---|---|---|
-| Agent and intended (fixed Claude) model visibly available | REQUIRES MAINTAINER | maintainer in assignment UI |
-| Permissions and repository access acceptable | REQUIRES MAINTAINER | maintainer in org GitHub Apps / repo access |
-| Maintainer understands how to cancel a session | GUIDED (below) — maintainer to confirm in UI | maintainer |
-| Safe first-canary task profile agreed | PROPOSED (below) — awaiting maintainer agreement | maintainer |
-
-No exit criterion can be fully closed from this environment; each terminates in
-a maintainer action at the checkpoint. That is expected for Milestone 0, which
-the plan defines as an inspection/readiness milestone with **no issue assigned
-and no code changed**.
+| Exit criterion | Status |
+|---|---|
+| Agent and intended (fixed Claude) model visibly available | UNRESOLVED — "Copilot cloud agent" enabled; model/agent picker not yet inspected |
+| Permissions and repository access acceptable | OPEN — agent app permissions not yet reviewed |
+| Branch protection and required CI checks in place | ✓ DONE — ruleset `master-protection` active |
+| No production secrets in worker environment | ✓ DONE — no Actions secrets, no copilot environment |
+| Maintainer understands how to cancel a session | OPEN — to be confirmed at start of Milestone 1 |
+| Safe first-canary task profile agreed | OPEN — awaiting maintainer agreement |
 
 ---
 
@@ -176,41 +166,33 @@ reviews the available controls and permissions, and decides whether to proceed.
 No issue is assigned and no code is changed in this milestone."* Suggested steps
 using your signed-in GitHub session:
 
-1. **Plan / third-party agent exposure (work items 1–2).**
-   Organization settings → Copilot → Coding agent (and policies). Confirm the
-   plan tier exposes third-party/partner coding agents and that the Anthropic
-   Claude agent can be enabled and scoped to this repo. Record: available? which
-   models are offered? can a fixed model be pinned?
+1. ✓ **Branch protection (work item 4).** Done — ruleset `master-protection`
+   active with `lane-baseline`, `lane-unit`, `lane-integration` required.
 
-2. **Assignment + model controls (work item 3).**
-   On an issue (do **not** assign one yet), open the assignment UI and confirm
-   you can select the Claude agent, pin a specific model, and target `master`.
-   Record exactly which controls appear.
+2. ✓ **Secret store (work item 6).** Done — no Actions secrets, no `copilot`
+   environment.
 
-3. **Permissions review (work item 5).**
-   Organization settings → GitHub Apps (or the coding-agent app entry). Review
-   the repository permission set. Confirm it is minimal (branch + PR + read
-   issues) with no unexpected admin/secret/org-write scope.
+3. **Agent app permissions (work item 5). OPEN.**
+   Personal Settings → Applications → Installed GitHub Apps, or the Copilot
+   coding-agent app entry. Review the repository permission set and confirm it
+   is minimal (branch + PR + read issues) with no unexpected admin/secret/
+   org-wide write scope.
 
-4. **Branch protection / required checks (work item 4) — enable, don't just confirm.**
-   `master` is verified unprotected (no classic rule, no rulesets). Repo
-   Settings → Branches or Rules: add a required-status-checks rule covering at
-   minimum `lane-baseline`, `lane-unit`, `lane-integration`. Do after steps 1–3.
+4. **Assignment UI + model/agent controls (work items 2–3). OPEN.**
+   On any issue, open the "Assign to Copilot" or coding-agent UI — **do not
+   assign yet**. Record: which agent(s) are offered? Is Anthropic Claude
+   selectable separately from the built-in Copilot cloud agent? Is there a
+   model picker? Can you target `master`? This resolves the key open question
+   from work items 1–3.
 
-5. **Secret store (work item 6).**
-   Repo/org Settings → Secrets and variables → Actions, and any `copilot`
-   environment. Confirm only disposable/dev values are present — no production
-   Supabase service-role key, TMDb key, or cron secret.
+5. **Cancellation path. OPEN** (to be captured at start of Milestone 1).
+   When the assignment UI is open, note whether there is a stop/cancel control
+   visible before starting. Record exact steps for stopping an in-flight
+   session.
 
-6. **Cancellation path (exit criterion 3).**
-   Confirm how to stop an in-flight agent session: from the agent session/run
-   view and from the resulting PR (e.g. stop the session and/or close the draft
-   PR). This repo's operator docs do not yet document a GitHub-native cancel
-   procedure — capture the real steps you see so we can record them. (See
-   "Documentation gap" below.)
-
-7. **Decide.** Proceed to Milestone 1 only with an explicit go, or stop and
-   record the blocking availability/permission result.
+6. **Decide.** Proceed to Milestone 1 only with an explicit go. If the
+   Anthropic Claude agent is not separately selectable, record that result and
+   stop — do not silently substitute the default Copilot cloud agent.
 
 ---
 
