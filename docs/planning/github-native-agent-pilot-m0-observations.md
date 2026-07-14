@@ -3,7 +3,7 @@
 ## Status
 
 **Experimental evidence log.** Maintained on `experiment/agent-platform-pilots`
-(via the milestone working branch `claude/agent-platform-milestone-0-sjqb1j`).
+(via the milestone working branch `claude/agent-platform-pilot-m0-b1j05m`).
 This file records Milestone 0 readiness findings for the GitHub-native pilot. It
 is **not** authoritative operating policy and does not override `AGENTS.md`, the
 live `moviecal Delivery` GitHub Project, or `docs/operators/`.
@@ -20,11 +20,13 @@ schema in `docs/planning/agent-platform-comparison-plan.md`.
 milestone:            GitHub-native Milestone 0 (readiness only)
 run_date:             2026-07-14
 executed_by:          Claude Code (remote execution environment)
-model:                claude-opus-4-8
-working_branch:       claude/agent-platform-milestone-0-sjqb1j (based on
-                      experiment/agent-platform-pilots @ bb6aacb)
-repo:                 PelvicSorcerer-Software/moviecal
-master_commit:        550bad9 (feat: enforce Dependencies project field, #241)
+model:                claude-sonnet-4-6
+working_branch:       claude/agent-platform-pilot-m0-b1j05m (rebased onto
+                      master @ 16e3f01)
+repo:                 PelvicSorcerer/moviecal (transferred from
+                      PelvicSorcerer-Software/moviecal to personal ownership;
+                      transfer required to enable third-party partner agents)
+master_commit:        16e3f01 (Point project automation to personal ownership, #249)
 authority_limits:     readiness only. No issue assigned, no Milestone 1, no live
                       Project mutation, no Agent Dispatch consumption, no PR to
                       master, no automation enabled.
@@ -71,20 +73,23 @@ below as REQUIRES MAINTAINER / ASSUMPTION rather than as fact.
 
 ### 2. Enable the Anthropic Claude coding agent and make it available to the repo
 
-- **UNRESOLVED.** The plan requires a specific Anthropic Claude agent; the
-  available UI surface is "Copilot cloud agent" (enabled) with no visible
-  model or partner-agent selector in settings. Whether the assignment UI
-  exposes model/agent choice is unknown until an issue assignment is opened.
-- Per the pilot plan: if GitHub-hosted Claude is not separately selectable,
-  stop Milestone 1 and record the result. Do not silently substitute a
-  different agent.
+- **VERIFIED (MAINTAINER-CONFIRMED):** The Claude partner agent is enabled.
+  Personal Settings → Copilot → Partner Agents (Preview) → "Allow Claude coding
+  agent" toggle is **On**.
+- **VERIFIED (precondition):** Enabling third-party partner agents required
+  moving the repository from the `PelvicSorcerer-Software` GitHub organization
+  to personal account ownership (`PelvicSorcerer/moviecal`). This transfer was
+  completed (see #249 / commit `16e3f01`).
+- **UNRESOLVED:** whether the agent is listed separately from the built-in
+  Copilot cloud agent in the issue-assignment UI, and whether model selection
+  appears there. To be confirmed by the maintainer during the checkpoint
+  walkthrough (open the assignment UI on any issue, observe, do not assign).
 
 ### 3. GitHub UI exposes repository, `master`, agent, and model selection controls
 
-- **VERIFIED (repository + branch reachable):** `PelvicSorcerer-Software/moviecal`
-  is accessible and `master` exists at `550bad9` (GitHub branches API + local
-  fetch). Other live branches seen: `experiment/agent-platform-pilots`,
-  `copilot/update-issue-fields`, `claude/pelvicsorcerer-repo-migration-52y71y`.
+- **VERIFIED (repository + branch reachable):** `PelvicSorcerer/moviecal`
+  (post-transfer) is accessible and `master` exists at `16e3f01` (GitHub
+  branches API + local fetch).
 - **UNRESOLVED:** the assignment UI's agent picker and model-selection control
   were not inspected. These need to be checked at the start of Milestone 1
   (look before assigning — just open the UI and record what appears).
@@ -150,12 +155,12 @@ below as REQUIRES MAINTAINER / ASSUMPTION rather than as fact.
 
 | Exit criterion | Status |
 |---|---|
-| Agent and intended (fixed Claude) model visibly available | UNRESOLVED — "Copilot cloud agent" enabled; model/agent picker not yet inspected |
-| Permissions and repository access acceptable | OPEN — agent app permissions not yet reviewed |
+| Agent and intended (fixed Claude) model visibly available | PARTIAL — Claude partner agent enabled (toggle On); model/agent picker in assignment UI not yet inspected |
+| Permissions and repository access acceptable | OPEN — agent app permissions not yet reviewed by maintainer |
 | Branch protection and required CI checks in place | ✓ DONE — ruleset `master-protection` active |
 | No production secrets in worker environment | ✓ DONE — no Actions secrets, no copilot environment |
-| Maintainer understands how to cancel a session | OPEN — to be confirmed at start of Milestone 1 |
-| Safe first-canary task profile agreed | OPEN — awaiting maintainer agreement |
+| Maintainer understands how to cancel a session | OPEN — to be confirmed during checkpoint walkthrough |
+| Safe first-canary task profile agreed | OPEN — proposed profile in this doc; awaiting maintainer agreement |
 
 ---
 
@@ -172,27 +177,36 @@ using your signed-in GitHub session:
 2. ✓ **Secret store (work item 6).** Done — no Actions secrets, no `copilot`
    environment.
 
-3. **Agent app permissions (work item 5). OPEN.**
-   Personal Settings → Applications → Installed GitHub Apps, or the Copilot
-   coding-agent app entry. Review the repository permission set and confirm it
-   is minimal (branch + PR + read issues) with no unexpected admin/secret/
-   org-wide write scope.
+3. ✓ **Claude partner agent enabled (work item 2, partial).** Maintainer
+   confirmed: Personal Settings → Copilot → Partner Agents (Preview) →
+   "Allow Claude coding agent" toggle is **On**. Repo transfer to personal
+   ownership (`PelvicSorcerer/moviecal`) was the necessary precondition.
 
-4. **Assignment UI + model/agent controls (work items 2–3). OPEN.**
+4. **Agent app permissions (work item 5). OPEN.**
+   Personal Settings → Applications → Installed GitHub Apps (or the Claude /
+   Copilot coding-agent app entry). Review the repository permission set and
+   confirm it is minimal (branch + PR + read issues) with no unexpected admin,
+   secrets, or org-wide write scope. Record exactly what permissions the Claude
+   partner agent claims.
+
+5. **Assignment UI + model/agent controls (work items 2–3). OPEN.**
    On any issue, open the "Assign to Copilot" or coding-agent UI — **do not
-   assign yet**. Record: which agent(s) are offered? Is Anthropic Claude
-   selectable separately from the built-in Copilot cloud agent? Is there a
-   model picker? Can you target `master`? This resolves the key open question
-   from work items 1–3.
+   assign yet**. Record:
+   - Which agent(s) are listed? Is "Claude" shown separately from the built-in
+     Copilot cloud agent?
+   - Is there a model picker? What models appear?
+   - Can you target `master` as the base branch, or is that fixed/automatic?
+   - What branch name format does the UI indicate the agent will use?
 
-5. **Cancellation path. OPEN** (to be captured at start of Milestone 1).
-   When the assignment UI is open, note whether there is a stop/cancel control
-   visible before starting. Record exact steps for stopping an in-flight
-   session.
+6. **Cancellation path. OPEN.**
+   With the assignment UI open (or after the above inspection), record:
+   - Is there a stop/cancel control visible in the assignment form?
+   - How do you stop an in-flight session (a session that has already started)?
+   - Can a session be cancelled from the issue page? From a separate dashboard?
 
-6. **Decide.** Proceed to Milestone 1 only with an explicit go. If the
-   Anthropic Claude agent is not separately selectable, record that result and
-   stop — do not silently substitute the default Copilot cloud agent.
+7. **Decide.** Proceed to Milestone 1 only with an explicit go. If Anthropic
+   Claude is not separately selectable in the assignment UI, record the result
+   and stop — do not silently substitute the default Copilot cloud agent.
 
 ---
 
