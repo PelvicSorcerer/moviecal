@@ -4,9 +4,9 @@
 # The GitHub Project is authoritative for dispatch state; issue bodies remain
 # authoritative for implementation contracts.
 
-PROJECT_QUEUE_REPO="${PROJECT_QUEUE_REPO:-PelvicSorcerer-Software/moviecal}"
-PROJECT_QUEUE_OWNER="${PROJECT_QUEUE_OWNER:-PelvicSorcerer-Software}"
-PROJECT_QUEUE_NUMBER="${PROJECT_QUEUE_NUMBER:-1}"
+PROJECT_QUEUE_REPO="${PROJECT_QUEUE_REPO:-PelvicSorcerer/moviecal}"
+PROJECT_QUEUE_OWNER="${PROJECT_QUEUE_OWNER:-PelvicSorcerer}"
+PROJECT_QUEUE_NUMBER="${PROJECT_QUEUE_NUMBER:-2}"
 PROJECT_QUEUE_LIST_LIMIT="${PROJECT_QUEUE_LIST_LIMIT:-200}"
 
 project_queue_setup_token() {
@@ -122,7 +122,9 @@ project_queue_fetch_project_items_json() {
   fi
 
   for owner_kind in organization user; do
-    response=$(project_queue_graphql_project_items_query "$owner_kind" "$graphql_limit")
+    if ! response=$(project_queue_graphql_project_items_query "$owner_kind" "$graphql_limit" 2>/dev/null); then
+      continue
+    fi
     if echo "$response" | jq -e --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.items.nodes' >/dev/null 2>&1; then
       PROJECT_ITEMS_JSON=$(project_queue_normalize_project_items_response "$response" "$owner_kind")
       return 0

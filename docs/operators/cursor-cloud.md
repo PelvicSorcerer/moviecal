@@ -38,7 +38,7 @@ Everything below marked "verified" was actually run against this repo on a real 
 
 ### Project queue validation on Cursor Cloud
 
-With `GITHUB_PAT_OPERATOR` configured and `jq` available, platform/governance agents can validate live queue state against `PelvicSorcerer-Software/moviecal` and the organization project `PelvicSorcerer-Software/1` (`moviecal Delivery`):
+With `GITHUB_PAT_OPERATOR` configured and `jq` available, platform/governance agents can validate live queue state against `PelvicSorcerer/moviecal` and the user-owned project `PelvicSorcerer/2` (`moviecal Delivery`):
 
 ```bash
 npm run agent:project-check

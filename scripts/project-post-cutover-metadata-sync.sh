@@ -3,8 +3,8 @@
 # Idempotent: skips only when both the short description and readme match the canonical post-cutover text.
 set -euo pipefail
 
-owner="${PROJECT_QUEUE_OWNER:-PelvicSorcerer-Software}"
-project_number="${PROJECT_QUEUE_NUMBER:-1}"
+owner="${PROJECT_QUEUE_OWNER:-PelvicSorcerer}"
+project_number="${PROJECT_QUEUE_NUMBER:-2}"
 
 read -r -d '' POST_CUTOVER_SHORT_DESCRIPTION <<'EOF' || true
 Operational delivery board for moviecal. GitHub Project is the authoritative source for live queue state, workflow status, and execution order. GitHub issues remain the authoritative source for scoped task requirements, acceptance criteria, verification steps, and security notes.
@@ -77,7 +77,7 @@ describe_metadata_drift() {
 load_project_metadata() {
   local response owner_kind
   for owner_kind in organization user; do
-    response=$(gh api graphql -f query="query {
+    if ! response=$(gh api graphql -f query="query {
       ${owner_kind}(login: \"$owner\") {
         projectV2(number: $project_number) {
           id
@@ -86,7 +86,9 @@ load_project_metadata() {
           readme
         }
       }
-    }")
+    }" 2>/dev/null); then
+      continue
+    fi
 
     if [ "$(echo "$response" | jq -r --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.id // empty')" != "" ]; then
       PROJECT_ID=$(echo "$response" | jq -r --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.id')

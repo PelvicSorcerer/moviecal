@@ -3,11 +3,11 @@
 # Uses the Projects GraphQL API so a classic PAT with project+repo scopes works without read:org.
 set -euo pipefail
 
-repo="${PROJECT_QUEUE_REPO:-PelvicSorcerer-Software/moviecal}"
+repo="${PROJECT_QUEUE_REPO:-PelvicSorcerer/moviecal}"
 repo_owner="${repo%%/*}"
 repo_name="${repo##*/}"
-owner="${PROJECT_QUEUE_OWNER:-PelvicSorcerer-Software}"
-project_number="${PROJECT_QUEUE_NUMBER:-1}"
+owner="${PROJECT_QUEUE_OWNER:-PelvicSorcerer}"
+project_number="${PROJECT_QUEUE_NUMBER:-2}"
 
 declare -A QUEUE_ORDER=(
   [98]=96
@@ -86,7 +86,7 @@ gh_graphql() {
 load_project() {
   local response owner_kind
   for owner_kind in organization user; do
-    response=$(gh_graphql -f query="query {
+    if ! response=$(gh_graphql -f query="query {
       ${owner_kind}(login: \"$owner\") {
         projectV2(number: $project_number) {
           id
@@ -108,7 +108,9 @@ load_project() {
           }
         }
       }
-    }")
+    }" 2>/dev/null); then
+      continue
+    fi
 
     if [ "$(echo "$response" | jq -r --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.id // empty')" = "" ]; then
       continue

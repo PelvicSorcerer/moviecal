@@ -3,11 +3,11 @@
   "compatibilityOnly": true,
   "source": {
     "type": "github-project",
-    "owner": "PelvicSorcerer-Software",
-    "projectNumber": 1,
-    "repo": "PelvicSorcerer-Software/moviecal"
+    "owner": "PelvicSorcerer",
+    "projectNumber": 2,
+    "repo": "PelvicSorcerer/moviecal"
   },
-  "generatedAt": "2026-07-12T17:58:34Z",
+  "generatedAt": "2026-07-14T03:22:01Z",
   "note": "Generated compatibility artifact. The GitHub Project is authoritative; do not hand-edit this file.",
   "queue": []
 }

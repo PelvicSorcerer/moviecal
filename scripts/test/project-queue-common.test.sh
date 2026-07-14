@@ -9,6 +9,11 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 # shellcheck source=../lib/project-queue-common.sh
 source "$repo_root/scripts/lib/project-queue-common.sh"
 
+# Mark every case as fixture-driven so an authenticated local `gh` session
+# cannot turn a deterministic unit test into a live issue lookup.
+export PROJECT_QUEUE_ITEMS_JSON='{"items":[]}'
+export PROJECT_QUEUE_OPEN_ISSUES_JSON='[]'
+
 # ---------------------------------------------------------------------------
 # Test harness
 # ---------------------------------------------------------------------------

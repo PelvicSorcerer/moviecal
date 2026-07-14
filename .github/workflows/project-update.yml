@@ -40,8 +40,9 @@ jobs:
         run: |
           set -uo pipefail
 
-          # "moviecal Delivery" project owner (organization login after repo transfer).
-          PROJECT_OWNER="PelvicSorcerer-Software"
+          # The delivery project follows the repository owner. The GraphQL query
+          # below supports both user and organization owners.
+          PROJECT_OWNER="$REPO_OWNER"
 
           # ── Helper: post a reply comment via GITHUB_TOKEN ──────────────────────
           # Comments posted this way appear as "github-actions[bot]".

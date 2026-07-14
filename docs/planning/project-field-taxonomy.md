@@ -6,7 +6,7 @@ Status: normative for `moviecal Delivery` custom field **values**. Read `AGENTS.
 
 | Surface | Authoritative for |
 |---|---|
-| **Live GitHub Project** (`PelvicSorcerer-Software/1`) | Current allowed option values for `Track`, `Area`, `Status`, `Agent Dispatch`, and other project custom fields |
+| **Live GitHub Project** (`PelvicSorcerer/2`) | Current allowed option values for `Track`, `Area`, `Status`, `Agent Dispatch`, and other project custom fields |
 | **This document** | Canonical allowed values, dispatch-eligibility mapping, and mismatch handling when repo docs or issue bodies disagree with the live project |
 | **`docs/planning/github-project-migration-plan.md`** | Historical schema design and bootstrap examples; field option lists here match the live project |
 | **GitHub issue bodies** | Execution contracts only: background, acceptance criteria, verification, security notes, dependencies — **not** project field values |
