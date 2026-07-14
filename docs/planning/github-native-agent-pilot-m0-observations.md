@@ -109,12 +109,20 @@ below as REQUIRES MAINTAINER / ASSUMPTION rather than as fact.
 
 ### 5. Review permissions granted to the installed agent app
 
-- **REQUIRES MAINTAINER.** The installed GitHub App / coding-agent permission
-  set (contents, pull requests, issues, actions, etc.) is an org GitHub Apps
-  setting; the available tooling cannot enumerate app permissions.
-- Maintainer action: review the agent app's repository permissions and confirm
-  they are the minimum needed to open a branch + PR and read issues — no
-  unexpected admin, secrets, or org-wide write scope.
+- **VERIFIED (MAINTAINER-CONFIRMED):** Claude appears under Personal Settings →
+  Applications → **Authorized GitHub Apps**, not "Installed GitHub Apps".
+  The authorized entry shows no permission inventory, no repository scope
+  selector, and no configuration surface — it is an OAuth authorization with
+  opaque scope, not a GitHub App installation.
+- **Implication:** there is no visible per-repository permission grant, no way
+  to restrict Claude's access to only `moviecal` from this settings page, and
+  no granular read/write permission list to audit. The effective permissions
+  are determined by what GitHub's partner-agent platform grants the OAuth token
+  at session time, which is not surfaced to the maintainer.
+- **Risk note:** this is a weaker permission-review posture than a GitHub App
+  installation (which shows explicit scopes and per-repo access). Record as a
+  known opacity gap. The repo-side mitigations (branch protection, no secrets
+  in Actions, placeholder-only `.env.example`) still apply regardless.
 
 ### 6. No production secrets or private user data enter the worker environment
 
@@ -156,7 +164,7 @@ below as REQUIRES MAINTAINER / ASSUMPTION rather than as fact.
 | Exit criterion | Status |
 |---|---|
 | Agent and intended (fixed Claude) model visibly available | PARTIAL — Claude partner agent enabled (toggle On); model/agent picker in assignment UI not yet inspected |
-| Permissions and repository access acceptable | OPEN — agent app permissions not yet reviewed by maintainer |
+| Permissions and repository access acceptable | OPACITY GAP — Claude is an OAuth authorization (Authorized GitHub Apps), not a GitHub App installation; no per-repo scope or permission list is visible |
 | Branch protection and required CI checks in place | ✓ DONE — ruleset `master-protection` active |
 | No production secrets in worker environment | ✓ DONE — no Actions secrets, no copilot environment |
 | Maintainer understands how to cancel a session | OPEN — to be confirmed during checkpoint walkthrough |
@@ -182,12 +190,12 @@ using your signed-in GitHub session:
    "Allow Claude coding agent" toggle is **On**. Repo transfer to personal
    ownership (`PelvicSorcerer/moviecal`) was the necessary precondition.
 
-4. **Agent app permissions (work item 5). OPEN.**
-   Personal Settings → Applications → Installed GitHub Apps (or the Claude /
-   Copilot coding-agent app entry). Review the repository permission set and
-   confirm it is minimal (branch + PR + read issues) with no unexpected admin,
-   secrets, or org-wide write scope. Record exactly what permissions the Claude
-   partner agent claims.
+4. ✓ **Agent app permissions (work item 5). DONE — opacity gap recorded.**
+   Claude appears under **Authorized GitHub Apps** (not Installed GitHub Apps).
+   No permission inventory or repository scope is shown — it is an OAuth
+   authorization with no auditable scope list. The repo-side mitigations
+   (branch protection, no Actions secrets, placeholder `.env.example`) remain
+   the effective safety boundary. This opacity is recorded as a known gap.
 
 5. **Assignment UI + model/agent controls (work items 2–3). OPEN.**
    On any issue, open the "Assign to Copilot" or coding-agent UI — **do not
