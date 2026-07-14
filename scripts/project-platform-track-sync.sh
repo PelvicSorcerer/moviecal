@@ -3,11 +3,11 @@
 # Uses the Projects GraphQL API so a classic PAT with project+repo scopes works without read:org.
 set -euo pipefail
 
-repo="${PROJECT_QUEUE_REPO:-PelvicSorcerer-Software/moviecal}"
+repo="${PROJECT_QUEUE_REPO:-PelvicSorcerer/moviecal}"
 repo_owner="${repo%%/*}"
 repo_name="${repo##*/}"
-owner="${PROJECT_QUEUE_OWNER:-PelvicSorcerer-Software}"
-project_number="${PROJECT_QUEUE_NUMBER:-1}"
+owner="${PROJECT_QUEUE_OWNER:-PelvicSorcerer}"
+project_number="${PROJECT_QUEUE_NUMBER:-2}"
 
 declare -A QUEUE_ORDER=(
   [98]=96

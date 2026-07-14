@@ -4,9 +4,9 @@
 # The GitHub Project is authoritative for dispatch state; issue bodies remain
 # authoritative for implementation contracts.
 
-PROJECT_QUEUE_REPO="${PROJECT_QUEUE_REPO:-PelvicSorcerer-Software/moviecal}"
-PROJECT_QUEUE_OWNER="${PROJECT_QUEUE_OWNER:-PelvicSorcerer-Software}"
-PROJECT_QUEUE_NUMBER="${PROJECT_QUEUE_NUMBER:-1}"
+PROJECT_QUEUE_REPO="${PROJECT_QUEUE_REPO:-PelvicSorcerer/moviecal}"
+PROJECT_QUEUE_OWNER="${PROJECT_QUEUE_OWNER:-PelvicSorcerer}"
+PROJECT_QUEUE_NUMBER="${PROJECT_QUEUE_NUMBER:-2}"
 PROJECT_QUEUE_LIST_LIMIT="${PROJECT_QUEUE_LIST_LIMIT:-200}"
 
 project_queue_setup_token() {

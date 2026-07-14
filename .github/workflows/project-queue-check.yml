@@ -49,16 +49,21 @@ jobs:
   project-queue-check:
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ secrets.PROJECT_QUEUE_TOKEN }}
+      # PROJECT_UPDATE_PAT already needs project+repo scopes for /project-update,
+      # so it is also a safe fallback for the read-only live queue check.
+      GH_TOKEN: ${{ secrets.PROJECT_QUEUE_TOKEN || secrets.PROJECT_UPDATE_PAT }}
       PROJECT_QUEUE_MODE: post-cutover
+      PROJECT_QUEUE_REPO: PelvicSorcerer/moviecal
+      PROJECT_QUEUE_OWNER: PelvicSorcerer
+      PROJECT_QUEUE_NUMBER: 2
     steps:
       - uses: actions/checkout@v4
-      - name: Note missing project queue token
+      - name: Note missing project queue credentials
         if: ${{ env.GH_TOKEN == '' }}
         run: |
-          echo "PROJECT_QUEUE_TOKEN is not configured for this repository."
+          echo "Neither PROJECT_QUEUE_TOKEN nor PROJECT_UPDATE_PAT is configured for this repository."
           echo "Skipping live GitHub Project validation and continuing with fixture coverage."
-          echo "Configure a repository secret with token scopes that can read both Projects and repository issues to enable the live check."
+          echo "Configure either repository secret with token scopes that can read both Projects and repository issues to enable the live check."
           echo "Minimum expected scopes today: project and read:project, plus repository issue-read access compatible with gh issue list."
       - name: Show tool versions
         run: gh --version && jq --version

@@ -3,8 +3,8 @@
 # Idempotent: skips only when both the short description and readme match the canonical post-cutover text.
 set -euo pipefail
 
-owner="${PROJECT_QUEUE_OWNER:-PelvicSorcerer-Software}"
-project_number="${PROJECT_QUEUE_NUMBER:-1}"
+owner="${PROJECT_QUEUE_OWNER:-PelvicSorcerer}"
+project_number="${PROJECT_QUEUE_NUMBER:-2}"
 
 read -r -d '' POST_CUTOVER_SHORT_DESCRIPTION <<'EOF' || true
 Operational delivery board for moviecal. GitHub Project is the authoritative source for live queue state, workflow status, and execution order. GitHub issues remain the authoritative source for scoped task requirements, acceptance criteria, verification steps, and security notes.

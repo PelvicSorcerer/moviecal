@@ -6,14 +6,14 @@ This directory holds one guide per agent platform that develops this repo (Codex
 
 ## Queue authority
 
-- Repository: `PelvicSorcerer-Software/moviecal`
-- Project: `PelvicSorcerer-Software/1` (`moviecal Delivery`)
+- Repository: `PelvicSorcerer/moviecal`
+- Project: `PelvicSorcerer/2` (`moviecal Delivery`)
 - The `moviecal Delivery` GitHub Project is authoritative for live queue state, workflow status, queue ordering, and dispatch selection.
 - GitHub issues are authoritative for scoped execution contracts: background, acceptance criteria, verification steps, security notes, dependency notes, and out-of-scope boundaries.
 - Dispatch authority lives in the GitHub Project `Agent Dispatch` and `Status` fields. Do not dispatch from issue labels alone.
 - The GitHub Project `Dependencies` field is the authoritative machine-readable blocker surface for queue eligibility.
 - Canonical project `Track` and `Area` values are defined in `../planning/project-field-taxonomy.md`.
-- Operator PATs (for example `GITHUB_PAT_OPERATOR`) authenticate as the human GitHub user (`PelvicSorcerer`). The repository and project owner is the `PelvicSorcerer-Software` organization.
+- Operator PATs (for example `GITHUB_PAT_OPERATOR`) authenticate as the human GitHub user (`PelvicSorcerer`), which also owns the repository and project.
 - Multi-platform dispatch rights are documented in `multi-platform-dispatch-policy.md`.
 
 ## How do I know which platform I'm on?
