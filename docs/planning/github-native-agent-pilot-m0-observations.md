@@ -242,6 +242,35 @@ using your signed-in GitHub session:
 
 ---
 
+## Additional M0 observations (captured during M1 assignment UI walkthrough)
+
+### Model picker — both agents
+
+- **VERIFIED (MAINTAINER-CONFIRMED):** Both the Claude agent and the Copilot
+  agent offer **Auto** as a model option.
+- **VERIFIED (MAINTAINER-CONFIRMED):** The **Copilot agent has more Anthropic
+  models available than the Claude agent.** Specifically, the Copilot agent
+  offers Opus-class models that the Claude agent does not expose.
+- **Implication for pilot plan:** the pilot plan calls for "GitHub-hosted Claude
+  with an explicit standard model" and specified `claude-haiku-4-5`. If the
+  Claude agent's model picker does not include the exact model IDs the plan
+  specifies, model selection may need to use the closest available option or
+  switch to the Copilot agent for model coverage. This should be resolved
+  before the comparison sample (the Claude agent model list needs to be
+  recorded at the start of each run).
+
+### Cancellation path — in-flight session
+
+- **VERIFIED (MAINTAINER-CONFIRMED):** The "Cancel" button in the assignment
+  modal closes the modal without assigning — it is **not** an in-flight session
+  stop control.
+- **UNRESOLVED:** in-flight session cancellation controls are only visible once
+  a session is running. Now that PR #250 is open and a session is active, the
+  maintainer can observe and record where the stop/cancel surface appears (issue
+  page sidebar, Copilot dashboard, Actions tab, etc.).
+
+---
+
 ## Milestone 0 summary
 
 **Status: COMPLETE.** Maintainer authorized Milestone 1 on 2026-07-14.
@@ -276,6 +305,67 @@ follow-up, not a repo change in this milestone.
 - No PR opened to `master`; no automation/workflow/trigger enabled or added.
 - No repository code, workflow, or config file changed — this milestone produced
   observations only, on the experimental branch.
+
+## Milestone 1 observations — issue #248 canary (in progress)
+
+```text
+run_date:             2026-07-14
+pr:                   #250 — https://github.com/PelvicSorcerer/moviecal/pull/250
+branch:               claude/fix-timestamp-format-mismatch
+branch_prefix:        claude/** (VERIFIED — first observed platform-assigned prefix)
+base_branch:          master @ 16e3f01 ✓
+pr_state:             Draft (opened as [WIP])
+session_status:       Failed during session (MCP error) — details TBD
+```
+
+### What went right
+
+- **Branch prefix VERIFIED:** `claude/fix-timestamp-format-mismatch`. Both
+  `claude/**` and `copilot/**` were already wired into CI; this is consistent
+  with CI coverage.
+- **Base branch correct:** PR targets `master` @ `16e3f01`. ✓
+- **Diff is correct and well-targeted:**
+  ```diff
+  -  expect(result.acceptedAt).toBe(acceptedAt);
+  +  expect(new Date(result.acceptedAt).toISOString()).toBe(new Date(acceptedAt).toISOString());
+  ```
+  Both assertions normalised via `new Date(x).toISOString()`. This satisfies
+  the acceptance criterion ("normalises the comparison rather than weakening
+  the assertion"). The fix is correct by inspection.
+- **Scope contained:** only `test/watchlist-memberships.real-stack.test.ts`
+  touched. ✓
+- **No queue mutations:** `Agent Dispatch` and Project fields unchanged. ✓
+
+### What went wrong
+
+- **Session failed while using MCP.** The agent opened the PR and made the
+  correct code change, then encountered an MCP error. The PR description was
+  not updated to a completion summary. Session status shows `in_progress` in
+  the API at time of recording; the UI reported a failure to the maintainer.
+  Root cause and exact error TBD — maintainer to provide session log or error
+  message.
+
+### Open questions from this run
+
+- What was the exact MCP error? (Error message, which MCP tool, at what point
+  in the session.)
+- Was the session using any MCP server that isn't provisioned in the GitHub
+  agent environment?
+- Does the cancellation surface appear on the issue page or in a Copilot
+  dashboard now that the session is active?
+- What model was actually selected/used? (The PR body doesn't report it.)
+- Do the required CI checks (`lane-baseline`, `lane-unit`, `lane-integration`)
+  pass on the branch?
+
+### Next decision
+
+The code change is correct. Options:
+1. **Merge as-is** after human review confirms the diff — counts as M1 success
+   with a note that the session ended in an MCP error after completing the work.
+2. **Re-run** the session on the existing branch to see if the agent can
+   complete the PR description and CI without the MCP error.
+3. **Human merges** the correct diff directly, recording the MCP failure as an
+   infrastructure observation.
 
 ## References
 
