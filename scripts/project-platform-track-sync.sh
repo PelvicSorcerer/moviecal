@@ -86,7 +86,7 @@ gh_graphql() {
 load_project() {
   local response owner_kind
   for owner_kind in organization user; do
-    response=$(gh_graphql -f query="query {
+    if ! response=$(gh_graphql -f query="query {
       ${owner_kind}(login: \"$owner\") {
         projectV2(number: $project_number) {
           id
@@ -108,7 +108,9 @@ load_project() {
           }
         }
       }
-    }")
+    }" 2>/dev/null); then
+      continue
+    fi
 
     if [ "$(echo "$response" | jq -r --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.id // empty')" = "" ]; then
       continue

@@ -122,7 +122,9 @@ project_queue_fetch_project_items_json() {
   fi
 
   for owner_kind in organization user; do
-    response=$(project_queue_graphql_project_items_query "$owner_kind" "$graphql_limit")
+    if ! response=$(project_queue_graphql_project_items_query "$owner_kind" "$graphql_limit" 2>/dev/null); then
+      continue
+    fi
     if echo "$response" | jq -e --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.items.nodes' >/dev/null 2>&1; then
       PROJECT_ITEMS_JSON=$(project_queue_normalize_project_items_response "$response" "$owner_kind")
       return 0

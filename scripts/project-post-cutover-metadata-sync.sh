@@ -77,7 +77,7 @@ describe_metadata_drift() {
 load_project_metadata() {
   local response owner_kind
   for owner_kind in organization user; do
-    response=$(gh api graphql -f query="query {
+    if ! response=$(gh api graphql -f query="query {
       ${owner_kind}(login: \"$owner\") {
         projectV2(number: $project_number) {
           id
@@ -86,7 +86,9 @@ load_project_metadata() {
           readme
         }
       }
-    }")
+    }" 2>/dev/null); then
+      continue
+    fi
 
     if [ "$(echo "$response" | jq -r --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.id // empty')" != "" ]; then
       PROJECT_ID=$(echo "$response" | jq -r --arg owner_kind "$owner_kind" '.data[$owner_kind].projectV2.id')
