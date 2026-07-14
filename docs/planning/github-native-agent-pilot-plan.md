@@ -209,6 +209,13 @@ human reproducing the assignment form for every issue.
 4. Validate permissions, audit-log visibility, idempotency key, cancellation,
    and duplicate-run detection.
 5. Add a hard allowlist so only a specifically approved pilot issue can pass.
+6. For each M1 workflow finding where the API surface does not provide the
+   needed control (draft-PR suppression, auto-reviewer-request suppression),
+   check whether a GitHub UI setting — repository settings, Copilot settings,
+   or account/org defaults — achieves the same effect before concluding the
+   capability is unavailable. Record the setting location and value alongside
+   any API parameter, so the M3 dispatcher design uses the simplest available
+   mechanism.
 
 If GitHub does not expose a supported programmatic interface for the partner
 agent, stop this milestone. Document the gap and decide whether to evaluate
