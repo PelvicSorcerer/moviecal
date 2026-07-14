@@ -377,19 +377,49 @@ forbidden." This may mean:
 "the supported agent or automation interface is unavailable." The built-in
 Copilot agent works; the Claude partner agent does not reach inference.
 
-### What the Copilot agent did (run 29308900709)
+### What the Copilot agent did — PR #251 (completed)
 
-The follow-up "Running Copilot cloud agent" session (currently in-progress at
-time of writing) produced the correct diff:
+The amended M1 canary (Copilot agent with explicit Anthropic model) completed
+successfully. PR #251 "Fix real-stack timestamp format mismatch in
+watchlist-memberships tests (Z vs +00:00)" is open as a draft.
+
+```
+branch:       copilot/fix-timestamp-format-mismatch  ← copilot/** prefix VERIFIED
+base:         master @ 16e3f01 ✓
+changed_files: 1
+additions:    6 / deletions: 2
+commits:      3
+```
+
+**Diff:**
 
 ```diff
 -  expect(result.acceptedAt).toBe(acceptedAt);
-+  expect(new Date(result.acceptedAt).toISOString()).toBe(new Date(acceptedAt).toISOString());
++  expect(new Date(result.acceptedAt).toISOString()).toBe(
++    new Date(acceptedAt).toISOString()
++  );
 ```
 
-Both assertions normalised on both sides. Fix is correct and within scope.
-This was not the intended pilot run (it used the Copilot agent, not Claude),
-but the output is usable as a baseline observation.
+```diff
+-  expect(data?.accepted_at).toBe(acceptedAt);
++  expect(new Date(data!.accepted_at).toISOString()).toBe(
++    new Date(acceptedAt).toISOString()
++  );
+```
+
+Fix is correct and within scope. The second assertion also tightens `data?`
+to `data!` — valid since `error` is already asserted null on the prior line.
+
+**Agent behaviour:**
+- `npm run verify` ran: 257 unit + 125 integration tests pass ✓
+- `lane:real-stack` constraint explicitly noted in PR body ✓
+- PR description follows the repo template (Summary, Test Impact, Verification,
+  Security notes) ✓
+- No queue mutations; branch stays `Agent Dispatch = No` ✓
+
+**What was not reported:**
+- Effective model: not visible in PR body. Record which model was selected at
+  assignment time (maintainer to supply). ← OPEN
 
 ### Plan tier research — VERIFIED NOT the cause
 
