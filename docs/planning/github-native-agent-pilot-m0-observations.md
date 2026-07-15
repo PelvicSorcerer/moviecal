@@ -431,11 +431,26 @@ assignment time from the Copilot agent model picker).
    (`PelvicSorcerer`) as a reviewer on PR #251. This is a **blocker for
    agent-driven review and merge automation**: Claude Code (or any other agent
    acting as reviewer/merger) could not complete the PR because the Copilot
-   agent had already requested a human reviewer. Future automation designs must
-   account for this — either suppress automatic reviewer requests at assignment
-   time (if the API supports it) or add a step that removes the human-reviewer
-   request before handing off to an automated reviewer. Record as an
-   architectural constraint for Milestone 2+ design.
+   agent had already requested a human reviewer. Record as an architectural
+   constraint for Milestone 2+ design.
+
+**M2 UI investigation result (2026-07-15, MAINTAINER-CONFIRMED):** No
+repository setting, account setting, or Copilot-specific setting exists in
+the GitHub UI to control either behavior. Both are hardcoded platform
+behaviors of the Copilot coding agent:
+- Draft PR creation cannot be suppressed via any UI setting.
+- Auto-reviewer-request cannot be suppressed via any UI setting.
+
+**Agreed solution:** A post-session GitHub Actions workflow, triggered by the
+Copilot agent's PR being opened, that uses the GitHub API to:
+1. Remove the auto-requested human reviewer.
+2. Convert the PR from draft to ready-for-review.
+
+This workflow must exist on `master` before any automated M3 canary runs
+(GitHub `pull_request`-triggered workflows must be on the default branch to
+fire). It is a required prerequisite for a fully automated issue-to-PR
+pipeline and should be implemented as part of M2 or as a standalone PR to
+`master` before M3 begins.
 
 ### Plan tier research — VERIFIED NOT the cause
 
