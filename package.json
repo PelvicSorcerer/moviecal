@@ -46,7 +46,10 @@
         "agent:project-metadata-sync": "bash scripts/project-post-cutover-metadata-sync.sh",
         "check:testing-governance": "bash scripts/testing-governance-check.sh",
         "check:surface-drift": "bash scripts/check-surface-drift.sh",
-        "test:queue-check": "bash scripts/test/project-queue-common.test.sh"
+        "test:queue-check": "bash scripts/test/project-queue-common.test.sh",
+        "dispatcher:doctor": "node tools/dispatcher/bin/dispatcher.mjs doctor",
+        "dispatcher:dry-run": "node tools/dispatcher/bin/dispatcher.mjs dry-run",
+        "dispatcher:gc": "node tools/dispatcher/bin/dispatcher.mjs gc"
     },
     "keywords": [],
     "author": "",

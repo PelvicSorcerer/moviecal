@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd job definition for the moviecal dispatcher.
+
+  This is a TEMPLATE — replace __REPO_PATH__ and __NODE_PATH__ before
+  installing, and do not commit a filled-in copy anywhere with real paths
+  that reveal machine-specific layout if that ever matters for this repo's
+  threat model (it currently does not, since this is a personal project, but
+  keep the placeholder convention so the template stays reusable).
+
+  Install:
+    cp com.moviecal.dispatcher.plist ~/Library/LaunchAgents/
+    # then edit the copy in ~/Library/LaunchAgents/ to fill in real paths
+    launchctl load ~/Library/LaunchAgents/com.moviecal.dispatcher.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.moviecal.dispatcher.plist
+    rm ~/Library/LaunchAgents/com.moviecal.dispatcher.plist
+
+  Logs: see docs/operators/local-execution.md "Run-log locations" for
+  per-worktree worker logs. This plist's StandardOutPath/StandardErrorPath
+  capture only the dispatcher process's own top-level output.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.moviecal.dispatcher</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE_PATH__</string>
+    <string>__REPO_PATH__/tools/dispatcher/bin/dispatcher.mjs</string>
+    <string>run</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO_PATH__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/moviecal-dispatcher.stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/moviecal-dispatcher.stderr.log</string>
+
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+</dict>
+</plist>
