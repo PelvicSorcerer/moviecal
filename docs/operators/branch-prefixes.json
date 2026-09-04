@@ -1,46 +1,22 @@
 {
-  "$comment": "Machine-readable source of truth for docs/operators/branch-and-ci-conventions.md. Read by scripts/check-branch-ci-conventions.py. Keep both files in sync when adding or changing a platform's branch prefix.",
+  "$comment": "Machine-readable source of truth for docs/operators/branch-and-ci-conventions.md. Read by scripts/check-branch-ci-conventions.py. Keep both files in sync when adding or changing a prefix.",
   "prefixes": [
     {
       "glob": "agent/**",
-      "example": "agent/<issue-number>-<short-slug>",
-      "platform": "Codex worker issue branches",
-      "requiresPathRestrictedPushTrigger": true
-    },
-    {
-      "glob": "orchestrator/**",
-      "example": "orchestrator/live (or similar)",
-      "platform": "Codex orchestrator's own attached branch",
-      "requiresPathRestrictedPushTrigger": false
-    },
-    {
-      "glob": "cursor/**",
-      "example": "cursor/<slug>-<run-id>",
-      "platform": "Cursor Cloud Agents",
-      "requiresPathRestrictedPushTrigger": true
-    },
-    {
-      "glob": "copilot/**",
-      "example": "copilot/**",
-      "platform": "GitHub Copilot coding agent",
-      "requiresPathRestrictedPushTrigger": true
-    },
-    {
-      "glob": "claude/**",
-      "example": "claude/<issue-number>-<short-slug>",
-      "platform": "Claude Code (CLI, web, IDE, or remote execution environment)",
+      "example": "agent/<linear-issue-id>-<short-slug>",
+      "platform": "Agent implementation work (any worker: Claude Code, Codex, or other locally-executable worker) dispatched from a Linear issue, or a human delegating work directly",
       "requiresPathRestrictedPushTrigger": true
     },
     {
       "glob": "docs/**",
       "example": "docs/**",
-      "platform": "Governance/queue-maintenance work from any agent or human",
+      "platform": "Governance/queue-maintenance work from any agent or human, not tied to a specific issue",
       "requiresPathRestrictedPushTrigger": false
     },
     {
       "glob": "chore/**",
       "example": "chore/**",
-      "platform": "Governance/queue-maintenance work from any agent or human",
+      "platform": "Governance/queue-maintenance work from any agent or human, not tied to a specific issue",
       "requiresPathRestrictedPushTrigger": false
     }
   ],
@@ -50,12 +26,9 @@
   ],
   "trustedSelfHostedExecutionGlobs": [
     "agent/**",
-    "orchestrator/**",
-    "cursor/**",
-    "copilot/**",
-    "claude/**",
     "docs/**",
     "chore/**"
   ],
-  "$comment_trustedSelfHostedExecutionGlobs": "Documentation-only until follow-up issue #241 teaches repo tooling to enforce trusted self-hosted execution policy."
+  "$comment_trustedSelfHostedExecutionGlobs": "Documentation-only until repo tooling enforces trusted self-hosted execution policy in code.",
+  "$comment_history": "Prior to the Linear-based dev-governance migration this registry carried five platform-specific prefixes (agent/**, orchestrator/**, cursor/**, copilot/**, claude/**) for a multi-cloud-agent dispatch model. That model is retired; all locally-dispatched agent work now uses a single agent/** prefix regardless of worker binary. See docs/operators/local-execution.md and docs/governance/linear-information-architecture.md."
 }
