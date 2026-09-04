@@ -65,8 +65,9 @@ This state list is the supervision surface a human uses to answer: what's waitin
 - `human-only` — never a dispatch candidate (replaces GitHub `Execution Mode = Human`)
 - `needs-secrets` — dispatcher refuses to start until the required local secret is present (replaces GitHub `Needs Infra/Secrets`)
 - `type:{feat,fix,chore,docs,test}` — work type (absorbs the old `Track = Docs` / `Migration` distinction)
-- `migration` — historical marker on issues imported from the GitHub Project cutover; not used for new work
 - `upgrade:{multi-system,ambiguous-spec,security-critical,prior-failure,architecture}` — cites the upgrade condition when `model:strong` is applied (see `docs/operators/worker-routing.md`); the dispatcher's routing logic requires at least one of these alongside `model:strong`
+
+No separate `migration` label: the historical-import marker is Linear's own auto-applied `Migrated` label (added to every issue by the GitHub Issues import assistant), not a hand-rolled one. A `migration` label was created here in Stage 3 before that was known, then deleted once confirmed unused — see "GitHub Issues: migration and ongoing sync" below.
 
 ## Estimates
 
@@ -135,8 +136,15 @@ The team settings, workflow states, labels, projects, and milestones described a
 
 ## GitHub Issues: migration and ongoing sync
 
-All existing GitHub issues (open and closed) are imported into Linear via Linear's GitHub Issues import assistant, then GitHub Issues Sync is enabled for two-way sync between team `MOV` and `PelvicSorcerer/moviecal`. **This step needs the repo owner's browser**, not just an API key: connecting GitHub (`integrationGithubConnect`) and the import assistant (`issueImportCreateGithub`) both require an OAuth `code` and `installationId` obtained by clicking through GitHub's App-install consent screen while logged in as `PelvicSorcerer` — confirmed via the public API schema, there is no way to obtain these from an API key alone. Do this from **Linear → Settings → Integrations → GitHub**. Once connected, the rest (import, sync) can proceed either through that same UI wizard or programmatically. After that:
+**Completed 2026-09-04.** All 110 existing GitHub issues (7 open, 103 closed) were imported into Linear team `MOV` via Linear's GitHub Issues import assistant (`issueImportCreateGithub`), landing as 114 total issues (110 imported + 4 Linear-default onboarding issues), split exactly as expected: 103 → `Done`, 7 → `Backlog`. Every imported issue carries a GitHub source-link attachment and a `Migrated` label (Linear's own, auto-applied — there is deliberately no separate hand-rolled `migration` label; one was created in Stage 3 and deleted once confirmed unused, since it duplicated this).
+
+Connecting GitHub itself required the repo owner's browser: `integrationGithubConnect` needs an OAuth `code` + `installationId` obtained by clicking through GitHub's App-install consent screen, confirmed via the public API schema to have no API-key-only path. Once connected (**Linear → Settings → Integrations → GitHub**), the import proceeded via the UI wizard's guided steps (Configure → Export → Select issues → Map users → Confirm).
+
+**The import wizard's "sync" is confirmed one-way (GitHub → Linear only) — not the two-way sync this design calls for.** Verified directly: a test comment posted on a synced Linear issue via the API never appeared on the corresponding GitHub issue after several minutes of polling. This means GitHub-side changes (e.g. an external bug reporter commenting) flow into Linear, but Linear-side changes (status, comments, new issues) do **not** flow back to GitHub — so "GitHub kept in sync for visibility" is not yet true. **Tracked as [MOV-115](https://linear.app/moviecal/issue/MOV-115) — research + build two-way sync** (options: a native two-way toggle that may exist outside the public API surface, or a mechanism piggybacked on the dispatcher's existing Linear-reporting hooks). Do not let this doc's "kept in sync" language above imply that gap is closed; MOV-115 is the source of truth on its status until resolved.
+
+After the one-time import:
 
 - **Linear is the sole authority for new work.** New issues are created in Linear, not GitHub.
 - **GitHub Issues remain open for external bug/feature intake** (via `.github/ISSUE_TEMPLATE/bug_report.md` and `feature_request.md`) and get pulled into Linear Triage.
 - **No GitHub issue is ever deleted.** The `moviecal Delivery` GitHub Project is archived (read-only) once Linear is verified end-to-end; existing `#NNN` references in 139+ merged PRs and every commit message remain resolvable forever.
+- **Two imported issues (`MOV-113`, `MOV-114`) were flagged to `Needs Human Decision`** rather than silently carried forward: both concern governance mechanisms this migration retires (a GitHub Copilot dispatch pilot, and a `/project-update` workflow test fix), and whether they're still worth doing is a call for the repo owner, not something to assume either way.

@@ -134,7 +134,11 @@ async function main() {
     "human-only",
     "needs-secrets",
     ...["feat", "fix", "chore", "docs", "test"].map((t) => `type:${t}`),
-    "migration",
+    // Deliberately no "migration" label: Linear's own GitHub Issues import
+    // wizard auto-creates and applies a "Migrated" label to every imported
+    // issue, making a separate hand-rolled label redundant. One was created
+    // here originally and then deleted once confirmed unused (0 issues) --
+    // see docs/governance/linear-information-architecture.md.
     ...["multi-system", "ambiguous-spec", "security-critical", "prior-failure", "architecture"].map(
       (c) => `upgrade:${c}`,
     ),
