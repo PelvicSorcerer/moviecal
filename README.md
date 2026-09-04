@@ -86,3 +86,4 @@ See `docs/` for product, design, technical, planning, and operator notes. Planni
 ## Security
 
 This is a public repository. Do **not** commit secrets, API keys, service-role keys, `.env` files, tokens, private URLs, or real user data. Keep real values in local environment files and hosting-provider secret stores. See `docs/technical/auth-and-security.md` for details.
+
