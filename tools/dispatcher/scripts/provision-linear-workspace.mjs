@@ -7,10 +7,6 @@
 // updates what's missing/different.
 //
 // Deliberately NOT provisioned here (see docs/governance/linear-information-architecture.md):
-// - Initiatives: gated behind the Business plan on this workspace (confirmed
-//   live via a FEATURE_NOT_ACCESSIBLE error on initiativeCreate). Skipped
-//   rather than push a plan upgrade for a marginal nice-to-have at this
-//   project's scale (5 projects, 1 team).
 // - Custom views: the saved-view filterData JSON shape isn't documented in
 //   the public API/schema, and getting it wrong risks shipping a saved view
 //   that looks legitimate but silently returns nothing. Build the 7 target
@@ -134,7 +130,11 @@ async function main() {
     "human-only",
     "needs-secrets",
     ...["feat", "fix", "chore", "docs", "test"].map((t) => `type:${t}`),
-    "migration",
+    // Deliberately no "migration" label: Linear's own GitHub Issues import
+    // wizard auto-creates and applies a "Migrated" label to every imported
+    // issue, making a separate hand-rolled label redundant. One was created
+    // here originally and then deleted once confirmed unused (0 issues) --
+    // see docs/governance/linear-information-architecture.md.
     ...["multi-system", "ambiguous-spec", "security-critical", "prior-failure", "architecture"].map(
       (c) => `upgrade:${c}`,
     ),
@@ -149,18 +149,37 @@ async function main() {
     log(`  label created: ${name}`);
   }
 
-  // --- Initiatives: SKIPPED. Live API confirms "Initiatives" are gated behind
-  // the Business plan on this workspace ("Not allowed to access feature
-  // 'teamInitiatives'" / "Subscribe to the Business plan"). Projects are
-  // created standalone (no initiative grouping) rather than pushing a plan
-  // upgrade for what was already a marginal nice-to-have at this project's
-  // scale (5 projects, 1 team). Revisit if the plan is upgraded later.
+  // --- Initiatives ---
+  // NOTE: initiativeCreate rejects a leadTeamId on this workspace's plan
+  // ("Not allowed to access feature 'teamInitiatives' ... Subscribe to the
+  // Business plan") but succeeds with no leadTeamId at all. With a single
+  // team (MOV), an initiative's "lead team" isn't meaningful here anyway, so
+  // this omits it rather than needing that sub-feature.
+  const initiativesData = await gql(`query { initiatives { nodes { id name } } }`);
+  const initByName = (n) => initiativesData.initiatives.nodes.find((i) => i.name === n);
+
+  async function ensureInitiative(name) {
+    let init = initByName(name);
+    if (init) {
+      log(`  [exists] initiative '${name}'`);
+      return init;
+    }
+    const data = await gql(
+      `mutation($input: InitiativeCreateInput!) { initiativeCreate(input: $input) { success initiative { id name } } }`,
+      { input: { name } },
+    );
+    log(`  created initiative '${name}'`);
+    return data.initiativeCreate.initiative;
+  }
+
+  const webAppInit = await ensureInitiative("Web App");
+  const iosInit = await ensureInitiative("Native iOS App");
 
   // --- Projects ---
   const projectsData = await gql(`query { projects { nodes { id name } } }`);
   const projByName = (n) => projectsData.projects.nodes.find((p) => p.name === n);
 
-  async function ensureProject(name) {
+  async function ensureProject(name, initiative) {
     let proj = projByName(name);
     if (!proj) {
       const data = await gql(
@@ -172,14 +191,26 @@ async function main() {
     } else {
       log(`  [exists] project '${name}'`);
     }
+    const linkCheck = await gql(
+      `query($projId: String!) { project(id: $projId) { initiatives { nodes { id } } } }`,
+      { projId: proj.id },
+    );
+    const alreadyLinked = linkCheck.project.initiatives.nodes.some((i) => i.id === initiative.id);
+    if (!alreadyLinked) {
+      await gql(
+        `mutation($input: InitiativeToProjectCreateInput!) { initiativeToProjectCreate(input: $input) { success } }`,
+        { input: { projectId: proj.id, initiativeId: initiative.id } },
+      );
+      log(`    linked '${name}' -> initiative '${initiative.name}'`);
+    }
     return proj;
   }
 
-  await ensureProject("Shared Watchlists");
-  await ensureProject("Calendar Feed");
-  await ensureProject("Platform & Infrastructure");
-  await ensureProject("Developer Governance & Agent Infrastructure");
-  const iosProject = await ensureProject("iOS Companion App");
+  await ensureProject("Shared Watchlists", webAppInit);
+  await ensureProject("Calendar Feed", webAppInit);
+  await ensureProject("Platform & Infrastructure", webAppInit);
+  await ensureProject("Developer Governance & Agent Infrastructure", webAppInit);
+  const iosProject = await ensureProject("iOS Companion App", iosInit);
 
   // --- Project milestones (iOS Companion App only) ---
   const milestonesData = await gql(

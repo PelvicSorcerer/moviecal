@@ -10,25 +10,32 @@ This design deliberately does not reproduce the GitHub Project's fields one-for-
 
 ## Plan
 
-**Free**, to start. Free includes issues, projects, cycles, Triage, labels, estimates, custom views, API + webhooks, and GitHub Issues Sync — everything this design needs. **Initiatives are not included on Free** (confirmed live, see below — Linear's own docs pages did not make this clear at the time this plan was written). The binding constraint on Free is a 250-issue cap; importing ~110 GitHub issues leaves headroom. Upgrade to Basic ($10/user/mo annual) only if that cap is reached. Do not upgrade to Business for Coding Sessions — those run in Linear's own cloud sandbox on Linear AI credits, which is the opposite of this repo's "local Mac is the execution environment" architecture.
+**Free**, to start. Free includes issues, projects, cycles, Triage, labels, estimates, custom views, API + webhooks, and GitHub Issues Sync — everything this design needs. The binding constraint on Free is a 250-issue cap; importing ~110 GitHub issues leaves headroom. Upgrade to Basic ($10/user/mo annual) only if that cap is reached. Do not upgrade to Business for Coding Sessions — those run in Linear's own cloud sandbox on Linear AI credits, which is the opposite of this repo's "local Mac is the execution environment" architecture.
+
+**Initiatives:** basic initiative creation and linking (used below) is enabled on this workspace — the repo owner unlocked it directly in Linear (exact mechanism not confirmed from the API side; possibly a trial or a workspace-level toggle distinct from a full Business subscription). One sub-feature remains gated regardless: assigning an initiative a "lead team" (`initiativeCreate`'s `leadTeamId` field) still returns `FEATURE_NOT_ACCESSIBLE` ("Subscribe to the Business plan to access team initiatives in your workspace"). That's not needed here — with a single team (`MOV`), a lead-team assignment wouldn't add anything — so `provision-linear-workspace.mjs` creates initiatives without it.
 
 ## Workspace / Teams
 
 One workspace (`moviecal`), one team (`MOV`). GitHub Issues Sync is one-repo-to-one-team; a single-developer project gains nothing from splitting teams.
 
-## Initiatives — not provisioned (plan-gated)
+## Initiatives
 
-The original design here proposed two initiatives (**Web App**, **Native iOS App**) grouping the five projects below. Provisioning them live confirmed **Initiatives are gated behind Linear's Business plan** on this workspace (`initiativeCreate` returns `FEATURE_NOT_ACCESSIBLE`: *"Subscribe to the Business plan to access team initiatives in your workspace"*) — this was not correctly reflected in Linear's own marketing/docs pages at the time this plan was written. Given initiatives were already evaluated as a marginal nice-to-have at this project's scale (5 projects, 1 team), this is skipped rather than upgrading the plan for it. The five projects below exist standalone, ungrouped. Revisit if the plan is ever upgraded for another reason.
+Two initiatives group the five projects below:
+
+- **Web App** — everything shipping to the Next.js application: Shared Watchlists, Calendar Feed, Platform & Infrastructure, Developer Governance & Agent Infrastructure.
+- **Native iOS App** — the future companion app: iOS Companion App.
+
+(A first attempt at provisioning these hit `FEATURE_NOT_ACCESSIBLE` — initiatives were originally plan-gated on this workspace, so this doc briefly shipped a "skip initiatives, projects stand alone" design. The repo owner then enabled the feature directly in Linear, and the initiatives + links above were created and verified live. The `leadTeamId` sub-feature remains gated, see "Plan" above — irrelevant here with one team.)
 
 ## Projects
 
-| Linear project | Replaces GitHub `Track` |
-|---|---|
-| Shared Watchlists | `Shared Watchlists` |
-| Calendar Feed | `Calendar` |
-| Platform & Infrastructure | `Platform` |
-| Developer Governance & Agent Infrastructure | (new) |
-| iOS Companion App | `iOS` |
+| Linear project | Initiative | Replaces GitHub `Track` |
+|---|---|---|
+| Shared Watchlists | Web App | `Shared Watchlists` |
+| Calendar Feed | Web App | `Calendar` |
+| Platform & Infrastructure | Web App | `Platform` |
+| Developer Governance & Agent Infrastructure | Web App | (new) |
+| iOS Companion App | Native iOS App | `iOS` |
 
 `Docs` and `Migration` are not projects — they are work *types*, represented as labels. `Future` is not a project — it is the `Icebox` backlog state.
 
@@ -65,8 +72,9 @@ This state list is the supervision surface a human uses to answer: what's waitin
 - `human-only` — never a dispatch candidate (replaces GitHub `Execution Mode = Human`)
 - `needs-secrets` — dispatcher refuses to start until the required local secret is present (replaces GitHub `Needs Infra/Secrets`)
 - `type:{feat,fix,chore,docs,test}` — work type (absorbs the old `Track = Docs` / `Migration` distinction)
-- `migration` — historical marker on issues imported from the GitHub Project cutover; not used for new work
 - `upgrade:{multi-system,ambiguous-spec,security-critical,prior-failure,architecture}` — cites the upgrade condition when `model:strong` is applied (see `docs/operators/worker-routing.md`); the dispatcher's routing logic requires at least one of these alongside `model:strong`
+
+No separate `migration` label: the historical-import marker is Linear's own auto-applied `Migrated` label (added to every issue by the GitHub Issues import assistant), not a hand-rolled one. A `migration` label was created here in Stage 3 before that was known, then deleted once confirmed unused — see "GitHub Issues: migration and ongoing sync" below.
 
 ## Estimates
 
@@ -131,12 +139,19 @@ No agent conversation is ever a source of truth. Every decision an agent makes t
 
 ## Provisioning
 
-The team settings, workflow states, labels, projects, and milestones described above are provisioned by `tools/dispatcher/scripts/provision-linear-workspace.mjs`, an idempotent script safe to re-run any time the workspace needs to be reconciled back to this design (e.g. after a manual mistake, or when setting up a second environment). It reads `LINEAR_API_KEY` from `~/.config/moviecal/linear.env` and does not create initiatives or custom views (see above).
+The team settings, initiatives, workflow states, labels, projects, and milestones described above are provisioned by `tools/dispatcher/scripts/provision-linear-workspace.mjs`, an idempotent script safe to re-run any time the workspace needs to be reconciled back to this design (e.g. after a manual mistake, or when setting up a second environment). It reads `LINEAR_API_KEY` from `~/.config/moviecal/linear.env`. It does not create custom views (see above).
 
 ## GitHub Issues: migration and ongoing sync
 
-All existing GitHub issues (open and closed) are imported into Linear via Linear's GitHub Issues import assistant, then GitHub Issues Sync is enabled for two-way sync between team `MOV` and `PelvicSorcerer/moviecal`. **This step needs the repo owner's browser**, not just an API key: connecting GitHub (`integrationGithubConnect`) and the import assistant (`issueImportCreateGithub`) both require an OAuth `code` and `installationId` obtained by clicking through GitHub's App-install consent screen while logged in as `PelvicSorcerer` — confirmed via the public API schema, there is no way to obtain these from an API key alone. Do this from **Linear → Settings → Integrations → GitHub**. Once connected, the rest (import, sync) can proceed either through that same UI wizard or programmatically. After that:
+**Completed 2026-09-04.** All 110 existing GitHub issues (7 open, 103 closed) were imported into Linear team `MOV` via Linear's GitHub Issues import assistant (`issueImportCreateGithub`), landing as 114 total issues (110 imported + 4 Linear-default onboarding issues), split exactly as expected: 103 → `Done`, 7 → `Backlog`. Every imported issue carries a GitHub source-link attachment and a `Migrated` label (Linear's own, auto-applied — there is deliberately no separate hand-rolled `migration` label; one was created in Stage 3 and deleted once confirmed unused, since it duplicated this).
+
+Connecting GitHub itself required the repo owner's browser: `integrationGithubConnect` needs an OAuth `code` + `installationId` obtained by clicking through GitHub's App-install consent screen, confirmed via the public API schema to have no API-key-only path. Once connected (**Linear → Settings → Integrations → GitHub**), the import proceeded via the UI wizard's guided steps (Configure → Export → Select issues → Map users → Confirm).
+
+**The import wizard's "sync" is confirmed one-way (GitHub → Linear only) — not the two-way sync this design calls for.** Verified directly: a test comment posted on a synced Linear issue via the API never appeared on the corresponding GitHub issue after several minutes of polling. This means GitHub-side changes (e.g. an external bug reporter commenting) flow into Linear, but Linear-side changes (status, comments, new issues) do **not** flow back to GitHub — so "GitHub kept in sync for visibility" is not yet true. **Tracked as [MOV-115](https://linear.app/moviecal/issue/MOV-115) — research + build two-way sync** (options: a native two-way toggle that may exist outside the public API surface, or a mechanism piggybacked on the dispatcher's existing Linear-reporting hooks). Do not let this doc's "kept in sync" language above imply that gap is closed; MOV-115 is the source of truth on its status until resolved.
+
+After the one-time import:
 
 - **Linear is the sole authority for new work.** New issues are created in Linear, not GitHub.
 - **GitHub Issues remain open for external bug/feature intake** (via `.github/ISSUE_TEMPLATE/bug_report.md` and `feature_request.md`) and get pulled into Linear Triage.
 - **No GitHub issue is ever deleted.** The `moviecal Delivery` GitHub Project is archived (read-only) once Linear is verified end-to-end; existing `#NNN` references in 139+ merged PRs and every commit message remain resolvable forever.
+- **Two imported issues (`MOV-113`, `MOV-114`) were flagged to `Needs Human Decision`** rather than silently carried forward: both concern governance mechanisms this migration retires (a GitHub Copilot dispatch pilot, and a `/project-update` workflow test fix), and whether they're still worth doing is a call for the repo owner, not something to assume either way.
