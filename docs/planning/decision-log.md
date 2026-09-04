@@ -14,11 +14,11 @@ Staged migration from a GitHub-Project (`moviecal Delivery`) + multi-cloud-agent
 
 | Stage | Deliverable | Status |
 |---|---|---|
-| 1 | Linear workspace created (Free plan) | **Blocked on human** — requires account creation |
-| 2 | Linear API key issued and stored at `~/.config/moviecal/linear.env` | **Blocked on human** — requires credential issuance |
-| 3 | Linear IA built (team, initiatives, projects, states, labels, views) | Not started — depends on 1–2 |
-| 4 | GitHub issue history imported into Linear | Not started — depends on 3 |
-| 5 | Linear ↔ GitHub connected (PR linking + Issues Sync) | Not started — depends on 4 |
+| 1 | Linear workspace created (Free plan) | **Done** |
+| 2 | Linear API key issued and stored at `~/.config/moviecal/linear.env` | **Done** |
+| 3 | Linear IA built (team, projects, states, labels) | **Done** — team settings, 14 workflow states, 33 labels, 5 projects, 3 milestones provisioned via `tools/dispatcher/scripts/provision-linear-workspace.mjs`. Initiatives skipped (Business-plan-gated, confirmed live). Custom views deferred to manual UI setup (saved-view filter format isn't public API). |
+| 4 | GitHub issue history imported into Linear | **Blocked on human** — needs a GitHub OAuth consent click-through (Linear → Settings → Integrations → GitHub); not obtainable via API key alone |
+| 5 | Linear ↔ GitHub connected (PR linking + Issues Sync) | **Blocked on human** — same OAuth step as Stage 4, same UI screen |
 | 6 | Governance docs PR (additive) | **Done** |
 | 7 | Branch prefix consolidation (`agent/**`, `docs/**`, `chore/**`) | **Done** |
 | 8 | Dispatcher scaffold (`tools/dispatcher/`: doctor, dry-run, gc) | **Done** — `run` (live poll loop) deferred pending Stage 1–2 |
