@@ -1,0 +1,97 @@
+// Worker + model routing.
+//
+// Implements the rubric documented in docs/operators/worker-routing.md.
+// Pure functions only — no I/O — so this is fully unit-testable without a
+// live Linear connection or a real worktree.
+
+export const WORKERS = ["claude", "codex"];
+export const MODEL_TIERS = ["cheap", "default", "strong"];
+
+const WORKER_LABEL_RE = /^worker:(claude|codex|any)$/;
+const MODEL_LABEL_RE = /^model:(cheap|default|strong)$/;
+
+/**
+ * Parse worker/model overrides out of a Linear issue's label list.
+ * Returns { worker: 'claude'|'codex'|'any'|null, model: 'cheap'|'default'|'strong'|null }.
+ * A human-applied label always wins over the default rubric below.
+ */
+export function parseRoutingLabels(labels = []) {
+  let worker = null;
+  let model = null;
+  for (const label of labels) {
+    const workerMatch = WORKER_LABEL_RE.exec(label);
+    if (workerMatch) worker = workerMatch[1];
+    const modelMatch = MODEL_LABEL_RE.exec(label);
+    if (modelMatch) model = modelMatch[1];
+  }
+  return { worker, model };
+}
+
+/**
+ * Default routing decision from labels alone (task-shape signals — area,
+ * risk — are advisory context a human supplies via labels/description; this
+ * function does not attempt to infer task shape from issue text).
+ *
+ * Default worker is 'claude' (either is only used when explicitly labeled
+ * worker:any or worker:codex). Default model tier is 'default'; 'cheap' and
+ * 'strong' both require the human to have applied the model:cheap or
+ * model:strong label explicitly (strong further requires an upgrade
+ * condition — see resolveRouting's return value).
+ */
+export function resolveRouting(issue) {
+  const labels = issue.labels || [];
+  const { worker: workerOverride, model: modelOverride } = parseRoutingLabels(labels);
+
+  const worker = workerOverride && workerOverride !== "any" ? workerOverride : "claude";
+  const model = modelOverride || "default";
+
+  const upgradeConditions = labels
+    .filter((l) => l.startsWith("upgrade:"))
+    .map((l) => l.slice("upgrade:".length));
+
+  if (model === "strong" && upgradeConditions.length === 0) {
+    return {
+      worker,
+      model,
+      ok: false,
+      reason:
+        "model:strong requires an upgrade-condition label (upgrade:multi-system | upgrade:ambiguous-spec | upgrade:security-critical | upgrade:prior-failure | upgrade:architecture)",
+    };
+  }
+
+  return { worker, model, ok: true, reason: null, upgradeConditions };
+}
+
+export function workerInvocation(worker, model, briefPath) {
+  if (worker === "claude") {
+    return {
+      command: "claude",
+      args: ["-p", "--model", modelIdForTier("claude", model), briefPath],
+    };
+  }
+  if (worker === "codex") {
+    return {
+      command: "codex",
+      args: ["exec", "--sandbox", "workspace-write", briefPath],
+    };
+  }
+  throw new Error(`unknown worker: ${worker}`);
+}
+
+/**
+ * Resolve a model tier ('cheap'|'default'|'strong') to a concrete model ID
+ * for the given worker. Deliberately not hard-coded to a single catalog
+ * entry per docs/operators/worker-routing.md — this is the one place that
+ * needs updating when the model catalog changes.
+ */
+export function modelIdForTier(worker, tier) {
+  if (worker !== "claude") return null; // codex resolves its own default
+  const table = {
+    cheap: process.env.MOVIECAL_MODEL_CHEAP || "claude-haiku-4-5",
+    default: process.env.MOVIECAL_MODEL_DEFAULT || "claude-sonnet-5",
+    strong: process.env.MOVIECAL_MODEL_STRONG || "claude-opus-5",
+  };
+  const id = table[tier];
+  if (!id) throw new Error(`unknown model tier: ${tier}`);
+  return id;
+}
