@@ -10,26 +10,25 @@ This design deliberately does not reproduce the GitHub Project's fields one-for-
 
 ## Plan
 
-**Free**, to start. Free includes issues, projects, cycles, initiatives, Triage, labels, estimates, custom views, API + webhooks, and GitHub Issues Sync — everything this design needs. The binding constraint is a 250-issue cap; importing ~110 GitHub issues leaves headroom. Upgrade to Basic ($10/user/mo annual) only if that cap is reached. Do not upgrade to Business for Coding Sessions — those run in Linear's own cloud sandbox on Linear AI credits, which is the opposite of this repo's "local Mac is the execution environment" architecture.
+**Free**, to start. Free includes issues, projects, cycles, Triage, labels, estimates, custom views, API + webhooks, and GitHub Issues Sync — everything this design needs. **Initiatives are not included on Free** (confirmed live, see below — Linear's own docs pages did not make this clear at the time this plan was written). The binding constraint on Free is a 250-issue cap; importing ~110 GitHub issues leaves headroom. Upgrade to Basic ($10/user/mo annual) only if that cap is reached. Do not upgrade to Business for Coding Sessions — those run in Linear's own cloud sandbox on Linear AI credits, which is the opposite of this repo's "local Mac is the execution environment" architecture.
 
 ## Workspace / Teams
 
 One workspace (`moviecal`), one team (`MOV`). GitHub Issues Sync is one-repo-to-one-team; a single-developer project gains nothing from splitting teams.
 
-## Initiatives
+## Initiatives — not provisioned (plan-gated)
 
-- **Web App** — everything shipping to the Next.js application.
-- **Native iOS App** — the future companion app (currently unstarted skeleton work).
+The original design here proposed two initiatives (**Web App**, **Native iOS App**) grouping the five projects below. Provisioning them live confirmed **Initiatives are gated behind Linear's Business plan** on this workspace (`initiativeCreate` returns `FEATURE_NOT_ACCESSIBLE`: *"Subscribe to the Business plan to access team initiatives in your workspace"*) — this was not correctly reflected in Linear's own marketing/docs pages at the time this plan was written. Given initiatives were already evaluated as a marginal nice-to-have at this project's scale (5 projects, 1 team), this is skipped rather than upgrading the plan for it. The five projects below exist standalone, ungrouped. Revisit if the plan is ever upgraded for another reason.
 
 ## Projects
 
-| Linear project | Initiative | Replaces GitHub `Track` |
-|---|---|---|
-| Shared Watchlists | Web App | `Shared Watchlists` |
-| Calendar Feed | Web App | `Calendar` |
-| Platform & Infrastructure | Web App | `Platform` |
-| Developer Governance & Agent Infrastructure | Web App | (new) |
-| iOS Companion App | Native iOS App | `iOS` |
+| Linear project | Replaces GitHub `Track` |
+|---|---|
+| Shared Watchlists | `Shared Watchlists` |
+| Calendar Feed | `Calendar` |
+| Platform & Infrastructure | `Platform` |
+| Developer Governance & Agent Infrastructure | (new) |
+| iOS Companion App | `iOS` |
 
 `Docs` and `Migration` are not projects — they are work *types*, represented as labels. `Future` is not a project — it is the `Icebox` backlog state.
 
@@ -67,6 +66,7 @@ This state list is the supervision surface a human uses to answer: what's waitin
 - `needs-secrets` — dispatcher refuses to start until the required local secret is present (replaces GitHub `Needs Infra/Secrets`)
 - `type:{feat,fix,chore,docs,test}` — work type (absorbs the old `Track = Docs` / `Migration` distinction)
 - `migration` — historical marker on issues imported from the GitHub Project cutover; not used for new work
+- `upgrade:{multi-system,ambiguous-spec,security-critical,prior-failure,architecture}` — cites the upgrade condition when `model:strong` is applied (see `docs/operators/worker-routing.md`); the dispatcher's routing logic requires at least one of these alongside `model:strong`
 
 ## Estimates
 
@@ -78,7 +78,7 @@ Replace the free-text `Dependencies` GitHub field with native Linear `blocked by
 
 ## Custom views
 
-The supervision dashboard for a human overseeing autonomous work:
+The supervision dashboard for a human overseeing autonomous work. **Build these by hand in the Linear UI** (Views → New view), not via the API: the saved-view `filterData` JSON shape isn't part of the documented public schema, and getting it wrong risks a saved view that looks legitimate but silently returns nothing — a few minutes of manual setup is cheaper than that risk. Each takes under a minute using Linear's own filter builder:
 
 - **Needs me** — `Needs Input` ∪ `Needs Human Decision` ∪ `Blocked`
 - **Agent activity** — `Agent Working`, grouped by project
@@ -129,9 +129,13 @@ No agent conversation is ever a source of truth. Every decision an agent makes t
 | `Area` | Label `area:*` |
 | `Needs Infra/Secrets` | Label `needs-secrets` |
 
+## Provisioning
+
+The team settings, workflow states, labels, projects, and milestones described above are provisioned by `tools/dispatcher/scripts/provision-linear-workspace.mjs`, an idempotent script safe to re-run any time the workspace needs to be reconciled back to this design (e.g. after a manual mistake, or when setting up a second environment). It reads `LINEAR_API_KEY` from `~/.config/moviecal/linear.env` and does not create initiatives or custom views (see above).
+
 ## GitHub Issues: migration and ongoing sync
 
-All existing GitHub issues (open and closed) are imported into Linear via Linear's GitHub Issues import assistant, then GitHub Issues Sync is enabled for two-way sync between team `MOV` and `PelvicSorcerer/moviecal`. After that:
+All existing GitHub issues (open and closed) are imported into Linear via Linear's GitHub Issues import assistant, then GitHub Issues Sync is enabled for two-way sync between team `MOV` and `PelvicSorcerer/moviecal`. **This step needs the repo owner's browser**, not just an API key: connecting GitHub (`integrationGithubConnect`) and the import assistant (`issueImportCreateGithub`) both require an OAuth `code` and `installationId` obtained by clicking through GitHub's App-install consent screen while logged in as `PelvicSorcerer` — confirmed via the public API schema, there is no way to obtain these from an API key alone. Do this from **Linear → Settings → Integrations → GitHub**. Once connected, the rest (import, sync) can proceed either through that same UI wizard or programmatically. After that:
 
 - **Linear is the sole authority for new work.** New issues are created in Linear, not GitHub.
 - **GitHub Issues remain open for external bug/feature intake** (via `.github/ISSUE_TEMPLATE/bug_report.md` and `feature_request.md`) and get pulled into Linear Triage.
