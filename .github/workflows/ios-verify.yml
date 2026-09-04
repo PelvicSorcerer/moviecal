@@ -5,10 +5,6 @@ on:
     branches:
       - master
       - agent/**
-      - orchestrator/**
-      - cursor/**
-      - copilot/**
-      - claude/**
       - docs/**
       - chore/**
     paths:
