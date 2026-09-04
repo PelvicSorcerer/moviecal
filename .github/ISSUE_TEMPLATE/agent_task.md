@@ -1,13 +1,15 @@
 Agent task template
 
-Use this template when creating tasks for any coding agent (Codex, Cursor, GitHub Copilot, or similar).
+New agent-delegated work is created as a Linear issue, not a GitHub issue — see `docs/governance/linear-information-architecture.md`. Use this checklist as the field list for a Linear issue destined for `Ready for Agent`. It is kept here (rather than only in Linear) because it is app-level policy that must survive independently of any particular work-item tool.
+
+This file remains useful for: shaping an issue before it exists in Linear, external contributors proposing agent-shaped work via GitHub (which then gets moved into Linear during triage), and as a reference for what "acceptance criteria are current" means during preflight (`AGENTS.md`).
 
 - Title: short task title
 - Background: context and why this change is needed
 - Goal: one clear outcome for a single PR
 - Relevant docs: exact repo docs the worker must read first
-- Dependencies / blocked by: upstream issues, infra, or tooling prerequisites; issue-number blockers must also be mirrored in the project `Dependencies` field so automation does not rely on prose alone
-- Goal / Acceptance criteria: explicit, testable criteria (pass/fail)
+- Dependencies / blocked by: upstream issues, infra, or tooling prerequisites — represent these as native Linear `blocked by` relations, not free text
+- Acceptance criteria: explicit, testable criteria (pass/fail)
 - Files to change: list of file paths to inspect or modify
 
 ## Testing Expectations
@@ -18,14 +20,12 @@ State the expected automated coverage up front. Use `docs/planning/repository-te
 - Integration tests: <!-- which routes, modules, or mocked boundaries -->
 - Browser E2E: <!-- which user journeys, or "none in this issue" -->
 - Verification commands: <!-- e.g. npm run verify, npm run lane:browser -->
-- Deferred coverage follow-up: <!-- if any layer above is deferred, name the concrete follow-up issue number (for example #NNN) that must exist before merge; do not defer to a vague umbrella testing issue -->
+- Deferred coverage follow-up: <!-- if any layer above is deferred, name the concrete follow-up Linear issue that must exist before merge; do not defer to a vague umbrella testing issue -->
 
-- Requested Claude model: <!-- claude-haiku-4-5 | claude-sonnet-4-6 | claude-sonnet-5 | claude-opus-4-8; required for Claude Code workers; N/A for Codex/Cursor/Copilot; see docs/operators/claude-model-selection-policy.md for the cost-optimized rubric. CCR note: the Agent tool only accepts enum aliases (sonnet/opus/haiku/fable); if this field is claude-sonnet-5, the orchestrator dispatches model: "opus" (claude-opus-4-8) as the CCR upgrade workaround — workers should record model_match: ccr-substitution and proceed. -->
-  - Upgrade condition: <!-- required if above claude-sonnet-4-6: multi-system | ambiguous-spec | security-critical | prior-failure | architecture + one-sentence rationale; opus requires prior-failure or architecture -->
 - Manual testing checklist: issue-specific local verification steps for the human tester, including setup assumptions, happy path, edge cases, regression checks, and expected results
 - Security notes: required for auth, database, calendar, cron, tokens, or secrets work
 - Out of scope: prevent adjacent backlog creep
 - Constraints: (e.g., no secrets, TypeScript strict, keep changes small)
 - Branch to start from: (e.g., master)
-- Queue note: suggested canonical project `Track` and `Area` values from `docs/planning/project-field-taxonomy.md` (do not use `Track = Product` or `Area = backend`); whether the issue could eventually receive `Agent Dispatch = Yes` on a dispatch-eligible domain track, `Future`, or `iOS`; whether non-Codex platforms may implement it via direct assignment; any live operational gate that must be rechecked before work starts (for example the iOS runner); note that the orchestrator owns `Status`, `Queue Order`, and other workflow fields
+- Worker / model routing: `worker:*` / `model:*` labels if a specific worker or model tier is required, with the upgrade condition cited — see `docs/operators/worker-routing.md`
 - Manual verification steps / notes for reviewer

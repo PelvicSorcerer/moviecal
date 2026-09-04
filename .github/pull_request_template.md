@@ -2,6 +2,8 @@
 
 <!-- What changed and why. Link the originating issue when one exists (for example Closes #NNN). -->
 
+**Linear:** <!-- MOV-NNN. Leave blank only for a GitHub-originated external bug/feature-request PR with no corresponding Linear issue yet. -->
+
 ## Test Impact
 
 <!-- Required for every PR. State what automated tests changed, or explain why no test changes were needed. -->
