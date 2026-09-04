@@ -54,6 +54,7 @@ export class LinearClient {
             id
             identifier
             title
+            description
             url
             project { name }
             labels { nodes { name } }
@@ -107,6 +108,7 @@ function normalizeIssue(node) {
     id: node.id,
     identifier: node.identifier,
     title: node.title,
+    description: node.description || "",
     url: node.url,
     project: node.project ? node.project.name : null,
     labels: node.labels.nodes.map((l) => l.name),

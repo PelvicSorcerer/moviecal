@@ -62,17 +62,20 @@ export function resolveRouting(issue) {
   return { worker, model, ok: true, reason: null, upgradeConditions };
 }
 
-export function workerInvocation(worker, model, briefPath) {
+// Both workers read their brief from stdin rather than a file path argument
+// (worker-spawn.mjs pipes it), since a stdin brief works identically whether
+// the worker binary reads from a real TTY-less pipe or a piped-in file.
+export function workerInvocation(worker, model) {
   if (worker === "claude") {
     return {
       command: "claude",
-      args: ["-p", "--model", modelIdForTier("claude", model), briefPath],
+      args: ["-p", "--model", modelIdForTier("claude", model)],
     };
   }
   if (worker === "codex") {
     return {
       command: "codex",
-      args: ["exec", "--sandbox", "workspace-write", briefPath],
+      args: ["exec", "--sandbox", "workspace-write"],
     };
   }
   throw new Error(`unknown worker: ${worker}`);

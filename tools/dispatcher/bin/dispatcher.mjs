@@ -2,13 +2,16 @@
 // moviecal-dispatcher CLI.
 //
 // Usage:
-//   dispatcher doctor    - read-only health check of every dependency
-//   dispatcher dry-run   - fetch Ready-for-Agent issues and print the plan
-//                          without touching any worktree, branch, or Linear
-//                          state (safe to run with a live or missing key)
-//   dispatcher gc        - prune merged/stale worktrees and old run logs
-//   dispatcher run       - the real poll loop (not yet wired to a live
-//                          Linear workspace as of this scaffold)
+//   dispatcher doctor              - read-only health check of every dependency
+//   dispatcher dry-run             - fetch Ready-for-Agent issues and print the plan
+//                                     without touching any worktree, branch, or Linear
+//                                     state (safe to run with a live or missing key)
+//   dispatcher gc                  - prune merged/stale worktrees and old run logs
+//   dispatcher run --once          - process every currently-eligible Ready-for-Agent
+//                                     issue exactly once, then exit (real side effects:
+//                                     creates worktrees, spawns workers, opens PRs)
+//   dispatcher run [--interval ms] - the live poll loop (default 30s); same real side
+//                                     effects as --once, repeated forever
 //
 // See docs/operators/local-execution.md.
 
@@ -32,6 +35,9 @@ import { LinearClient } from "../src/linear-client.mjs";
 import { evaluatePreflight, worktreeName, branchName } from "../src/preflight.mjs";
 import { resolveRouting } from "../src/worker-routing.mjs";
 import { WorktreeManager } from "../src/worktree-manager.mjs";
+import { runOnce } from "../src/run-loop.mjs";
+import { spawnWorker } from "../src/worker-spawn.mjs";
+import { findPrForBranch, defaultRunner as ghRunner } from "../src/pr-check.mjs";
 
 const IOS_RUNNER_NAME = "moviecal-ios-runner";
 const GITHUB_REPO = "PelvicSorcerer/moviecal";
@@ -197,6 +203,102 @@ function cmdGc() {
   }
 }
 
+const DEFAULT_POLL_INTERVAL_MS = 30_000;
+const RUN_STATE_NAMES = {
+  readyForAgent: "Ready for Agent",
+  blocked: "Blocked",
+  agentWorking: "Agent Working",
+  needsHumanDecision: "Needs Human Decision",
+  inReview: "In Review",
+};
+
+async function checkIosRunnerOnline() {
+  try {
+    const out = execFileSync("gh", ["api", `repos/${GITHUB_REPO}/actions/runners`], { encoding: "utf8" });
+    const runner = (JSON.parse(out).runners || []).find((r) => r.name === IOS_RUNNER_NAME);
+    return Boolean(runner && runner.status === "online");
+  } catch {
+    return false;
+  }
+}
+
+/** Build the real (non-fake) context runOnce needs, wiring actual Linear/gh/git/process dependencies. */
+async function buildRunContext(linearClient, teamKey) {
+  const states = await linearClient.workflowStates(teamKey);
+  const stateId = (name) => {
+    const s = states.find((st) => st.name === name);
+    if (!s) throw new Error(`workflow state not found: ${name} (has the workspace been provisioned? see tools/dispatcher/scripts/provision-linear-workspace.mjs)`);
+    return s.id;
+  };
+
+  const worktreeManager = new WorktreeManager({
+    repoRoot: REPO_ROOT,
+    worktreeRoot: worktreeRoot(),
+    statePath: worktreesStatePath(),
+  });
+
+  return {
+    linearClient,
+    stateIds: {
+      blocked: stateId(RUN_STATE_NAMES.blocked),
+      agentWorking: stateId(RUN_STATE_NAMES.agentWorking),
+      needsHumanDecision: stateId(RUN_STATE_NAMES.needsHumanDecision),
+      inReview: stateId(RUN_STATE_NAMES.inReview),
+    },
+    worktreeManager,
+    concurrencyLimit: Number(process.env.MOVIECAL_CONCURRENCY || DEFAULT_CONCURRENCY),
+    iosRunnerOnline: await checkIosRunnerOnline(),
+    secretPresent: () => fs.existsSync(envLocalPath()),
+    worktreeRoot: worktreeRoot(),
+    envLocalSource: fs.existsSync(envLocalPath()) ? envLocalPath() : undefined,
+    ghRepo: GITHUB_REPO,
+    logRoot: logRoot(),
+    spawnWorkerFn: spawnWorker,
+    findPrForBranchFn: (branch, repo) => findPrForBranch(branch, repo, ghRunner),
+  };
+}
+
+async function cmdRunOnce() {
+  const linearConfig = loadLinearConfig();
+  if (!linearConfig.apiKey) {
+    console.error(`No Linear API key configured (${linearEnvPath()}). Run \`dispatcher doctor\` first.`);
+    return 1;
+  }
+  const linearClient = new LinearClient({ apiKey: linearConfig.apiKey });
+  const issues = await linearClient.issuesInState({
+    teamKey: linearConfig.teamKey,
+    stateName: RUN_STATE_NAMES.readyForAgent,
+  });
+
+  if (issues.length === 0) {
+    console.log(`No issues in "${RUN_STATE_NAMES.readyForAgent}". Nothing to do.`);
+    return 0;
+  }
+
+  const ctx = await buildRunContext(linearClient, linearConfig.teamKey);
+  const results = await runOnce(issues, ctx);
+  for (const r of results) {
+    console.log(`${r.issue}: ${r.outcome}${r.reason ? ` — ${r.reason}` : ""}${r.pr ? ` — ${r.pr}` : ""}`);
+  }
+  return 0;
+}
+
+async function cmdRun({ once, intervalMs }) {
+  if (once) {
+    return cmdRunOnce();
+  }
+  console.log(`Starting poll loop (interval: ${intervalMs}ms). Press Ctrl+C to stop.`);
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      await cmdRunOnce();
+    } catch (err) {
+      console.error("Poll iteration failed:", err.message);
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 async function main() {
   const [, , cmd, ...rest] = process.argv;
   switch (cmd) {
@@ -212,14 +314,15 @@ async function main() {
     case "gc":
       cmdGc();
       break;
-    case "run":
-      console.error(
-        "`dispatcher run` (the live poll loop) is not yet wired up — this scaffold ships doctor/dry-run/gc first. See docs/operators/local-execution.md 'Known gaps / follow-ups'.",
-      );
-      process.exitCode = 1;
+    case "run": {
+      const once = rest.includes("--once");
+      const intervalFlagIdx = rest.indexOf("--interval");
+      const intervalMs = intervalFlagIdx !== -1 ? Number(rest[intervalFlagIdx + 1]) : DEFAULT_POLL_INTERVAL_MS;
+      process.exitCode = await cmdRun({ once, intervalMs });
       break;
+    }
     default:
-      console.error("Usage: dispatcher <doctor|dry-run|gc|run> [--fixture <path>]");
+      console.error("Usage: dispatcher <doctor|dry-run|gc|run> [--fixture <path>] [--once] [--interval <ms>]");
       process.exitCode = 1;
   }
 }

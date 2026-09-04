@@ -21,9 +21,9 @@ Staged migration from a GitHub-Project (`moviecal Delivery`) + multi-cloud-agent
 | 5 | Linear ↔ GitHub connected (PR linking + Issues Sync) | **Partially done** — GitHub connection is live, and issues sync **one-way (GitHub → Linear only)**, confirmed by direct test (a Linear-side comment never reached GitHub). Two-way sync (Linear → GitHub, needed for "GitHub kept in sync for visibility") is not yet achieved. Tracked as `MOV-115` in Linear — do not consider Stage 5 complete until that resolves. |
 | 6 | Governance docs PR (additive) | **Done** |
 | 7 | Branch prefix consolidation (`agent/**`, `docs/**`, `chore/**`) | **Done** |
-| 8 | Dispatcher scaffold (`tools/dispatcher/`: doctor, dry-run, gc) | **Done** — `run` (live poll loop) deferred pending Stage 1–2 |
+| 8 | Dispatcher (`tools/dispatcher/`: doctor, dry-run, gc, run) | **Done** — `run --once` / `run [--interval ms]` implemented and unit-tested against every outcome (82 tests). Exercised for real against the live Linear workspace with zero eligible issues (safe no-op path only) to confirm the auth/query wiring works. Has **not** yet processed a real issue end-to-end — that's Stage 10, deliberately deferred as a supervised action rather than a side effect of shipping the code. |
 | 9 | Ruleset hardening (require PR review + `lane-browser` on `master-protection`) | Not started — deliberately deferred until Stage 1–8 are live, so autonomy isn't enabled before the loop it governs exists |
-| 10 | End-to-end verification with a real Linear issue | Not started — depends on 1–9 |
+| 10 | End-to-end verification with a real Linear issue | Not started — depends on 1–9. This is the first time a real worker (Claude Code or Codex) will make real commits and open a real PR autonomously; requires explicit sign-off before running, not just code being ready. |
 | 11 | Decommission old governance (archive/remove superseded docs, scripts, workflows) | Not started — gated on Stage 10 passing |
 | 12 | External decommission (revoke `PROJECT_UPDATE_PAT`, archive GitHub Project) | Not started — gated on Stage 11 |
 

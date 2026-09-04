@@ -61,20 +61,20 @@ describe("resolveRouting", () => {
 });
 
 describe("workerInvocation", () => {
-  it("builds a claude invocation with a resolved model id", () => {
-    const invocation = workerInvocation("claude", "default", "/tmp/brief.md");
+  it("builds a claude invocation with a resolved model id, no brief-path arg (stdin instead)", () => {
+    const invocation = workerInvocation("claude", "default");
     expect(invocation.command).toBe("claude");
-    expect(invocation.args).toEqual(["-p", "--model", modelIdForTier("claude", "default"), "/tmp/brief.md"]);
+    expect(invocation.args).toEqual(["-p", "--model", modelIdForTier("claude", "default")]);
   });
 
-  it("builds a codex invocation with the workspace-write sandbox", () => {
-    const invocation = workerInvocation("codex", "default", "/tmp/brief.md");
+  it("builds a codex invocation with the workspace-write sandbox, no brief-path arg (stdin instead)", () => {
+    const invocation = workerInvocation("codex", "default");
     expect(invocation.command).toBe("codex");
-    expect(invocation.args).toEqual(["exec", "--sandbox", "workspace-write", "/tmp/brief.md"]);
+    expect(invocation.args).toEqual(["exec", "--sandbox", "workspace-write"]);
   });
 
   it("throws for an unknown worker", () => {
-    expect(() => workerInvocation("gemini", "default", "/tmp/brief.md")).toThrow(/unknown worker/);
+    expect(() => workerInvocation("gemini", "default")).toThrow(/unknown worker/);
   });
 });
 
