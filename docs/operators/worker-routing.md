@@ -17,6 +17,21 @@ Only workers that can execute against a real local git worktree on this Mac are 
 
 Cursor Cloud Agent and GitHub Copilot coding agent are **not** viable dispatch targets for this pipeline: both execute in a cloud VM with no path to this Mac's worktrees. They may still be useful as an editor/IDE completion tool, but that is a separate decision from this repo's agent-dispatch architecture and is not covered by this document.
 
+### Installing the Codex CLI
+
+Codex is the dispatcher's second worker option, selected via the `worker:codex` Linear label. To use Codex as a dispatch target:
+
+1. **Install** the Codex CLI globally via npm:
+   ```sh
+   npm i -g @openai/codex
+   ```
+
+2. **Verify** the installation by running `dispatcher doctor`, which will report "codex on PATH" as a passing check:
+   ```sh
+   npm run dispatcher:doctor
+   ```
+   If the check fails, ensure the global npm bin directory is on your shell's `PATH`.
+
 ## Default routing by task shape
 
 | Task shape | Worker | Model tier |
