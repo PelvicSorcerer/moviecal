@@ -120,6 +120,13 @@ No agent conversation is a source of truth. Anything that matters must be writte
 - `vercel --prod`; `gh release create`; `npm publish`
 - Edit `AGENTS.md`, `.github/copilot-instructions.md`, or `docs/product/**`
 
+For a Claude worker, this list is now partially enforced by `.claude/settings.json`'s `permissions.deny` rules — a real technical layer Claude Code's own harness checks before a tool call runs, not something that depends on the model choosing to comply (verified: rules are evaluated deny-then-ask-then-allow, and a deny rule can't be carved out by a more specific allow). That's a step up from pure documentation, but it isn't as strong as the GitHub-ruleset category above: Bash pattern matching is prefix/substring-based and documented as fragile against creative command construction, it only covers what the worker invokes *through Claude Code's own tools* (a raw `curl` to the GitHub API instead of `gh` isn't covered), and Codex has no equivalent settings file at all yet — it relies on `--sandbox workspace-write`, a different and less granular mechanism. `MOV-116` is still the plan for closing the gap properly.
+
+Two operational prerequisites for a Claude worker to run headlessly at all, discovered and confirmed empirically while wiring this up:
+
+- **Workspace trust.** Claude Code refuses to apply `.claude/settings.json` in an untrusted workspace. This is anchored to the repository's **main checkout path**, not to whichever worktree a session runs from: trusting a linked worktree's own path did *not* stop the "workspace has not been trusted" warning for a `-p` session run from it; trusting the main checkout did, and that one grant covers every worktree of the repo. `WorktreeManager.create()` (`tools/dispatcher/src/worktree-manager.mjs`) pre-trusts both the new worktree's own path and the discovered main-checkout path (via `mainWorktreePath()`, parsed from `git worktree list --porcelain`) using `tools/dispatcher/src/claude-trust.mjs`'s `trustWorkspace()` — a careful read-modify-write of `~/.claude.json` that touches only the one project key, preserving everything else. This is safe specifically because it only ever runs on paths the dispatcher itself just checked out from this same repository, never an arbitrary path. Failure is non-fatal and logged: an untrusted workspace still fails cleanly rather than hanging (see below).
+- **A current login.** The `claude` CLI's own login must be valid (`claude` then `/login` if expired) — this can only be done interactively, never by an agent.
+
 **Always requires a human (`Needs Human Decision`):**
 
 - Database migrations touching existing tables
