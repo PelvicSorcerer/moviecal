@@ -4,19 +4,18 @@ This folder holds the product, design, technical, and planning documents for the
 
 Recommended reading order for contributors and agents:
 
-1. `AGENTS.md` (repo root) — generic agent contract; routes you to `docs/operators/*.md` for your specific platform
+1. `AGENTS.md` (repo root) — generic agent contract; routes to `docs/operators/local-execution.md` and `worker-routing.md`
 2. `.github/copilot-instructions.md`
-3. `docs/operators/README.md` — platform operator index and queue-authority summary
-4. `docs/operators/multi-platform-dispatch-policy.md` — which platforms may receive `Agent Dispatch = Yes`
-5. `docs/operators/codex-orchestration.md` — Codex orchestrator/worker operating procedure (Codex only)
-6. `docs/product/product-brief.md`
-7. `docs/product/requirements.md`
-8. `docs/technical/architecture.md`
-9. `docs/planning/implementation-plan.md`
-10. `docs/planning/recommended-issue-sequence.md`
-11. `docs/planning/agent-environment-compatibility-plan.md` (audit of agent/environment-specific artifacts; remaining work tracked as issues #105–#106)
-12. `docs/planning/github-project-migration-plan.md` (migration + Platform track queue order for #92–#106)
+3. `docs/governance/linear-information-architecture.md` — the Linear workspace design and source-of-truth boundaries
+4. `docs/operators/local-execution.md` — the local-Mac dispatcher: worktree lifecycle, worker interface, security model
+5. `docs/product/product-brief.md`
+6. `docs/product/requirements.md`
+7. `docs/technical/architecture.md`
+8. `docs/planning/implementation-plan.md`
+9. `docs/planning/recommended-issue-sequence.md`
 
 Keep docs updated when behavior, routes, environment variables, or security assumptions change. Planning docs should describe the intended execution plan and issue hygiene; they should not be used as a historical progress tracker.
 
-Fresh implementation sessions should use the `moviecal Delivery` GitHub Project as the source of truth for sequencing, workflow state, and dispatch. GitHub issues remain the source of truth for the scoped execution contract. When project state and docs diverge, reconcile the project first and then update the docs.
+Linear is the source of truth for sequencing, workflow state, and agent delegation. GitHub remains the source of truth for source control, PRs, CI, and releases. See `docs/governance/linear-information-architecture.md` for the full boundary. When Linear and docs diverge, reconcile Linear first and then update the docs.
+
+Historical, GitHub-Project-centric planning docs (the previous control plane, superseded by Linear) are preserved for reference in `docs/planning/archive/` and `docs/operators/archive/` — see `docs/planning/decision-log.md` for the full migration record.

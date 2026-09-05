@@ -1,3 +1,7 @@
+> **Archived 2026-09-05.** This document describes the retired GitHub-Project-centric, multi-cloud-agent dev-governance model. It is preserved for historical reference only — do not follow it for current work. Superseded by docs/operators/local-execution.md (Cursor Cloud is deprecated from the agent-dispatch architecture; see docs/planning/decision-log.md). See `docs/planning/decision-log.md` for the full migration record.
+
+---
+
 # Cursor Cloud Agent operator notes
 
 ## Scope

@@ -1,3 +1,7 @@
+> **Archived 2026-09-05.** This document describes the retired GitHub-Project-centric, multi-cloud-agent dev-governance model. It is preserved for historical reference only — do not follow it for current work. Superseded by docs/governance/linear-information-architecture.md. See `docs/planning/decision-log.md` for the full migration record.
+
+---
+
 # GitHub Project field taxonomy
 
 Status: normative for `moviecal Delivery` custom field **values**. Read `AGENTS.md` first for the generic queue contract.

@@ -1,3 +1,7 @@
+> **Archived 2026-09-05.** This document describes the retired GitHub-Project-centric, multi-cloud-agent dev-governance model. It is preserved for historical reference only — do not follow it for current work. Superseded by docs/operators/worker-routing.md. See `docs/planning/decision-log.md` for the full migration record.
+
+---
+
 # Claude model-selection policy
 
 Read `AGENTS.md` and `docs/operators/claude-code.md` before this file. Those documents cover the generic queue contract and the mechanical surfaces (checkpoint fields, dispatch template, fallback error behavior). This document answers the policy question those mechanics left open: **how should the model for a Claude worker session be chosen?**

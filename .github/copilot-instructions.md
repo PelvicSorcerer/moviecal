@@ -17,4 +17,4 @@ Agent-specific guidance
 - For agent tasks include: branch to start from, files to change, exact acceptance criteria, **Testing Expectations** (expected unit/integration/E2E coverage and any deferred follow-up issue), tests to run, and any constraints.
 - Keep PRs small and focused. Include a **Test Impact** section stating what tests changed or why no changes were needed.
 - If a task touches authentication, data access, or calendar feeds, add a security note in the PR and ensure secrets are not committed.
-- Read `AGENTS.md` for this repo's full agent workflow contract, including which platform-specific operator guide under `docs/operators/` to read next (for example `docs/operators/github-copilot.md` if you are GitHub Copilot's coding agent).
+- Read `AGENTS.md` for this repo's full agent workflow contract. Agent-delegated implementation work is dispatched from Linear to a local Mac worker (`docs/operators/local-execution.md`); GitHub Copilot's own coding agent is not part of that dispatch path (see `docs/planning/decision-log.md`).
