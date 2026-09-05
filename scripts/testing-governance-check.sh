@@ -14,13 +14,13 @@ set -euo pipefail
 # Or directly: bash scripts/testing-governance-check.sh
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-# shellcheck source=lib/project-queue-common.sh
-source "$repo_root/scripts/lib/project-queue-common.sh"
+# shellcheck source=lib/testing-governance-common.sh
+source "$repo_root/scripts/lib/testing-governance-common.sh"
 
-project_queue_require_jq
+testing_governance_require_jq
 
 echo "Repository root: $repo_root"
 echo "Running testing governance consistency checks..."
 echo ""
 
-project_queue_validate_testing_governance "$repo_root"
+testing_governance_validate "$repo_root"

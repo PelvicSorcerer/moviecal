@@ -1,3 +1,7 @@
+> **Archived 2026-09-05.** This document describes the retired GitHub-Project-centric, multi-cloud-agent dev-governance model. It is preserved for historical reference only — do not follow it for current work. Superseded by docs/operators/local-execution.md. See `docs/planning/decision-log.md` for the full migration record.
+
+---
+
 # Codex orchestrator/worker procedure
 
 Read `AGENTS.md` and `docs/operators/codex.md` first. This document is the single primary home for Codex orchestrator/worker operating procedure after the GitHub Project queue cutover (#95). Platform environment and tooling detail stays in `codex.md`; multi-platform dispatch rights are in `multi-platform-dispatch-policy.md`.

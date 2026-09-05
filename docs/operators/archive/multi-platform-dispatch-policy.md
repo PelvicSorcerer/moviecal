@@ -1,3 +1,7 @@
+> **Archived 2026-09-05.** This document describes the retired GitHub-Project-centric, multi-cloud-agent dev-governance model. It is preserved for historical reference only — do not follow it for current work. Superseded by docs/governance/linear-information-architecture.md (Linear delegation + the dispatcher's concurrency limit replace the multi-platform Agent Dispatch slot model). See `docs/planning/decision-log.md` for the full migration record.
+
+---
+
 # Multi-platform agent dispatch policy
 
 This document is the single source of truth for which agent platforms may receive `Agent Dispatch = Yes` on a `moviecal Delivery` GitHub Project item after the project cutover.

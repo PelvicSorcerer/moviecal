@@ -1,3 +1,7 @@
+> **Archived 2026-09-05.** This document describes the retired GitHub-Project-centric, multi-cloud-agent dev-governance model. It is preserved for historical reference only — do not follow it for current work. Superseded by tools/dispatcher/src/brief.mjs (the dispatcher now generates the worker brief programmatically). See `docs/planning/decision-log.md` for the full migration record.
+
+---
+
 # Claude worker dispatch prompt template
 
 Use this template when a human or Claude Code orchestrator hands one implementation issue to a Claude Code worker. It is the Claude Code analogue of `codex-worker-dispatch-prompt.md`. Fill in every placeholder so the worker does not have to infer scope, sequencing, model choice, or reporting behavior from repo docs alone. See `codex-orchestration.md` for the orchestrator/worker procedure and `docs/operators/claude-code.md` for Claude Code–specific environment notes.
