@@ -6,6 +6,8 @@ The local process that turns a Linear issue into a running agent against an isol
 
 Stage 8 of the Linear/GitHub/local-Mac dev-governance migration is functionally complete: `doctor`, `dry-run`, `gc`, and `run` are all implemented and unit-tested. **`dispatcher run` has real side effects** — it creates worktrees, spawns a real `claude`/`codex` process, and expects that worker to push a branch and open a PR. It has been unit-tested against every outcome (preflight block, routing block, worker success, worker failure, worker exits 0 with no PR, spawn error) with fakes, but has **not yet been run against the live Linear workspace** — that first real run is migration Stage 10 (end-to-end verification) and should be a deliberate, supervised action, not something triggered incidentally.
 
+A Claude worker is invoked as `claude -p --model <id> --permission-mode dontAsk`, scoped by `.claude/settings.json` at the repo root (allow/deny rules matching the hard-deny list in `docs/operators/local-execution.md` §Security model). Getting a headless `claude -p` session to run at all — without hanging, and with its permission rules actually applied — needed two things verified directly against the installed CLI (v2.1.208), not assumed from docs: `--permission-mode dontAsk` (the newer `acceptEdits` + `--permission-prompts none` combination needs a version this Mac doesn't have), and pre-trusting the repo's main checkout path in `~/.claude.json` (`claude-trust.mjs`, wired into `WorktreeManager.create()`) — workspace trust for `.claude/settings.json` is anchored to that one path across every worktree, not to each worktree's own path.
+
 ## Commands
 
 ```
@@ -37,6 +39,7 @@ tools/dispatcher/
     worker-routing.mjs       worker + model routing rubric (pure)
     security-policy.mjs      hard-deny / needs-human command classification (pure)
     worktree-manager.mjs     git worktree lifecycle + JSON state bookkeeping
+    claude-trust.mjs         pre-trusts a worktree in Claude Code's global config (~/.claude.json)
     brief.mjs                worker brief generation (pure)
     worker-spawn.mjs         spawns a worker process, captures logs to a manifest
     pr-check.mjs             checks whether a worker opened a PR for its branch

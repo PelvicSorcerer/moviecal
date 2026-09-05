@@ -9,13 +9,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { trustWorkspace as defaultTrustWorkspace } from "./claude-trust.mjs";
 
 export function defaultRunner(command, args, opts = {}) {
   return execFileSync(command, args, { encoding: "utf8", ...opts });
 }
 
 export class WorktreeManager {
-  constructor({ repoRoot, worktreeRoot, statePath, runner = defaultRunner } = {}) {
+  constructor({ repoRoot, worktreeRoot, statePath, runner = defaultRunner, trustWorkspaceFn = defaultTrustWorkspace } = {}) {
     if (!repoRoot) throw new Error("repoRoot is required");
     if (!worktreeRoot) throw new Error("worktreeRoot is required");
     if (!statePath) throw new Error("statePath is required");
@@ -23,6 +24,7 @@ export class WorktreeManager {
     this.worktreeRoot = worktreeRoot;
     this.statePath = statePath;
     this.runner = runner;
+    this.trustWorkspaceFn = trustWorkspaceFn;
   }
 
   loadState() {
@@ -41,6 +43,23 @@ export class WorktreeManager {
 
   isPathFree(worktreePath) {
     return !fs.existsSync(worktreePath);
+  }
+
+  /**
+   * The repository's main (original) checkout path, as opposed to any linked
+   * worktree. Discovered via `git worktree list --porcelain`, whose first
+   * `worktree <path>` line is always the main checkout. Needed because
+   * Claude Code's `.claude/settings.json` trust is anchored to this path for
+   * every worktree of the same repository, not to whichever worktree a
+   * session happens to run from (confirmed empirically: trusting a linked
+   * worktree's own path did not stop the "workspace has not been trusted"
+   * warning for a `-p` session run from it; trusting the main checkout did).
+   */
+  mainWorktreePath() {
+    const out = this.runner("git", ["worktree", "list", "--porcelain"], { cwd: this.repoRoot });
+    const match = /^worktree (.+)$/m.exec(out);
+    if (!match) throw new Error("could not determine main worktree path from `git worktree list --porcelain`");
+    return match[1];
   }
 
   activeCount() {
@@ -68,6 +87,25 @@ export class WorktreeManager {
     if (envLocalSource && fs.existsSync(envLocalSource)) {
       const envLocalDest = path.join(worktreePath, ".env.local");
       fs.symlinkSync(envLocalSource, envLocalDest);
+    }
+
+    // Pre-trust both the new worktree path and the repo's main checkout path
+    // in Claude Code's global config, so a headless `claude -p` worker
+    // doesn't hang on the interactive workspace-trust dialog. The main
+    // checkout is what actually gates .claude/settings.json loading for
+    // every worktree of this repo (see mainWorktreePath() above); the
+    // worktree's own path is trusted too since it's cheap and may matter for
+    // other trust-scoped behavior. Safe here specifically because both paths
+    // belong to this same repository the dispatcher just checked out from,
+    // not an externally-supplied path. Non-fatal on failure: an untrusted
+    // workspace still fails cleanly (settings.json permissions get ignored,
+    // `--permission-mode dontAsk` denies the rest), which surfaces as a
+    // normal worker-failure outcome rather than a hang.
+    for (const pathToTrust of new Set([worktreePath, this.mainWorktreePath()])) {
+      const trustResult = this.trustWorkspaceFn(pathToTrust);
+      if (!trustResult.ok) {
+        console.error(`Warning: could not pre-trust ${pathToTrust}: ${trustResult.reason}`);
+      }
     }
 
     const entry = {

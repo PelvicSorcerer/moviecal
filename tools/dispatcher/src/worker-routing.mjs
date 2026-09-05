@@ -65,11 +65,28 @@ export function resolveRouting(issue) {
 // Both workers read their brief from stdin rather than a file path argument
 // (worker-spawn.mjs pipes it), since a stdin brief works identically whether
 // the worker binary reads from a real TTY-less pipe or a piped-in file.
+//
+// Claude's `-p` (print/non-interactive) mode starts in Manual permission mode
+// on every plan -- with no explicit mode set, a tool call that would need
+// approval genuinely blocks waiting for an answer that can never come in a
+// headless subprocess with no TTY (verified directly against the CLI version
+// installed on this Mac, 2.1.208). `--permission-mode dontAsk` is the fix:
+// it auto-denies anything not already covered by permissions.allow in
+// .claude/settings.json or the built-in read-only command set, instead of
+// prompting -- so an unmatched call fails cleanly rather than hanging. (A
+// newer, more precise combination -- `acceptEdits` plus `--permission-prompts
+// none` -- requires Claude Code v2.1.259+; the installed version rejects
+// `--permission-prompts` as an unknown option, so this uses the
+// version-compatible single flag instead.) Permission rules (including the
+// deny list in .claude/settings.json) are enforced by Claude Code's own
+// harness code, not by the model choosing to comply -- see
+// docs/operators/local-execution.md §Security model for what that boundary
+// does and does not cover.
 export function workerInvocation(worker, model) {
   if (worker === "claude") {
     return {
       command: "claude",
-      args: ["-p", "--model", modelIdForTier("claude", model)],
+      args: ["-p", "--model", modelIdForTier("claude", model), "--permission-mode", "dontAsk"],
     };
   }
   if (worker === "codex") {

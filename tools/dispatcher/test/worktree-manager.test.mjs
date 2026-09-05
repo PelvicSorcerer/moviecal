@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { WorktreeManager } from "../src/worktree-manager.mjs";
 
-function fakeRunner(calls) {
+function fakeRunner(calls, { mainWorktreePath = "/fake/main/checkout" } = {}) {
   return (command, args, opts) => {
     calls.push({ command, args, opts });
     if (command === "git" && args[0] === "worktree" && args[1] === "add") {
@@ -13,6 +13,9 @@ function fakeRunner(calls) {
     if (command === "git" && args[0] === "worktree" && args[1] === "remove") {
       const target = args[args.length - 1];
       fs.rmSync(target, { recursive: true, force: true });
+    }
+    if (command === "git" && args[0] === "worktree" && args[1] === "list" && args[2] === "--porcelain") {
+      return `worktree ${mainWorktreePath}\nHEAD 0000000000000000000000000000000000000000\nbranch refs/heads/master\n\n`;
     }
     return "";
   };
@@ -24,17 +27,24 @@ describe("WorktreeManager", () => {
   let statePath;
   let calls;
   let manager;
+  let trustCalls;
 
   beforeEach(() => {
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-dispatcher-test-"));
     worktreeRoot = path.join(tmpRoot, "worktrees");
     statePath = path.join(tmpRoot, "config", "worktrees.json");
     calls = [];
+    trustCalls = [];
     manager = new WorktreeManager({
       repoRoot: tmpRoot,
       worktreeRoot,
       statePath,
       runner: fakeRunner(calls),
+      // Never touch the real ~/.claude.json from a test.
+      trustWorkspaceFn: (p) => {
+        trustCalls.push(p);
+        return { ok: true };
+      },
     });
   });
 
@@ -60,6 +70,36 @@ describe("WorktreeManager", () => {
     expect(manager.activeCount()).toBe(1);
     expect(calls[0]).toMatchObject({ command: "git", args: ["fetch", "origin", "master"] });
     expect(calls[1]).toMatchObject({ command: "git", args: ["worktree", "add", entry.path, "-b", "agent/MOV-1-fix-the-thing", "origin/master"] });
+  });
+
+  it("pre-trusts both the new worktree path and the repo's main checkout path", () => {
+    const entry = manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+    expect(new Set(trustCalls)).toEqual(new Set([entry.path, "/fake/main/checkout"]));
+  });
+
+  it("mainWorktreePath() reads the first `worktree <path>` line from git", () => {
+    expect(manager.mainWorktreePath()).toBe("/fake/main/checkout");
+  });
+
+  it("mainWorktreePath() throws a clear error if git's output is unparseable", () => {
+    const brokenManager = new WorktreeManager({
+      repoRoot: tmpRoot,
+      worktreeRoot,
+      statePath,
+      runner: () => "not porcelain output",
+    });
+    expect(() => brokenManager.mainWorktreePath()).toThrow(/could not determine main worktree path/);
+  });
+
+  it("does not fail worktree creation when pre-trusting fails (non-fatal, logged)", () => {
+    const errorManager = new WorktreeManager({
+      repoRoot: tmpRoot,
+      worktreeRoot,
+      statePath,
+      runner: fakeRunner(calls),
+      trustWorkspaceFn: () => ({ ok: false, reason: "could not write ~/.claude.json" }),
+    });
+    expect(() => errorManager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" })).not.toThrow();
   });
 
   it("refuses to create a worktree at a path that already exists", () => {

@@ -64,7 +64,28 @@ describe("workerInvocation", () => {
   it("builds a claude invocation with a resolved model id, no brief-path arg (stdin instead)", () => {
     const invocation = workerInvocation("claude", "default");
     expect(invocation.command).toBe("claude");
-    expect(invocation.args).toEqual(["-p", "--model", modelIdForTier("claude", "default")]);
+    expect(invocation.args).toEqual([
+      "-p",
+      "--model",
+      modelIdForTier("claude", "default"),
+      "--permission-mode",
+      "dontAsk",
+    ]);
+  });
+
+  it("scopes the claude invocation to a non-hanging, non-bypassing permission mode", () => {
+    // dontAsk auto-denies anything not covered by .claude/settings.json
+    // permissions.allow, instead of prompting -- which is what prevents a
+    // headless run with no TTY from hanging on an unmatched permission
+    // request. Verified against the installed CLI version (2.1.208): the
+    // newer `acceptEdits` + `--permission-prompts none` combination is
+    // rejected as an unknown option on this version.
+    const invocation = workerInvocation("claude", "default");
+    expect(invocation.args).toContain("--permission-mode");
+    expect(invocation.args).toContain("dontAsk");
+    expect(invocation.args).not.toContain("bypassPermissions");
+    expect(invocation.args).not.toContain("--dangerously-skip-permissions");
+    expect(invocation.args).not.toContain("--permission-prompts");
   });
 
   it("builds a codex invocation with the workspace-write sandbox, no brief-path arg (stdin instead)", () => {
