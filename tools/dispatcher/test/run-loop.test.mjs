@@ -30,8 +30,8 @@ function fakeWorktreeManager({ activeCount = 0, pathFree = true } = {}) {
       this.createCalls.push(args);
       return { path: `/fake/worktrees/${args.name}`, ...args };
     },
-    markStatus(id, status) {
-      this.statusCalls.push({ id, status });
+    markStatus(id, status, extra = {}) {
+      this.statusCalls.push({ id, status, ...extra });
     },
   };
 }
@@ -114,7 +114,9 @@ describe("runOnce", () => {
     expect(spawnArg.cwd).toBe("/fake/worktrees/MOV-1-fix-the-thing");
     expect(spawnArg.brief).toContain("MOV-1");
 
-    expect(ctx.worktreeManager.statusCalls).toEqual([{ id: "MOV-1", status: "review" }]);
+    expect(ctx.worktreeManager.statusCalls).toEqual([
+      { id: "MOV-1", status: "review", prNumber: 1, prUrl: "https://github.com/owner/repo/pull/1" },
+    ]);
     expect(result).toEqual({ issue: "MOV-1", outcome: "in-review", pr: "https://github.com/owner/repo/pull/1" });
   });
 

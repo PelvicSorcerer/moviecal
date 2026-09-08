@@ -134,6 +134,16 @@ describe("WorktreeManager", () => {
     expect(manager.loadState()).toEqual({});
   });
 
+  it("merges extra fields into the entry when marking status", () => {
+    manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+    manager.markStatus("MOV-1", "review", { prNumber: 42, prUrl: "https://github.com/owner/repo/pull/42" });
+
+    const entry = manager.loadState()["MOV-1"];
+    expect(entry.status).toBe("review");
+    expect(entry.prNumber).toBe(42);
+    expect(entry.prUrl).toBe("https://github.com/owner/repo/pull/42");
+  });
+
   it("keeps a recently-failed worktree until the retention window passes", () => {
     manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
     manager.markStatus("MOV-1", "failed");
