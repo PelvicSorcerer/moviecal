@@ -1,0 +1,325 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		1000000000000000000002B1 /* MoviecalApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001A1 /* MoviecalApp.swift */; };
+		1000000000000000000002B2 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001A2 /* RootView.swift */; };
+		1000000000000000000002B3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001A3 /* Assets.xcassets */; };
+		1000000000000000000002B4 /* MoviecalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001A4 /* MoviecalTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		1000000000000000000001A1 /* MoviecalApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoviecalApp.swift; sourceTree = "<group>"; };
+		1000000000000000000001A2 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		1000000000000000000001A3 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		1000000000000000000001A4 /* MoviecalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoviecalTests.swift; sourceTree = "<group>"; };
+		1000000000000000000001A5 /* Moviecal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Moviecal.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1000000000000000000001A6 /* MoviecalTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MoviecalTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		1000000000000000000004D2 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1000000000000000000004D5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1000000000000000000000AB = {
+			isa = PBXGroup;
+			children = (
+				1000000000000000000000AD /* Moviecal */,
+				1000000000000000000000AF /* MoviecalTests */,
+				1000000000000000000000AC /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		1000000000000000000000AC /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				1000000000000000000001A5 /* Moviecal.app */,
+				1000000000000000000001A6 /* MoviecalTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		1000000000000000000000AD /* Moviecal */ = {
+			isa = PBXGroup;
+			children = (
+				1000000000000000000000AE /* App */,
+				1000000000000000000001A3 /* Assets.xcassets */,
+			);
+			path = Moviecal;
+			sourceTree = "<group>";
+		};
+		1000000000000000000000AE /* App */ = {
+			isa = PBXGroup;
+			children = (
+				1000000000000000000001A1 /* MoviecalApp.swift */,
+				1000000000000000000001A2 /* RootView.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		1000000000000000000000AF /* MoviecalTests */ = {
+			isa = PBXGroup;
+			children = (
+				1000000000000000000001A4 /* MoviecalTests.swift */,
+			);
+			path = MoviecalTests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		1000000000000000000003C1 /* Moviecal */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1000000000000000000006F2 /* Build configuration list for PBXNativeTarget "Moviecal" */;
+			buildPhases = (
+				1000000000000000000004D1 /* Sources */,
+				1000000000000000000004D2 /* Frameworks */,
+				1000000000000000000004D3 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Moviecal;
+			productName = Moviecal;
+			productReference = 1000000000000000000001A5 /* Moviecal.app */;
+			productType = "com.apple.product-type.application";
+		};
+		1000000000000000000003C2 /* MoviecalTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1000000000000000000006F3 /* Build configuration list for PBXNativeTarget "MoviecalTests" */;
+			buildPhases = (
+				1000000000000000000004D4 /* Sources */,
+				1000000000000000000004D5 /* Frameworks */,
+				1000000000000000000004D6 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MoviecalTests;
+			productName = MoviecalTests;
+			productReference = 1000000000000000000001A6 /* MoviecalTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		1000000000000000000000AA /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1620;
+			};
+			buildConfigurationList = 1000000000000000000006F1 /* Build configuration list for PBXProject "Moviecal" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 1000000000000000000000AB;
+			productRefGroup = 1000000000000000000000AC /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				1000000000000000000003C1 /* Moviecal */,
+				1000000000000000000003C2 /* MoviecalTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		1000000000000000000004D3 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1000000000000000000002B3 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1000000000000000000004D6 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		1000000000000000000004D1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1000000000000000000002B1 /* MoviecalApp.swift in Sources */,
+				1000000000000000000002B2 /* RootView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1000000000000000000004D4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1000000000000000000002B4 /* MoviecalTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		1000000000000000000005E1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		1000000000000000000005E2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		1000000000000000000005E3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Moviecal;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.moviecal.ios";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Debug;
+		};
+		1000000000000000000005E4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Moviecal;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.moviecal.ios";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Release;
+		};
+		1000000000000000000005E5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.moviecal.ios.tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Debug;
+		};
+		1000000000000000000005E6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.moviecal.ios.tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		1000000000000000000006F1 /* Build configuration list for PBXProject "Moviecal" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1000000000000000000005E1 /* Debug */,
+				1000000000000000000005E2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1000000000000000000006F2 /* Build configuration list for PBXNativeTarget "Moviecal" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1000000000000000000005E3 /* Debug */,
+				1000000000000000000005E4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1000000000000000000006F3 /* Build configuration list for PBXNativeTarget "MoviecalTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1000000000000000000005E5 /* Debug */,
+				1000000000000000000005E6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 1000000000000000000000AA /* Project object */;
+}
