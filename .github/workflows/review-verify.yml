@@ -1,0 +1,30 @@
+name: review-verify
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lane-review:
+    name: lane-review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      CI: true
+      GITHUB_BASE_REF: ${{ github.base_ref }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      PR_BODY: ${{ github.event.pull_request.body }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: git fetch origin "${{ github.base_ref }}"
+      - name: lane:review
+        run: node scripts/lane-review.mjs
