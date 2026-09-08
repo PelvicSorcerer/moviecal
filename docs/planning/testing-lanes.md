@@ -19,6 +19,7 @@ For the environment contract behind each lane, including disposable credential r
 | Full-stack runtime | `npm run lane:full-stack` | `supabase-verify` → `lane-full-stack-runtime` | Heavy | Conditional — path-filtered |
 | External smoke | `npm run lane:smoke-external` | `smoke-external` → `lane-smoke-external` | Heavy | No — scheduled/manual |
 | Post-deploy smoke | `npm run lane:smoke-post-deploy` | `smoke-post-deploy` → `lane-smoke-post-deploy` | Heavy | No — post-deploy/scheduled |
+| iOS | `xcodebuild build`/`test` in `ios/` (see [iOS lane](#ios-lane)) | `ios-verify` → `lane-ios` | Medium | Conditional — path-filtered (`ios/**`), not yet a required status check |
 
 The default fast pull-request gate is `npm run verify`, which runs the **baseline**, **unit**, and **integration** lanes in sequence. Browser, real-stack, and smoke lanes stay separate so failures are attributable to the lane that owns the behavior.
 
@@ -167,17 +168,17 @@ The authoritative CI gate is `.github/workflows/supabase-verify.yml`'s `lane-ful
 
 ## iOS lane
 
-The iOS lane is a separate GitHub Actions workflow, `ios-verify`, that runs on the self-hosted macOS runner.
+The iOS lane is a separate GitHub Actions workflow, `ios-verify` (job `lane-ios`), that runs on the self-hosted macOS runner.
 
-### Bootstrap state (before `ios/` exists)
+### Bootstrap state (historical, before `ios/` existed)
 
-- `ios-verify` runs as a successful no-op/config-validation workflow.
-- It must still prove runner routing and basic toolchain presence, including `xcodebuild -version`.
+- `ios-verify` ran as a successful no-op/config-validation workflow.
+- It proved runner routing and basic toolchain presence, including `xcodebuild -version`.
 
-### `#237` cutover state
+### `#237` / `MOV-104` cutover state (current)
 
-- `#237` switches `ios-verify` from bootstrap mode to real CI.
-- Minimum required coverage at that point:
+- `ios-verify` builds `ios/Moviecal.xcodeproj` (scheme `Moviecal`) for an iOS Simulator destination via `xcodebuild build`, then runs `xcodebuild test` against the `MoviecalTests` target.
+- Minimum required coverage at this point:
   - simulator build
   - at least one trivial XCTest smoke test
 
@@ -215,6 +216,7 @@ GitHub Actions workflows and jobs use the `lane-*` prefix so a failing check nam
 - `supabase-verify.yml`: `lane-real-stack`, `lane-full-stack-runtime`
 - `smoke-external.yml`: `lane-smoke-external`
 - `smoke-post-deploy.yml`: `lane-smoke-post-deploy`
+- `ios-verify.yml`: `lane-ios`
 
 When a lane fails, fix or investigate within that lane's scope before rerunning unrelated lanes.
 
