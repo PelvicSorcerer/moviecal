@@ -22,7 +22,8 @@ permissions:
   contents: read
 
 jobs:
-  ios-verify-bootstrap:
+  lane-ios:
+    name: lane-ios
     env:
       DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
     runs-on:
@@ -35,7 +36,17 @@ jobs:
         run: |
           sw_vers
           xcodebuild -version
-      - name: Verify bootstrap policy
-        run: |
-          echo "ios-verify is in bootstrap mode until ios/ contains the real app scaffold."
-          echo "This successful no-op proves branch/path routing and toolchain availability."
+      - name: lane-ios (xcodebuild build)
+        working-directory: ios
+        run: >
+          xcodebuild build
+          -project Moviecal.xcodeproj
+          -scheme Moviecal
+          -destination 'platform=iOS Simulator,name=iPhone 17'
+      - name: lane-ios (xcodebuild test)
+        working-directory: ios
+        run: >
+          xcodebuild test
+          -project Moviecal.xcodeproj
+          -scheme Moviecal
+          -destination 'platform=iOS Simulator,name=iPhone 17'
