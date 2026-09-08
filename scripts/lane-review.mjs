@@ -26,6 +26,7 @@ const SENSITIVE_PATH_PATTERNS = [
   /^AGENTS\.md$/,
   /^\.github\/copilot-instructions\.md$/,
   /^docs\/product\//,
+  /^\.claude\/settings.*\.json$/,
   /ruleset|branch-protection/i,
 ];
 

@@ -120,6 +120,50 @@ describe("runOnce", () => {
     expect(result).toEqual({ issue: "MOV-1", outcome: "in-review", pr: "https://github.com/owner/repo/pull/1" });
   });
 
+  it("does not call applyStagedWorkflowEditFn for an ordinary (unauthorized) issue", async () => {
+    const applyStagedWorkflowEditFn = vi.fn(() => ({ applied: false, reason: "not configured" }));
+    const ctx = baseCtx({ applyStagedWorkflowEditFn });
+
+    await runOnce([ISSUE], ctx);
+
+    expect(applyStagedWorkflowEditFn).not.toHaveBeenCalled();
+  });
+
+  it("applies a staged workflow-edit proposal and comments when the issue is authorized", async () => {
+    const applyStagedWorkflowEditFn = vi.fn(() => ({ applied: true, path: ".github/workflows/ios-verify.yml" }));
+    const ctx = baseCtx({ applyStagedWorkflowEditFn });
+    const issue = {
+      ...ISSUE,
+      labels: ["ci:workflow-edit-authorized"],
+      description: "Workflow-edit: .github/workflows/ios-verify.yml",
+    };
+
+    await runOnce([issue], ctx);
+
+    expect(applyStagedWorkflowEditFn).toHaveBeenCalledWith(
+      "/fake/worktrees/MOV-1-fix-the-thing",
+      ".github/workflows/ios-verify.yml",
+    );
+    const comments = ctx.linearClient.calls.filter((c) => c.type === "addComment").map((c) => c.body);
+    expect(comments.some((b) => b.includes("Applied staged workflow-edit proposal"))).toBe(true);
+  });
+
+  it("does not comment when authorized but the worker staged nothing", async () => {
+    const applyStagedWorkflowEditFn = vi.fn(() => ({ applied: false, reason: "no staged proposal found" }));
+    const ctx = baseCtx({ applyStagedWorkflowEditFn });
+    const issue = {
+      ...ISSUE,
+      labels: ["ci:workflow-edit-authorized"],
+      description: "Workflow-edit: .github/workflows/ios-verify.yml",
+    };
+
+    await runOnce([issue], ctx);
+
+    expect(applyStagedWorkflowEditFn).toHaveBeenCalled();
+    const comments = ctx.linearClient.calls.filter((c) => c.type === "addComment").map((c) => c.body);
+    expect(comments.some((b) => b.includes("Applied staged workflow-edit proposal"))).toBe(false);
+  });
+
   it("marks the worktree failed and reports needs-human-decision with log tail when the worker exits non-zero", async () => {
     const ctx = baseCtx({ spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir: "/fake/logs/MOV-1" })) });
 

@@ -6,6 +6,8 @@
 // path, a branch, and a brief on stdin, produce commits on that branch and
 // exit 0."
 
+import { resolveWorkflowEditAuthorization } from "./preflight.mjs";
+
 export function generateBrief(issue, { branch, worktreePath, worker, model, upgradeConditions = [] } = {}) {
   const lines = [];
   lines.push(`# ${issue.identifier}: ${issue.title}`);
@@ -31,6 +33,24 @@ export function generateBrief(issue, { branch, worktreePath, worker, model, upgr
     "If you hit a hard-deny action or a case that needs a human decision (see `docs/operators/local-execution.md` §Security model), stop and report the blocker instead of improvising around it — do not attempt to work around a refusal.",
   );
   lines.push("");
+
+  const workflowAuth = resolveWorkflowEditAuthorization(issue);
+  if (workflowAuth.authorized) {
+    lines.push("## Workflow-edit authorization");
+    lines.push("");
+    lines.push(
+      `A human has reviewed and authorized this issue to change **one specific file**: \`${workflowAuth.path}\`. You cannot edit that path directly — \`Edit(.github/workflows/**)\` is hard-denied for every issue, with no exceptions, and that does not change here.`,
+    );
+    lines.push("");
+    lines.push(
+      `Instead: write the **complete new content** of \`${workflowAuth.path}\` to \`tools/dispatcher/pending-workflow-edits/${workflowAuth.path.split("/").pop()}\` (an ordinary, unrestricted path). After you exit, the dispatcher's own trusted orchestration code — not you — copies that content into the real path, removes the staging file, and commits it onto your branch before opening the PR. The resulting PR will still visibly contain the workflow diff, and \`lane-review\` will flag it as requiring explicit human sign-off before merge, same as any other workflow change.`,
+    );
+    lines.push("");
+    lines.push(
+      "Do not stage a proposal for any file other than the one named above — the dispatcher will refuse to apply anything else.",
+    );
+    lines.push("");
+  }
   lines.push("## Issue description");
   lines.push("");
   lines.push(issue.description || "_(no description provided)_");

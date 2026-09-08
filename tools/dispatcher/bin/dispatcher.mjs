@@ -39,6 +39,7 @@ import { runOnce } from "../src/run-loop.mjs";
 import { spawnWorker } from "../src/worker-spawn.mjs";
 import { findPrForBranch, defaultRunner as ghRunner } from "../src/pr-check.mjs";
 import { checkPrState, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
+import { applyStagedWorkflowEdit } from "../src/workflow-edit-apply.mjs";
 
 const IOS_RUNNER_NAME = "moviecal-ios-runner";
 const GITHUB_REPO = "PelvicSorcerer/moviecal";
@@ -256,6 +257,7 @@ async function buildRunContext(linearClient, teamKey) {
     logRoot: logRoot(),
     spawnWorkerFn: spawnWorker,
     findPrForBranchFn: (branch, repo) => findPrForBranch(branch, repo, ghRunner),
+    applyStagedWorkflowEditFn: (worktreePath, authorizedPath) => applyStagedWorkflowEdit(worktreePath, authorizedPath),
   };
 }
 

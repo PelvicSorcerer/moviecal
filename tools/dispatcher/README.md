@@ -43,10 +43,13 @@ tools/dispatcher/
     brief.mjs                worker brief generation (pure)
     worker-spawn.mjs         spawns a worker process, captures logs to a manifest
     pr-check.mjs             checks whether a worker opened a PR for its branch
+    pr-reconcile.mjs         reconciles "review"-status worktrees against real PR state (merged/closed)
+    workflow-edit-apply.mjs  applies a staged .github/workflows/ proposal (MOV-121; see local-execution.md)
     run-loop.mjs             ties all of the above together for `dispatcher run`
   test/                      Vitest unit tests for everything above
   launchd/
     com.moviecal.dispatcher.plist   launchd job template
+  pending-workflow-edits/    staging area for authorized .github/workflows/ proposals (MOV-121)
 ```
 
 ## Design notes
