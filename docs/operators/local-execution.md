@@ -152,5 +152,5 @@ Dispatcher and worker run logs are written to `~/Library/Logs/moviecal-dispatche
 - Dispatch is currently poll-based (default 30s interval, `dispatcher run [--interval ms]`). A Linear Agent App (webhook-driven) is a planned follow-up, not yet implemented.
 - `dispatcher run` is implemented and unit-tested against every outcome (preflight block, routing block, worker success, worker failure, worker exits 0 with no PR, spawn error), but has not yet been exercised against the live Linear workspace — that first real run is migration Stage 10 (end-to-end verification), tracked in `docs/planning/decision-log.md`.
 - Docker is not installed on this Mac, so `npm run lane:real-stack` / `lane:full-stack` stay CI-only locally; use the `supabase-verify` GitHub Actions workflow as the authoritative DB gate.
-- MOV-115 (two-way GitHub sync) is unresolved — see `docs/governance/linear-information-architecture.md`.
+- MOV-115 (two-way GitHub sync) is **done** — see `docs/governance/linear-information-architecture.md` §GitHub Issues: migration and ongoing sync.
 - MOV-116 (an automated `lane-review` status check for independent PR scrutiny, plus wiring `security-policy.mjs`'s hard-deny list into real enforcement) is partially done — see §Security model above. `lane-review` exists but is not yet a required status check; the hard-deny-enforcement half is still unresolved.
