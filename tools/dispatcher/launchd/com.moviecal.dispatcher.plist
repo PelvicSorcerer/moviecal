@@ -3,11 +3,28 @@
 <!--
   launchd job definition for the moviecal dispatcher.
 
-  This is a TEMPLATE — replace __REPO_PATH__ and __NODE_PATH__ before
-  installing, and do not commit a filled-in copy anywhere with real paths
+  This is a TEMPLATE — replace __REPO_PATH__, __NODE_PATH__, and __HOME__
+  before installing (mkdir -p __HOME__/Library/Logs/moviecal-dispatcher
+  first, launchd will not create it), and do not commit a filled-in copy
+  anywhere with real paths
   that reveal machine-specific layout if that ever matters for this repo's
   threat model (it currently does not, since this is a personal project, but
   keep the placeholder convention so the template stays reusable).
+
+  __REPO_PATH__ should be a DEDICATED, non-interactive worktree (e.g.
+  ~/code/worktrees/moviecal/dispatcher-daemon), not the interactive main
+  checkout. REPO_ROOT (tools/dispatcher/src/config.mjs) self-resolves from
+  wherever dispatcher.mjs physically lives, so this needs no separate
+  config — just point __REPO_PATH__ at a worktree nobody uses by hand.
+  Otherwise the daemon's own `git fetch`/`git worktree add`/`git branch -D`
+  calls share a working directory with interactive local git use. The
+  dispatcher has zero external npm dependencies (everything under
+  tools/dispatcher/ imports only node:* builtins), so that worktree needs
+  no `npm ci` — a bare `git worktree add` is enough. It is not auto-updated:
+  `git pull` it manually whenever tools/dispatcher/ changes on master, then
+  restart the service, or it runs stale orchestration code indefinitely
+  without erroring. See docs/operators/local-execution.md §Persistent
+  service (launchd) for the full writeup.
 
   Install:
     cp com.moviecal.dispatcher.plist ~/Library/LaunchAgents/
@@ -17,6 +34,9 @@
   Uninstall:
     launchctl unload ~/Library/LaunchAgents/com.moviecal.dispatcher.plist
     rm ~/Library/LaunchAgents/com.moviecal.dispatcher.plist
+
+  Status:  launchctl list | grep com.moviecal.dispatcher
+  Restart: launchctl kickstart -k gui/$(id -u)/com.moviecal.dispatcher
 
   Logs: see docs/operators/local-execution.md "Run-log locations" for
   per-worktree worker logs. This plist's StandardOutPath/StandardErrorPath
@@ -47,10 +67,10 @@
   </dict>
 
   <key>StandardOutPath</key>
-  <string>/tmp/moviecal-dispatcher.stdout.log</string>
+  <string>__HOME__/Library/Logs/moviecal-dispatcher/dispatcher.stdout.log</string>
 
   <key>StandardErrorPath</key>
-  <string>/tmp/moviecal-dispatcher.stderr.log</string>
+  <string>__HOME__/Library/Logs/moviecal-dispatcher/dispatcher.stderr.log</string>
 
   <key>ThrottleInterval</key>
   <integer>30</integer>
