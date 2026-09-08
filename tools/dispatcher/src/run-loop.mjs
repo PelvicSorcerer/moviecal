@@ -8,7 +8,7 @@
 // with fakes. See bin/dispatcher.mjs for how real dependencies are wired up.
 
 import path from "node:path";
-import { evaluatePreflight, worktreeName, branchName } from "./preflight.mjs";
+import { evaluatePreflight, worktreeName, branchName, resolveWorkflowEditAuthorization } from "./preflight.mjs";
 import { resolveRouting, workerInvocation } from "./worker-routing.mjs";
 import { generateBrief } from "./brief.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
@@ -29,6 +29,7 @@ import { tailLogs } from "./worker-spawn.mjs";
  * @param {string} ctx.logRoot
  * @param {(args: object) => Promise<{exitCode: number, logDir: string}>} ctx.spawnWorkerFn
  * @param {(branch: string, repo: string) => {number:number,url:string,isDraft:boolean}|null} ctx.findPrForBranchFn
+ * @param {(worktreePath: string, authorizedPath: string) => {applied: boolean, path?: string, reason?: string}} [ctx.applyStagedWorkflowEditFn] - MOV-121; defaults to a no-op if not provided (tests that don't care about this can omit it)
  * @returns {Promise<Array<{issue: string, outcome: string, [key: string]: unknown}>>}
  */
 export async function runOnce(issues, ctx) {
@@ -54,6 +55,7 @@ async function processIssue(issue, ctx) {
     logRoot,
     spawnWorkerFn,
     findPrForBranchFn,
+    applyStagedWorkflowEditFn = () => ({ applied: false, reason: "not configured" }),
   } = ctx;
 
   const name = worktreeName(issue.identifier, issue.title);
@@ -144,6 +146,19 @@ async function processIssue(issue, ctx) {
       ].join("\n"),
     );
     return { issue: issue.identifier, outcome: "worker-failed", exitCode: spawnResult.exitCode };
+  }
+
+  const workflowAuth = resolveWorkflowEditAuthorization(issue);
+  if (workflowAuth.authorized) {
+    const applyResult = applyStagedWorkflowEditFn(entry.path, workflowAuth.path);
+    if (applyResult.applied) {
+      await linearClient.addComment(
+        issue.id,
+        `**Applied staged workflow-edit proposal:** \`${workflowAuth.path}\`. Written by the worker to \`tools/dispatcher/pending-workflow-edits/\`; applied and committed by the dispatcher itself, not the worker — see docs/operators/local-execution.md §Security model (MOV-121). The PR (once opened) will still visibly contain this diff and \`lane-review\` will flag it as requiring explicit sign-off before merge.`,
+      );
+    }
+    // A staged file simply not existing is normal (the worker may have decided
+    // not to touch the workflow after all) — not an error, no comment needed.
   }
 
   const pr = findPrForBranchFn(branch, ghRepo);

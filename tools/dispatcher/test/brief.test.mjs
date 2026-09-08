@@ -60,4 +60,23 @@ describe("generateBrief", () => {
     const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
     expect(brief).toMatch(/stop and report/i);
   });
+
+  it("omits workflow-edit-authorization instructions for an ordinary issue", () => {
+    const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
+    expect(brief).not.toContain("Workflow-edit authorization");
+    expect(brief).not.toContain("pending-workflow-edits");
+  });
+
+  it("includes staging instructions naming the exact authorized path when authorized", () => {
+    const authorizedIssue = {
+      ...issue,
+      labels: ["ci:workflow-edit-authorized"],
+      description: "Workflow-edit: .github/workflows/ios-verify.yml",
+    };
+    const brief = generateBrief(authorizedIssue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
+    expect(brief).toContain("Workflow-edit authorization");
+    expect(brief).toContain(".github/workflows/ios-verify.yml");
+    expect(brief).toContain("tools/dispatcher/pending-workflow-edits/ios-verify.yml");
+    expect(brief).toMatch(/hard-denied for every issue, with no exceptions/);
+  });
 });

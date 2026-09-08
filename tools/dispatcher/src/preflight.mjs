@@ -7,6 +7,65 @@
 // caller and passed in as `context`, so this module is fully unit-testable
 // without touching the network or the filesystem.
 
+const WORKFLOW_EDIT_LABEL = "ci:workflow-edit-authorized";
+const WORKFLOW_EDIT_MARKER_RE = /^Workflow-edit:\s*(\S+)\s*$/gim;
+const WORKFLOW_EDIT_PATH_RE = /^\.github\/workflows\/[A-Za-z0-9_.-]+\.ya?ml$/;
+
+/**
+ * Resolves whether an issue is authorized to propose a change to exactly one
+ * named .github/workflows/ file via the staged-apply mechanism (MOV-121; see
+ * docs/operators/local-execution.md §Security model). The worker's own
+ * Edit(.github/workflows/**) hard-deny is never lifted -- this only decides
+ * whether run-loop.mjs's post-worker apply step is allowed to act, and on
+ * exactly which file.
+ *
+ * Fails closed: any mismatch between the label and a single valid marker is
+ * NOT authorized and carries a reason, meant to surface as a preflight
+ * failure rather than being silently ignored. `reason: null` means the issue
+ * simply isn't attempting this at all -- the normal case for ~every issue.
+ *
+ * @param {{ labels?: string[], description?: string }} issue
+ * @returns {{ authorized: true, path: string } | { authorized: false, reason: string | null }}
+ */
+export function resolveWorkflowEditAuthorization(issue) {
+  const labels = issue.labels || [];
+  const description = issue.description || "";
+  const hasLabel = labels.includes(WORKFLOW_EDIT_LABEL);
+  const matches = [...description.matchAll(WORKFLOW_EDIT_MARKER_RE)];
+
+  if (!hasLabel && matches.length === 0) {
+    return { authorized: false, reason: null };
+  }
+  if (!hasLabel) {
+    return {
+      authorized: false,
+      reason: `description declares a Workflow-edit marker but the issue isn't labeled ${WORKFLOW_EDIT_LABEL}`,
+    };
+  }
+  if (matches.length === 0) {
+    return {
+      authorized: false,
+      reason: `labeled ${WORKFLOW_EDIT_LABEL} but description has no "Workflow-edit: <path>" marker`,
+    };
+  }
+  if (matches.length > 1) {
+    return {
+      authorized: false,
+      reason: `description declares ${matches.length} Workflow-edit markers -- exactly one is required`,
+    };
+  }
+
+  const path = matches[0][1];
+  if (!WORKFLOW_EDIT_PATH_RE.test(path)) {
+    return {
+      authorized: false,
+      reason: `Workflow-edit marker path "${path}" must be a single .github/workflows/*.yml or *.yaml file`,
+    };
+  }
+
+  return { authorized: true, path };
+}
+
 /**
  * @param {object} issue - Linear issue: { id, labels: string[], blockedByIds: string[], project: string|null }
  * @param {object} context
@@ -24,6 +83,11 @@ export function evaluatePreflight(issue, context) {
 
   if (labels.includes("human-only")) {
     return { ok: false, reason: "labeled human-only: never a dispatch candidate" };
+  }
+
+  const workflowAuth = resolveWorkflowEditAuthorization(issue);
+  if (!workflowAuth.authorized && workflowAuth.reason) {
+    return { ok: false, reason: `workflow-edit authorization misconfigured: ${workflowAuth.reason}` };
   }
 
   const blockedByIds = issue.blockedByIds || [];
