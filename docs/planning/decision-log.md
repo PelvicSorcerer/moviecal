@@ -30,7 +30,13 @@ Staged migration from a GitHub-Project (`moviecal Delivery`) + multi-cloud-agent
 
 ## Migration complete
 
-All 12 stages of the Linear/GitHub/local-Mac dev-governance migration are done. Remaining open work is tracked as ordinary Linear issues, not migration stages: `MOV-115` (two-way GitHub sync), `MOV-116` (separate worker credential + automated second reviewer for real PR review), `MOV-118` (dispatcher should detect a merged PR and auto-clean its worktree). None of these block using the system for real work — they're refinements, not missing prerequisites.
+All 12 stages of the Linear/GitHub/local-Mac dev-governance migration are done. Remaining open work is tracked as ordinary Linear issues, not migration stages, and none of it blocks using the system for real work — these are refinements, not missing prerequisites:
+
+- `MOV-115` — two-way GitHub sync (Linear → GitHub is currently one-way only via the import wizard's built-in sync).
+- `MOV-116` — **done.** Rescoped 2026-09-08 from "separate worker identity + formal PR approval" to `lane-review`, an automated independent review pass running as a required-CI-style status check (see [PR #272](https://github.com/PelvicSorcerer/moviecal/pull/272)); not yet added to `master-protection`'s required checks (tracked as `MOV-119`).
+- `MOV-118` — **done.** The dispatcher now reconciles worktrees in `"review"` against their real PR state every poll cycle (`pr-reconcile.mjs`): merged → `"merged"`, closed-without-merging → `"abandoned"`, both without manual intervention.
+- `MOV-119` — monitor `lane-review`'s false-positive rate, then add it to `master-protection`'s required checks. Blocks `MOV-120`.
+- `MOV-120` — install the dispatcher as a persistent `launchd` service. Deliberately held pending `MOV-119` and more run-type confidence beyond the two supervised Stage 10 tests.
 
 Two originally-planned items outside the 12-stage table are now also closed: the Codex CLI is installed on the local Mac (repo owner ran the global npm install; confirmed via `codex --version`, `codex-cli 0.153.4`), and the 7 Linear custom views listed in Stage 3 above are built. The one remaining originally-planned item, running the dispatcher as a persistent `launchd` background service (continuous unattended polling rather than manual `--once` invocation), is **deliberately held** — only two supervised end-to-end runs (Stage 10) have exercised the loop so far, and the repo owner chose to hold off on unattended operation until more confidence is built (an app-code change, a worker-failure case) rather than install it on the strength of the original plan alone.
 

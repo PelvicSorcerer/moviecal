@@ -38,6 +38,7 @@ import { WorktreeManager } from "../src/worktree-manager.mjs";
 import { runOnce } from "../src/run-loop.mjs";
 import { spawnWorker } from "../src/worker-spawn.mjs";
 import { findPrForBranch, defaultRunner as ghRunner } from "../src/pr-check.mjs";
+import { checkPrState, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
 
 const IOS_RUNNER_NAME = "moviecal-ios-runner";
 const GITHUB_REPO = "PelvicSorcerer/moviecal";
@@ -258,7 +259,32 @@ async function buildRunContext(linearClient, teamKey) {
   };
 }
 
+/**
+ * Sweep worktrees sitting in "review" against their real PR state, so a
+ * merged PR gets marked "merged" (dispatcher gc cleans it up) and a
+ * closed-without-merging PR gets marked "abandoned" (7-day retention path),
+ * with nobody having to notice and clean up by hand. Runs every poll cycle,
+ * independent of whether there are new Ready-for-Agent issues.
+ */
+function reconcileWorktrees() {
+  const worktreeManager = new WorktreeManager({
+    repoRoot: REPO_ROOT,
+    worktreeRoot: worktreeRoot(),
+    statePath: worktreesStatePath(),
+  });
+  const changes = reconcileReviewWorktrees(worktreeManager, {
+    ghRepo: GITHUB_REPO,
+    checkPrStateFn: (prNumber, repo) => checkPrState(prNumber, repo, ghRunner),
+  });
+  for (const c of changes) {
+    console.log(`${c.id}: PR #${c.prNumber} is ${c.to === "merged" ? "merged" : "closed"} — worktree marked "${c.to}"`);
+  }
+  return changes;
+}
+
 async function cmdRunOnce() {
+  reconcileWorktrees();
+
   const linearConfig = loadLinearConfig();
   if (!linearConfig.apiKey) {
     console.error(`No Linear API key configured (${linearEnvPath()}). Run \`dispatcher doctor\` first.`);

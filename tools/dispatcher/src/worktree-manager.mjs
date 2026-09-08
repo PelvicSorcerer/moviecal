@@ -126,12 +126,18 @@ export class WorktreeManager {
     return entry;
   }
 
-  /** Mark a worktree entry merged/failed/abandoned without deleting it yet. */
-  markStatus(id, status) {
+  /**
+   * Mark a worktree entry merged/failed/abandoned/review without deleting it
+   * yet. `extra` fields (e.g. `prNumber`/`prUrl` when transitioning to
+   * "review") are merged into the entry so later reconciliation can look
+   * the PR back up — see pr-reconcile.mjs.
+   */
+  markStatus(id, status, extra = {}) {
     const state = this.loadState();
     if (!state[id]) throw new Error(`no worktree record for ${id}`);
     state[id].status = status;
     state[id].endedAt = new Date().toISOString();
+    Object.assign(state[id], extra);
     this.saveState(state);
     return state[id];
   }

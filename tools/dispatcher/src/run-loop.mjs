@@ -157,7 +157,7 @@ async function processIssue(issue, ctx) {
     return { issue: issue.identifier, outcome: "no-pr" };
   }
 
-  worktreeManager.markStatus(issue.identifier, "review");
+  worktreeManager.markStatus(issue.identifier, "review", { prNumber: pr.number, prUrl: pr.url });
   await linearClient.moveToState(issue.id, stateIds.inReview);
   await linearClient.addComment(issue.id, `**Pull request opened:** ${pr.url}${pr.isDraft ? " (draft)" : ""}`);
   return { issue: issue.identifier, outcome: "in-review", pr: pr.url };
