@@ -46,6 +46,10 @@ export function logRoot() {
 export const DEFAULT_CONCURRENCY = 2;
 export const RUN_LOG_RETENTION_DAYS = 90;
 export const FAILED_WORKTREE_RETENTION_DAYS = 7;
+// MOV-138: a worker is one-shot with no resume, so a hang (MOV-106) must be
+// killed rather than freeze the poll loop forever. 45 minutes comfortably
+// exceeds a healthy `npm run verify` + implementation pass.
+export const DEFAULT_WORKER_TIMEOUT_MS = 2_700_000;
 
 /** Parse a simple KEY=VALUE dotenv-style file. Returns {} if the file is missing. */
 export function parseEnvFile(filePath) {

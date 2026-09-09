@@ -145,6 +145,38 @@ describe("spawnWorker", () => {
     ]);
   });
 
+  it("kills the worker's process group when the abort signal fires (MOV-138)", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
+    const signals = [];
+    const killImpl = (pid, signal) => signals.push({ pid, signal });
+    const controller = new AbortController();
+    let capturedChild;
+    const spawnImpl = () => {
+      capturedChild = fakeChildProcess({ exitCode: 0 });
+      capturedChild.pid = 4343;
+      return capturedChild;
+    };
+
+    const resultPromise = spawnWorker({
+      invocation: { command: "claude", args: ["-p"] },
+      cwd: "/tmp/some-worktree",
+      brief: "brief",
+      logDir: path.join(tmpDir, "run"),
+      spawnImpl,
+      killGraceMs: 5,
+      killImpl,
+      signal: controller.signal,
+    });
+
+    // Abort before the fake child's own close event (queued via queueMicrotask
+    // in fakeChildProcess) fires, simulating a still-hung worker being killed.
+    controller.abort();
+    await resultPromise;
+
+    expect(signals[0]).toEqual({ pid: 4343, signal: "SIGTERM" });
+    expect(signals.some((s) => s.signal === "SIGKILL")).toBe(true);
+  });
+
   it("does not attempt to signal a process group when the child never got a pid", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
     const killImpl = vi.fn();
