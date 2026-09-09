@@ -31,23 +31,29 @@ describe("LinearClient", () => {
     await expect(client.viewer()).rejects.toThrow(/not authorized/);
   });
 
-  it("normalizes issuesInState results, including blocking relations", async () => {
+  it("derives blockedByIds from inverseRelations, not relations (MOV-128)", async () => {
+    // Real MOV-125 -> MOV-126 -> MOV-127 shape: MOV-126 is blocked by MOV-125
+    // (shows up only in MOV-126's inverseRelations) and itself blocks MOV-127
+    // (shows up in MOV-126's own relations, i.e. a dependent, not a blocker).
     const fetchImpl = mockFetch({
       issues: {
         nodes: [
           {
-            id: "id-1",
-            identifier: "MOV-1",
+            id: "id-126",
+            identifier: "MOV-126",
             title: "Do the thing",
             description: "Full description text.",
-            url: "https://linear.app/moviecal/issue/MOV-1",
+            url: "https://linear.app/moviecal/issue/MOV-126",
             project: { name: "Calendar Feed" },
             labels: { nodes: [{ name: "area:calendar" }, { name: "worker:codex" }] },
             relations: {
               nodes: [
-                { type: "blocks", relatedIssue: { id: "id-0", state: { name: "Done" } } },
+                { type: "blocks", relatedIssue: { id: "id-127", state: { name: "Backlog" } } },
                 { type: "related", relatedIssue: { id: "id-9", state: { name: "Backlog" } } },
               ],
+            },
+            inverseRelations: {
+              nodes: [{ type: "blocks", issue: { id: "id-126" }, relatedIssue: { id: "id-125", state: { name: "In Review" } } }],
             },
           },
         ],
@@ -59,20 +65,34 @@ describe("LinearClient", () => {
 
     expect(issues).toEqual([
       {
-        id: "id-1",
-        identifier: "MOV-1",
+        id: "id-126",
+        identifier: "MOV-126",
         title: "Do the thing",
         description: "Full description text.",
-        url: "https://linear.app/moviecal/issue/MOV-1",
+        url: "https://linear.app/moviecal/issue/MOV-126",
         project: "Calendar Feed",
         labels: ["area:calendar", "worker:codex"],
-        blockedByIds: ["id-0"],
+        blockedByIds: ["id-125"],
+        inverseRelations: [
+          { type: "blocks", issue: { id: "id-126" }, relatedIssue: { id: "id-125", state: { name: "In Review" } } },
+        ],
         relations: [
-          { type: "blocks", relatedIssue: { id: "id-0", state: { name: "Done" } } },
+          { type: "blocks", relatedIssue: { id: "id-127", state: { name: "Backlog" } } },
           { type: "related", relatedIssue: { id: "id-9", state: { name: "Backlog" } } },
         ],
       },
     ]);
+  });
+
+  it("sends the inverseRelations selection alongside relations", async () => {
+    const fetchImpl = mockFetch({ issues: { nodes: [] } });
+    const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+    await client.issuesInState({ teamKey: "MOV", stateName: "Ready for Agent" });
+
+    const [, init] = fetchImpl.mock.calls[0];
+    const { query } = JSON.parse(init.body);
+    expect(query).toMatch(/inverseRelations\s*\{\s*nodes\s*\{/);
   });
 
   it("handles a null project without throwing", async () => {

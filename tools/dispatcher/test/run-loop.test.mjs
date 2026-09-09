@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { runOnce } from "../src/run-loop.mjs";
+import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 
 const STATE_IDS = {
   blocked: "state-blocked",
@@ -219,5 +220,49 @@ describe("runOnce", () => {
     const results = await runOnce([issueA, issueB], ctx);
 
     expect(results.map((r) => r.outcome)).toEqual(["in-review", "blocked"]);
+  });
+
+  describe("real dependency gating via buildIsIssueSatisfied (MOV-128)", () => {
+    // Mirrors LinearClient normalization: each issue's own blockedByIds/
+    // inverseRelations, as buildRunContext would receive them from a live
+    // issuesInState() batch.
+    function issueBlockedBy(blockerId, blockerStateName) {
+      return {
+        ...ISSUE,
+        blockedByIds: [blockerId],
+        inverseRelations: [{ type: "blocks", relatedIssue: { id: blockerId, state: { name: blockerStateName } } }],
+      };
+    }
+
+    it("blocks and does not dispatch when the blocker is still In Review", async () => {
+      const issue = issueBlockedBy("id-125", "In Review");
+      const ctx = baseCtx({ isIssueSatisfied: buildIsIssueSatisfied([issue]) });
+
+      const [result] = await runOnce([issue], ctx);
+
+      expect(result.outcome).toBe("blocked");
+      expect(result.reason).toMatch(/blocked by unresolved relation\(s\): id-125/);
+      expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+    });
+
+    it("blocks and does not dispatch when the blocker is still in Backlog", async () => {
+      const issue = issueBlockedBy("id-125", "Backlog");
+      const ctx = baseCtx({ isIssueSatisfied: buildIsIssueSatisfied([issue]) });
+
+      const [result] = await runOnce([issue], ctx);
+
+      expect(result.outcome).toBe("blocked");
+      expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+    });
+
+    it("proceeds once the blocker reaches Done", async () => {
+      const issue = issueBlockedBy("id-125", "Done");
+      const ctx = baseCtx({ isIssueSatisfied: buildIsIssueSatisfied([issue]) });
+
+      const [result] = await runOnce([issue], ctx);
+
+      expect(result.outcome).toBe("in-review");
+      expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+    });
   });
 });
