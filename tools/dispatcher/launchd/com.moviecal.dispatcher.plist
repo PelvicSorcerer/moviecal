@@ -57,6 +57,21 @@
   <key>WorkingDirectory</key>
   <string>__REPO_PATH__</string>
 
+  <!--
+    launchd gives jobs a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin) —
+    not the interactive shell's PATH. ProgramArguments above uses an
+    absolute path to node, so the daemon itself starts fine, but every
+    child process it and its workers spawn (gh, npm, codex under
+    /usr/local/bin, claude under ~/.local/bin) fails with ENOENT unless
+    PATH is set explicitly here. `git` happens to resolve from the
+    system dirs, so without this the failure surfaces first on `gh`.
+  -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
   <key>RunAtLoad</key>
   <true/>
 
