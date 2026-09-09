@@ -91,6 +91,39 @@ describe("WorktreeManager", () => {
     expect(() => brokenManager.mainWorktreePath()).toThrow(/could not determine main worktree path/);
   });
 
+  it("uncommittedChanges() returns an empty array for a clean worktree (MOV-137)", () => {
+    const cleanManager = new WorktreeManager({
+      repoRoot: tmpRoot,
+      worktreeRoot,
+      statePath,
+      runner: () => "",
+    });
+    expect(cleanManager.uncommittedChanges("/fake/worktrees/MOV-1")).toEqual([]);
+  });
+
+  it("uncommittedChanges() lists porcelain paths for a dirty worktree (MOV-137)", () => {
+    let capturedArgs;
+    const dirtyManager = new WorktreeManager({
+      repoRoot: tmpRoot,
+      worktreeRoot,
+      statePath,
+      runner: (command, args, opts) => {
+        capturedArgs = { command, args, opts };
+        return " M src/Auth.swift\n?? src/AuthTests.swift\n";
+      },
+    });
+
+    expect(dirtyManager.uncommittedChanges("/fake/worktrees/MOV-1")).toEqual([
+      "src/Auth.swift",
+      "src/AuthTests.swift",
+    ]);
+    expect(capturedArgs).toMatchObject({
+      command: "git",
+      args: ["status", "--porcelain"],
+      opts: { cwd: "/fake/worktrees/MOV-1" },
+    });
+  });
+
   it("does not fail worktree creation when pre-trusting fails (non-fatal, logged)", () => {
     const errorManager = new WorktreeManager({
       repoRoot: tmpRoot,

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -98,6 +98,95 @@ describe("spawnWorker", () => {
     });
 
     expect(result.exitCode).toBe(1);
+  });
+
+  it("spawns the worker detached so it becomes its own process-group leader", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
+    let capturedOpts;
+    const spawnImpl = (cmd, args, opts) => {
+      capturedOpts = opts;
+      return fakeChildProcess({ exitCode: 0 });
+    };
+
+    await spawnWorker({
+      invocation: { command: "claude", args: ["-p"] },
+      cwd: "/tmp/some-worktree",
+      brief: "brief",
+      logDir: path.join(tmpDir, "run"),
+      spawnImpl,
+    });
+
+    expect(capturedOpts.detached).toBe(true);
+  });
+
+  it("sends SIGTERM then SIGKILL to the worker's process group after it exits (MOV-137)", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
+    const signals = [];
+    const killImpl = (pid, signal) => signals.push({ pid, signal });
+    const spawnImpl = () => {
+      const child = fakeChildProcess({ exitCode: 0 });
+      child.pid = 4242;
+      return child;
+    };
+
+    await spawnWorker({
+      invocation: { command: "claude", args: ["-p"] },
+      cwd: "/tmp/some-worktree",
+      brief: "brief",
+      logDir: path.join(tmpDir, "run"),
+      spawnImpl,
+      killGraceMs: 5,
+      killImpl,
+    });
+
+    expect(signals).toEqual([
+      { pid: 4242, signal: "SIGTERM" },
+      { pid: 4242, signal: "SIGKILL" },
+    ]);
+  });
+
+  it("does not attempt to signal a process group when the child never got a pid", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
+    const killImpl = vi.fn();
+    const spawnImpl = () => fakeChildProcess({ exitCode: 0 }); // no .pid set, like the other fakes in this file
+
+    await spawnWorker({
+      invocation: { command: "claude", args: ["-p"] },
+      cwd: "/tmp/some-worktree",
+      brief: "brief",
+      logDir: path.join(tmpDir, "run"),
+      spawnImpl,
+      killGraceMs: 5,
+      killImpl,
+    });
+
+    expect(killImpl).not.toHaveBeenCalled();
+  });
+
+  it("reaps a real backgrounded child so it does not outlive the worker (MOV-137)", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
+    const pidFile = path.join(tmpDir, "child.pid");
+
+    // A fake worker that backgrounds a long sleep and exits immediately —
+    // exactly the failure mode from MOV-106 this issue exists to close off.
+    // The background job redirects its own stdio to /dev/null, same as any
+    // real daemonized process would, so it doesn't hold the parent's piped
+    // stdout/stderr open (an inherited pipe fd would stall Node's own
+    // ChildProcess "close" event independent of process-group reaping).
+    const result = await spawnWorker({
+      invocation: {
+        command: "sh",
+        args: ["-c", `sleep 30 >/dev/null 2>&1 & echo $! > '${pidFile}'; exit 0`],
+      },
+      cwd: tmpDir,
+      brief: "",
+      logDir: path.join(tmpDir, "run"),
+      killGraceMs: 100,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const childPid = Number(fs.readFileSync(pidFile, "utf8").trim());
+    expect(() => process.kill(childPid, 0)).toThrow();
   });
 
   it("rejects when the spawn itself errors (e.g. binary not found)", async () => {

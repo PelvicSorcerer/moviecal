@@ -30,6 +30,10 @@ export function generateBrief(issue, { branch, worktreePath, worker, model, upgr
   );
   lines.push("");
   lines.push(
+    "**Run verification synchronously.** You are a one-shot invocation — there is no resume, no later turn in which to check on something you backgrounded. Wait for `npm run verify` and any build/test command (including `xcodebuild`, `xcrun simctl`, long-running `npm` scripts) to finish, and act on its actual result, before you exit. Never background a long-running build or test and exit expecting it to keep running or to be resumed — anything still running when you exit is forcibly killed the moment you exit, and any uncommitted work is treated as abandoned.",
+  );
+  lines.push("");
+  lines.push(
     "If you hit a hard-deny action or a case that needs a human decision (see `docs/operators/local-execution.md` §Security model), stop and report the blocker instead of improvising around it — do not attempt to work around a refusal.",
   );
   lines.push("");

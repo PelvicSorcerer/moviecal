@@ -56,6 +56,12 @@ describe("generateBrief", () => {
     expect(brief).toContain("Linear: MOV-42");
   });
 
+  it("instructs the worker to run verification synchronously rather than background a build and exit (MOV-137)", () => {
+    const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
+    expect(brief).toMatch(/synchronously/i);
+    expect(brief).toMatch(/never background a long-running build or test/i);
+  });
+
   it("tells the worker to stop and report rather than work around a hard deny", () => {
     const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
     expect(brief).toMatch(/stop and report/i);

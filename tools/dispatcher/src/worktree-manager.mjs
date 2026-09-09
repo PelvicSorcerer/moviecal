@@ -68,6 +68,20 @@ export class WorktreeManager {
   }
 
   /**
+   * Paths with uncommitted changes (staged, unstaged, or untracked) in a
+   * worktree, via `git status --porcelain`. Empty array = clean. Used by
+   * run-loop.mjs (MOV-137) to tell a worker that abandoned its work mid-task
+   * apart from one that cleanly exited with nothing left to commit.
+   */
+  uncommittedChanges(worktreePath) {
+    const out = this.runner("git", ["status", "--porcelain"], { cwd: worktreePath });
+    return out
+      .split("\n")
+      .map((line) => line.slice(3).trim())
+      .filter(Boolean);
+  }
+
+  /**
    * Create a new worktree + branch from origin/master and record it.
    * Returns the state entry.
    */

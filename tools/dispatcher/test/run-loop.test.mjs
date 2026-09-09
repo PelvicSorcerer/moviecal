@@ -177,8 +177,11 @@ describe("runOnce", () => {
     expect(ctx.findPrForBranchFn).not.toHaveBeenCalled();
   });
 
-  it("marks failed and reports needs-human-decision when the worker exits 0 but opens no PR", async () => {
-    const ctx = baseCtx({ findPrForBranchFn: vi.fn(() => null) });
+  it("marks failed and reports needs-human-decision when the worker exits 0, opens no PR, and the worktree is clean", async () => {
+    const ctx = baseCtx({
+      findPrForBranchFn: vi.fn(() => null),
+      uncommittedChangesFn: vi.fn(() => []),
+    });
 
     const [result] = await runOnce([ISSUE], ctx);
 
@@ -186,6 +189,47 @@ describe("runOnce", () => {
     expect(ctx.worktreeManager.statusCalls).toEqual([{ id: "MOV-1", status: "failed" }]);
     const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
     expect(lastComment.body).toMatch(/no PR was found/);
+  });
+
+  it("defaults to no-pr when uncommittedChangesFn is not provided (existing callers unaffected)", async () => {
+    const ctx = baseCtx({ findPrForBranchFn: vi.fn(() => null) });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result.outcome).toBe("no-pr");
+  });
+
+  it("reports abandoned-dirty (MOV-137) when the worker exits 0 with uncommitted changes and no PR", async () => {
+    const uncommittedChangesFn = vi.fn(() => ["src/Auth.swift", "src/AuthTests.swift"]);
+    const ctx = baseCtx({
+      findPrForBranchFn: vi.fn(() => null),
+      uncommittedChangesFn,
+    });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result.outcome).toBe("abandoned-dirty");
+    expect(result.uncommittedPaths).toEqual(["src/Auth.swift", "src/AuthTests.swift"]);
+    expect(ctx.worktreeManager.statusCalls).toEqual([{ id: "MOV-1", status: "failed" }]);
+    expect(uncommittedChangesFn).toHaveBeenCalledWith("/fake/worktrees/MOV-1-fix-the-thing");
+
+    const lastMove = ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1);
+    expect(lastMove.stateId).toBe("state-needs-human");
+
+    const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
+    expect(lastComment.body).toMatch(/uncommitted changes and no PR/);
+    expect(lastComment.body).toContain("src/Auth.swift");
+    expect(lastComment.body).toContain("src/AuthTests.swift");
+  });
+
+  it("does not report abandoned-dirty when a PR was opened, even if uncommittedChangesFn would report dirty (unreachable in practice)", async () => {
+    const uncommittedChangesFn = vi.fn(() => ["src/Auth.swift"]);
+    const ctx = baseCtx({ uncommittedChangesFn });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result.outcome).toBe("in-review");
+    expect(uncommittedChangesFn).not.toHaveBeenCalled();
   });
 
   it("marks failed and reports needs-human-decision when spawning the worker itself throws", async () => {

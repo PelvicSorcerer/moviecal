@@ -29,6 +29,7 @@ import { tailLogs } from "./worker-spawn.mjs";
  * @param {string} ctx.logRoot
  * @param {(args: object) => Promise<{exitCode: number, logDir: string}>} ctx.spawnWorkerFn
  * @param {(branch: string, repo: string) => {number:number,url:string,isDraft:boolean}|null} ctx.findPrForBranchFn
+ * @param {(worktreePath: string) => string[]} [ctx.uncommittedChangesFn] - MOV-137; defaults to "always clean" if not provided (tests that don't care about this can omit it)
  * @param {(worktreePath: string, authorizedPath: string) => {applied: boolean, path?: string, reason?: string}} [ctx.applyStagedWorkflowEditFn] - MOV-121; defaults to a no-op if not provided (tests that don't care about this can omit it)
  * @returns {Promise<Array<{issue: string, outcome: string, [key: string]: unknown}>>}
  */
@@ -55,6 +56,7 @@ async function processIssue(issue, ctx) {
     logRoot,
     spawnWorkerFn,
     findPrForBranchFn,
+    uncommittedChangesFn = () => [],
     applyStagedWorkflowEditFn = () => ({ applied: false, reason: "not configured" }),
   } = ctx;
 
@@ -165,6 +167,30 @@ async function processIssue(issue, ctx) {
   if (!pr) {
     worktreeManager.markStatus(issue.identifier, "failed");
     await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
+
+    const uncommittedPaths = uncommittedChangesFn(entry.path);
+    if (uncommittedPaths.length > 0) {
+      await linearClient.addComment(
+        issue.id,
+        [
+          `**Worker exited 0 with uncommitted changes and no PR for branch \`${branch}\`.** The worktree was left dirty instead of committed and pushed — likely abandoned mid-task (e.g. backgrounded a build/test and exited instead of waiting on it).`,
+          "",
+          "Uncommitted paths:",
+          "```",
+          uncommittedPaths.join("\n"),
+          "```",
+          "",
+          "Last ~30 log lines:",
+          "```",
+          tailLogs(logDir, 30),
+          "```",
+          "",
+          `Full run log: \`${logDir}\``,
+        ].join("\n"),
+      );
+      return { issue: issue.identifier, outcome: "abandoned-dirty", uncommittedPaths };
+    }
+
     await linearClient.addComment(
       issue.id,
       `**Worker exited 0 but no PR was found for branch \`${branch}\`.** The worker is responsible for opening its own PR (see docs/operators/local-execution.md). Run log: \`${logDir}\``,
