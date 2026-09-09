@@ -108,8 +108,8 @@ export class LinearClient {
             } }
             inverseRelations { nodes {
               type
-              issue { id }
-              relatedIssue { id state { name } }
+              issue { id state { name } }
+              relatedIssue { id }
             } }
           }
         }
@@ -220,12 +220,13 @@ function normalizeIssue(node) {
     labels: node.labels.nodes.map((l) => l.name),
     // A "blocks" entry under this issue's own `relations` means THIS issue
     // blocks the related one (a dependent) -- the inverse of what "blocked
-    // by" means. Real blockers show up under `inverseRelations` instead: a
-    // "blocks" entry there means the related issue blocks THIS one. See
+    // by" means. Real blockers show up under `inverseRelations`: for a
+    // "blocks" entry there, `issue` is the blocker and `relatedIssue` is
+    // THIS issue. Read `issue`, not `relatedIssue` (which is just self). See
     // docs/governance/linear-information-architecture.md §Relations (MOV-128).
     blockedByIds: inverseRelations
-      .filter((r) => r.type === "blocks" && r.relatedIssue)
-      .map((r) => r.relatedIssue.id),
+      .filter((r) => r.type === "blocks" && r.issue)
+      .map((r) => r.issue.id),
     // exposed for isIssueSatisfied() callers that want the blocking issue's state
     inverseRelations,
     // dependents view: issues this one blocks
