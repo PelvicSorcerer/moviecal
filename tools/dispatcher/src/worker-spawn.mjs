@@ -88,8 +88,23 @@ export function spawnWorker({
     child.stdout?.pipe(stdoutStream);
     child.stderr?.pipe(stderrStream);
 
-    child.stdin?.write(brief);
-    child.stdin?.end();
+    // A worker that dies immediately (crash on startup, killed before it ever
+    // reads stdin) closes its stdin pipe, so writing the brief races the exit
+    // and can raise an async EPIPE. Without an 'error' listener that becomes an
+    // unhandled exception. The brief is only useful to a live worker, so a
+    // broken pipe here is benign — swallow EPIPE, and re-surface anything else.
+    if (child.stdin) {
+      child.stdin.on("error", (err) => {
+        if (err && err.code === "EPIPE") return;
+        throw err;
+      });
+      try {
+        if (child.stdin.writable) child.stdin.write(brief);
+        child.stdin.end();
+      } catch (err) {
+        if (!err || err.code !== "EPIPE") throw err;
+      }
+    }
 
     // Both the child process closing AND both log files finishing their
     // writes must happen before we resolve — otherwise a caller that acts on
