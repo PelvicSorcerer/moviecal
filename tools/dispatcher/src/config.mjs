@@ -23,6 +23,10 @@ export function linearEnvPath() {
   return path.join(configDir(), "linear.env");
 }
 
+export function linearAppEnvPath() {
+  return path.join(configDir(), "linear-app.env");
+}
+
 export function envLocalPath() {
   return path.join(configDir(), "env.local");
 }
@@ -83,5 +87,22 @@ export function loadLinearConfig() {
   return {
     apiKey: env.LINEAR_API_KEY || process.env.LINEAR_API_KEY || null,
     teamKey: env.LINEAR_TEAM_KEY || process.env.LINEAR_TEAM_KEY || "MOV",
+  };
+}
+
+/**
+ * The app-actor OAuth credential (MOV-122). Optional during the transition:
+ * when `clientId`/`clientSecret` are absent the dispatcher keeps using the
+ * personal API key from `loadLinearConfig()`. `scopes` is left null here so
+ * the token minter (`getAppToken`) applies its own default.
+ */
+export function loadLinearAppConfig(envPath = linearAppEnvPath()) {
+  const env = parseEnvFile(envPath);
+  return {
+    clientId: env.LINEAR_APP_CLIENT_ID || process.env.LINEAR_APP_CLIENT_ID || null,
+    clientSecret:
+      env.LINEAR_APP_CLIENT_SECRET || process.env.LINEAR_APP_CLIENT_SECRET || null,
+    actorId: env.LINEAR_APP_ACTOR_ID || process.env.LINEAR_APP_ACTOR_ID || null,
+    scopes: env.LINEAR_APP_SCOPES || process.env.LINEAR_APP_SCOPES || null,
   };
 }
