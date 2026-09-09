@@ -84,6 +84,8 @@ Replace GitHub `Target PR Size` (XS/S/M/L) with Linear's native Estimate field (
 
 Replace the free-text `Dependencies` GitHub field with native Linear `blocked by` / `blocks` relations. Linear enforces these referentially — there is no equivalent of the old dependency-syntax validator (`scripts/lib/project-queue-common.sh`) because malformed or dangling references are not representable in the first place.
 
+**Relation direction — do not create these by hand.** Linear's `issueRelationCreate` mutation reads `input.issueId` as the *source* of the named relation and `input.relatedIssueId` as its *target*, so `type: "blocks"` means "`issueId` **blocks** `relatedIssueId`". Passing the pair the intuitive-but-wrong way (earlier issue as `relatedIssueId`) builds the whole chain backwards — the last issue ends up unblocked and the first shows as blocked by its successor. This has happened more than once. Use `LinearClient.addBlocksRelation({ blockerId, blockedId })` or `LinearClient.linkBlockingChain([...orderedIds])` (`tools/dispatcher/src/linear-client.mjs`), which take role-named arguments and are unit-tested against the field mapping; if you must call the raw GraphQL, verify the direction with a readback query before moving on.
+
 ## Custom views
 
 The supervision dashboard for a human overseeing autonomous work. **Build these by hand in the Linear UI** (Views → New view), not via the API: the saved-view `filterData` JSON shape isn't part of the documented public schema, and getting it wrong risks a saved view that looks legitimate but silently returns nothing — a few minutes of manual setup is cheaper than that risk. Each takes under a minute using Linear's own filter builder:
