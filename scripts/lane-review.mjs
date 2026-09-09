@@ -20,6 +20,17 @@
 
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+// A sensitive-path finding is a `block` by default. It can be downgraded to a
+// `warn` (still printed, still in the summary comment — fully auditable) only
+// when BOTH of these are present, the same fail-closed shape as MOV-121's
+// workflow-edit authorization: the PR carries this label AND its body has a
+// `lane-review-ack: <reason>` line. Secret-detection and diff-size blocks are
+// never downgradeable this way. See docs/operators/local-execution.md §Security
+// model (MOV-134).
+const SENSITIVE_PATH_ACK_LABEL = "sensitive-path-ack";
+const SENSITIVE_PATH_ACK_MARKER_RE = /^lane-review-ack:[ \t]*(\S.*?)\s*$/im;
 
 const SENSITIVE_PATH_PATTERNS = [
   /^\.github\/workflows\//,
@@ -65,15 +76,52 @@ function getDiff(base) {
   return sh(`git diff ${base}...HEAD`);
 }
 
-function runHeuristics(files, diffText) {
+/**
+ * Decide whether a sensitive-path change has been explicitly acknowledged.
+ * Returns one of:
+ *   { acknowledged: true, reason }        - label + marker both present
+ *   { acknowledged: false, problem }      - one present without the other
+ *   { acknowledged: false, problem: null} - neither present (the normal case)
+ */
+export function resolveSensitivePathAck({ prBody = "", labels = [] } = {}) {
+  const hasLabel = labels.includes(SENSITIVE_PATH_ACK_LABEL);
+  const markerMatch = SENSITIVE_PATH_ACK_MARKER_RE.exec(prBody || "");
+
+  if (!hasLabel && !markerMatch) return { acknowledged: false, problem: null };
+  if (hasLabel && !markerMatch) {
+    return {
+      acknowledged: false,
+      problem: `labeled "${SENSITIVE_PATH_ACK_LABEL}" but the PR body has no "lane-review-ack: <reason>" line`,
+    };
+  }
+  if (!hasLabel && markerMatch) {
+    return {
+      acknowledged: false,
+      problem: `PR body has a "lane-review-ack:" line but the PR is not labeled "${SENSITIVE_PATH_ACK_LABEL}"`,
+    };
+  }
+  return { acknowledged: true, reason: markerMatch[1].trim() };
+}
+
+export function runHeuristics(files, diffText, ack = { acknowledged: false, problem: null }) {
   const findings = [];
 
   const sensitiveHits = files.filter((f) => SENSITIVE_PATH_PATTERNS.some((re) => re.test(f)));
   if (sensitiveHits.length > 0) {
-    findings.push({
-      severity: "block",
-      summary: `Touches sensitive path(s) requiring explicit human sign-off: ${sensitiveHits.join(", ")}`,
-    });
+    if (ack.acknowledged) {
+      findings.push({
+        severity: "warn",
+        summary: `Touches sensitive path(s): ${sensitiveHits.join(", ")} — acknowledged (${SENSITIVE_PATH_ACK_LABEL} + lane-review-ack: "${ack.reason}")`,
+      });
+    } else {
+      const how = ack.problem
+        ? ack.problem
+        : `to acknowledge, add the "${SENSITIVE_PATH_ACK_LABEL}" label AND a "lane-review-ack: <reason>" line to the PR body`;
+      findings.push({
+        severity: "block",
+        summary: `Touches sensitive path(s) requiring explicit human sign-off: ${sensitiveHits.join(", ")} — ${how}`,
+      });
+    }
   }
 
   for (const [re, label] of SECRET_PATTERNS) {
@@ -228,12 +276,25 @@ async function postSummaryComment(findings) {
   }
 }
 
+/** PR labels from the Actions event payload (same source as postSummaryComment). */
+function getPrLabels() {
+  const eventPath = process.env.GITHUB_EVENT_PATH;
+  if (!eventPath) return [];
+  try {
+    const event = JSON.parse(readFileSync(eventPath, "utf8"));
+    return (event?.pull_request?.labels ?? []).map((l) => l.name).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 async function main() {
   const base = resolveBaseRef();
   const files = getChangedFiles(base);
   const diffText = getDiff(base);
 
-  const heuristicFindings = runHeuristics(files, diffText);
+  const ack = resolveSensitivePathAck({ prBody: process.env.PR_BODY, labels: getPrLabels() });
+  const heuristicFindings = runHeuristics(files, diffText, ack);
   const aiResult = await runAiReview(diffText, process.env.PR_TITLE, process.env.PR_BODY);
 
   const allFindings = [...heuristicFindings, ...aiResult.findings];
@@ -253,7 +314,12 @@ async function main() {
   console.log("lane-review: PASS");
 }
 
-main().catch((err) => {
-  console.error("lane-review: unexpected error:", err);
-  process.exit(1);
-});
+const invokedDirectly =
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+  main().catch((err) => {
+    console.error("lane-review: unexpected error:", err);
+    process.exit(1);
+  });
+}
