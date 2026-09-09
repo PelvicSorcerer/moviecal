@@ -22,16 +22,19 @@ import {
   configDir,
   envLocalPath,
   linearEnvPath,
+  linearAppEnvPath,
   worktreeRoot,
   logRoot,
   worktreesStatePath,
   loadLinearConfig,
+  loadLinearAppConfig,
   checkSecretFileMode,
   DEFAULT_CONCURRENCY,
   RUN_LOG_RETENTION_DAYS,
   REPO_ROOT,
 } from "../src/config.mjs";
 import { LinearClient } from "../src/linear-client.mjs";
+import { getAppToken } from "../src/linear-app-auth.mjs";
 import { evaluatePreflight, worktreeName, branchName } from "../src/preflight.mjs";
 import { resolveRouting } from "../src/worker-routing.mjs";
 import { WorktreeManager } from "../src/worktree-manager.mjs";
@@ -84,6 +87,37 @@ async function cmdDoctor() {
   // env.local present and mode 600
   const envCheck = checkSecretFileMode(envLocalPath());
   checks.push({ name: ".env.local present + mode 600", ok: envCheck.ok, detail: envCheck.reason || envLocalPath() });
+
+  // Linear app-actor credential (MOV-122) — optional during the transition
+  const appConfig = loadLinearAppConfig();
+  if (!appConfig.clientId && !appConfig.clientSecret) {
+    checks.push({
+      name: "Linear app-actor credential",
+      ok: true,
+      detail: `not configured (${linearAppEnvPath()}) — dispatcher uses the personal key; see MOV-122`,
+    });
+  } else {
+    const appModeCheck = checkSecretFileMode(linearAppEnvPath());
+    checks.push({
+      name: "linear-app.env present + mode 600",
+      ok: appModeCheck.ok,
+      detail: appModeCheck.reason || linearAppEnvPath(),
+    });
+    const tokenResult = await tryRunAsync(() =>
+      getAppToken({
+        clientId: appConfig.clientId,
+        clientSecret: appConfig.clientSecret,
+        scopes: appConfig.scopes || undefined,
+      }),
+    );
+    checks.push({
+      name: "Linear app-actor token mint",
+      ok: tokenResult.ok,
+      detail: tokenResult.ok
+        ? `ok, expires ${tokenResult.value.expiresAt.toISOString().slice(0, 10)}`
+        : tokenResult.error,
+    });
+  }
 
   // claude / codex on PATH
   for (const bin of ["claude", "codex"]) {

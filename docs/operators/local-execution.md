@@ -114,6 +114,7 @@ It ran informationally (not required) for its first several PRs before being pro
 |---|---|---|
 | GitHub | `gh` keyring auth on this Mac | already scoped |
 | Linear API key | `~/.config/moviecal/linear.env` (mode 600) | scoped to team `MOV` |
+| Linear app-actor credential | `~/.config/moviecal/linear-app.env` (mode 600) | OAuth2 Client Credentials for the `moviecal-dispatcher` workspace identity (MOV-122); keys `LINEAR_APP_CLIENT_ID`, `LINEAR_APP_CLIENT_SECRET`, `LINEAR_APP_ACTOR_ID`, `LINEAR_APP_SCOPES` (`read,write,app:assignable,app:mentionable`). Optional during the transition — when absent the dispatcher falls back to the personal API key above. |
 | Test `.env.local` | `~/.config/moviecal/env.local` (mode 600) | disposable/dev Supabase + TMDb credentials only |
 | `SUPABASE_DB_URL_PROD` | GitHub Actions secret | never available to a local worker |
 
@@ -174,7 +175,7 @@ The plist's own `StandardOutPath`/`StandardErrorPath` (`~/Library/Logs/moviecal-
 
 ## Standing health check
 
-`dispatcher doctor` is a read-only command that asserts: Linear auth works, `gh` auth works, the worktree root is writable, `~/.config/moviecal/env.local` exists and is mode 600, `claude` and `codex` are on `PATH`, `origin/master` is fetchable, and the iOS self-hosted runner is reachable. Run it after any environment change and before relying on the dispatcher for real work.
+`dispatcher doctor` is a read-only command that asserts: Linear auth works, `gh` auth works, the worktree root is writable, `~/.config/moviecal/env.local` exists and is mode 600, `claude` and `codex` are on `PATH`, `origin/master` is fetchable, and the iOS self-hosted runner is reachable. If `~/.config/moviecal/linear-app.env` is present it additionally checks the file is mode 600 and that an app-actor token can be minted from it (MOV-122); if it is absent that check is a no-op pass. Run it after any environment change and before relying on the dispatcher for real work.
 
 ## Known gaps / follow-ups
 
