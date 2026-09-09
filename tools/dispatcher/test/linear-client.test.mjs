@@ -145,4 +145,86 @@ describe("LinearClient", () => {
       await expect(client.linkBlockingChain(["only-one"])).rejects.toThrow(/at least two/);
     });
   });
+
+  describe("app-actor auth (Client Credentials, MOV-125)", () => {
+    const appAuth = { clientId: "cid", clientSecret: "csecret", scopes: "read,write" };
+
+    function fetchOk(status, responseData) {
+      return { status, json: async () => ({ data: responseData }) };
+    }
+
+    it("throws without an apiKey or appAuth", () => {
+      expect(() => new LinearClient({})).toThrow(/apiKey or appAuth/);
+      expect(() => new LinearClient({ appAuth: { clientId: "cid" } })).toThrow(/apiKey or appAuth/);
+    });
+
+    it("mints a token lazily on the first request and sends it as Bearer", async () => {
+      const getAppTokenFn = vi.fn().mockResolvedValue({ token: "tok1", tokenType: "Bearer", expiresAt: new Date() });
+      const fetchImpl = vi.fn().mockResolvedValue(fetchOk(200, { viewer: { id: "app-1" } }));
+      const client = new LinearClient({ appAuth, fetchImpl, getAppTokenFn });
+
+      await client.viewer();
+
+      expect(getAppTokenFn).toHaveBeenCalledTimes(1);
+      expect(getAppTokenFn).toHaveBeenCalledWith(
+        { clientId: "cid", clientSecret: "csecret", scopes: "read,write" },
+        { fetchImpl },
+      );
+      const [, init] = fetchImpl.mock.calls[0];
+      expect(init.headers.Authorization).toBe("Bearer tok1");
+    });
+
+    it("caches the token across subsequent requests", async () => {
+      const getAppTokenFn = vi.fn().mockResolvedValue({ token: "tok1", tokenType: "Bearer", expiresAt: new Date() });
+      const fetchImpl = vi.fn().mockResolvedValue(fetchOk(200, { viewer: { id: "app-1" } }));
+      const client = new LinearClient({ appAuth, fetchImpl, getAppTokenFn });
+
+      await client.viewer();
+      await client.viewer();
+
+      expect(getAppTokenFn).toHaveBeenCalledTimes(1);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it("re-acquires exactly once on a 401 and retries the request", async () => {
+      const getAppTokenFn = vi
+        .fn()
+        .mockResolvedValueOnce({ token: "expired", tokenType: "Bearer", expiresAt: new Date() })
+        .mockResolvedValueOnce({ token: "fresh", tokenType: "Bearer", expiresAt: new Date() });
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(fetchOk(401, {}))
+        .mockResolvedValueOnce(fetchOk(200, { viewer: { id: "app-1" } }));
+      const client = new LinearClient({ appAuth, fetchImpl, getAppTokenFn });
+
+      const viewer = await client.viewer();
+
+      expect(viewer).toEqual({ id: "app-1" });
+      expect(getAppTokenFn).toHaveBeenCalledTimes(2);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(fetchImpl.mock.calls[0][1].headers.Authorization).toBe("Bearer expired");
+      expect(fetchImpl.mock.calls[1][1].headers.Authorization).toBe("Bearer fresh");
+    });
+
+    it("does not retry a second time if the retried request is also a 401", async () => {
+      const getAppTokenFn = vi.fn().mockResolvedValue({ token: "tok", tokenType: "Bearer", expiresAt: new Date() });
+      const fetchImpl = vi.fn().mockResolvedValue(fetchOk(401, {}));
+      const client = new LinearClient({ appAuth, fetchImpl, getAppTokenFn });
+
+      await client.request("query {}");
+      expect(getAppTokenFn).toHaveBeenCalledTimes(2);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it("apiKey wins over appAuth when both are supplied (personal-key path unchanged)", async () => {
+      const getAppTokenFn = vi.fn();
+      const fetchImpl = mockFetch({ viewer: { id: "u1" } });
+      const client = new LinearClient({ apiKey: "lin_api_abc", appAuth, fetchImpl, getAppTokenFn });
+
+      await client.viewer();
+
+      expect(getAppTokenFn).not.toHaveBeenCalled();
+      expect(fetchImpl.mock.calls[0][1].headers.Authorization).toBe("lin_api_abc");
+    });
+  });
 });

@@ -5,25 +5,69 @@
 // makes. See docs/governance/linear-information-architecture.md for the
 // workspace shape this queries against.
 
+import { getAppToken } from "./linear-app-auth.mjs";
+
 const LINEAR_API_URL = "https://api.linear.app/graphql";
 
 export class LinearClient {
-  constructor({ apiKey, fetchImpl = fetch, apiUrl = LINEAR_API_URL } = {}) {
-    if (!apiKey) throw new Error("LinearClient requires an apiKey");
-    this.apiKey = apiKey;
+  /**
+   * Either a personal `apiKey` (sent as-is, unprefixed — current/default
+   * behaviour) or `appAuth: {clientId, clientSecret, scopes}` (Client
+   * Credentials, MOV-122/125): a token is minted lazily on the first
+   * `request()`, cached in memory for the life of this client, and re-minted
+   * exactly once and the request retried if a request comes back `401`.
+   * `apiKey` wins if both are supplied. `getAppTokenFn` is injectable for
+   * tests; defaults to the real token-minting call.
+   */
+  constructor({ apiKey, appAuth, fetchImpl = fetch, apiUrl = LINEAR_API_URL, getAppTokenFn = getAppToken } = {}) {
+    const hasAppAuth = Boolean(appAuth && appAuth.clientId && appAuth.clientSecret);
+    if (!apiKey && !hasAppAuth) {
+      throw new Error("LinearClient requires an apiKey or appAuth {clientId, clientSecret}");
+    }
+    this.apiKey = apiKey || null;
+    this.appAuth = this.apiKey ? null : appAuth;
     this.fetchImpl = fetchImpl;
     this.apiUrl = apiUrl;
+    this.getAppTokenFn = getAppTokenFn;
+    this._appToken = null;
+  }
+
+  async _acquireAppToken() {
+    const { token, tokenType } = await this.getAppTokenFn(
+      {
+        clientId: this.appAuth.clientId,
+        clientSecret: this.appAuth.clientSecret,
+        scopes: this.appAuth.scopes,
+      },
+      { fetchImpl: this.fetchImpl },
+    );
+    this._appToken = `${tokenType} ${token}`;
+    return this._appToken;
+  }
+
+  async _authHeader() {
+    if (this.apiKey) return this.apiKey;
+    return this._appToken || this._acquireAppToken();
   }
 
   async request(query, variables = {}) {
+    return this._requestWithRetry(query, variables, false);
+  }
+
+  async _requestWithRetry(query, variables, hasRetried) {
+    const authHeader = await this._authHeader();
     const res = await this.fetchImpl(this.apiUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: this.apiKey,
+        Authorization: authHeader,
       },
       body: JSON.stringify({ query, variables }),
     });
+    if (res.status === 401 && this.appAuth && !hasRetried) {
+      await this._acquireAppToken();
+      return this._requestWithRetry(query, variables, true);
+    }
     const body = await res.json();
     if (body.errors && body.errors.length > 0) {
       throw new Error(`Linear API error: ${body.errors.map((e) => e.message).join("; ")}`);

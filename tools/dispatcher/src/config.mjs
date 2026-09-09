@@ -82,8 +82,8 @@ export function checkSecretFileMode(filePath) {
   return { ok: true, reason: null };
 }
 
-export function loadLinearConfig() {
-  const env = parseEnvFile(linearEnvPath());
+export function loadLinearConfig(envPath = linearEnvPath()) {
+  const env = parseEnvFile(envPath);
   return {
     apiKey: env.LINEAR_API_KEY || process.env.LINEAR_API_KEY || null,
     teamKey: env.LINEAR_TEAM_KEY || process.env.LINEAR_TEAM_KEY || "MOV",
@@ -105,4 +105,31 @@ export function loadLinearAppConfig(envPath = linearAppEnvPath()) {
     actorId: env.LINEAR_APP_ACTOR_ID || process.env.LINEAR_APP_ACTOR_ID || null,
     scopes: env.LINEAR_APP_SCOPES || process.env.LINEAR_APP_SCOPES || null,
   };
+}
+
+/**
+ * Resolve which Linear credential the dispatcher's real run/dry-run path
+ * should authenticate with: `linear-app.env` (MOV-122 app actor) when both
+ * halves of the client-credentials pair are present, else the personal
+ * `linear.env` API key (today's behaviour, unconditionally reversible by
+ * removing linear-app.env). `mode: "none"` means neither is configured.
+ */
+export function resolveLinearAuth({ linearPath = linearEnvPath(), linearAppPath = linearAppEnvPath() } = {}) {
+  const { apiKey, teamKey } = loadLinearConfig(linearPath);
+  const appConfig = loadLinearAppConfig(linearAppPath);
+  if (appConfig.clientId && appConfig.clientSecret) {
+    return {
+      mode: "app",
+      teamKey,
+      appAuth: {
+        clientId: appConfig.clientId,
+        clientSecret: appConfig.clientSecret,
+        scopes: appConfig.scopes || undefined,
+      },
+    };
+  }
+  if (apiKey) {
+    return { mode: "apiKey", teamKey, apiKey };
+  }
+  return { mode: "none", teamKey };
 }
