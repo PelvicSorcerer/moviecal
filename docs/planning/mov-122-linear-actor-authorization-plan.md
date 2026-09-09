@@ -1,10 +1,22 @@
 # MOV-122 — Linear Actor Authorization: planning artifact
 
-Status: forward-looking planning artifact for [`MOV-122`](https://linear.app/moviecal/issue/MOV-122)
+**Status: DONE (2026-09-09).** The whole chain shipped —
+`MOV-123` (register the `moviecal-dispatcher` OAuth app) →
+`MOV-124` (provision `~/.config/moviecal/linear-app.env` + `dispatcher doctor` checks, #293) →
+`MOV-125` (Client Credentials auth in `linear-client.mjs`, and the run-path cutover, #297) →
+`MOV-126` (closed as a duplicate of `MOV-125`'s cutover) →
+`MOV-127` (live verification — the repo owner confirmed receiving Linear notifications
+for `moviecal-dispatcher`'s activity on `MOV-126`).
+This document is kept as the design/research record. See `docs/planning/decision-log.md`
+for the outcome summary.
+
+---
+
+Originally: a forward-looking planning artifact for [`MOV-122`](https://linear.app/moviecal/issue/MOV-122)
 ("Linear Actor Authorization: give the dispatcher its own identity so notifications
 actually fire"). Establishes the research findings, the auth-mechanism decision, and
 the sub-issue / milestone breakdown the repo owner asked for before implementation
-starts.
+started.
 
 ## How to use this document
 
