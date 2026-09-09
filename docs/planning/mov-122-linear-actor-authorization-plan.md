@@ -51,10 +51,15 @@ Sources: `linear.app/developers/agents`, `linear.app/developers/oauth-2-0-authen
 - The app gets a **unique identity ID per workspace installation** — fetch it via
   GraphQL once and store it alongside the token, so the dispatcher can positively
   identify "its own" activity later.
-- Scopes available in `actor=app` mode: `app:assignable` (can be assigned issues /
-  added to projects), `app:mentionable` (can be @-mentioned), plus `customer:*` and
-  `initiative:*`. **`admin` scope cannot be combined with `actor=app`.** The
-  dispatcher does not need `admin` — it comments and moves issues between states.
+- Scope string (confirmed live 2026-09-08): **`read,write,app:assignable,app:mentionable`**.
+  `read` + `write` are the actual data-access scopes and are required — an app-actor
+  token with only `app:assignable`/`app:mentionable` is rejected with
+  `Invalid scope: 'read' required` on the first query. `app:assignable` (can be
+  assigned issues / added to projects) and `app:mentionable` (can be @-mentioned) are
+  agent-capability flags, not data permissions. **`admin` cannot be combined with
+  `actor=app`** and the dispatcher does not need it — it only comments and moves
+  issues between states. Changing the scope set revokes and replaces any existing
+  app tokens.
 - **Billing:** "Agents installed in your workspace do not count as billable users."
   So this does not consume a seat against the Linear Free plan's limits.
 
@@ -73,9 +78,12 @@ identity** (`actor=app`). They differ only in *how the token is obtained*:
 | Secret rotation | Refresh tokens survive until revoked | Rotating the client secret invalidates all client-credentials tokens immediately |
 | Best fit | A product where a specific user consents once and you want durable delegated access | **A headless daemon with no interactive user** |
 
-In both cases the OAuth **app must still be created and installed into the workspace
-once by an admin** — Client Credentials is about how the *running* dispatcher
-authenticates day to day, not a way to skip the one-time human install.
+Either way the OAuth **app must be created once by a workspace admin** — that step is
+`human-only` and produces the client secret. Confirmed 2026-09-08: with Client
+Credentials there is **no additional browser-based install/authorize step** — the app
+authenticates directly in the workspace that owns it. Client Credentials is about how
+the *running* dispatcher authenticates day to day, not a way to skip the one-time
+human app creation.
 
 ## Decision: use the Client Credentials grant
 
@@ -157,26 +165,32 @@ Each sub-issue is `blocked by` the one before it, and all are `related to` `MOV-
 Created 2026-09-08 as [`MOV-123`](https://linear.app/moviecal/issue/MOV-123) →
 [`MOV-127`](https://linear.app/moviecal/issue/MOV-127), all in `Backlog`.
 
-### 1. `MOV-123` — Register and install the Linear OAuth app (`human-only`)
+### 1. `MOV-123` — Register the Linear OAuth app (`human-only`) — **DONE 2026-09-08**
 
 - Create an OAuth application in the `moviecal` workspace (Settings → API →
-  Applications). Enable webhooks; select "Agent session events".
-- Complete the **workspace-admin** install with `actor=app`, requesting only
-  `app:assignable` + `app:mentionable` (no `admin`).
-- Query and record the app's **per-workspace identity ID**.
-- Capture the **client ID** and **client secret**.
-- Set the agent's workspace display name to `moviecal-dispatcher`. Confirm via
-  readback that it does **not** count as a billable member.
-- Acceptance: app appears installed in workspace settings; a manual
-  client-credentials token request returns a usable access token; `viewer`-style
-  identity query run with that token returns the app identity, not a person.
+  Applications), name `moviecal-dispatcher`. Only toggle turned **on** is
+  **Client credentials**; **Webhooks off** (the dispatcher polls, has no public URL,
+  and the repo-owner notifications this milestone targets are Linear-side actor
+  behaviour, not webhook-driven). Public **off**. Redirect URI `http://localhost`
+  (unused by `client_credentials` but the form wants one). GitHub username left
+  blank.
+- No separate browser "install" step: `client_credentials` works directly in the
+  workspace that owns the app.
+- Mint a token with `grant_type=client_credentials`, `actor=app`,
+  `scope=read,write,app:assignable,app:mentionable` (see scope note above — `read`
+  and `write` are mandatory).
+- Recorded and handed to `MOV-124`: **client ID**, **client secret**, **app actor
+  identity ID** (from a `viewer` query with the app token).
+- Verified: `viewer` returns `moviecal-dispatcher`, not a person; app is not a
+  billable member.
 
 ### 2. `MOV-124` — Provision the dispatcher credential
 
 - New file `~/.config/moviecal/linear-app.env` (mode `600`), holding
-  `LINEAR_APP_CLIENT_ID`, `LINEAR_APP_CLIENT_SECRET`, and
-  `LINEAR_APP_ACTOR_ID` (the identity ID from sub-issue 1). Keep it alongside, not
-  replacing, `linear.env` during the transition.
+  `LINEAR_APP_CLIENT_ID`, `LINEAR_APP_CLIENT_SECRET`, `LINEAR_APP_ACTOR_ID` (the
+  identity ID from sub-issue 1), and `LINEAR_APP_SCOPES`
+  (`read,write,app:assignable,app:mentionable`). Keep it alongside, not replacing,
+  `linear.env` during the transition.
 - Add the new credential to `docs/operators/local-execution.md` §Security model
   credentials table.
 - Add `dispatcher doctor` assertions: `linear-app.env` exists, is mode `600`, and a
@@ -187,8 +201,9 @@ Created 2026-09-08 as [`MOV-123`](https://linear.app/moviecal/issue/MOV-123) →
 ### 3. `MOV-125` — Add client-credentials auth to `linear-client.mjs`
 
 - New small module (e.g. `linear-app-auth.mjs`): `getAppToken({ clientId,
-  clientSecret, scopes })` → POSTs to Linear's token endpoint, returns
-  `{ token, expiresAt }`. No refresh token stored.
+  clientSecret, scopes })` → POSTs to `https://api.linear.app/oauth/token` with
+  `grant_type=client_credentials` + `actor=app`, returns `{ token, expiresAt }`. No
+  refresh token stored. Default `scopes` = `read,write,app:assignable,app:mentionable`.
 - `LinearClient` gains an auth mode: given app credentials, it acquires a token
   lazily on first `request()`, caches it, and **on any `401` re-acquires once and
   retries** the request. Given only a personal `apiKey` (current behaviour) it works
