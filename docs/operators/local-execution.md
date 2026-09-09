@@ -2,11 +2,15 @@
 
 Read `AGENTS.md` first. This document covers the local-Mac execution path: how a Linear work item becomes a running agent in an isolated git worktree on this machine, and what every worker (human or agent) needs to know about that environment. It replaces the former per-platform operator guides (`claude-code.md`, `codex.md`) and the cloud-orchestrator model (`codex-orchestration.md`, `multi-platform-dispatch-policy.md`), which are retained under `docs/operators/archive/` as historical reference.
 
+> **This is the Mac execution adapter's operator guide — one of two adapters, not the whole execution model.** `docs/governance/hybrid-execution-architecture.md` is the authoritative architecture: Linear owns desired lifecycle state, GitHub owns delivered state, and eligible non-iOS work may route to a Linear-managed **cloud** adapter instead of this one. Everything below remains accurate and current for the Mac lane, which is permanent — iOS/Xcode work can only run here. The cloud adapter is decided but **not enabled** (gated on `MOV-141`); until then this is the only live adapter.
+
 See `docs/governance/linear-information-architecture.md` for the Linear workspace design this path is driven by, and `docs/operators/worker-routing.md` for how a worker binary and model are selected per issue.
 
 ## What changed from the cloud-agent model
 
 The previous system assumed agents ran in degraded cloud containers: no `gh` CLI, GitHub GraphQL blocked by a network proxy, no Docker, no persistent local state. None of that applies here. This Mac has a full `gh` install, direct GitHub API access, a real filesystem, and a real process supervisor. Do not carry forward workarounds written for that constrained environment — they produce strictly worse behavior locally (e.g. avoiding `gh` in favor of a comment-command workflow when `gh` is simply available).
+
+**Not to be confused with the new cloud adapter.** The "cloud-agent model" retired above is the old multi-platform GitHub-Project-era arrangement (Cursor Cloud, Copilot, cloud Codex) — a different thing from the Linear-managed Coding Session adapter introduced in `docs/governance/hybrid-execution-architecture.md`. The lesson that survives is narrow and still applies: never assume an execution environment's capabilities; both adapters are defined by an explicit contract and an explicit capability table, not by assumption.
 
 ## Architecture
 
