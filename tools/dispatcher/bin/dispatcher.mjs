@@ -28,6 +28,7 @@ import {
   worktreesStatePath,
   loadLinearConfig,
   loadLinearAppConfig,
+  resolveLinearAuth,
   checkSecretFileMode,
   DEFAULT_CONCURRENCY,
   RUN_LOG_RETENTION_DAYS,
@@ -46,6 +47,23 @@ import { applyStagedWorkflowEdit } from "../src/workflow-edit-apply.mjs";
 
 const IOS_RUNNER_NAME = "moviecal-ios-runner";
 const GITHUB_REPO = "PelvicSorcerer/moviecal";
+
+/**
+ * Build the LinearClient the real run/dry-run path authenticates with:
+ * prefer the app-actor credential (linear-app.env, MOV-122) when configured,
+ * else fall back to the personal API key (linear.env) — see
+ * `resolveLinearAuth()` and docs/planning/mov-122-linear-actor-authorization-plan.md.
+ * Returns `null` (with a printed error) when neither credential is configured.
+ */
+function buildLinearClient() {
+  const auth = resolveLinearAuth();
+  if (auth.mode === "app") return { client: new LinearClient({ appAuth: auth.appAuth }), teamKey: auth.teamKey };
+  if (auth.mode === "apiKey") return { client: new LinearClient({ apiKey: auth.apiKey }), teamKey: auth.teamKey };
+  console.error(
+    `No Linear credential configured (checked ${linearAppEnvPath()} and ${linearEnvPath()}). Run \`dispatcher doctor\` first.`,
+  );
+  return null;
+}
 
 function tryRun(fn) {
   try {
@@ -172,13 +190,9 @@ async function cmdDryRun({ fixturePath } = {}) {
   if (fixturePath) {
     issues = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
   } else {
-    const linearConfig = loadLinearConfig();
-    if (!linearConfig.apiKey) {
-      console.error(`No Linear API key configured (${linearEnvPath()}) and no --fixture given. Nothing to dry-run.`);
-      return 1;
-    }
-    const client = new LinearClient({ apiKey: linearConfig.apiKey });
-    issues = await client.issuesInState({ teamKey: linearConfig.teamKey, stateName: "Ready for Agent" });
+    const built = buildLinearClient();
+    if (!built) return 1;
+    issues = await built.client.issuesInState({ teamKey: built.teamKey, stateName: "Ready for Agent" });
   }
 
   const manager = new WorktreeManager({
@@ -321,14 +335,11 @@ function reconcileWorktrees() {
 async function cmdRunOnce() {
   reconcileWorktrees();
 
-  const linearConfig = loadLinearConfig();
-  if (!linearConfig.apiKey) {
-    console.error(`No Linear API key configured (${linearEnvPath()}). Run \`dispatcher doctor\` first.`);
-    return 1;
-  }
-  const linearClient = new LinearClient({ apiKey: linearConfig.apiKey });
+  const built = buildLinearClient();
+  if (!built) return 1;
+  const { client: linearClient, teamKey } = built;
   const issues = await linearClient.issuesInState({
-    teamKey: linearConfig.teamKey,
+    teamKey,
     stateName: RUN_STATE_NAMES.readyForAgent,
   });
 
@@ -337,7 +348,7 @@ async function cmdRunOnce() {
     return 0;
   }
 
-  const ctx = await buildRunContext(linearClient, linearConfig.teamKey);
+  const ctx = await buildRunContext(linearClient, teamKey);
   const results = await runOnce(issues, ctx);
   for (const r of results) {
     console.log(`${r.issue}: ${r.outcome}${r.reason ? ` — ${r.reason}` : ""}${r.pr ? ` — ${r.pr}` : ""}`);

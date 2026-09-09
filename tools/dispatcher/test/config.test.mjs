@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { parseEnvFile, checkSecretFileMode, loadLinearAppConfig } from "../src/config.mjs";
+import { parseEnvFile, checkSecretFileMode, loadLinearAppConfig, resolveLinearAuth } from "../src/config.mjs";
 
 describe("parseEnvFile", () => {
   let tmpFile;
@@ -110,5 +110,50 @@ describe("loadLinearAppConfig", () => {
     expect(cfg.clientId).toBe("from-env");
     expect(cfg.clientSecret).toBe("from-file");
     expect(cfg.scopes).toBeNull();
+  });
+});
+
+describe("resolveLinearAuth", () => {
+  let linearPath;
+  let linearAppPath;
+
+  afterEach(() => {
+    for (const f of [linearPath, linearAppPath]) {
+      if (f && fs.existsSync(f)) fs.rmSync(f);
+    }
+  });
+
+  it("prefers the app credential when both linear.env and linear-app.env are present", () => {
+    linearPath = path.join(os.tmpdir(), `moviecal-test-linear-${Date.now()}.env`);
+    linearAppPath = path.join(os.tmpdir(), `moviecal-test-linear-app-${Date.now()}.env`);
+    fs.writeFileSync(linearPath, "LINEAR_API_KEY=lin_api_personal\nLINEAR_TEAM_KEY=MOV\n", { mode: 0o600 });
+    fs.writeFileSync(
+      linearAppPath,
+      "LINEAR_APP_CLIENT_ID=cid\nLINEAR_APP_CLIENT_SECRET=csecret\nLINEAR_APP_SCOPES=read,write\n",
+      { mode: 0o600 },
+    );
+
+    const auth = resolveLinearAuth({ linearPath, linearAppPath });
+
+    expect(auth).toEqual({
+      mode: "app",
+      teamKey: "MOV",
+      appAuth: { clientId: "cid", clientSecret: "csecret", scopes: "read,write" },
+    });
+  });
+
+  it("falls back to the personal API key when linear-app.env is absent", () => {
+    linearPath = path.join(os.tmpdir(), `moviecal-test-linear-${Date.now()}.env`);
+    linearAppPath = "/nonexistent/linear-app.env";
+    fs.writeFileSync(linearPath, "LINEAR_API_KEY=lin_api_personal\nLINEAR_TEAM_KEY=MOV\n", { mode: 0o600 });
+
+    const auth = resolveLinearAuth({ linearPath, linearAppPath });
+
+    expect(auth).toEqual({ mode: "apiKey", teamKey: "MOV", apiKey: "lin_api_personal" });
+  });
+
+  it("reports mode 'none' when neither credential is configured", () => {
+    const auth = resolveLinearAuth({ linearPath: "/nonexistent/linear.env", linearAppPath: "/nonexistent/linear-app.env" });
+    expect(auth).toEqual({ mode: "none", teamKey: "MOV" });
   });
 });
