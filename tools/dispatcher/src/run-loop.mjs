@@ -27,18 +27,67 @@ import { tailLogs } from "./worker-spawn.mjs";
  * @param {string} [ctx.envLocalSource]
  * @param {string} ctx.ghRepo - "owner/name"
  * @param {string} ctx.logRoot
- * @param {(args: object) => Promise<{exitCode: number, logDir: string}>} ctx.spawnWorkerFn
+ * @param {(args: object) => Promise<{exitCode: number, logDir: string}>} ctx.spawnWorkerFn - given a `signal` (AbortSignal, MOV-138), a real
+ *   implementation should kill the worker's process group when it fires; see worker-spawn.mjs.
  * @param {(branch: string, repo: string) => {number:number,url:string,isDraft:boolean}|null} ctx.findPrForBranchFn
+ * @param {number} ctx.workerTimeoutMs - MOV-138: a worker that hasn't exited after this many ms is killed and its issue moved to Needs Human Decision
  * @param {(worktreePath: string) => string[]} [ctx.uncommittedChangesFn] - MOV-137; defaults to "always clean" if not provided (tests that don't care about this can omit it)
  * @param {(worktreePath: string, authorizedPath: string) => {applied: boolean, path?: string, reason?: string}} [ctx.applyStagedWorkflowEditFn] - MOV-121; defaults to a no-op if not provided (tests that don't care about this can omit it)
  * @returns {Promise<Array<{issue: string, outcome: string, [key: string]: unknown}>>}
  */
 export async function runOnce(issues, ctx) {
-  const results = [];
-  for (const issue of issues) {
-    results.push(await processIssue(issue, ctx));
-  }
+  const { concurrencyLimit, worktreeManager } = ctx;
+
+  // MOV-138: bound how many `processIssue` calls run concurrently within this
+  // batch to the slots this cycle can actually use — the concurrency limit
+  // minus whatever's already active from earlier cycles, floored at 1 so an
+  // over-subscribed cycle still runs each issue through preflight (which
+  // reports the real "blocked" outcome) instead of deadlocking. Sized once
+  // up front: within a batch, active-worktree count can only fall (as issues
+  // finish) not rise from outside this loop, so a fixed-size pool exactly
+  // tracks the slots preflight's own live check will grant as issues finish
+  // and free a slot for the next queued one.
+  const poolSize = Math.max(1, concurrencyLimit - worktreeManager.activeCount());
+  let availablePermits = poolSize;
+  const waiters = [];
+  const acquire = () =>
+    new Promise((resolve) => {
+      if (availablePermits > 0) {
+        availablePermits -= 1;
+        resolve();
+      } else {
+        waiters.push(resolve);
+      }
+    });
+  const release = () => {
+    const next = waiters.shift();
+    if (next) next();
+    else availablePermits += 1;
+  };
+
+  const results = new Array(issues.length);
+  await Promise.all(
+    issues.map(async (issue, index) => {
+      await acquire();
+      try {
+        results[index] = await processIssue(issue, ctx);
+      } finally {
+        release();
+      }
+    }),
+  );
   return results;
+}
+
+const WORKER_TIMEOUT = Symbol("worker-timeout");
+
+/** Race a worker's promise against a timeout, resolving to WORKER_TIMEOUT if the timer wins. */
+function raceWorkerTimeout(promise, timeoutMs) {
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(WORKER_TIMEOUT), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 async function processIssue(issue, ctx) {
@@ -56,6 +105,7 @@ async function processIssue(issue, ctx) {
     logRoot,
     spawnWorkerFn,
     findPrForBranchFn,
+    workerTimeoutMs,
     uncommittedChangesFn = () => [],
     applyStagedWorkflowEditFn = () => ({ applied: false, reason: "not configured" }),
   } = ctx;
@@ -119,9 +169,13 @@ async function processIssue(issue, ctx) {
   const invocation = workerInvocation(routing.worker, routing.model);
   const logDir = path.join(logRoot, name);
 
+  const abortController = new AbortController();
   let spawnResult;
   try {
-    spawnResult = await spawnWorkerFn({ invocation, cwd: entry.path, brief, logDir });
+    spawnResult = await raceWorkerTimeout(
+      spawnWorkerFn({ invocation, cwd: entry.path, brief, logDir, signal: abortController.signal }),
+      workerTimeoutMs,
+    );
   } catch (err) {
     worktreeManager.markStatus(issue.identifier, "failed");
     await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
@@ -130,6 +184,28 @@ async function processIssue(issue, ctx) {
       `**Dispatcher failed to start the worker:** ${err.message}\n\nRun log: \`${logDir}\``,
     );
     return { issue: issue.identifier, outcome: "spawn-error", error: err.message };
+  }
+
+  if (spawnResult === WORKER_TIMEOUT) {
+    // MOV-138: kill the worker's process group (reuses MOV-137's group-kill
+    // in worker-spawn.mjs, triggered by the abort signal) and hand off to a
+    // human rather than let a hang (MOV-106) freeze the rest of the batch.
+    abortController.abort();
+    worktreeManager.markStatus(issue.identifier, "failed");
+    await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
+    await linearClient.addComment(
+      issue.id,
+      [
+        `**Worker timed out after ${workerTimeoutMs}ms and was killed.**`,
+        "",
+        "```",
+        tailLogs(logDir, 30),
+        "```",
+        "",
+        `Full run log: \`${logDir}\``,
+      ].join("\n"),
+    );
+    return { issue: issue.identifier, outcome: "timeout", timeoutMs: workerTimeoutMs };
   }
 
   if (spawnResult.exitCode !== 0) {

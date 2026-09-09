@@ -34,6 +34,7 @@ import {
   resolveLinearAuth,
   checkSecretFileMode,
   DEFAULT_CONCURRENCY,
+  DEFAULT_WORKER_TIMEOUT_MS,
   RUN_LOG_RETENTION_DAYS,
   REPO_ROOT,
 } from "../src/config.mjs";
@@ -308,6 +309,7 @@ async function buildRunContext(linearClient, teamKey, issues) {
     },
     worktreeManager,
     concurrencyLimit: Number(process.env.MOVIECAL_CONCURRENCY || DEFAULT_CONCURRENCY),
+    workerTimeoutMs: Number(process.env.MOVIECAL_WORKER_TIMEOUT_MS || DEFAULT_WORKER_TIMEOUT_MS),
     iosRunnerOnline: await checkIosRunnerOnline(),
     isIssueSatisfied: buildIsIssueSatisfied(issues),
     secretPresent: () => fs.existsSync(envLocalPath()),

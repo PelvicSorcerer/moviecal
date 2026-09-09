@@ -48,6 +48,9 @@ function reapProcessGroup(pid, { graceMs, killImpl }) {
  * @param {(cmd: string, args: string[], opts: object) => import('node:child_process').ChildProcess} [opts.spawnImpl]
  * @param {number} [opts.killGraceMs] - delay between SIGTERM and SIGKILL when reaping the worker's process group
  * @param {(pid: number, signal: string) => void} [opts.killImpl] - injectable for tests; defaults to signalling the real process group
+ * @param {AbortSignal} [opts.signal] - MOV-138: aborting (e.g. a per-worker timeout in run-loop.mjs) reaps the
+ *   worker's process group immediately, the same SIGTERM-then-SIGKILL path used once the worker exits on its own
+ *   (MOV-137). The promise still only settles once the child actually closes.
  * @returns {Promise<{exitCode: number, logDir: string}>}
  */
 export function spawnWorker({
@@ -58,6 +61,7 @@ export function spawnWorker({
   spawnImpl = spawn,
   killGraceMs = 5000,
   killImpl = killProcessGroup,
+  signal,
 }) {
   fs.mkdirSync(logDir, { recursive: true });
   const stdoutPath = path.join(logDir, "stdout.log");
@@ -87,6 +91,12 @@ export function spawnWorker({
     stderrStream.on("error", () => {});
     child.stdout?.pipe(stdoutStream);
     child.stderr?.pipe(stderrStream);
+
+    if (signal) {
+      const killOnAbort = () => reapProcessGroup(child.pid, { graceMs: killGraceMs, killImpl });
+      if (signal.aborted) killOnAbort();
+      else signal.addEventListener("abort", killOnAbort, { once: true });
+    }
 
     // A worker that dies immediately (crash on startup, killed before it ever
     // reads stdin) closes its stdin pipe, so writing the brief races the exit
