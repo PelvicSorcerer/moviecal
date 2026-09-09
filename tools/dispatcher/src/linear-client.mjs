@@ -90,6 +90,62 @@ export class LinearClient {
     return data.issueUpdate.success;
   }
 
+  /**
+   * Create a "blocks" dependency: `blockerId` blocks `blockedId`
+   * (i.e. `blockedId` cannot start until `blockerId` is done).
+   *
+   * Direction matters and is easy to invert. Linear's `issueRelationCreate`
+   * treats `input.issueId` as the SOURCE of the named relation and
+   * `input.relatedIssueId` as its TARGET, so `type: "blocks"` reads as
+   * "issueId blocks relatedIssueId". This helper takes role-named arguments
+   * (`blockerId` / `blockedId`) precisely so callers never have to remember
+   * which raw field is which — passing a bare `{ issueId, relatedIssueId }`
+   * pair by hand has produced a reversed chain more than once.
+   */
+  async addBlocksRelation({ blockerId, blockedId }) {
+    if (!blockerId || !blockedId) {
+      throw new Error("addBlocksRelation requires blockerId and blockedId");
+    }
+    if (blockerId === blockedId) {
+      throw new Error("addBlocksRelation: an issue cannot block itself");
+    }
+    const mutation = `
+      mutation($issueId: String!, $relatedIssueId: String!) {
+        issueRelationCreate(input: {
+          issueId: $issueId
+          relatedIssueId: $relatedIssueId
+          type: "blocks"
+        }) { success }
+      }
+    `;
+    const data = await this.request(mutation, {
+      issueId: blockerId,
+      relatedIssueId: blockedId,
+    });
+    return data.issueRelationCreate.success;
+  }
+
+  /**
+   * Wire an ordered list of issue IDs into a linear dependency chain: each
+   * entry blocks the next, so `orderedIssueIds[0]` is the only unblocked
+   * issue and the last entry is blocked by everything before it.
+   * Returns the number of relations created.
+   */
+  async linkBlockingChain(orderedIssueIds) {
+    if (!Array.isArray(orderedIssueIds) || orderedIssueIds.length < 2) {
+      throw new Error("linkBlockingChain requires at least two issue IDs");
+    }
+    let created = 0;
+    for (let i = 0; i < orderedIssueIds.length - 1; i++) {
+      await this.addBlocksRelation({
+        blockerId: orderedIssueIds[i],
+        blockedId: orderedIssueIds[i + 1],
+      });
+      created++;
+    }
+    return created;
+  }
+
   async workflowStates(teamKey) {
     const query = `
       query($teamKey: String!) {

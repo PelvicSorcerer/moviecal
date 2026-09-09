@@ -96,4 +96,53 @@ describe("LinearClient", () => {
     expect(issue.project).toBeNull();
     expect(issue.blockedByIds).toEqual([]);
   });
+
+  describe("addBlocksRelation", () => {
+    it("maps blockerId -> issueId and blockedId -> relatedIssueId", async () => {
+      const fetchImpl = mockFetch({ issueRelationCreate: { success: true } });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      await client.addBlocksRelation({ blockerId: "blocker-1", blockedId: "blocked-2" });
+
+      const [, init] = fetchImpl.mock.calls[0];
+      const { query, variables } = JSON.parse(init.body);
+      // The blocker is the source of the "blocks" relation; the blocked issue
+      // is its target. Reversing these is the bug this test exists to catch.
+      expect(variables).toEqual({ issueId: "blocker-1", relatedIssueId: "blocked-2" });
+      expect(query).toMatch(/type:\s*"blocks"/);
+    });
+
+    it("rejects missing IDs and self-blocking", async () => {
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl: mockFetch({}) });
+      await expect(client.addBlocksRelation({ blockerId: "a" })).rejects.toThrow(/blockedId/);
+      await expect(
+        client.addBlocksRelation({ blockerId: "a", blockedId: "a" }),
+      ).rejects.toThrow(/cannot block itself/);
+    });
+  });
+
+  describe("linkBlockingChain", () => {
+    it("creates each-blocks-the-next relations in order", async () => {
+      const fetchImpl = mockFetch({ issueRelationCreate: { success: true } });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const created = await client.linkBlockingChain(["i1", "i2", "i3", "i4"]);
+
+      expect(created).toBe(3);
+      const pairs = fetchImpl.mock.calls.map(([, init]) => {
+        const { variables } = JSON.parse(init.body);
+        return [variables.issueId, variables.relatedIssueId];
+      });
+      expect(pairs).toEqual([
+        ["i1", "i2"],
+        ["i2", "i3"],
+        ["i3", "i4"],
+      ]);
+    });
+
+    it("requires at least two IDs", async () => {
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl: mockFetch({}) });
+      await expect(client.linkBlockingChain(["only-one"])).rejects.toThrow(/at least two/);
+    });
+  });
 });
