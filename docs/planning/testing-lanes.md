@@ -154,15 +154,16 @@ The authoritative CI gate is `.github/workflows/supabase-verify.yml`'s `lane-ful
 
 **Purpose:** Confirm critical deployed runtime paths after release or on a schedule.
 
-**Runs:** `scripts/lane-smoke-post-deploy.sh`, which makes three HTTP requests against `SMOKE_URL`: a home page load check (GET `/` → expect 200), a search endpoint query-validation check (GET `/api/movies/search?q=` with a blank query → expect 400 — this route is an intentionally public TMDb passthrough, not auth-gated), and a calendar feed token-resolution check (GET `/api/calendar/smoke-test-invalid-token` → expect 404, matching `docs/technical/deployment-plan.md`).
+**Runs:** `scripts/lane-smoke-post-deploy.sh`, which makes four HTTP requests against `SMOKE_URL`: a home page load check (GET `/` → expect 200), a search endpoint query-validation check (GET `/api/movies/search?q=` with a blank query → expect 400 — this route is an intentionally public TMDb passthrough, not auth-gated), a calendar feed token-resolution check (GET `/api/calendar/smoke-test-invalid-token` → expect 404, matching `docs/technical/deployment-plan.md`), and an auth-gate check on a protected route (GET `/api/watchlist` without auth → expect 401).
 
 **Expected to catch:**
 
 - home page load failures in the hosted environment
 - search endpoint routing/validation breakage after deploy (e.g. the required `q` param no longer being read or enforced)
 - calendar feed token-resolution regressions (e.g. an unresolvable token starting to leak data or returning the wrong status)
+- auth-gate breakage after deploy (e.g. a protected route serving data to unauthenticated callers)
 
-**Pass/fail criteria:** exits 0 when `SMOKE_URL` is set and all three HTTP checks return the expected status codes; exits 1 with a diagnostic message on the first failing check. The `SMOKE_URL` value is never printed.
+**Pass/fail criteria:** exits 0 when `SMOKE_URL` is set and all four HTTP checks return the expected status codes; exits 1 with a diagnostic message on the first failing check. The `SMOKE_URL` value is never printed.
 
 **Merge policy:** Post-deploy or scheduled; not part of the default PR gate.
 
