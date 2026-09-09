@@ -40,6 +40,7 @@ import { evaluatePreflight, worktreeName, branchName } from "../src/preflight.mj
 import { resolveRouting } from "../src/worker-routing.mjs";
 import { WorktreeManager } from "../src/worktree-manager.mjs";
 import { runOnce } from "../src/run-loop.mjs";
+import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { spawnWorker } from "../src/worker-spawn.mjs";
 import { findPrForBranch, defaultRunner as ghRunner } from "../src/pr-check.mjs";
 import { checkPrState, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
@@ -272,8 +273,14 @@ async function checkIosRunnerOnline() {
   }
 }
 
-/** Build the real (non-fake) context runOnce needs, wiring actual Linear/gh/git/process dependencies. */
-async function buildRunContext(linearClient, teamKey) {
+/**
+ * Build the real (non-fake) context runOnce needs, wiring actual Linear/gh/git/process
+ * dependencies. `issues` is the same "Ready for Agent" batch runOnce will process --
+ * each issue's `inverseRelations` (from LinearClient.issuesInState()) already carries
+ * its blockers' workflow states, so isIssueSatisfied is resolved from that batch with
+ * no extra Linear call.
+ */
+async function buildRunContext(linearClient, teamKey, issues) {
   const states = await linearClient.workflowStates(teamKey);
   const stateId = (name) => {
     const s = states.find((st) => st.name === name);
@@ -298,6 +305,7 @@ async function buildRunContext(linearClient, teamKey) {
     worktreeManager,
     concurrencyLimit: Number(process.env.MOVIECAL_CONCURRENCY || DEFAULT_CONCURRENCY),
     iosRunnerOnline: await checkIosRunnerOnline(),
+    isIssueSatisfied: buildIsIssueSatisfied(issues),
     secretPresent: () => fs.existsSync(envLocalPath()),
     worktreeRoot: worktreeRoot(),
     envLocalSource: fs.existsSync(envLocalPath()) ? envLocalPath() : undefined,
@@ -348,7 +356,7 @@ async function cmdRunOnce() {
     return 0;
   }
 
-  const ctx = await buildRunContext(linearClient, teamKey);
+  const ctx = await buildRunContext(linearClient, teamKey, issues);
   const results = await runOnce(issues, ctx);
   for (const r of results) {
     console.log(`${r.issue}: ${r.outcome}${r.reason ? ` — ${r.reason}` : ""}${r.pr ? ` — ${r.pr}` : ""}`);

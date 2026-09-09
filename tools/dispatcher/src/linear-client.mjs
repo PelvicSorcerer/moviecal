@@ -106,6 +106,11 @@ export class LinearClient {
               type
               relatedIssue { id state { name } }
             } }
+            inverseRelations { nodes {
+              type
+              issue { id }
+              relatedIssue { id state { name } }
+            } }
           }
         }
       }
@@ -204,6 +209,7 @@ export class LinearClient {
 }
 
 function normalizeIssue(node) {
+  const inverseRelations = node.inverseRelations ? node.inverseRelations.nodes : [];
   return {
     id: node.id,
     identifier: node.identifier,
@@ -212,10 +218,17 @@ function normalizeIssue(node) {
     url: node.url,
     project: node.project ? node.project.name : null,
     labels: node.labels.nodes.map((l) => l.name),
-    blockedByIds: node.relations.nodes
+    // A "blocks" entry under this issue's own `relations` means THIS issue
+    // blocks the related one (a dependent) -- the inverse of what "blocked
+    // by" means. Real blockers show up under `inverseRelations` instead: a
+    // "blocks" entry there means the related issue blocks THIS one. See
+    // docs/governance/linear-information-architecture.md §Relations (MOV-128).
+    blockedByIds: inverseRelations
       .filter((r) => r.type === "blocks" && r.relatedIssue)
       .map((r) => r.relatedIssue.id),
-    // exposed for isIssueSatisfied() callers that want the related issue's state
+    // exposed for isIssueSatisfied() callers that want the blocking issue's state
+    inverseRelations,
+    // dependents view: issues this one blocks
     relations: node.relations.nodes,
   };
 }
