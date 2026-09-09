@@ -154,6 +154,8 @@ The authoritative CI gate is `.github/workflows/supabase-verify.yml`'s `lane-ful
 
 **Purpose:** Confirm critical deployed runtime paths after release or on a schedule.
 
+**`SMOKE_URL`:** set to `https://moviecal-nine.vercel.app`, the project's Deployment-Protection-exempt hostname (SSO-protected `*.vercel.app` hosts would otherwise 302 unauthenticated CI requests to a login page). See `docs/technical/deployment-plan.md` for the full rationale.
+
 **Runs:** `scripts/lane-smoke-post-deploy.sh`, which makes four HTTP requests against `SMOKE_URL`: a home page load check (GET `/` → expect 200), a search endpoint query-validation check (GET `/api/movies/search?q=` with a blank query → expect 400 — this route is an intentionally public TMDb passthrough, not auth-gated), a calendar feed token-resolution check (GET `/api/calendar/smoke-test-invalid-token` → expect 404, matching `docs/technical/deployment-plan.md`), and an auth-gate check on a protected route (GET `/api/watchlist` without auth → expect 401).
 
 **Expected to catch:**

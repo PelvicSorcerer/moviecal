@@ -39,6 +39,8 @@ Notes:
 
 ## Post-deploy smoke checks
 
+CI's `smoke-post-deploy` lane runs against `SMOKE_URL=https://moviecal-nine.vercel.app`. This hostname was chosen because Vercel Deployment Protection on this project is scoped `all_except_custom_domains`: every other `*.vercel.app` host on the project 302s to a Vercel login page that an unauthenticated CI runner can't pass, and the project has no custom domain. Two alternatives were rejected: adding a custom domain (protection-exempt, but unnecessary infrastructure just to unblock smoke checks) and issuing a Protection Bypass for Automation token (an extra long-lived secret for no additional coverage over the exempt hostname).
+
 Run these checks against the deployed environment using disposable/dev-only credentials:
 
 1. Open `/` and confirm the home page renders without server errors.
