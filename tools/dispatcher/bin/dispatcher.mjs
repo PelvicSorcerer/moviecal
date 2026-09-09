@@ -317,6 +317,7 @@ async function buildRunContext(linearClient, teamKey, issues) {
     logRoot: logRoot(),
     spawnWorkerFn: spawnWorker,
     findPrForBranchFn: (branch, repo) => findPrForBranch(branch, repo, ghRunner),
+    uncommittedChangesFn: (worktreePath) => worktreeManager.uncommittedChanges(worktreePath),
     applyStagedWorkflowEditFn: (worktreePath, authorizedPath) => applyStagedWorkflowEdit(worktreePath, authorizedPath),
   };
 }

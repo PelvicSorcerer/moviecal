@@ -86,6 +86,8 @@ Before starting work on an issue, all of the following must pass, or the issue m
 
 A worker is any binary satisfying: *given a repo path, a branch, and a brief on stdin, produce commits on that branch and exit 0.* Concretely, `claude -p --model <id>` or `codex exec --sandbox workspace-write`. Adding a third worker means writing one adapter, not a new operator guide, a new branch prefix, and edits to every CI workflow's `branches:` filter.
 
+A worker invocation is one-shot — there is no resume across turns, so the brief (`brief.mjs`) explicitly tells the worker to run verification (`npm run verify`, `xcodebuild`, etc.) synchronously and never background a long-running build/test and exit expecting to check on it later (`MOV-137`, after `MOV-106`'s first dispatch did exactly that and left an orphaned `xcodebuild test` running after the worker exited 0). As a backstop, `worker-spawn.mjs` spawns the worker detached (its own process group) and, once it exits, signals the whole group (`SIGTERM` then `SIGKILL` after a grace period) so nothing it spawned outlives it, and `run-loop.mjs` reports a worker that exits 0 with an unclean worktree and no PR as `abandoned-dirty` (naming the uncommitted paths in the Linear comment) rather than the generic `no-pr`.
+
 ## Branch and CI conventions
 
 Branch prefixes are the machine-readable registry in `docs/operators/branch-prefixes.json`, enforced against CI workflow `branches:` filters by `npm run check:branch-ci`. Current prefixes:
@@ -199,7 +201,7 @@ The plist's own `StandardOutPath`/`StandardErrorPath` (`~/Library/Logs/moviecal-
 ## Known gaps / follow-ups
 
 - Dispatch is currently poll-based (default 30s interval, `dispatcher run [--interval ms]`). A Linear Agent App (webhook-driven) is a planned follow-up, not yet implemented.
-- `dispatcher run` is implemented and unit-tested against every outcome (preflight block, routing block, worker success, worker failure, worker exits 0 with no PR, spawn error), but has not yet been exercised against the live Linear workspace — that first real run is migration Stage 10 (end-to-end verification), tracked in `docs/planning/decision-log.md`.
+- `dispatcher run` is implemented and unit-tested against every outcome (preflight block, routing block, worker success, worker failure, worker exits 0 with no PR and a clean worktree, worker exits 0 with no PR and an `abandoned-dirty` worktree, spawn error), but has not yet been exercised against the live Linear workspace — that first real run is migration Stage 10 (end-to-end verification), tracked in `docs/planning/decision-log.md`.
 - Docker is not installed on this Mac, so `npm run lane:real-stack` / `lane:full-stack` stay CI-only locally; use the `supabase-verify` GitHub Actions workflow as the authoritative DB gate.
 - MOV-115 (two-way GitHub sync) is **done** — see `docs/governance/linear-information-architecture.md` §GitHub Issues: migration and ongoing sync.
 - MOV-116 (an automated `lane-review` status check for independent PR scrutiny, plus wiring `security-policy.mjs`'s hard-deny list into real enforcement) is partially done — see §Security model above. `lane-review` is now a required status check (MOV-119); the hard-deny-enforcement half is still unresolved.

@@ -8,15 +8,57 @@ import fs from "node:fs";
 import path from "node:path";
 
 /**
+ * Signal a worker's whole process group (negative pid), swallowing the
+ * "already gone" case. Only meaningful when the child was spawned detached
+ * (see spawnWorker) so its pid is also its process-group id.
+ */
+function killProcessGroup(pid, signal) {
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    // process group already gone
+  }
+}
+
+/**
+ * MOV-137: a worker (`claude -p` / `codex exec`) is one-shot — if it
+ * backgrounds a long-running build/test and exits, that child has no parent
+ * left to wait on it. Reap the worker's entire process group after it exits
+ * so nothing it spawned (xcodebuild, simctl, npm, ...) outlives it: SIGTERM
+ * first, then SIGKILL after a grace period, both idempotent against an
+ * already-empty group.
+ */
+function reapProcessGroup(pid, { graceMs, killImpl }) {
+  if (!pid) return Promise.resolve();
+  killImpl(pid, "SIGTERM");
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      killImpl(pid, "SIGKILL");
+      resolve();
+    }, graceMs);
+  });
+}
+
+/**
  * @param {object} opts
  * @param {{command: string, args: string[]}} opts.invocation
  * @param {string} opts.cwd - the worker's worktree path
  * @param {string} opts.brief - text piped to the worker's stdin
  * @param {string} opts.logDir - directory to write stdout.log/stderr.log/manifest.json into
  * @param {(cmd: string, args: string[], opts: object) => import('node:child_process').ChildProcess} [opts.spawnImpl]
+ * @param {number} [opts.killGraceMs] - delay between SIGTERM and SIGKILL when reaping the worker's process group
+ * @param {(pid: number, signal: string) => void} [opts.killImpl] - injectable for tests; defaults to signalling the real process group
  * @returns {Promise<{exitCode: number, logDir: string}>}
  */
-export function spawnWorker({ invocation, cwd, brief, logDir, spawnImpl = spawn }) {
+export function spawnWorker({
+  invocation,
+  cwd,
+  brief,
+  logDir,
+  spawnImpl = spawn,
+  killGraceMs = 5000,
+  killImpl = killProcessGroup,
+}) {
   fs.mkdirSync(logDir, { recursive: true });
   const stdoutPath = path.join(logDir, "stdout.log");
   const stderrPath = path.join(logDir, "stderr.log");
@@ -24,7 +66,15 @@ export function spawnWorker({ invocation, cwd, brief, logDir, spawnImpl = spawn 
 
   return new Promise((resolve, reject) => {
     const startedAt = new Date().toISOString();
-    const child = spawnImpl(invocation.command, invocation.args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
+    // detached: true (POSIX) makes the child the leader of its own process
+    // group via setsid(), so its own pid doubles as the group id we reap on
+    // exit — any grandchildren it backgrounds (xcodebuild, simctl, npm, ...)
+    // are in that same group and go down with it.
+    const child = spawnImpl(invocation.command, invocation.args, {
+      cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+      detached: true,
+    });
 
     const stdoutStream = fs.createWriteStream(stdoutPath);
     const stderrStream = fs.createWriteStream(stderrPath);
@@ -47,7 +97,7 @@ export function spawnWorker({ invocation, cwd, brief, logDir, spawnImpl = spawn 
     // removing the log directory) can race an in-flight disk write.
     let exitCode = null;
     let settled = false;
-    const pending = new Set(["child", "stdout", "stderr"]);
+    const pending = new Set(["child", "stdout", "stderr", "reap"]);
 
     const maybeFinish = () => {
       if (pending.size > 0 || settled) return;
@@ -82,6 +132,10 @@ export function spawnWorker({ invocation, cwd, brief, logDir, spawnImpl = spawn 
     child.on("close", (code) => {
       exitCode = code;
       pending.delete("child");
+      reapProcessGroup(child.pid, { graceMs: killGraceMs, killImpl }).then(() => {
+        pending.delete("reap");
+        maybeFinish();
+      });
       maybeFinish();
     });
   });
