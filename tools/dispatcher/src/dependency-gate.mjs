@@ -9,7 +9,9 @@ const COMPLETED_BLOCKER_STATE_NAMES = new Set(["Done", "Released", "Canceled", "
 
 /**
  * @param {object[]} issues - normalized issues from LinearClient.issuesInState(),
- *   each carrying `inverseRelations` (raw nodes: {type, relatedIssue: {id, state: {name}}})
+ *   each carrying `inverseRelations` (raw nodes: {type, issue: {id, state: {name}},
+ *   relatedIssue: {id}}). For a "blocks" entry there, `issue` is the blocker and
+ *   `relatedIssue` is the issue being blocked (self) -- read `issue`.
  * @returns {(id: string) => boolean} true if the blocker issue `id` is in a
  *   completed/canceled workflow state. Fails closed (false) for an id with no
  *   known state -- an unresolved blocker should never be treated as satisfied.
@@ -18,8 +20,8 @@ export function buildIsIssueSatisfied(issues) {
   const blockerStateNameById = new Map();
   for (const issue of issues) {
     for (const relation of issue.inverseRelations || []) {
-      if (relation.type === "blocks" && relation.relatedIssue) {
-        blockerStateNameById.set(relation.relatedIssue.id, relation.relatedIssue.state ? relation.relatedIssue.state.name : null);
+      if (relation.type === "blocks" && relation.issue) {
+        blockerStateNameById.set(relation.issue.id, relation.issue.state ? relation.issue.state.name : null);
       }
     }
   }

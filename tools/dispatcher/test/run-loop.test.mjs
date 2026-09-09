@@ -230,7 +230,10 @@ describe("runOnce", () => {
       return {
         ...ISSUE,
         blockedByIds: [blockerId],
-        inverseRelations: [{ type: "blocks", relatedIssue: { id: blockerId, state: { name: blockerStateName } } }],
+        // Real Linear shape: `issue` is the blocker, `relatedIssue` is self.
+        inverseRelations: [
+          { type: "blocks", issue: { id: blockerId, state: { name: blockerStateName } }, relatedIssue: { id: ISSUE.id } },
+        ],
       };
     }
 

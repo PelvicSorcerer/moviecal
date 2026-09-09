@@ -31,10 +31,11 @@ describe("LinearClient", () => {
     await expect(client.viewer()).rejects.toThrow(/not authorized/);
   });
 
-  it("derives blockedByIds from inverseRelations, not relations (MOV-128)", async () => {
-    // Real MOV-125 -> MOV-126 -> MOV-127 shape: MOV-126 is blocked by MOV-125
-    // (shows up only in MOV-126's inverseRelations) and itself blocks MOV-127
-    // (shows up in MOV-126's own relations, i.e. a dependent, not a blocker).
+  it("derives blockedByIds from inverseRelations.issue, not relations or self (MOV-128)", async () => {
+    // Real MOV-125 -> MOV-126 -> MOV-127 shape, verified live: in MOV-126's
+    // inverseRelations, a "blocks" entry has `issue` = the blocker (MOV-125)
+    // and `relatedIssue` = MOV-126 itself. MOV-126 blocking MOV-127 shows up
+    // under MOV-126's own `relations` (a dependent, not a blocker).
     const fetchImpl = mockFetch({
       issues: {
         nodes: [
@@ -53,7 +54,10 @@ describe("LinearClient", () => {
               ],
             },
             inverseRelations: {
-              nodes: [{ type: "blocks", issue: { id: "id-126" }, relatedIssue: { id: "id-125", state: { name: "In Review" } } }],
+              nodes: [
+                { type: "blocks", issue: { id: "id-125", state: { name: "In Review" } }, relatedIssue: { id: "id-126" } },
+                { type: "related", issue: { id: "id-9", state: { name: "Backlog" } }, relatedIssue: { id: "id-126" } },
+              ],
             },
           },
         ],
@@ -74,7 +78,8 @@ describe("LinearClient", () => {
         labels: ["area:calendar", "worker:codex"],
         blockedByIds: ["id-125"],
         inverseRelations: [
-          { type: "blocks", issue: { id: "id-126" }, relatedIssue: { id: "id-125", state: { name: "In Review" } } },
+          { type: "blocks", issue: { id: "id-125", state: { name: "In Review" } }, relatedIssue: { id: "id-126" } },
+          { type: "related", issue: { id: "id-9", state: { name: "Backlog" } }, relatedIssue: { id: "id-126" } },
         ],
         relations: [
           { type: "blocks", relatedIssue: { id: "id-127", state: { name: "Backlog" } } },
