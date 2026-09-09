@@ -92,9 +92,28 @@ Rationale:
 - It is the mainstream **machine-to-machine / service-account** pattern (OAuth 2.0
   client credentials), and it is the exact shape Linear documents for
   CI/automation: "request a new client credentials token at the start of each run."
-- Assistant sessions (interactive Claude Code / Codex work outside the dispatcher)
-  can adopt the same credential later if we want their Linear mutations to notify the
-  repo owner too — out of scope for `MOV-122`, noted for follow-up.
+- Interactive assistant sessions keep using the personal API key — see
+  "Scope: dispatcher only" below.
+
+## Scope: dispatcher only, not interactive assistant sessions
+
+Interactive Claude Code / Codex sessions also mutate Linear under the personal key
+today, so the repo owner gets no notification for their activity either. This is
+**deliberately left as-is**, not folded into `MOV-122`:
+
+- Those sessions are **attended** — the human is present as the change is made. A
+  push notification for something you are actively doing at your desk is noise,
+  which is exactly what self-notification suppression exists to prevent.
+- The dispatcher is the real case: unattended, so "someone else did this while you
+  weren't looking" is genuinely true and the notification is genuinely useful.
+- Attributing a real-time, human-directed session's mutations to a bot identity
+  muddies the workspace activity feed ("did I do this, or an agent on my behalf?").
+- There is no shared long-lived Linear client for ad-hoc sessions — each would need
+  its own token acquisition, more plumbing for little gain.
+
+Revisit only if attended-session blindness turns out to matter in practice (e.g. the
+repo owner routinely starts a session and walks away) — then as its own small issue,
+reusing the credential this milestone provisions.
 
 ## Relationship to the `launchd` service (MOV-120)
 
@@ -146,9 +165,8 @@ Created 2026-09-08 as [`MOV-123`](https://linear.app/moviecal/issue/MOV-123) →
   `app:assignable` + `app:mentionable` (no `admin`).
 - Query and record the app's **per-workspace identity ID**.
 - Capture the **client ID** and **client secret**.
-- Decide and record the agent's display name in the workspace (proposed:
-  `moviecal-dispatcher`). Confirm via readback that it does **not** count as a
-  billable member.
+- Set the agent's workspace display name to `moviecal-dispatcher`. Confirm via
+  readback that it does **not** count as a billable member.
 - Acceptance: app appears installed in workspace settings; a manual
   client-credentials token request returns a usable access token; `viewer`-style
   identity query run with that token returns the app identity, not a person.
@@ -206,13 +224,13 @@ Created 2026-09-08 as [`MOV-123`](https://linear.app/moviecal/issue/MOV-123) →
   "new open item" note, record the outcome) and
   `docs/operators/local-execution.md` §Security model.
 
-## Open questions for the repo owner
+## Resolved decisions (repo owner, 2026-09-08)
 
-1. Agent display name in the workspace — `moviecal-dispatcher`, or something else?
-2. Should interactive assistant sessions (not just the dispatcher) also move to the
-   app credential in a later issue, so *their* Linear activity notifies you too?
-3. Milestone name — `Linear actor authorization` under Developer Governance & Agent
-   Infrastructure, as proposed here?
+1. **Agent workspace display name: `moviecal-dispatcher`.**
+2. **Scope stays dispatcher-only** — interactive assistant sessions keep the personal
+   API key (rationale under "Scope: dispatcher only" above).
+3. **Milestone name: `Linear actor authorization`** under Developer Governance &
+   Agent Infrastructure — kept as created.
 
 ## References
 
