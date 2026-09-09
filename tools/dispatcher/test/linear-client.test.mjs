@@ -122,6 +122,45 @@ describe("LinearClient", () => {
     expect(issue.blockedByIds).toEqual([]);
   });
 
+  it("issuesForPromotion adds stateName + recentComments and filters by a state list (MOV-129)", async () => {
+    const fetchImpl = mockFetch({
+      issues: {
+        nodes: [
+          {
+            id: "id-900",
+            identifier: "MOV-900",
+            title: "Ready-ish",
+            description: "## Acceptance criteria\n- x\n## Testing Expectations\n- unit",
+            url: "https://linear.app/moviecal/issue/MOV-900",
+            state: { name: "Blocked" },
+            project: null,
+            labels: { nodes: [{ name: "type:fix" }] },
+            relations: { nodes: [] },
+            inverseRelations: {
+              nodes: [{ type: "blocks", issue: { id: "id-800", state: { name: "Done" } }, relatedIssue: { id: "id-900" } }],
+            },
+            comments: { nodes: [{ body: "first" }, { body: "**Dispatcher preflight failed:** blocked by unresolved relation(s): id-800" }] },
+          },
+        ],
+      },
+    });
+    const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+    const [issue] = await client.issuesForPromotion({ teamKey: "MOV", stateNames: ["Backlog", "Blocked"] });
+
+    expect(issue.stateName).toBe("Blocked");
+    expect(issue.blockedByIds).toEqual(["id-800"]);
+    expect(issue.recentComments).toEqual([
+      "first",
+      "**Dispatcher preflight failed:** blocked by unresolved relation(s): id-800",
+    ]);
+
+    const [, init] = fetchImpl.mock.calls[0];
+    const { query, variables } = JSON.parse(init.body);
+    expect(query).toMatch(/state:\s*\{\s*name:\s*\{\s*in:\s*\$stateNames\s*\}\s*\}/);
+    expect(variables.stateNames).toEqual(["Backlog", "Blocked"]);
+  });
+
   describe("addBlocksRelation", () => {
     it("maps blockerId -> issueId and blockedId -> relatedIssueId", async () => {
       const fetchImpl = mockFetch({ issueRelationCreate: { success: true } });
