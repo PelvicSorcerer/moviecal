@@ -48,13 +48,13 @@ Used only where real sequencing exists. Initial milestones live under **iOS Comp
 | Category | State | Meaning |
 |---|---|---|
 | Triage | Triage | Linear Triage inbox — external GitHub bug/feature intake lands here |
-| Backlog | Backlog | Accepted, not yet specified |
+| Backlog | Backlog | Accepted. The automated promoter (MOV-129) evaluates every issue here each cycle and moves the ready ones to `Ready for Agent`; an unspecified issue simply doesn't qualify yet and stays. |
 | Backlog | Icebox | Deliberately deferred (replaces `Track = Future`) |
-| Unstarted | Spec Ready | Has acceptance criteria + Testing Expectations; not yet cleared for an agent |
-| Unstarted | Ready for Agent | Delegable — the dispatcher only picks up issues in this state |
+| Unstarted | Spec Ready | **Manual hold.** A specced issue parked here deliberately, to keep it out of the automated flow — the promoter never touches this state. Move it back to `Backlog` to let it flow. |
+| Unstarted | Ready for Agent | Delegable — the dispatcher only picks up issues in this state. Filled by the promote pass, not by hand. |
 | Started | Agent Working | A worktree is open and a worker is running |
 | Started | Needs Input | The agent asked a question; waiting on a human |
-| Started | Blocked | A dependency, missing secret, or infra gate failed preflight |
+| Started | Blocked | A dependency, missing secret, or infra gate failed preflight. The promoter auto-recovers issues blocked purely on a now-resolved `blocks` relation; anything blocked for another reason waits for a human. |
 | Started | In Review | A PR is open; CI is running or green |
 | Started | Needs Human Decision | An explicit governance boundary was hit (see `docs/operators/local-execution.md` §Security model) |
 | Completed | Done | PR merged (set automatically by the GitHub magic word, e.g. `Fixes MOV-123`) |
@@ -62,6 +62,8 @@ Used only where real sequencing exists. Initial milestones live under **iOS Comp
 | Canceled | Canceled / Duplicate | — |
 
 This state list is the supervision surface a human uses to answer: what's waiting on me, what's the agent doing right now, what shipped. It replaces the six-state GitHub Project `Status` field plus the `Agent Dispatch` boolean.
+
+**The readiness contract (MOV-129).** An issue in `Backlog` is auto-promoted to `Ready for Agent` when it is not labeled `human-only`, its description has a non-empty acceptance-criteria section (heading matching `/^#+\s*acceptance criteria/i`) and a non-empty Testing Expectations section (`/^#+\s*testing expectations/i`), and every issue that `blocks` it is in a completed/canceled state. `blocks` relations plus the dispatcher's preflight do all sequencing; the promoter only judges readiness. It runs as a phase of `dispatcher run` (and standalone as `dispatcher promote [--dry-run]`). See `docs/operators/local-execution.md` §Automated promotion.
 
 ## Labels
 

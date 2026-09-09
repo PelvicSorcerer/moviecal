@@ -119,6 +119,51 @@ export class LinearClient {
     return data.issues.nodes.map(normalizeIssue);
   }
 
+  /**
+   * Issues in any of `stateNames`, with the extra fields the automated
+   * promoter needs (MOV-129): the issue's own `state.name`, and recent
+   * comment bodies (to read back the dispatcher's last preflight-failure
+   * reason). Same normalization as issuesInState, plus `stateName` and
+   * `recentComments` (oldest-to-newest).
+   */
+  async issuesForPromotion({ teamKey, stateNames }) {
+    const query = `
+      query($teamKey: String!, $stateNames: [String!]!) {
+        issues(filter: {
+          team: { key: { eq: $teamKey } }
+          state: { name: { in: $stateNames } }
+        }) {
+          nodes {
+            id
+            identifier
+            title
+            description
+            url
+            state { name }
+            project { name }
+            labels { nodes { name } }
+            relations { nodes {
+              type
+              relatedIssue { id state { name } }
+            } }
+            inverseRelations { nodes {
+              type
+              issue { id state { name } }
+              relatedIssue { id }
+            } }
+            comments(last: 20) { nodes { body } }
+          }
+        }
+      }
+    `;
+    const data = await this.request(query, { teamKey, stateNames });
+    return data.issues.nodes.map((node) => ({
+      ...normalizeIssue(node),
+      stateName: node.state ? node.state.name : null,
+      recentComments: (node.comments ? node.comments.nodes : []).map((c) => c.body),
+    }));
+  }
+
   async addComment(issueId, body) {
     const mutation = `
       mutation($issueId: String!, $body: String!) {

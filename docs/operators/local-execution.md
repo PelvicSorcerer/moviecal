@@ -45,6 +45,21 @@ Dispatcher code lives in `tools/dispatcher/` in this repository (TypeScript, usi
 
 The dispatcher polls Linear for issues in workflow state `Ready for Agent` that are delegated to it. (A future phase may register a Linear Agent App for webhook-driven dispatch instead of polling; both share the same downstream pipeline.)
 
+## Automated promotion
+
+`Ready for Agent` is filled automatically, not by hand (MOV-129). Each poll cycle, before the dispatch scan, `dispatcher run` runs a **promote pass** (`tools/dispatcher/src/promoter.mjs`; also standalone as `dispatcher promote [--dry-run]`) over every issue in `Backlog` and `Blocked`. An issue is moved to `Ready for Agent` when **all** of:
+
+- it is **not** labeled `human-only`;
+- its description has a non-empty **acceptance-criteria** section (heading matching `/^#+\s*acceptance criteria/i`);
+- its description has a non-empty **Testing Expectations** section (`/^#+\s*testing expectations/i`);
+- every issue that `blocks` it is in a completed/canceled state (`Done`, `Released`, `Canceled`, `Duplicate`), resolved via the same `inverseRelations` data the dependency gate uses.
+
+For a `Blocked` issue there is one extra condition: its most recent `**Dispatcher preflight failed:**` comment must name an unresolved-relation reason (now resolved). An issue blocked for any other reason — a missing secret, a worktree collision, a human's decision — is left alone.
+
+On promotion the promoter comments `Auto-promoted to Ready for Agent — …` (which, via the app-actor identity from MOV-122, notifies the repo owner). It is idempotent: a promoted issue is no longer in `Backlog`/`Blocked`, so a second pass does nothing.
+
+`blocks` relations plus the preflight gates below do all **sequencing**; the promoter only judges **readiness**. There is no per-issue human promotion step. To hold a specced issue out of the automated flow, move it to `Spec Ready` — the promoter never touches that state.
+
 ## Preflight gates
 
 Before starting work on an issue, all of the following must pass, or the issue moves to `Blocked` with a comment naming the failed gate:

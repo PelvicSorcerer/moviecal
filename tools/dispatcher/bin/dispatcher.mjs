@@ -7,6 +7,9 @@
 //                                     without touching any worktree, branch, or Linear
 //                                     state (safe to run with a live or missing key)
 //   dispatcher gc                  - prune merged/stale worktrees and old run logs
+//   dispatcher promote [--dry-run] - move Backlog/Blocked issues that meet the
+//                                     readiness contract into Ready for Agent
+//                                     (MOV-129); the run loop does this each cycle
 //   dispatcher run --once          - process every currently-eligible Ready-for-Agent
 //                                     issue exactly once, then exit (real side effects:
 //                                     creates worktrees, spawns workers, opens PRs)
@@ -41,6 +44,7 @@ import { resolveRouting } from "../src/worker-routing.mjs";
 import { WorktreeManager } from "../src/worktree-manager.mjs";
 import { runOnce } from "../src/run-loop.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
+import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
 import { spawnWorker } from "../src/worker-spawn.mjs";
 import { findPrForBranch, defaultRunner as ghRunner } from "../src/pr-check.mjs";
 import { checkPrState, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
@@ -340,8 +344,57 @@ function reconcileWorktrees() {
   return changes;
 }
 
+/**
+ * Automated backlog promoter (MOV-129): move issues in Backlog/Blocked that
+ * meet the readiness contract into "Ready for Agent". Returns 0/1 for the
+ * standalone `promote` command; `promotePass()` wraps it for the run loop.
+ */
+async function cmdPromoteOnce({ dryRun = false } = {}) {
+  const built = buildLinearClient();
+  if (!built) return 1;
+  const { client: linearClient, teamKey } = built;
+
+  const states = await linearClient.workflowStates(teamKey);
+  const readyState = states.find((s) => s.name === RUN_STATE_NAMES.readyForAgent);
+  if (!readyState) {
+    console.error(`workflow state "${RUN_STATE_NAMES.readyForAgent}" not found (provision the workspace)`);
+    return 1;
+  }
+
+  const issues = await linearClient.issuesForPromotion({ teamKey, stateNames: PROMOTABLE_STATES });
+  const isBlockerSatisfied = buildIsIssueSatisfied(issues);
+  const results = await promoteEligible(issues, {
+    linearClient,
+    readyForAgentStateId: readyState.id,
+    isBlockerSatisfied,
+    dryRun,
+  });
+
+  const promoted = results.filter((r) => r.promoted);
+  for (const r of results) {
+    if (r.promoted) console.log(`${r.issue}: ${dryRun ? "would promote" : "promoted"} — ${r.reason}`);
+    else console.log(`${r.issue}: skip — ${r.reason}`);
+  }
+  console.log(
+    dryRun
+      ? `Dry run — ${promoted.length} issue(s) would be promoted, no Linear state changed.`
+      : `Promoted ${promoted.length} issue(s) to "${RUN_STATE_NAMES.readyForAgent}".`,
+  );
+  return 0;
+}
+
+/** Run a promote pass inside the poll loop; never let it abort dispatch. */
+async function promotePass() {
+  try {
+    await cmdPromoteOnce({ dryRun: false });
+  } catch (err) {
+    console.error("Promote pass failed (continuing to dispatch):", err.message);
+  }
+}
+
 async function cmdRunOnce() {
   reconcileWorktrees();
+  await promotePass();
 
   const built = buildLinearClient();
   if (!built) return 1;
@@ -395,6 +448,11 @@ async function main() {
     case "gc":
       cmdGc();
       break;
+    case "promote": {
+      const dryRun = rest.includes("--dry-run");
+      process.exitCode = await cmdPromoteOnce({ dryRun });
+      break;
+    }
     case "run": {
       const once = rest.includes("--once");
       const intervalFlagIdx = rest.indexOf("--interval");
@@ -403,7 +461,7 @@ async function main() {
       break;
     }
     default:
-      console.error("Usage: dispatcher <doctor|dry-run|gc|run> [--fixture <path>] [--once] [--interval <ms>]");
+      console.error("Usage: dispatcher <doctor|dry-run|gc|promote|run> [--fixture <path>] [--dry-run] [--once] [--interval <ms>]");
       process.exitCode = 1;
   }
 }
