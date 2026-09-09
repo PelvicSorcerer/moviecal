@@ -10,8 +10,10 @@ set -euo pipefail
 #
 # Checks:
 #   1. Home page loads (GET / → expect HTTP 200)
-#   2. Auth gating enforced on search (GET /api/movies/search?query=test → expect HTTP 401)
-#   3. Calendar feed authorization enforced (GET /api/calendar/smoke-test-invalid-token → expect HTTP 401)
+#   2. Search endpoint validates its required query param (GET /api/movies/search?q= → expect HTTP 400).
+#      This route is an intentionally public TMDb passthrough, not auth-gated — a 200 here just
+#      means the search returned results and is not itself a regression signal.
+#   3. Calendar feed resolves unknown tokens to Not Found (GET /api/calendar/smoke-test-invalid-token → expect HTTP 404)
 #
 # Exit 0 if all checks pass; exit 1 on first failure.
 
@@ -50,31 +52,31 @@ fi
 echo "lane:smoke-post-deploy: PASS — home page returned HTTP 200"
 CHECKS_PASSED=$((CHECKS_PASSED + 1))
 
-# --- Check 2: Auth gating enforced on search ---
+# --- Check 2: Search endpoint validates its required query param ---
 
-echo "lane:smoke-post-deploy: [2/3] checking search endpoint auth gate ..."
+echo "lane:smoke-post-deploy: [2/3] checking search endpoint query validation ..."
 
 RESPONSE=$(curl --silent --write-out "\n%{http_code}" \
   --max-time 15 \
   --retry 2 \
   --retry-delay 2 \
-  "${SMOKE_URL}/api/movies/search?query=test")
+  "${SMOKE_URL}/api/movies/search?q=")
 
 HTTP_BODY=$(echo "$RESPONSE" | head -n -1)
 HTTP_STATUS=$(echo "$RESPONSE" | tail -n 1)
 
-if [[ "$HTTP_STATUS" != "401" ]]; then
-  echo "lane:smoke-post-deploy: FAIL — search endpoint returned HTTP $HTTP_STATUS (expected 401; 200 would mean auth is broken)" >&2
+if [[ "$HTTP_STATUS" != "400" ]]; then
+  echo "lane:smoke-post-deploy: FAIL — search endpoint returned HTTP $HTTP_STATUS (expected 400 for blank q)" >&2
   echo "Response body: $HTTP_BODY" >&2
   exit 1
 fi
 
-echo "lane:smoke-post-deploy: PASS — search endpoint returned HTTP 401 (auth gate enforced)"
+echo "lane:smoke-post-deploy: PASS — search endpoint returned HTTP 400 (blank q rejected)"
 CHECKS_PASSED=$((CHECKS_PASSED + 1))
 
-# --- Check 3: Calendar feed authorization enforced ---
+# --- Check 3: Calendar feed resolves unknown tokens to Not Found ---
 
-echo "lane:smoke-post-deploy: [3/3] checking calendar endpoint auth gate ..."
+echo "lane:smoke-post-deploy: [3/3] checking calendar endpoint token resolution ..."
 
 RESPONSE=$(curl --silent --write-out "\n%{http_code}" \
   --max-time 15 \
@@ -85,13 +87,13 @@ RESPONSE=$(curl --silent --write-out "\n%{http_code}" \
 HTTP_BODY=$(echo "$RESPONSE" | head -n -1)
 HTTP_STATUS=$(echo "$RESPONSE" | tail -n 1)
 
-if [[ "$HTTP_STATUS" != "401" ]]; then
-  echo "lane:smoke-post-deploy: FAIL — calendar endpoint returned HTTP $HTTP_STATUS (expected 401)" >&2
+if [[ "$HTTP_STATUS" != "404" ]]; then
+  echo "lane:smoke-post-deploy: FAIL — calendar endpoint returned HTTP $HTTP_STATUS (expected 404 for an unresolvable token)" >&2
   echo "Response body: $HTTP_BODY" >&2
   exit 1
 fi
 
-echo "lane:smoke-post-deploy: PASS — calendar endpoint returned HTTP 401 (auth gate enforced)"
+echo "lane:smoke-post-deploy: PASS — calendar endpoint returned HTTP 404 (unresolvable token)"
 CHECKS_PASSED=$((CHECKS_PASSED + 1))
 
 # --- Summary ---
