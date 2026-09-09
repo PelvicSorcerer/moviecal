@@ -204,17 +204,18 @@ export class LinearClient {
       throw new Error("addBlocksRelation: an issue cannot block itself");
     }
     const mutation = `
-      mutation($issueId: String!, $relatedIssueId: String!) {
+      mutation($issueId: String!, $relatedIssueId: String!, $type: IssueRelationType!) {
         issueRelationCreate(input: {
           issueId: $issueId
           relatedIssueId: $relatedIssueId
-          type: "blocks"
+          type: $type
         }) { success }
       }
     `;
     const data = await this.request(mutation, {
       issueId: blockerId,
       relatedIssueId: blockedId,
+      type: "blocks",
     });
     return data.issueRelationCreate.success;
   }

@@ -162,7 +162,7 @@ describe("LinearClient", () => {
   });
 
   describe("addBlocksRelation", () => {
-    it("maps blockerId -> issueId and blockedId -> relatedIssueId", async () => {
+    it("maps blockerId -> issueId and blockedId -> relatedIssueId, with type sent as a variable", async () => {
       const fetchImpl = mockFetch({ issueRelationCreate: { success: true } });
       const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
 
@@ -172,8 +172,28 @@ describe("LinearClient", () => {
       const { query, variables } = JSON.parse(init.body);
       // The blocker is the source of the "blocks" relation; the blocked issue
       // is its target. Reversing these is the bug this test exists to catch.
-      expect(variables).toEqual({ issueId: "blocker-1", relatedIssueId: "blocked-2" });
-      expect(query).toMatch(/type:\s*"blocks"/);
+      expect(variables).toEqual({ issueId: "blocker-1", relatedIssueId: "blocked-2", type: "blocks" });
+      // `type` must be declared as a typed GraphQL variable, not inlined as a
+      // quoted string literal -- Linear's schema rejects `type: "blocks"`
+      // because IssueRelationType is an enum, and GraphQL only accepts enum
+      // literals or typed variables for enum-typed input fields.
+      expect(query).toMatch(/\$type:\s*IssueRelationType!/);
+      expect(query).toMatch(/type:\s*\$type/);
+      expect(query).not.toMatch(/type:\s*"blocks"/);
+    });
+
+    it("declares issueId and relatedIssueId as typed String! variables used in the input object", async () => {
+      const fetchImpl = mockFetch({ issueRelationCreate: { success: true } });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      await client.addBlocksRelation({ blockerId: "blocker-1", blockedId: "blocked-2" });
+
+      const [, init] = fetchImpl.mock.calls[0];
+      const { query } = JSON.parse(init.body);
+      expect(query).toMatch(/\$issueId:\s*String!/);
+      expect(query).toMatch(/\$relatedIssueId:\s*String!/);
+      expect(query).toMatch(/issueId:\s*\$issueId/);
+      expect(query).toMatch(/relatedIssueId:\s*\$relatedIssueId/);
     });
 
     it("rejects missing IDs and self-blocking", async () => {
