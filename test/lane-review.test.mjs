@@ -59,7 +59,10 @@ describe("runHeuristics sensitive-path gating", () => {
   });
 
   it("never downgrades a secret-detection block, even when acknowledged", () => {
-    const diffWithSecret = "+ const key = 'sk-abcdefghijklmnopqrstuvwxyz0123'\n";
+    // Build the sk- token at runtime so this file's own source doesn't trip
+    // lane-review's secret scanner when this very repo is the PR under review.
+    const fakeSecret = `sk-${"x".repeat(30)}`;
+    const diffWithSecret = `+ const key = '${fakeSecret}'\n`;
     const findings = runHeuristics(["AGENTS.md"], diffWithSecret, ACK);
     const severities = findings.map((f) => f.severity);
     expect(findings.some((f) => /contain a/.test(f.summary) && f.severity === "block")).toBe(true);
