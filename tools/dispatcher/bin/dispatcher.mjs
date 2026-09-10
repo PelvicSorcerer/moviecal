@@ -56,7 +56,7 @@ import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
 import { spawnWorker } from "../src/worker-spawn.mjs";
 import { findPrForBranch, defaultRunner as ghRunner } from "../src/pr-check.mjs";
-import { checkPrState, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
+import { checkPrState, checkPrObservation, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
 import { applyStagedWorkflowEdit } from "../src/workflow-edit-apply.mjs";
 
 const IOS_RUNNER_NAME = "moviecal-ios-runner";
@@ -387,6 +387,7 @@ function reconcileWorktrees() {
   const changes = reconcileReviewWorktrees(worktreeManager, {
     ghRepo: GITHUB_REPO,
     checkPrStateFn: (prNumber, repo) => checkPrState(prNumber, repo, ghRunner),
+    observePrFn: (prNumber, repo) => checkPrObservation(prNumber, repo, ghRunner),
   });
   for (const c of changes) {
     console.log(`${c.id}: PR #${c.prNumber} is ${c.to === "merged" ? "merged" : "closed"} — worktree marked "${c.to}"`);
