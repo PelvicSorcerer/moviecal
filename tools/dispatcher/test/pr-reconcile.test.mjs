@@ -3,6 +3,7 @@ import {
   aggregateCheckResults,
   checkPrObservation,
   checkPrState,
+  isCheckPrObservation,
   normalizeCheckOutcome,
   observePullRequest,
   reconcileReviewWorktrees,
@@ -92,6 +93,20 @@ describe("observePullRequest", () => {
 });
 
 describe("checkPrObservation", () => {
+  it("recognizes valid observations and rejects malformed fixtures", () => {
+    expect(isCheckPrObservation({
+      state: "OPEN",
+      headSha: "sha",
+      checks: { checks: [], required: [], missingRequired: [] },
+    })).toBe(true);
+    expect(isCheckPrObservation({ state: "OPEN", headSha: "sha", checks: {} })).toBe(false);
+    expect(isCheckPrObservation({
+      observationError: { recoverable: true, message: "unavailable" },
+      state: "UNAVAILABLE",
+      actionable: false,
+    })).toBe(true);
+  });
+
   it("returns a recoverable observation error for CLI/API parse failures", () => {
     const result = checkPrObservation(42, "owner/repo", () => "not json");
     expect(result).toEqual({
