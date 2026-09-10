@@ -36,6 +36,10 @@ export function worktreesStatePath() {
   return path.join(configDir(), "worktrees.json");
 }
 
+export function dispatcherLockPath() {
+  return path.join(configDir(), "dispatcher.lock");
+}
+
 export function worktreeRoot() {
   return process.env.MOVIECAL_WORKTREE_ROOT || path.join(os.homedir(), "code", "worktrees", "moviecal");
 }
@@ -44,7 +48,10 @@ export function logRoot() {
   return process.env.MOVIECAL_LOG_ROOT || path.join(os.homedir(), "Library", "Logs", "moviecal-dispatcher");
 }
 
-export const DEFAULT_CONCURRENCY = 2;
+// The Mac adapter is deliberately single-flight. Xcode and the self-hosted
+// runner contend for the same scarce resources; raise this only when a real
+// nonblocking supervisor exists.
+export const DEFAULT_CONCURRENCY = 1;
 export const RUN_LOG_RETENTION_DAYS = 90;
 export const FAILED_WORKTREE_RETENTION_DAYS = 7;
 // MOV-138: a worker is one-shot with no resume, so a hang (MOV-106) must be

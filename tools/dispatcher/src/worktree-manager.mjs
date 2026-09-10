@@ -11,6 +11,48 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { trustWorkspace as defaultTrustWorkspace } from "./claude-trust.mjs";
 
+export class DispatcherLock {
+  constructor(lockPath, { fsImpl = fs, pid = process.pid } = {}) {
+    this.lockPath = lockPath;
+    this.fs = fsImpl;
+    this.pid = pid;
+    this.owned = false;
+  }
+
+  acquire() {
+    this.fs.mkdirSync(path.dirname(this.lockPath), { recursive: true, mode: 0o700 });
+    try {
+      const fd = this.fs.openSync(this.lockPath, "wx", 0o600);
+      this.fs.writeFileSync(fd, JSON.stringify({ pid: this.pid, startedAt: new Date().toISOString() }) + "\n");
+      this.fs.closeSync(fd);
+      this.owned = true;
+      return this;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      let owner = "unknown";
+      try { owner = JSON.parse(this.fs.readFileSync(this.lockPath, "utf8")).pid || owner; } catch {}
+      if (owner !== "unknown" && Number(owner) !== this.pid) {
+        try { process.kill(Number(owner), 0); } catch (probeError) {
+          if (probeError.code === "ESRCH") {
+            this.fs.unlinkSync(this.lockPath);
+            return this.acquire();
+          }
+        }
+      }
+      throw new Error(`dispatcher is already running (lock: ${this.lockPath}, pid: ${owner})`);
+    }
+  }
+
+  release() {
+    if (!this.owned) return;
+    try {
+      const owner = JSON.parse(this.fs.readFileSync(this.lockPath, "utf8"));
+      if (Number(owner.pid) === this.pid) this.fs.unlinkSync(this.lockPath);
+    } catch {}
+    this.owned = false;
+  }
+}
+
 export function defaultRunner(command, args, opts = {}) {
   return execFileSync(command, args, { encoding: "utf8", ...opts });
 }
@@ -29,16 +71,40 @@ export class WorktreeManager {
 
   loadState() {
     if (!fs.existsSync(this.statePath)) return {};
-    try {
-      return JSON.parse(fs.readFileSync(this.statePath, "utf8"));
-    } catch {
-      return {};
+    const read = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+    try { return this.validateState(read(this.statePath)); } catch (primaryError) {
+      try { return this.validateState(read(`${this.statePath}.bak`)); } catch {
+        throw new Error(`dispatcher state is corrupt and no valid backup exists: ${primaryError.message}`);
+      }
     }
   }
 
   saveState(state) {
     fs.mkdirSync(path.dirname(this.statePath), { recursive: true });
-    fs.writeFileSync(this.statePath, JSON.stringify(state, null, 2) + "\n", { mode: 0o600 });
+    this.validateState(state);
+    const tempPath = `${this.statePath}.${process.pid}.${Date.now()}.tmp`;
+    const fd = fs.openSync(tempPath, "w", 0o600);
+    try {
+      fs.writeFileSync(fd, JSON.stringify(state, null, 2) + "\n", "utf8");
+      fs.fsyncSync(fd);
+    } finally { fs.closeSync(fd); }
+    fs.chmodSync(tempPath, 0o600);
+    if (fs.existsSync(this.statePath)) {
+      try { this.validateState(JSON.parse(fs.readFileSync(this.statePath, "utf8"))); fs.copyFileSync(this.statePath, `${this.statePath}.bak`); } catch {}
+    }
+    fs.renameSync(tempPath, this.statePath);
+    try {
+      const dirFd = fs.openSync(path.dirname(this.statePath), "r");
+      try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+    } catch {}
+  }
+
+  validateState(state) {
+    if (!state || typeof state !== "object" || Array.isArray(state)) throw new Error("state root must be an object");
+    for (const [id, entry] of Object.entries(state)) {
+      if (!entry || typeof entry !== "object" || entry.id !== id) throw new Error(`invalid state entry: ${id}`);
+    }
+    return state;
   }
 
   isPathFree(worktreePath) {
@@ -132,6 +198,7 @@ export class WorktreeManager {
       linearUrl,
       status: "active",
       pid: process.pid,
+      workerPid: null,
       startedAt: new Date().toISOString(),
     };
     const state = this.loadState();
@@ -154,6 +221,67 @@ export class WorktreeManager {
     Object.assign(state[id], extra);
     this.saveState(state);
     return state[id];
+  }
+
+  markStatusIf(id, expectedStatus, status, extra = {}) {
+    const state = this.loadState();
+    if (!state[id] || state[id].status !== expectedStatus) return null;
+    state[id].status = status;
+    state[id].endedAt = new Date().toISOString();
+    Object.assign(state[id], extra);
+    this.saveState(state);
+    return state[id];
+  }
+
+  setWorkerPid(id, workerPid) {
+    const state = this.loadState();
+    if (!state[id]) throw new Error(`no worktree record for ${id}`);
+    state[id].workerPid = workerPid || null;
+    this.saveState(state);
+  }
+
+  reconcileStartup({ isPidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } } } = {}) {
+    const state = this.loadState();
+    const changes = [];
+    for (const [id, entry] of Object.entries(state)) {
+      if (!["active", "review"].includes(entry.status)) continue;
+      if (!fs.existsSync(entry.path)) {
+        state[id].status = "abandoned";
+        state[id].endedAt = new Date().toISOString();
+        state[id].recoveryReason = "recorded worktree is missing after dispatcher restart";
+        changes.push({ id, from: entry.status, to: "abandoned", reason: state[id].recoveryReason });
+      } else if (entry.status === "review" && !entry.prNumber) {
+        state[id].status = "abandoned";
+        state[id].endedAt = new Date().toISOString();
+        state[id].recoveryReason = "review record has no PR number after dispatcher restart";
+        changes.push({ id, from: "review", to: "abandoned", reason: state[id].recoveryReason });
+      } else if (entry.status === "active" && (!entry.workerPid || !isPidAlive(entry.workerPid))) {
+        state[id].status = "abandoned";
+        state[id].endedAt = new Date().toISOString();
+        state[id].recoveryReason = "dispatcher restarted after worker stopped without a terminal update";
+        changes.push({ id, from: "active", to: "abandoned", reason: state[id].recoveryReason });
+      }
+    }
+    const knownPaths = new Set(Object.values(state).map((entry) => path.resolve(entry.path)));
+    const porcelain = this.runner("git", ["worktree", "list", "--porcelain"], { cwd: this.repoRoot });
+    let orphanPath = null;
+    let orphanBranch = null;
+    for (const line of porcelain.split("\n")) {
+      if (line.startsWith("worktree ")) orphanPath = line.slice("worktree ".length);
+      if (line.startsWith("branch refs/heads/")) orphanBranch = line.slice("branch refs/heads/".length);
+      if (!line && orphanPath && path.resolve(orphanPath) !== path.resolve(this.repoRoot)
+        && path.relative(this.worktreeRoot, orphanPath) && !path.relative(this.worktreeRoot, orphanPath).startsWith("..")
+        && !knownPaths.has(path.resolve(orphanPath))) {
+        try { this.runner("git", ["worktree", "remove", "--force", orphanPath], { cwd: this.repoRoot }); } catch {}
+        if (orphanBranch?.startsWith("agent/")) {
+          try { this.runner("git", ["branch", "-D", orphanBranch], { cwd: this.repoRoot }); } catch {}
+        }
+        changes.push({ path: orphanPath, branch: orphanBranch, from: "orphaned", to: "removed" });
+      }
+      if (!line) { orphanPath = null; orphanBranch = null; }
+    }
+    if (changes.length) this.saveState(state);
+    return changes;
   }
 
   /** Remove the worktree directory, delete the local+remote branch, and drop the record. */

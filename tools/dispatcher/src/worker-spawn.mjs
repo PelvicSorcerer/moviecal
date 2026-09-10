@@ -136,7 +136,7 @@ export function spawnWorker({
           2,
         ) + "\n",
       );
-      resolve({ exitCode: exitCode ?? 1, logDir });
+      resolve({ exitCode: exitCode ?? 1, logDir, pid: child.pid || null });
     };
 
     stdoutStream.on("finish", () => {

@@ -110,7 +110,9 @@ These run **after** the §Dispatch trigger gate has established that the issue i
 2. Not labeled `human-only`.
 3. Not labeled `needs-secrets` unless the named local secret is actually present.
 4. If the issue is in the **iOS Companion App** project: the self-hosted macOS runner (`moviecal-ios-runner`, labels `self-hosted, macOS, ios`) is online.
-5. A concurrency slot is free (default: 2 simultaneous worktrees).
+5. A concurrency slot is free (default: **1** simultaneous worktree). The Mac
+   dispatcher is intentionally single-flight until a real nonblocking job
+   supervisor can account for child process groups and resource limits.
 6. `origin/master` is fetched.
 7. The target worktree path is unused. This is also what makes overlapping poll cycles safe: a second cycle that sees the same issue collides here and reports `Blocked` rather than spawning a second worker. It is a real filesystem mutex — unlike the `Agent Working` state change, which is only a report (§Dispatch trigger).
 
@@ -119,10 +121,24 @@ These run **after** the §Dispatch trigger gate has established that the issue i
 - **Path:** `~/code/worktrees/moviecal/<LINEAR-ID>-<slug>`
 - **Branch:** `agent/<LINEAR-ID>-<slug>`, branched from `origin/master`
 - The Linear issue identifier appears in both the path and the branch name, so ownership is always unambiguous from either side.
-- Ownership is recorded in `~/.config/moviecal/worktrees.json`: identifier, branch, PID, worker, model, start time, Linear issue URL.
+- Ownership is recorded in `~/.config/moviecal/worktrees.json`: identifier, branch, dispatcher/worker PIDs, worker, model, start time, Linear issue URL. Writes use a fsync + rename transaction and retain a `.bak`; a malformed primary state file is recovered from that backup or the dispatcher refuses to mutate anything.
+- The mutating `dispatcher run` command takes `~/.config/moviecal/dispatcher.lock` using exclusive file creation. A second live instance exits without touching Linear, worktrees, branches, or registry state. A stale lock is reclaimed only when its recorded PID no longer exists.
 - `.env.local` is a **symlink** to `~/.config/moviecal/env.local`, never a copy — one file to rotate, and no credential material ever lands inside a git-tracked tree.
 - **Cleanup:** on merge, the worktree is removed and the remote branch deleted. On failure, the worktree is retained for 7 days for inspection, then pruned. `dispatcher gc` (also runnable manually) prunes stale entries and orphaned worktrees.
 - **Reconciliation (`pr-reconcile.mjs`):** once a worker's PR is found, the worktree entry records `prNumber`/`prUrl` alongside its `"review"` status. Every `dispatcher run` poll cycle (via `cmdRunOnce`, before processing new issues) sweeps every worktree in `"review"` and checks its PR's real state (`gh pr view <n> --json state,mergedAt`): merged → marked `"merged"` (so the next `gc` cleans it up); closed without merging → marked `"abandoned"` (7-day retention path, same as a worker failure). Before this existed, a merged PR's worktree just sat there indefinitely — nothing watched it after `"review"` — and had to be cleaned up by hand (found during `MOV-117` cleanup, fixed by `MOV-118`). Linear's own state generally transitions separately via the GitHub magic-word sync (`Fixes MOV-NNN` in the PR body) once merged; this reconciliation only owns the local worktree bookkeeping.
+- **Crash recovery:** startup reconciles every nonterminal registry entry. A missing worktree or an active entry whose recorded worker PID is gone is marked `abandoned` with a recovery reason for human/Linear follow-up. Review transitions are conditional on the entry still being in `review`, so a reconciliation pass cannot overwrite a newly active worker record.
+
+### Resource contention policy
+
+The Mac adapter has one dispatcher slot by default. Heavy Xcode builds/tests,
+the iOS Simulator, and the self-hosted `moviecal-ios-runner` are treated as a
+single scarce resource pool: do not run them concurrently with another local
+worker, and do not raise `MOVIECAL_CONCURRENCY` to bypass that policy. The
+runner's online status is a preflight gate, but it is not a second execution
+slot. If a future supervisor can queue and cancel process groups without
+leaving `xcodebuild`, `simctl`, or npm descendants behind, this section and
+`DEFAULT_CONCURRENCY` may be revised together with tests proving the new
+semantics.
 - Agents must not commit directly to `master`, and never operate outside their assigned worktree.
 
 ## Worker interface

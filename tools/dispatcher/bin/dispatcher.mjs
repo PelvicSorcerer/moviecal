@@ -38,6 +38,7 @@ import {
   DEFAULT_WORKER_TIMEOUT_MS,
   RUN_LOG_RETENTION_DAYS,
   REPO_ROOT,
+  dispatcherLockPath,
 } from "../src/config.mjs";
 import { LinearClient } from "../src/linear-client.mjs";
 import { getAppToken } from "../src/linear-app-auth.mjs";
@@ -49,7 +50,7 @@ import {
   evaluateLocalDispatch,
   selectCloudCandidates,
 } from "../src/dispatch-eligibility.mjs";
-import { WorktreeManager } from "../src/worktree-manager.mjs";
+import { DispatcherLock, WorktreeManager } from "../src/worktree-manager.mjs";
 import { runOnce } from "../src/run-loop.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
@@ -345,7 +346,9 @@ async function buildRunContext(linearClient, teamKey, issues) {
       inReview: stateId(RUN_STATE_NAMES.inReview),
     },
     worktreeManager,
-    concurrencyLimit: Number(process.env.MOVIECAL_CONCURRENCY || DEFAULT_CONCURRENCY),
+    // MOV-144: a config value above the single-flight resource policy is not
+    // honored until a nonblocking supervisor exists.
+    concurrencyLimit: Math.min(Number(process.env.MOVIECAL_CONCURRENCY || DEFAULT_CONCURRENCY), DEFAULT_CONCURRENCY),
     workerTimeoutMs: Number(process.env.MOVIECAL_WORKER_TIMEOUT_MS || DEFAULT_WORKER_TIMEOUT_MS),
     iosRunnerOnline: await checkIosRunnerOnline(),
     isIssueSatisfied: buildIsIssueSatisfied(issues),
@@ -378,6 +381,9 @@ function reconcileWorktrees() {
     worktreeRoot: worktreeRoot(),
     statePath: worktreesStatePath(),
   });
+  for (const c of worktreeManager.reconcileStartup()) {
+    console.log(`${c.id}: startup recovery marked ${c.from} worktree ${c.to} — ${c.reason}`);
+  }
   const changes = reconcileReviewWorktrees(worktreeManager, {
     ghRepo: GITHUB_REPO,
     checkPrStateFn: (prNumber, repo) => checkPrState(prNumber, repo, ghRunner),
@@ -462,9 +468,10 @@ async function cmdRunOnce() {
 }
 
 async function cmdRun({ once, intervalMs }) {
-  if (once) {
-    return cmdRunOnce();
-  }
+  const lock = new DispatcherLock(dispatcherLockPath());
+  try { lock.acquire(); } catch (err) { console.error(err.message); return 2; }
+  process.once("exit", () => lock.release());
+  if (once) { try { return await cmdRunOnce(); } finally { lock.release(); } }
   console.log(`Starting poll loop (interval: ${intervalMs}ms). Press Ctrl+C to stop.`);
   // eslint-disable-next-line no-constant-condition
   while (true) {

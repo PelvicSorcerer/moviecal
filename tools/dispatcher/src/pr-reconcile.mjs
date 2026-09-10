@@ -54,17 +54,18 @@ export function reconcileReviewWorktrees(worktreeManager, ctx) {
   const { ghRepo, checkPrStateFn } = ctx;
   const state = worktreeManager.loadState();
   const changes = [];
+  const markIfReview = (id, status) => worktreeManager.markStatusIf
+    ? worktreeManager.markStatusIf(id, "review", status)
+    : (worktreeManager.markStatus(id, status), true);
 
   for (const [id, entry] of Object.entries(state)) {
     if (entry.status !== "review" || !entry.prNumber) continue;
 
     const pr = checkPrStateFn(entry.prNumber, ghRepo);
     if (pr.state === "MERGED") {
-      worktreeManager.markStatus(id, "merged");
-      changes.push({ id, prNumber: entry.prNumber, from: "review", to: "merged" });
+      if (markIfReview(id, "merged")) changes.push({ id, prNumber: entry.prNumber, from: "review", to: "merged" });
     } else if (pr.state === "CLOSED") {
-      worktreeManager.markStatus(id, "abandoned");
-      changes.push({ id, prNumber: entry.prNumber, from: "review", to: "abandoned" });
+      if (markIfReview(id, "abandoned")) changes.push({ id, prNumber: entry.prNumber, from: "review", to: "abandoned" });
     }
     // OPEN: nothing to do yet.
   }
