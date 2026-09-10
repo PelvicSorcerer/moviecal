@@ -114,6 +114,23 @@ export function observePullRequest({ pr, checks = [], requiredChecks = [], revie
   };
 }
 
+/** Return whether a value has the data shape emitted by checkPrObservation. */
+export function isCheckPrObservation(value) {
+  if (!value || typeof value !== "object") return false;
+  if (value.observationError) {
+    return value.state === "UNAVAILABLE"
+      && typeof value.observationError === "object"
+      && typeof value.observationError.message === "string";
+  }
+  return typeof value.state === "string"
+    && (value.headSha === null || typeof value.headSha === "string")
+    && value.checks
+    && typeof value.checks === "object"
+    && Array.isArray(value.checks.checks)
+    && Array.isArray(value.checks.required)
+    && Array.isArray(value.checks.missingRequired);
+}
+
 /** Read-only GitHub CLI observer. Optional protection/review calls fail closed as observation errors. */
 export function checkPrObservation(prNumber, repo, runner = defaultRunner) {
   try {

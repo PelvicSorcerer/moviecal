@@ -56,7 +56,7 @@ import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
 import { spawnWorker } from "../src/worker-spawn.mjs";
 import { findPrForBranch, defaultRunner as ghRunner } from "../src/pr-check.mjs";
-import { checkPrState, checkPrObservation, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
+import { checkPrState, checkPrObservation, isCheckPrObservation, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
 import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
 import { applyStagedWorkflowEdit } from "../src/workflow-edit-apply.mjs";
 
@@ -310,6 +310,10 @@ function cmdShadow({ prNumber, fixturePath } = {}) {
   let observation;
   if (fixturePath) {
     observation = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
+    if (!isCheckPrObservation(observation)) {
+      console.error("shadow fixture must match the checkPrObservation shape");
+      return 1;
+    }
   } else {
     observation = checkPrObservation(prNumber, GITHUB_REPO, ghRunner);
   }
@@ -449,7 +453,9 @@ async function reportReviewCi(linearClient, teamKey) {
     if (observation.observationError || !observation.headSha) continue;
     const events = (observation.checks?.checks || []).map((check) => ({ ...check, sha: check.sha || observation.headSha, conclusion: check.outcome }));
     const decision = decideCiOutcome({ prNumber: entry.prNumber, prUrl: entry.prUrl || null, headSha: observation.headSha, events });
-    const existingBodies = linearClient.issueComments ? await linearClient.issueComments(issue.id) : [];
+    const existingBodies = typeof linearClient?.issueComments === "function"
+      ? await linearClient.issueComments(issue.id)
+      : [];
     results.push(await reportObservationToLinear({
       linearClient,
       issueId: issue.id,
