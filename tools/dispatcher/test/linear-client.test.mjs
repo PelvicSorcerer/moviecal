@@ -391,4 +391,103 @@ describe("LinearClient", () => {
       expect(fetchImpl.mock.calls[0][1].headers.Authorization).toBe("lin_api_abc");
     });
   });
+
+  describe("Agent Session mutations (MOV-167, Developer Preview)", () => {
+    // These document shapes are transcribed from Linear's published preview
+    // docs and have never returned successfully against this workspace —
+    // MOV-141's live probe got `agent sessions disabled` from
+    // agentSessionCreateOnIssue. These tests pin the request/response
+    // *handling*, which is what the bridge depends on; the field names
+    // themselves stay unverified until MOV-166 enables the feature.
+    function bodyOf(fetchImpl, index = 0) {
+      return JSON.parse(fetchImpl.mock.calls[index][1].body);
+    }
+
+    it("creates a session on an issue and returns its id and status", async () => {
+      const fetchImpl = mockFetch({ agentSessionCreateOnIssue: { success: true, agentSession: { id: "s1", status: "active" } } });
+      const client = new LinearClient({ apiKey: "k", fetchImpl });
+
+      expect(await client.createAgentSessionOnIssue({ issueId: "uuid-1" })).toEqual({ id: "s1", status: "active" });
+      expect(bodyOf(fetchImpl).variables).toEqual({ issueId: "uuid-1" });
+    });
+
+    it("throws when the mutation succeeds but returns no session", async () => {
+      const fetchImpl = mockFetch({ agentSessionCreateOnIssue: { success: true, agentSession: null } });
+      const client = new LinearClient({ apiKey: "k", fetchImpl });
+
+      await expect(client.createAgentSessionOnIssue({ issueId: "uuid-1" })).rejects.toThrow(/no agent session/);
+    });
+
+    it("surfaces the entitlement rejection verbatim, so the bridge can recognize it", async () => {
+      // The exact string the bridge's isAgentSessionsUnavailableError() matches
+      // on. Rewording it here would silently break the fallback latch.
+      const fetchImpl = vi.fn().mockResolvedValue({
+        json: async () => ({ errors: [{ message: "agent sessions disabled" }] }),
+      });
+      const client = new LinearClient({ apiKey: "k", fetchImpl });
+
+      await expect(client.createAgentSessionOnIssue({ issueId: "uuid-1" })).rejects.toThrow(/agent sessions disabled/);
+    });
+
+    it("requires an issueId before making any request", async () => {
+      const fetchImpl = mockFetch({});
+      await expect(new LinearClient({ apiKey: "k", fetchImpl }).createAgentSessionOnIssue({})).rejects.toThrow(/issueId/);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("emits an activity with the serialized content object", async () => {
+      const fetchImpl = mockFetch({ agentActivityCreate: { success: true, agentActivity: { id: "a1" } } });
+      const client = new LinearClient({ apiKey: "k", fetchImpl });
+      const content = { type: "thought", body: "picked it up" };
+
+      expect(await client.createAgentActivity({ agentSessionId: "s1", content })).toBe(true);
+      expect(bodyOf(fetchImpl).variables).toEqual({ agentSessionId: "s1", content });
+    });
+
+    it("validates activity arguments before making any request", async () => {
+      const fetchImpl = mockFetch({});
+      const client = new LinearClient({ apiKey: "k", fetchImpl });
+
+      await expect(client.createAgentActivity({ content: { type: "thought" } })).rejects.toThrow(/agentSessionId/);
+      await expect(client.createAgentActivity({ agentSessionId: "s1", content: null })).rejects.toThrow(/content object/);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("sets the session's external URL to the PR link", async () => {
+      const fetchImpl = mockFetch({ agentSessionUpdate: { success: true } });
+      const client = new LinearClient({ apiKey: "k", fetchImpl });
+
+      expect(await client.updateAgentSessionExternalLink("s1", "https://gh/pr/1")).toBe(true);
+      expect(bodyOf(fetchImpl).variables).toEqual({ id: "s1", externalUrl: "https://gh/pr/1" });
+    });
+
+    it("validates external-link arguments before making any request", async () => {
+      const fetchImpl = mockFetch({});
+      const client = new LinearClient({ apiKey: "k", fetchImpl });
+
+      await expect(client.updateAgentSessionExternalLink(null, "https://gh/pr/1")).rejects.toThrow(/agentSessionId/);
+      await expect(client.updateAgentSessionExternalLink("s1", "")).rejects.toThrow(/externalUrl/);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("reads a session back for the attach-vs-new decision", async () => {
+      const fetchImpl = mockFetch({ agentSession: { id: "s1", status: "complete", updatedAt: "2026-09-10T00:00:00.000Z" } });
+      const client = new LinearClient({ apiKey: "k", fetchImpl });
+
+      expect(await client.agentSession("s1")).toEqual({
+        id: "s1",
+        status: "complete",
+        lastActivityAt: "2026-09-10T00:00:00.000Z",
+      });
+    });
+
+    it("reads a missing session as null, which callers treat as no prior session", async () => {
+      const fetchImpl = mockFetch({ agentSession: null });
+      const client = new LinearClient({ apiKey: "k", fetchImpl });
+
+      expect(await client.agentSession("s1")).toBeNull();
+      expect(await client.agentSession(null)).toBeNull();
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+  });
 });
