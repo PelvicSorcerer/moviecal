@@ -157,10 +157,13 @@ work needing a local secret infer `execution:mac`; supported non-iOS projects
 infer `execution:cloud`; anything ambiguous falls back to `execution:mac`.
 
 Validation rejects missing, conflicting, or semantically invalid labels (for
-example, `execution:none` on an executable issue). The cloud adapter remains
-disabled until its rollout gate is satisfied, so a materialized cloud route is
-currently reported for the cloud adapter rather than executed by the local
-dispatcher.
+example, `execution:none` on an executable issue). **Until the cloud lane is
+piloted (stage 7 below), a materialized `execution:cloud` route is not
+executable:** the local dispatcher moves such an issue to `Needs Human
+Decision` with an explanatory comment and creates no worktree. `execution:none`
+issues are likewise moved to `Needs Human Decision` (skipped, never a PR).
+`docs/operators/local-execution.md` §Automated promotion has the per-route
+dispatch behaviour table.
 
 ## Feasibility gates
 

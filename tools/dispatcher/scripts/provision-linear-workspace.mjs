@@ -116,8 +116,12 @@ async function main() {
   await createState("Released", "completed", 3.5, "#5e6ad2");
 
   // --- Labels ---
+  // 250 is Linear's max page size; this workspace's 250-issue plan cap keeps
+  // the label count well below that, so a single page is a complete list. With
+  // first: 100, an existing `execution` group sitting past the first 100 labels
+  // could be missed and a duplicate group created.
   const labelsData = await gql(
-    `query($teamId: ID) { issueLabels(first: 100, filter: { team: { id: { eq: $teamId } } }) { nodes { id name isGroup } } }`,
+    `query($teamId: ID) { issueLabels(first: 250, filter: { team: { id: { eq: $teamId } } }) { nodes { id name isGroup } } }`,
     { teamId: team.id },
   );
   const existingLabelNodes = labelsData.issueLabels.nodes;

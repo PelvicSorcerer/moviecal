@@ -8,7 +8,7 @@ export const EXECUTION_LABELS = EXECUTION_ROUTES.map((route) => `execution:${rou
 export const EXECUTION_LABEL_GROUP = "execution";
 
 const EXECUTION_LABEL_RE = /^execution:(cloud|mac|none)$/;
-const IOS_OR_XCODE_RE = /\b(?:ios|xcode|xcodebuild|simulator)\b|self-hosted\s+mac(?:os)?\s+runner|local\s+secret/i;
+const IOS_OR_XCODE_RE = /\b(?:ios|xcode|xcodebuild|simulator)\b|\bself-hosted\s+macos?\s+runner\b|\blocal\s+secret\b/i;
 const COORDINATION_LABELS = new Set(["type:coordination", "coordination", "umbrella"]);
 const CLOUD_PROJECTS = new Set([
   "Shared Watchlists",
