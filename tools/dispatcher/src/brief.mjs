@@ -26,7 +26,7 @@ export function generateBrief(issue, { branch, worktreePath, worker, model, upgr
   );
   lines.push("");
   lines.push(
-    "This Linear issue is your assignment. Implement it fully: read its description and acceptance criteria below, make the change, run the required verification lanes (see `docs/planning/testing-lanes.md`; at minimum `npm run verify`), commit your work on the branch above, push it, and open a **draft** pull request against `master` with `gh pr create --draft` that includes a filled-in **Test Impact** section and a `Linear: " + issue.identifier + "` reference (see `.github/pull_request_template.md`).",
+    "This Linear issue is your assignment. Implement it fully: read its description and acceptance criteria below, make the change, run the required verification lanes (see `docs/planning/testing-lanes.md`; at minimum `npm run verify`), commit your work on the branch above, push it, and open a **draft** pull request against `master` with `gh pr create --draft` that includes a filled-in **Test Impact** section and, in the **Linear** field, an explicit closing reference reading `Fixes " + issue.identifier + "` (see `.github/pull_request_template.md`) -- a bare `" + issue.identifier + "` does not trigger Linear's GitHub-integration sync, so the issue would never auto-close on merge.",
   );
   lines.push("");
   lines.push(

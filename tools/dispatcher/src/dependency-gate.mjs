@@ -5,7 +5,10 @@
 // docs/governance/linear-information-architecture.md §Relations for the
 // blockedByIds/inverseRelations direction this depends on (MOV-128).
 
-const COMPLETED_BLOCKER_STATE_NAMES = new Set(["Done", "Released", "Canceled", "Duplicate"]);
+// Exported so other consumers of "is this issue's Linear state terminal?"
+// (pr-reconcile.mjs's merge/close backstop) share one definition instead of
+// drifting from this one.
+export const COMPLETED_BLOCKER_STATE_NAMES = new Set(["Done", "Released", "Canceled", "Duplicate"]);
 
 /**
  * @param {object[]} issues - normalized issues from LinearClient.issuesInState(),

@@ -304,6 +304,7 @@ const RUN_STATE_NAMES = {
   agentWorking: "Agent Working",
   needsHumanDecision: "Needs Human Decision",
   inReview: "In Review",
+  done: "Done",
 };
 
 async function checkIosRunnerOnline() {
@@ -374,8 +375,15 @@ async function buildRunContext(linearClient, teamKey, issues) {
  * closed-without-merging PR gets marked "abandoned" (7-day retention path),
  * with nobody having to notice and clean up by hand. Runs every poll cycle,
  * independent of whether there are new Ready-for-Agent issues.
+ *
+ * MOV-152: when a `linearClient` is available, this also backstops Linear's
+ * own GitHub magic-word sync — idempotently moving a merged PR's issue to
+ * Done if that sync hasn't happened yet, and escalating a closed-unmerged
+ * PR's issue to Needs Human Decision (unless it's already terminal). Without
+ * a live Linear credential, only the worktree bookkeeping half runs; the
+ * backstop simply retries on the next poll cycle that has one.
  */
-function reconcileWorktrees() {
+async function reconcileWorktrees(linearClient, teamKey) {
   const worktreeManager = new WorktreeManager({
     repoRoot: REPO_ROOT,
     worktreeRoot: worktreeRoot(),
@@ -384,10 +392,26 @@ function reconcileWorktrees() {
   for (const c of worktreeManager.reconcileStartup()) {
     console.log(`${c.id}: startup recovery marked ${c.from} worktree ${c.to} — ${c.reason}`);
   }
-  const changes = reconcileReviewWorktrees(worktreeManager, {
+
+  let doneStateId;
+  let needsHumanDecisionStateId;
+  if (linearClient && teamKey) {
+    try {
+      const states = await linearClient.workflowStates(teamKey);
+      doneStateId = states.find((s) => s.name === RUN_STATE_NAMES.done)?.id;
+      needsHumanDecisionStateId = states.find((s) => s.name === RUN_STATE_NAMES.needsHumanDecision)?.id;
+    } catch (err) {
+      console.error("Could not resolve Linear workflow states for PR-outcome reconciliation (continuing worktree-only):", err.message);
+    }
+  }
+
+  const changes = await reconcileReviewWorktrees(worktreeManager, {
     ghRepo: GITHUB_REPO,
     checkPrStateFn: (prNumber, repo) => checkPrState(prNumber, repo, ghRunner),
     observePrFn: (prNumber, repo) => checkPrObservation(prNumber, repo, ghRunner),
+    linearClient,
+    doneStateId,
+    needsHumanDecisionStateId,
   });
   for (const c of changes) {
     console.log(`${c.id}: PR #${c.prNumber} is ${c.to === "merged" ? "merged" : "closed"} — worktree marked "${c.to}"`);
@@ -444,10 +468,15 @@ async function promotePass() {
 }
 
 async function cmdRunOnce() {
-  reconcileWorktrees();
+  const built = buildLinearClient();
+
+  // Reconciliation runs even without a live Linear credential (worktree
+  // bookkeeping alone is still useful, and the Linear backstop is designed
+  // to retry on whichever future poll cycle does have one) -- see
+  // reconcileWorktrees() for how it degrades without a client.
+  await reconcileWorktrees(built?.client, built?.teamKey);
   await promotePass();
 
-  const built = buildLinearClient();
   if (!built) return 1;
   const { client: linearClient, teamKey } = built;
   const issues = await linearClient.issuesInState({

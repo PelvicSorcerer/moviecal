@@ -151,7 +151,7 @@ export class WorktreeManager {
    * Create a new worktree + branch from origin/master and record it.
    * Returns the state entry.
    */
-  create({ id, name, branch, worker, model, linearUrl, envLocalSource }) {
+  create({ id, name, branch, worker, model, linearUrl, linearIssueId, envLocalSource }) {
     const worktreePath = path.join(this.worktreeRoot, name);
     if (!this.isPathFree(worktreePath)) {
       throw new Error(`worktree path already exists: ${worktreePath}`);
@@ -196,6 +196,11 @@ export class WorktreeManager {
       worker,
       model,
       linearUrl,
+      // The Linear issue's internal UUID (distinct from `id`, which is the
+      // human-readable identifier like "MOV-152") -- pr-reconcile.mjs needs
+      // this to write back to the issue (moveToState/addComment) once the PR
+      // it opened resolves, independent of GitHub's own magic-word sync.
+      linearIssueId: linearIssueId || null,
       status: "active",
       pid: process.pid,
       workerPid: null,
@@ -228,6 +233,21 @@ export class WorktreeManager {
     if (!state[id] || state[id].status !== expectedStatus) return null;
     state[id].status = status;
     state[id].endedAt = new Date().toISOString();
+    Object.assign(state[id], extra);
+    this.saveState(state);
+    return state[id];
+  }
+
+  /**
+   * Merge `extra` fields into an entry without touching `status`/`endedAt`.
+   * Used by pr-reconcile.mjs to record bookkeeping (e.g. `linearSynced`,
+   * `headSha`) after a worktree has already settled into "merged" or
+   * "abandoned" -- a plain `markStatus` call would incorrectly re-stamp
+   * `endedAt` and imply a fresh transition happened.
+   */
+  updateEntry(id, extra = {}) {
+    const state = this.loadState();
+    if (!state[id]) throw new Error(`no worktree record for ${id}`);
     Object.assign(state[id], extra);
     this.saveState(state);
     return state[id];

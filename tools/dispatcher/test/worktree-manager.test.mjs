@@ -177,6 +177,40 @@ describe("WorktreeManager", () => {
     expect(entry.prUrl).toBe("https://github.com/owner/repo/pull/42");
   });
 
+  it("records the Linear issue's internal id (MOV-152), distinct from the human-readable identifier", () => {
+    const entry = manager.create({
+      id: "MOV-1",
+      name: "MOV-1-fix",
+      branch: "agent/MOV-1-fix",
+      linearUrl: "https://linear.app/moviecal/issue/MOV-1",
+      linearIssueId: "issue-uuid-1",
+    });
+
+    expect(entry.linearIssueId).toBe("issue-uuid-1");
+    expect(manager.loadState()["MOV-1"].linearIssueId).toBe("issue-uuid-1");
+  });
+
+  it("defaults linearIssueId to null when not provided", () => {
+    const entry = manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+    expect(entry.linearIssueId).toBeNull();
+  });
+
+  it("updateEntry merges fields without touching status or endedAt (MOV-152)", () => {
+    manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+    manager.markStatus("MOV-1", "merged");
+    const beforeEndedAt = manager.loadState()["MOV-1"].endedAt;
+
+    const updated = manager.updateEntry("MOV-1", { linearSynced: true });
+
+    expect(updated.status).toBe("merged");
+    expect(updated.linearSynced).toBe(true);
+    expect(manager.loadState()["MOV-1"].endedAt).toBe(beforeEndedAt);
+  });
+
+  it("updateEntry throws for an unknown id", () => {
+    expect(() => manager.updateEntry("MOV-404", { linearSynced: true })).toThrow(/no worktree record/);
+  });
+
   it("keeps a recently-failed worktree until the retention window passes", () => {
     manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
     manager.markStatus("MOV-1", "failed");

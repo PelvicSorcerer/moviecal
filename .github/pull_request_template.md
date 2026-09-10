@@ -2,7 +2,7 @@
 
 <!-- What changed and why. Link the originating issue when one exists (for example Closes #NNN). -->
 
-**Linear:** <!-- MOV-NNN. Leave blank only for a GitHub-originated external bug/feature-request PR with no corresponding Linear issue yet. -->
+**Linear:** <!-- Required closing reference, e.g. "Fixes MOV-NNN" (Closes/Resolves also work). Use an actual Linear-recognized closing keyword, not a bare "MOV-NNN" -- a bare identifier does not trigger Linear's GitHub-integration sync, so the issue would never auto-close on merge. Leave as "N/A" only for a GitHub-originated external bug/feature-request PR with no corresponding Linear issue yet. -->
 
 ## Test Impact
 

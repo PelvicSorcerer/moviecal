@@ -164,7 +164,7 @@ describe("runOnce", () => {
     const [result] = await runOnce([ISSUE], ctx);
 
     expect(ctx.worktreeManager.createCalls).toHaveLength(1);
-    expect(ctx.worktreeManager.createCalls[0]).toMatchObject({ id: "MOV-1", worker: "claude" });
+    expect(ctx.worktreeManager.createCalls[0]).toMatchObject({ id: "MOV-1", worker: "claude", linearIssueId: "id-1" });
 
     const stateChanges = ctx.linearClient.calls.filter((c) => c.type === "moveToState").map((c) => c.stateId);
     expect(stateChanges).toEqual(["state-agent-working", "state-in-review"]);
