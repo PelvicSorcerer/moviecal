@@ -199,6 +199,16 @@ export class LinearClient {
     return data.commentCreate.success;
   }
 
+  async issueComments(issueId) {
+    const query = `
+      query($issueId: String!) {
+        issue(id: $issueId) { comments(last: 20) { nodes { body } } }
+      }
+    `;
+    const data = await this.request(query, { issueId });
+    return (data.issue?.comments?.nodes || []).map((comment) => comment.body);
+  }
+
   async moveToState(issueId, stateId) {
     const mutation = `
       mutation($issueId: String!, $stateId: String!) {
