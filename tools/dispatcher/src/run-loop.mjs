@@ -13,6 +13,7 @@ import { resolveRouting, workerInvocation } from "./worker-routing.mjs";
 import { confirmStillClaimable, evaluateLocalDispatch } from "./dispatch-eligibility.mjs";
 import { generateBrief } from "./brief.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
+import { auditWorkerResult, writeWorkerAudit } from "./worker-guard.mjs";
 
 /**
  * @param {object[]} issues - from LinearClient.issuesInState()
@@ -34,6 +35,10 @@ import { tailLogs } from "./worker-spawn.mjs";
  * @param {number} ctx.workerTimeoutMs - MOV-138: a worker that hasn't exited after this many ms is killed and its issue moved to Needs Human Decision
  * @param {(worktreePath: string) => string[]} [ctx.uncommittedChangesFn] - MOV-137; defaults to "always clean" if not provided (tests that don't care about this can omit it)
  * @param {(worktreePath: string, authorizedPath: string) => {applied: boolean, path?: string, reason?: string}} [ctx.applyStagedWorkflowEditFn] - MOV-121; defaults to a no-op if not provided (tests that don't care about this can omit it)
+ * @param {'implementation'|'repair'} [ctx.workerMode] - MOV-145; repair mode has stricter protected paths and never applies staged workflow proposals
+ * @param {(args: object) => object} [ctx.auditWorkerResultFn] - MOV-145; validates structured tool calls and the resulting diff before publication
+ * @param {(logDir: string, report: object) => object} [ctx.writeWorkerAuditFn] - MOV-145; persists an audit record outside the worktree
+ * @param {(args: object) => object} [ctx.publishWorkerResultFn] - MOV-145; trusted dispatcher-side non-force push and draft PR creation
  * @param {{id?: string|null, name?: string|null}} [ctx.dispatcherDelegate] - MOV-143: the delegate an issue must name for this dispatcher to claim it; defaults to matching `moviecal-dispatcher` by name
  * @param {(issue: object) => Promise<object|null>} [ctx.refreshIssueFn] - MOV-143: re-read an issue immediately before committing to it, so a route/delegation change since the poll snapshot is a safe no-op; defaults to reusing the snapshot (tests that don't exercise the race can omit it)
  * @returns {Promise<Array<{issue: string, outcome: string, [key: string]: unknown}>>}
@@ -111,6 +116,10 @@ async function processIssue(issue, ctx) {
     workerTimeoutMs,
     uncommittedChangesFn = () => [],
     applyStagedWorkflowEditFn = () => ({ applied: false, reason: "not configured" }),
+    workerMode = "implementation",
+    auditWorkerResultFn = auditWorkerResult,
+    writeWorkerAuditFn = writeWorkerAudit,
+    publishWorkerResultFn = null,
     dispatcherDelegate = {},
     refreshIssueFn = async (snapshot) => snapshot,
   } = ctx;
@@ -203,6 +212,7 @@ async function processIssue(issue, ctx) {
     linearUrl: issue.url,
     linearIssueId: issue.id,
     envLocalSource,
+    repository: ghRepo,
   });
 
   await linearClient.moveToState(issue.id, stateIds.agentWorking);
@@ -231,7 +241,14 @@ async function processIssue(issue, ctx) {
   let spawnResult;
   try {
     spawnResult = await raceWorkerTimeout(
-      spawnWorkerFn({ invocation, cwd: entry.path, brief, logDir, signal: abortController.signal }),
+      spawnWorkerFn({
+        invocation,
+        cwd: entry.path,
+        brief,
+        logDir,
+        signal: abortController.signal,
+        securityContext: { mode: workerMode },
+      }),
       workerTimeoutMs,
     );
   } catch (err) {
@@ -268,6 +285,46 @@ async function processIssue(issue, ctx) {
 
   if (spawnResult.pid) worktreeManager.setWorkerPid(issue.identifier, spawnResult.pid);
 
+  let securityReport;
+  let auditRecord;
+  try {
+    securityReport = auditWorkerResultFn({
+      worktreePath: entry.path,
+      branch,
+      logDir,
+      mode: workerMode,
+    });
+    auditRecord = writeWorkerAuditFn(logDir, {
+      issue: issue.identifier,
+      worker: routing.worker,
+      exitCode: spawnResult.exitCode,
+      ...securityReport,
+    });
+  } catch (err) {
+    securityReport = {
+      ok: false,
+      violations: [{ action: "security audit", reason: `audit could not complete: ${err.message}` }],
+    };
+  }
+
+  if (!securityReport.ok) {
+    worktreeManager.markStatus(issue.identifier, "failed");
+    await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
+    await linearClient.addComment(
+      issue.id,
+      [
+        "**Worker safety boundary blocked publication.**",
+        "",
+        ...securityReport.violations.map((violation) => `- ${violation.reason}: \`${String(violation.action).slice(0, 500)}\``),
+        "",
+        `Audit record: \`${auditRecord?.path || logDir}\`${auditRecord?.sha256 ? ` (SHA-256 \`${auditRecord.sha256}\`)` : ""}`,
+        "",
+        "The issue was moved to `Needs Human Decision`; no dispatcher push, PR mutation, or staged workflow application was performed.",
+      ].join("\n"),
+    );
+    return { issue: issue.identifier, outcome: "security-blocked", violations: securityReport.violations };
+  }
+
   if (spawnResult.exitCode !== 0) {
     worktreeManager.markStatus(issue.identifier, "failed");
     await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
@@ -287,19 +344,32 @@ async function processIssue(issue, ctx) {
   }
 
   const workflowAuth = resolveWorkflowEditAuthorization(issue);
-  if (workflowAuth.authorized) {
+  if (workflowAuth.authorized && workerMode !== "repair") {
     const applyResult = applyStagedWorkflowEditFn(entry.path, workflowAuth.path);
     if (applyResult.applied) {
       await linearClient.addComment(
         issue.id,
-        `**Applied staged workflow-edit proposal:** \`${workflowAuth.path}\`. Written by the worker to \`tools/dispatcher/pending-workflow-edits/\`; applied and committed by the dispatcher itself, not the worker — see docs/operators/local-execution.md §Security model (MOV-121). The PR (once opened) will still visibly contain this diff and \`lane-review\` will flag it as requiring explicit sign-off before merge.`,
+        `**Applied staged workflow-edit proposal:** \`${workflowAuth.path}\`. Written by the worker to \`tools/dispatcher/pending-workflow-edits/\`; applied by the dispatcher itself and included in its trusted commit — see docs/operators/local-execution.md §Security model (MOV-121). The PR (once opened) will still visibly contain this diff and \`lane-review\` will flag it as requiring explicit sign-off before merge.`,
       );
     }
     // A staged file simply not existing is normal (the worker may have decided
     // not to touch the workflow after all) — not an error, no comment needed.
   }
 
-  const pr = findPrForBranchFn(branch, ghRepo);
+  let pr;
+  try {
+    pr = publishWorkerResultFn
+      ? publishWorkerResultFn({ worktreePath: entry.path, branch, repo: ghRepo, issue })
+      : findPrForBranchFn(branch, ghRepo);
+  } catch (err) {
+    worktreeManager.markStatus(issue.identifier, "failed");
+    await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
+    await linearClient.addComment(
+      issue.id,
+      `**Dispatcher refused or failed to publish the audited worker result:** ${err.message}\n\nAudit record: \`${auditRecord?.path || logDir}\``,
+    );
+    return { issue: issue.identifier, outcome: "publish-failed", error: err.message };
+  }
   if (!pr) {
     worktreeManager.markStatus(issue.identifier, "failed");
     await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
@@ -309,7 +379,7 @@ async function processIssue(issue, ctx) {
       await linearClient.addComment(
         issue.id,
         [
-          `**Worker exited 0 with uncommitted changes and no PR for branch \`${branch}\`.** The worktree was left dirty instead of committed and pushed — likely abandoned mid-task (e.g. backgrounded a build/test and exited instead of waiting on it).`,
+          `**Dispatcher found unpublished changes after the trusted publication step for branch \`${branch}\`.** Publication failed closed; inspect the retained worktree and audit before retrying.`,
           "",
           "Uncommitted paths:",
           "```",
@@ -329,12 +399,16 @@ async function processIssue(issue, ctx) {
 
     await linearClient.addComment(
       issue.id,
-      `**Worker exited 0 but no PR was found for branch \`${branch}\`.** The worker is responsible for opening its own PR (see docs/operators/local-execution.md). Run log: \`${logDir}\``,
+      `**Worker exited 0 but the trusted dispatcher found no PR for branch \`${branch}\`.** Run log: \`${logDir}\``,
     );
     return { issue: issue.identifier, outcome: "no-pr" };
   }
 
-  worktreeManager.markStatus(issue.identifier, "review", { prNumber: pr.number, prUrl: pr.url });
+  worktreeManager.markStatus(issue.identifier, "review", {
+    prNumber: pr.number,
+    prUrl: pr.url,
+    headSha: pr.headSha || null,
+  });
   await linearClient.moveToState(issue.id, stateIds.inReview);
   await linearClient.addComment(issue.id, `**Pull request opened:** ${pr.url}${pr.isDraft ? " (draft)" : ""}`);
   return { issue: issue.identifier, outcome: "in-review", pr: pr.url };

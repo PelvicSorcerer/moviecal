@@ -113,6 +113,12 @@ export function observePullRequest({ pr, checks = [], requiredChecks = [], revie
     mergedAt: pr?.mergedAt || null,
     isDraft: Boolean(pr?.isDraft),
     headSha: rollup.headSha,
+    headBranch: pr?.headRefName || pr?.headBranch || null,
+    headRepository:
+      pr?.headRepository?.nameWithOwner ||
+      (pr?.headRepositoryOwner?.login && pr?.headRepository?.name
+        ? `${pr.headRepositoryOwner.login}/${pr.headRepository.name}`
+        : pr?.headRepository || null),
     mergeState: pr?.mergeStateStatus || pr?.mergeable || null,
     checks: rollup,
     review: {
@@ -145,7 +151,7 @@ export function isCheckPrObservation(value) {
 /** Read-only GitHub CLI observer. Optional protection/review calls fail closed as observation errors. */
 export function checkPrObservation(prNumber, repo, runner = defaultRunner) {
   try {
-    const pr = JSON.parse(runner("gh", ["pr", "view", String(prNumber), "--repo", repo, "--json", "url,state,mergedAt,isDraft,headRefOid,baseRefName,mergeStateStatus,reviewDecision,statusCheckRollup,reviews,comments"]));
+    const pr = JSON.parse(runner("gh", ["pr", "view", String(prNumber), "--repo", repo, "--json", "url,state,mergedAt,isDraft,headRefOid,headRefName,headRepository,headRepositoryOwner,baseRefName,mergeStateStatus,reviewDecision,statusCheckRollup,reviews,comments"]));
     let requiredChecks = [];
     try {
       const protection = JSON.parse(runner("gh", ["api", `repos/${repo}/branches/${encodeURIComponent(pr.baseRefName)}/protection/required_status_checks`]));
