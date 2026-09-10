@@ -56,7 +56,8 @@ import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
 import { spawnWorker } from "../src/worker-spawn.mjs";
 import { findPrForBranch, defaultRunner as ghRunner } from "../src/pr-check.mjs";
-import { checkPrState, checkPrObservation, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
+import { checkPrState, checkPrObservation, isCheckPrObservation, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
+import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
 import { applyStagedWorkflowEdit } from "../src/workflow-edit-apply.mjs";
 
 const IOS_RUNNER_NAME = "moviecal-ios-runner";
@@ -297,6 +298,49 @@ function cmdGc() {
   }
 }
 
+/**
+ * Read-only CI classifier preview. It intentionally accepts a fixture so a
+ * real PR payload can be saved and replayed without credentials or writes.
+ */
+function cmdShadow({ prNumber, fixturePath } = {}) {
+  if (!prNumber) {
+    console.error("shadow requires --pr <number>");
+    return 1;
+  }
+  let observation;
+  if (fixturePath) {
+    observation = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
+    if (!isCheckPrObservation(observation)) {
+      console.error("shadow fixture must match the checkPrObservation shape");
+      return 1;
+    }
+  } else {
+    observation = checkPrObservation(prNumber, GITHUB_REPO, ghRunner);
+  }
+  if (observation.observationError) {
+    console.log(JSON.stringify({ mode: "shadow", readOnly: true, prNumber, observationError: observation.observationError, wouldStartWorker: false, wouldRerunCi: false, wouldMutateLinear: false }, null, 2));
+    return 0;
+  }
+  const events = (observation.checks?.checks || []).map((check) => ({
+    ...check,
+    required: check.required,
+    sha: check.sha || observation.headSha,
+    conclusion: check.outcome,
+  }));
+  const decision = decideCiOutcome({ prNumber, prUrl: observation.url || null, headSha: observation.headSha, events });
+  console.log(formatShadowReport({
+    ...decision,
+    observation: {
+      state: observation.state,
+      isDraft: observation.isDraft,
+      headSha: observation.headSha,
+      requiredChecks: observation.checks.required.map((check) => check.name),
+      missingRequired: observation.checks.missingRequired,
+    },
+  }));
+  return 0;
+}
+
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const RUN_STATE_NAMES = {
   readyForAgent: "Ready for Agent",
@@ -419,6 +463,34 @@ async function reconcileWorktrees(linearClient, teamKey) {
   return changes;
 }
 
+/** Report current CI decisions for review PRs; no worker or CI mutation occurs. */
+async function reportReviewCi(linearClient, teamKey) {
+  const reviewIssues = await linearClient.issuesInState({ teamKey, stateName: RUN_STATE_NAMES.inReview });
+  const byIdentifier = new Map(reviewIssues.map((issue) => [issue.identifier, issue]));
+  const manager = new WorktreeManager({ repoRoot: REPO_ROOT, worktreeRoot: worktreeRoot(), statePath: worktreesStatePath() });
+  const results = [];
+  for (const entry of Object.values(manager.loadState())) {
+    if (entry.status !== "review" || !entry.prNumber) continue;
+    const issue = byIdentifier.get(entry.id);
+    if (!issue) continue;
+    const observation = checkPrObservation(entry.prNumber, GITHUB_REPO, ghRunner);
+    if (observation.observationError || !observation.headSha) continue;
+    const events = (observation.checks?.checks || []).map((check) => ({ ...check, sha: check.sha || observation.headSha, conclusion: check.outcome }));
+    const decision = decideCiOutcome({ prNumber: entry.prNumber, prUrl: entry.prUrl || null, headSha: observation.headSha, events });
+    const existingBodies = typeof linearClient?.issueComments === "function"
+      ? await linearClient.issueComments(issue.id)
+      : [];
+    results.push(await reportObservationToLinear({
+      linearClient,
+      issueId: issue.id,
+      decision,
+      observation: { requiredChecks: observation.checks.required.map((check) => check.name) },
+      existingBodies,
+    }));
+  }
+  return results;
+}
+
 /**
  * Automated backlog promoter (MOV-129): move issues in Backlog/Blocked that
  * meet the readiness contract into "Ready for Agent". Returns 0/1 for the
@@ -481,6 +553,13 @@ async function cmdRunOnce() {
   await promotePass();
 
   if (!built) return 1;
+
+  try {
+    await reportReviewCi(linearClient, teamKey);
+  } catch (err) {
+    console.error("CI observation reporting failed (continuing to dispatch):", err.message);
+  }
+
   const issues = await linearClient.issuesInState({
     teamKey,
     stateName: RUN_STATE_NAMES.readyForAgent,
@@ -531,6 +610,15 @@ async function main() {
     case "gc":
       cmdGc();
       break;
+    case "shadow": {
+      const prFlagIdx = rest.indexOf("--pr");
+      const fixtureFlagIdx = rest.indexOf("--fixture");
+      process.exitCode = cmdShadow({
+        prNumber: prFlagIdx === -1 ? undefined : Number(rest[prFlagIdx + 1]),
+        fixturePath: fixtureFlagIdx === -1 ? undefined : rest[fixtureFlagIdx + 1],
+      });
+      break;
+    }
     case "promote": {
       const dryRun = rest.includes("--dry-run");
       process.exitCode = await cmdPromoteOnce({ dryRun });
@@ -544,7 +632,7 @@ async function main() {
       break;
     }
     default:
-      console.error("Usage: dispatcher <doctor|dry-run|gc|promote|run> [--fixture <path>] [--dry-run] [--once] [--interval <ms>]");
+      console.error("Usage: dispatcher <doctor|dry-run|shadow|gc|promote|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]");
       process.exitCode = 1;
   }
 }

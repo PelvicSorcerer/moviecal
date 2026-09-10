@@ -13,12 +13,21 @@ A Claude worker is invoked as `claude -p --model <id> --permission-mode dontAsk`
 ```
 node tools/dispatcher/bin/dispatcher.mjs doctor
 node tools/dispatcher/bin/dispatcher.mjs dry-run [--fixture path/to/issues.json]
+node tools/dispatcher/bin/dispatcher.mjs shadow --pr <number> [--fixture path/to/observation.json]
 node tools/dispatcher/bin/dispatcher.mjs gc
 node tools/dispatcher/bin/dispatcher.mjs run --once            # one pass over eligible issues, then exit
 node tools/dispatcher/bin/dispatcher.mjs run [--interval ms]   # poll loop (default 30000ms)
 ```
 
 Also available as npm scripts: `npm run dispatcher:doctor`, `npm run dispatcher:dry-run`, `npm run dispatcher:gc`.
+
+`shadow --pr` reads the PR and required checks, classifies the current head,
+deduplicates observations, and prints the proposed decision as JSON. It never
+starts a worker, reruns CI, or writes Linear state. `--fixture` accepts a saved
+`checkPrObservation`-shaped JSON payload for repeatable classifier validation.
+During a normal run, review PR observations are published to the matching
+Linear issue as concise status records keyed by PR and SHA; those records are
+not machine-control messages.
 
 - **`doctor`** is read-only. It checks: Linear API auth, `gh` auth, worktree root writable, `.env.local` present and mode 600, `claude`/`codex` on `PATH`, `origin/master` fetchable, and the self-hosted iOS runner's online status. Run it after any environment change.
 - **`dry-run`** fetches issues in the `Ready for Agent` Linear state (or reads a fixture JSON file with `--fixture`, for testing without a live Linear connection) and prints the worktree path, branch name, worker/model routing decision, and preflight verdict for each — without creating anything.

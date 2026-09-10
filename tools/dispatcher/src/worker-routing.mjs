@@ -90,10 +90,16 @@ export function workerInvocation(worker, model) {
     };
   }
   if (worker === "codex") {
-    return {
-      command: "codex",
-      args: ["exec", "--sandbox", "workspace-write"],
-    };
+    const args = [
+      "exec",
+      "--sandbox",
+      "workspace-write",
+      "-c",
+      `model_reasoning_effort=${codexReasoningEffortForTier(model)}`,
+    ];
+    const codexModel = codexModelIdForTier(model);
+    if (codexModel) args.push("--model", codexModel);
+    return { command: "codex", args };
   }
   throw new Error(`unknown worker: ${worker}`);
 }
@@ -114,4 +120,35 @@ export function modelIdForTier(worker, tier) {
   const id = table[tier];
   if (!id) throw new Error(`unknown model tier: ${tier}`);
   return id;
+}
+
+/**
+ * Resolve a model tier to a Codex `model_reasoning_effort` value. Mirrors
+ * modelIdForTier's env-override pattern, defaulting to low/medium/high.
+ */
+export function codexReasoningEffortForTier(tier) {
+  const table = {
+    cheap: process.env.MOVIECAL_CODEX_EFFORT_CHEAP || "low",
+    default: process.env.MOVIECAL_CODEX_EFFORT_DEFAULT || "medium",
+    strong: process.env.MOVIECAL_CODEX_EFFORT_STRONG || "high",
+  };
+  const effort = table[tier];
+  if (!effort) throw new Error(`unknown model tier: ${tier}`);
+  return effort;
+}
+
+/**
+ * Resolve a model tier to an explicit Codex `--model` id, if one has been
+ * configured. No default: with no env override, this returns null and
+ * workerInvocation omits `--model` entirely, falling through to whatever
+ * `~/.codex/config.toml` holds.
+ */
+export function codexModelIdForTier(tier) {
+  const table = {
+    cheap: process.env.MOVIECAL_CODEX_MODEL_CHEAP || null,
+    default: process.env.MOVIECAL_CODEX_MODEL_DEFAULT || null,
+    strong: process.env.MOVIECAL_CODEX_MODEL_STRONG || null,
+  };
+  if (!(tier in table)) throw new Error(`unknown model tier: ${tier}`);
+  return table[tier];
 }
