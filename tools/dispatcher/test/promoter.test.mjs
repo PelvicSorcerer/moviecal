@@ -20,7 +20,7 @@ function issue(overrides = {}) {
     identifier: "MOV-900",
     stateName: "Backlog",
     description: READY_SECTIONS,
-    labels: ["execution:mac"],
+    labels: [],
     blockedByIds: [],
     recentComments: [],
     ...overrides,
@@ -46,15 +46,15 @@ describe("evaluatePromotion", () => {
     expect(v.reason).toMatch(/human-only/);
   });
 
-  it("rejects coordination parents even when their description is complete", () => {
-    const v = evaluatePromotion(issue({ labels: ["type:coordination", "execution:none"] }), { isBlockerSatisfied: ALL_SATISFIED });
-    expect(v).toEqual({ promote: false, reason: "execution:none coordination issue" });
+  it("rejects a coordination parent (type:coordination) even with a complete description", () => {
+    const v = evaluatePromotion(issue({ labels: ["type:coordination"] }), { isBlockerSatisfied: ALL_SATISFIED });
+    expect(v.promote).toBe(false);
+    expect(v.reason).toMatch(/coordination issue/);
   });
 
-  it("rejects an issue whose inferred route was not materialized", () => {
+  it("promotes an ordinary issue with no execution:* label (route enforcement is MOV-143, not the promoter)", () => {
     const v = evaluatePromotion(issue({ labels: [] }), { isBlockerSatisfied: ALL_SATISFIED });
-    expect(v.promote).toBe(false);
-    expect(v.reason).toMatch(/execution route invalid/);
+    expect(v.promote).toBe(true);
   });
 
   it("rejects a missing acceptance-criteria section", () => {

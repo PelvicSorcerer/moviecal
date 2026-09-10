@@ -147,23 +147,21 @@ ambiguous or conflicting route fails validation rather than defaulting silently.
 Sequencing is unchanged and adapter-independent: `blocks` relations plus the
 dispatcher's preflight gates decide *when*; the route decides *where*.
 
-MOV-142 materializes these routes as a mutually-exclusive Linear label group:
-`execution:cloud`, `execution:mac`, or `execution:none`. Inference is
-deterministic but never sufficient by itself: the inferred label must be
-written to the issue before promotion or dispatch. Coordination issues labeled
-`type:coordination` infer `execution:none` and are excluded from automated
-promotion; the iOS Companion App project, Xcode/Simulator/runner work, and
-work needing a local secret infer `execution:mac`; supported non-iOS projects
-infer `execution:cloud`; anything ambiguous falls back to `execution:mac`.
+`MOV-142` provisions these routes as a mutually-exclusive Linear label group
+(`execution:cloud` / `execution:mac` / `execution:none`) and supplies the
+deterministic inference: `type:coordination` → `execution:none`; the iOS
+Companion App project, Xcode/Simulator/runner work, and local-secret work →
+`execution:mac`; supported non-iOS projects → `execution:cloud`; anything
+ambiguous → `execution:mac`. Inference is advisory — the label must be
+materialized on the issue to be authoritative.
 
-Validation rejects missing, conflicting, or semantically invalid labels (for
-example, `execution:none` on an executable issue). **Until the cloud lane is
-piloted (stage 7 below), a materialized `execution:cloud` route is not
-executable:** the local dispatcher moves such an issue to `Needs Human
-Decision` with an explanatory comment and creates no worktree. `execution:none`
-issues are likewise moved to `Needs Human Decision` (skipped, never a PR).
-`docs/operators/local-execution.md` §Automated promotion has the per-route
-dispatch behaviour table.
+`MOV-142` wires this into exactly one behaviour: an issue that infers
+`execution:none` never auto-promotes. **Enforcing routes at dispatch** —
+restricting the local dispatcher to Mac-routed issues and rejecting cloud,
+missing, or conflicting routes — is `MOV-143`, which first backfills the
+existing backlog with inferred labels so the switch breaks nothing. A
+`execution:cloud` issue is not runnable until the cloud lane is piloted (stage
+7 below) regardless.
 
 ## Feasibility gates
 

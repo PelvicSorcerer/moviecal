@@ -62,21 +62,21 @@ For a `Blocked` issue there is one extra condition: its most recent `**Dispatche
 
 On promotion the promoter comments `Auto-promoted to Ready for Agent — …` (which, via the app-actor identity from MOV-122, notifies the repo owner). It is idempotent: a promoted issue is no longer in `Backlog`/`Blocked`, so a second pass does nothing.
 
-Before promotion, the issue must also carry exactly one materialized
-`execution:{cloud,mac,none}` label. The dispatcher infers routes for dry-run
-and classification purposes, but does not silently write or dispatch an
-unmaterialized inference. `execution:none` is reserved for issues labeled
-`type:coordination`; those coordination parents are intentionally excluded
-from the automated promoter because they must not produce their own PR.
+**Execution routing (MOV-142) — labels and inference only, not enforced yet.**
+`execution:{cloud,mac,none}` is a mutually-exclusive Linear label group,
+provisioned idempotently by `tools/dispatcher/scripts/provision-linear-workspace.mjs`.
+`tools/dispatcher/src/execution-routing.mjs` provides the pure inference and
+validation logic (`inferExecutionRoute`, `resolveExecutionRoute`,
+`isCoordinationIssue`), and `dispatcher dry-run` prints each issue's route +
+inference. The **only** place a route affects behaviour today is the promoter:
+an issue that infers `execution:none` (i.e. carries `type:coordination`) never
+auto-promotes, because a coordination parent must not produce its own PR.
 
-**What the dispatcher does with each route, today:**
-
-| Materialized route | Dispatch behaviour |
-|---|---|
-| `execution:mac` | Runs on this Mac adapter as described in this document. |
-| `execution:cloud` | **Not executable yet.** The dispatcher moves the issue to `Needs Human Decision` with a comment ("the Linear-managed cloud adapter is not enabled yet") and does not create a worktree. Stays this way until the cloud lane is piloted (`MOV-153`–`MOV-155`, `docs/governance/hybrid-execution-architecture.md` §Rollout gates). Until then, do not label routable work `execution:cloud` expecting it to run. |
-| `execution:none` | Moved to `Needs Human Decision` with a "skipped coordination issue" comment; never produces a PR. If a `type:coordination` parent genuinely needs code, split the work into a child issue with its own route — the parent stays `execution:none`. |
-| invalid / missing / conflicting | Moved to `Needs Human Decision` naming the specific problem (`resolveExecutionRoute` in `tools/dispatcher/src/execution-routing.mjs`). |
+Restricting local dispatch to Mac-routed issues — rejecting cloud, missing, or
+conflicting routes at dispatch time — is **`MOV-143`**, which also backfills
+`execution:*` labels onto the existing backlog first so nothing breaks on the
+switch. Until then the dispatcher ignores the route for `execution:mac` and
+label-less issues alike.
 
 `blocks` relations plus the preflight gates below do all **sequencing**; the promoter only judges **readiness**. There is no per-issue human promotion step. To hold a specced issue out of the automated flow, move it to `Spec Ready` — the promoter never touches that state.
 

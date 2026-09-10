@@ -11,7 +11,7 @@
 // (`promoteEligible`) so the contract is fully unit-testable with fakes.
 // See docs/operators/local-execution.md §Automated promotion and MOV-129.
 
-import { resolveExecutionRoute } from "./execution-routing.mjs";
+import { isCoordinationIssue } from "./execution-routing.mjs";
 
 const ACCEPTANCE_HEADING_RE = /^#{1,6}[ \t]*acceptance criteria\b/im;
 const TESTING_HEADING_RE = /^#{1,6}[ \t]*testing expectations\b/im;
@@ -69,12 +69,12 @@ export function evaluatePromotion(issue, ctx) {
   if (labels.includes("human-only")) {
     return { promote: false, reason: "labeled human-only" };
   }
-  const execution = resolveExecutionRoute(issue);
-  if (!execution.ok) {
-    return { promote: false, reason: `execution route invalid: ${execution.reason}` };
-  }
-  if (execution.route === "none") {
-    return { promote: false, reason: "execution:none coordination issue" };
+  // Coordination issues (execution route "none", from `type:coordination`)
+  // must never auto-promote — they produce no PR. This is inference-based and
+  // needs no materialized `execution:*` label; enforcing a materialized route
+  // for everything else is MOV-143's scope, not MOV-142's.
+  if (isCoordinationIssue(issue)) {
+    return { promote: false, reason: "coordination issue — never auto-promoted (route execution:none)" };
   }
   if (!sectionHasContent(issue.description, ACCEPTANCE_HEADING_RE)) {
     return { promote: false, reason: "no non-empty acceptance-criteria section" };
