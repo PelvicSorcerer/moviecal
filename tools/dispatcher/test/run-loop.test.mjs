@@ -77,7 +77,10 @@ function baseCtx(overrides = {}) {
     ghRepo: "owner/repo",
     logRoot: "/fake/logs",
     spawnWorkerFn: vi.fn(async () => ({ exitCode: 0, logDir: "/fake/logs/x" })),
-    findPrForBranchFn: vi.fn(() => ({ number: 1, url: "https://github.com/owner/repo/pull/1", isDraft: true })),
+    findPrForBranchFn: vi.fn(() => ({ number: 1, url: "https://github.com/owner/repo/pull/1", isDraft: true, headSha: "sha-1" })),
+    auditWorkerResultFn: vi.fn(() => ({ ok: true, violations: [] })),
+    writeWorkerAuditFn: vi.fn(() => ({ path: "/fake/logs/x/security-audit.json", sha256: "abc123" })),
+    publishWorkerResultFn: vi.fn(() => ({ number: 1, url: "https://github.com/owner/repo/pull/1", isDraft: true, headSha: "sha-1" })),
     ...overrides,
   };
 }
@@ -173,9 +176,10 @@ describe("runOnce", () => {
     const spawnArg = ctx.spawnWorkerFn.mock.calls[0][0];
     expect(spawnArg.cwd).toBe("/fake/worktrees/MOV-1-fix-the-thing");
     expect(spawnArg.brief).toContain("MOV-1");
+    expect(spawnArg.securityContext).toEqual({ mode: "implementation" });
 
     expect(ctx.worktreeManager.statusCalls).toEqual([
-      { id: "MOV-1", status: "review", prNumber: 1, prUrl: "https://github.com/owner/repo/pull/1" },
+      { id: "MOV-1", status: "review", prNumber: 1, prUrl: "https://github.com/owner/repo/pull/1", headSha: "sha-1" },
     ]);
     expect(result).toEqual({ issue: "MOV-1", outcome: "in-review", pr: "https://github.com/owner/repo/pull/1" });
   });
@@ -224,6 +228,76 @@ describe("runOnce", () => {
     expect(comments.some((b) => b.includes("Applied staged workflow-edit proposal"))).toBe(false);
   });
 
+  it("never applies a staged workflow proposal during repair", async () => {
+    const applyStagedWorkflowEditFn = vi.fn(() => ({ applied: true }));
+    const ctx = baseCtx({ applyStagedWorkflowEditFn, workerMode: "repair" });
+    const issue = {
+      ...ISSUE,
+      labels: [...ISSUE.labels, "ci:workflow-edit-authorized"],
+      description: "Workflow-edit: .github/workflows/ios-verify.yml",
+    };
+
+    await runOnce([issue], ctx);
+
+    expect(applyStagedWorkflowEditFn).not.toHaveBeenCalled();
+    expect(ctx.spawnWorkerFn.mock.calls[0][0].securityContext).toEqual({ mode: "repair" });
+  });
+
+  it("fails closed with an audit record before workflow apply or publication on a bypass attempt", async () => {
+    const applyStagedWorkflowEditFn = vi.fn();
+    const publishWorkerResultFn = vi.fn();
+    const ctx = baseCtx({
+      applyStagedWorkflowEditFn,
+      publishWorkerResultFn,
+      auditWorkerResultFn: vi.fn(() => ({
+        ok: false,
+        violations: [{ action: "gh api -X DELETE repos/o/r/rulesets/1", reason: "direct GitHub API access" }],
+      })),
+    });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result.outcome).toBe("security-blocked");
+    expect(applyStagedWorkflowEditFn).not.toHaveBeenCalled();
+    expect(publishWorkerResultFn).not.toHaveBeenCalled();
+    expect(ctx.findPrForBranchFn).not.toHaveBeenCalled();
+    expect(ctx.worktreeManager.statusCalls).toEqual([{ id: "MOV-1", status: "failed" }]);
+    expect(ctx.linearClient.calls.at(-1).body).toContain("Worker safety boundary blocked publication");
+    expect(ctx.linearClient.calls.at(-1).body).toContain("SHA-256");
+  });
+
+  it("publishes only through the trusted dispatcher callback after a clean audit", async () => {
+    const publishWorkerResultFn = vi.fn(() => ({
+      number: 4,
+      url: "https://github.com/owner/repo/pull/4",
+      isDraft: true,
+      headSha: "sha-4",
+    }));
+    const ctx = baseCtx({ publishWorkerResultFn });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(publishWorkerResultFn).toHaveBeenCalledWith({
+      worktreePath: "/fake/worktrees/MOV-1-fix-the-thing",
+      branch: "agent/MOV-1-fix-the-thing",
+      repo: "owner/repo",
+      issue: ISSUE,
+    });
+    expect(ctx.findPrForBranchFn).not.toHaveBeenCalled();
+    expect(result.pr).toBe("https://github.com/owner/repo/pull/4");
+  });
+
+  it("fails closed when the trusted dispatcher publisher is not configured", async () => {
+    const ctx = baseCtx({ publishWorkerResultFn: undefined });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result).toMatchObject({ outcome: "publish-failed", error: "trusted dispatcher publisher is not configured" });
+    expect(ctx.findPrForBranchFn).not.toHaveBeenCalled();
+    expect(ctx.worktreeManager.statusCalls).toEqual([{ id: "MOV-1", status: "failed" }]);
+    expect(ctx.linearClient.calls.at(-1).body).toContain("trusted dispatcher publisher is not configured");
+  });
+
   it("marks the worktree failed and reports needs-human-decision with log tail when the worker exits non-zero", async () => {
     const ctx = baseCtx({ spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir: "/fake/logs/MOV-1" })) });
 
@@ -238,7 +312,7 @@ describe("runOnce", () => {
 
   it("marks failed and reports needs-human-decision when the worker exits 0, opens no PR, and the worktree is clean", async () => {
     const ctx = baseCtx({
-      findPrForBranchFn: vi.fn(() => null),
+      publishWorkerResultFn: vi.fn(() => null),
       uncommittedChangesFn: vi.fn(() => []),
     });
 
@@ -247,11 +321,11 @@ describe("runOnce", () => {
     expect(result.outcome).toBe("no-pr");
     expect(ctx.worktreeManager.statusCalls).toEqual([{ id: "MOV-1", status: "failed" }]);
     const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
-    expect(lastComment.body).toMatch(/no PR was found/);
+    expect(lastComment.body).toMatch(/found no PR/);
   });
 
   it("defaults to no-pr when uncommittedChangesFn is not provided (existing callers unaffected)", async () => {
-    const ctx = baseCtx({ findPrForBranchFn: vi.fn(() => null) });
+    const ctx = baseCtx({ publishWorkerResultFn: vi.fn(() => null) });
 
     const [result] = await runOnce([ISSUE], ctx);
 
@@ -261,7 +335,7 @@ describe("runOnce", () => {
   it("reports abandoned-dirty (MOV-137) when the worker exits 0 with uncommitted changes and no PR", async () => {
     const uncommittedChangesFn = vi.fn(() => ["src/Auth.swift", "src/AuthTests.swift"]);
     const ctx = baseCtx({
-      findPrForBranchFn: vi.fn(() => null),
+      publishWorkerResultFn: vi.fn(() => null),
       uncommittedChangesFn,
     });
 
@@ -276,7 +350,7 @@ describe("runOnce", () => {
     expect(lastMove.stateId).toBe("state-needs-human");
 
     const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
-    expect(lastComment.body).toMatch(/uncommitted changes and no PR/);
+    expect(lastComment.body).toMatch(/unpublished changes after the trusted publication step/);
     expect(lastComment.body).toContain("src/Auth.swift");
     expect(lastComment.body).toContain("src/AuthTests.swift");
   });
@@ -302,7 +376,15 @@ describe("runOnce", () => {
 
     expect(result.outcome).toBe("spawn-error");
     expect(ctx.worktreeManager.statusCalls).toEqual([{ id: "MOV-1", status: "failed" }]);
+    expect(ctx.writeWorkerAuditFn).toHaveBeenCalledWith("/fake/logs/MOV-1-fix-the-thing", expect.objectContaining({
+      issue: "MOV-1",
+      phase: "spawn",
+      ok: false,
+      violations: [expect.objectContaining({ reason: expect.stringContaining("ENOENT") })],
+    }));
     expect(ctx.linearClient.calls.at(-1).body).toContain("ENOENT");
+    expect(ctx.linearClient.calls.at(-1).body).toContain("SHA-256");
+    expect(ctx.linearClient.calls.at(-1).body).toContain("no worker ran and no remote mutation was attempted");
   });
 
   it("blocks on the concurrency limit before creating a worktree", async () => {

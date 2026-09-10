@@ -99,7 +99,7 @@ Adapter differences are **properties**, not contract changes:
 | iOS / Xcode capable | yes | **no** |
 | Runs on | local Mac, `launchd` dispatcher, isolated git worktree | Linear-managed cloud sandbox |
 | Worker binaries | `claude`, `codex` (`docs/operators/worker-routing.md`) | Linear Coding Session |
-| Containment | `.claude/settings.json` deny rules (Claude), `--sandbox workspace-write` (Codex) | Linear's sandbox |
+| Containment | shared macOS Seatbelt worker guard + native no-network command sandboxes + credential stripping + transcript/diff audit + dispatcher-only Git/publication (MOV-145) | Linear's sandbox; must prove the same behavioral boundary before pilot |
 | Local secrets (`~/.config/moviecal/`) | available | **not** available |
 | Quota / cost | provider subscriptions, local CPU | Linear plan tier + AI credits |
 | Concurrency | dispatcher `concurrencyLimit` | Linear-managed |

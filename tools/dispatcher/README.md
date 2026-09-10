@@ -4,9 +4,9 @@ The local process that turns a Linear issue into a running agent against an isol
 
 ## Status
 
-Stage 8 of the Linear/GitHub/local-Mac dev-governance migration is functionally complete: `doctor`, `dry-run`, `gc`, and `run` are all implemented and unit-tested. **`dispatcher run` has real side effects** — it creates worktrees, spawns a real `claude`/`codex` process, and expects that worker to push a branch and open a PR. It has been unit-tested against every outcome (preflight block, routing block, worker success, worker failure, worker exits 0 with no PR, spawn error) with fakes, but has **not yet been run against the live Linear workspace** — that first real run is migration Stage 10 (end-to-end verification) and should be a deliberate, supervised action, not something triggered incidentally.
+`doctor`, `dry-run`, `gc`, and `run` are implemented and unit-tested. **`dispatcher run` has real side effects** — it creates worktrees and spawns a real `claude`/`codex` process, but the worker itself has no Git or GitHub mutation authority. The worker produces verified filesystem changes; the dispatcher audits its sandboxed structured transcript and diff, then creates the commit and performs the exact non-force branch push and draft-PR creation. The first live run after a dispatcher/security upgrade remains a deliberate, supervised operator action.
 
-A Claude worker is invoked as `claude -p --model <id> --permission-mode dontAsk`, scoped by `.claude/settings.json` at the repo root (allow/deny rules matching the hard-deny list in `docs/operators/local-execution.md` §Security model). Getting a headless `claude -p` session to run at all — without hanging, and with its permission rules actually applied — needed two things verified directly against the installed CLI (v2.1.208), not assumed from docs: `--permission-mode dontAsk` (the newer `acceptEdits` + `--permission-prompts none` combination needs a version this Mac doesn't have), and pre-trusting the repo's main checkout path in `~/.claude.json` (`claude-trust.mjs`, wired into `WorktreeManager.create()`) — workspace trust for `.claude/settings.json` is anchored to that one path across every worktree, not to each worktree's own path.
+A Claude worker is invoked in structured-output `dontAsk` mode and Codex in structured-output `workspace-write --ask-for-approval never` mode. Both are wrapped in the same inherited macOS sandbox; vendor-specific controls are defense in depth. Getting a headless Claude session to run without hanging still requires pre-trusting the repo's main checkout path in `~/.claude.json` (`claude-trust.mjs`, wired into `WorktreeManager.create()`).
 
 The safety boundary intentionally has no permissive fallback. Claude's project policy sets `sandbox.failIfUnavailable: true` and forbids unsandboxed commands, while the shared guard requires the outer macOS Seatbelt profile. If either layer is unavailable or cannot be applied, the worker must not start; the dispatcher integration fails closed to `Needs Human Decision` and preserves the failure in its checksummed audit record and Linear evidence comment. Operators must repair the host or configuration rather than disable a layer to keep unattended work running.
 
@@ -31,10 +31,10 @@ During a normal run, review PR observations are published to the matching
 Linear issue as concise status records keyed by PR and SHA; those records are
 not machine-control messages.
 
-- **`doctor`** is read-only. It checks: Linear API auth, `gh` auth, worktree root writable, `.env.local` present and mode 600, `claude`/`codex` on `PATH`, `origin/master` fetchable, and the self-hosted iOS runner's online status. Run it after any environment change.
+- **`doctor`** is read-only. It checks: Linear API auth, `gh` auth, worktree root writable, `.env.local` present and mode 600, `claude`/`codex` on `PATH`, the macOS worker sandbox can actually be applied, `origin/master` fetchable, and the self-hosted iOS runner's online status. Run it after any environment change.
 - **`dry-run`** fetches issues in the `Ready for Agent` Linear state (or reads a fixture JSON file with `--fixture`, for testing without a live Linear connection) and prints the worktree path, branch name, worker/model routing decision, and preflight verdict for each — without creating anything.
 - **`gc`** prunes merged worktrees immediately and failed/abandoned worktrees older than the retention window, plus run logs older than 90 days.
-- **`run`** is the real loop: for each issue in `Ready for Agent`, runs preflight (§ below), provisions a worktree, spawns the routed worker with the issue as its brief (piped via stdin), waits for it to exit, checks for a resulting PR, and reports every transition back to Linear as a state change + comment. See `docs/operators/local-execution.md` for the full state-transition table.
+- **`run`** is the real loop: for each issue in `Ready for Agent`, runs preflight (§ below), provisions a worktree, spawns the guarded worker with the issue as its brief (piped via stdin), waits for it to exit, audits the transcript/diff, commits and publishes the accepted result through dispatcher-owned credentials, and reports every transition back to Linear. See `docs/operators/local-execution.md` for the full state-transition table.
 
 ## Layout
 
@@ -49,11 +49,13 @@ tools/dispatcher/
     preflight.mjs            preflight gate logic (pure) + branch/worktree naming
     worker-routing.mjs       worker + model routing rubric (pure)
     security-policy.mjs      hard-deny / needs-human command classification (pure)
+    worker-guard.mjs         shared sandbox, credential stripping, transcript/diff audit, repair admission
+    worker-publish.mjs       trusted non-force push and draft-PR creation after a clean audit
     worktree-manager.mjs     git worktree lifecycle + JSON state bookkeeping
     claude-trust.mjs         pre-trusts a worktree in Claude Code's global config (~/.claude.json)
     brief.mjs                worker brief generation (pure)
     worker-spawn.mjs         spawns a worker process, captures logs to a manifest
-    pr-check.mjs             checks whether a worker opened a PR for its branch
+    pr-check.mjs             finds the PR attached to an audited branch
     pr-reconcile.mjs         observes PR head/check/review state and reconciles merged/closed worktrees
     workflow-edit-apply.mjs  applies a staged .github/workflows/ proposal (MOV-121; see local-execution.md)
     run-loop.mjs             ties all of the above together for `dispatcher run`
