@@ -191,11 +191,12 @@ export class LinearClient {
 
   async issuesForPriorityPropagation({ teamKey, stateNames }) {
     const query = `
-      query($teamKey: String!, $stateNames: [String!]!) {
+      query($teamKey: String!, $stateNames: [String!]!, $after: String) {
         issues(filter: {
           team: { key: { eq: $teamKey } }
           state: { name: { in: $stateNames } }
-        }) {
+        }, first: 100, after: $after) {
+          pageInfo { hasNextPage endCursor }
           nodes {
             ${ISSUE_FIELDS}
             state { name type }
@@ -204,13 +205,27 @@ export class LinearClient {
         }
       }
     `;
-    const data = await this.request(query, { teamKey, stateNames });
-    return data.issues.nodes.map((node) => ({
-      ...normalizeIssue(node),
-      stateName: node.state ? node.state.name : null,
-      stateType: node.state ? node.state.type : null,
-      priority: Number.isInteger(node.priority) ? node.priority : 0,
-    }));
+    const out = [];
+    let after = null;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const data = await this.request(query, { teamKey, stateNames, after });
+      const issues = data.issues || {};
+      const nodes = issues.nodes || [];
+      out.push(
+        ...nodes.map((node) => ({
+          ...normalizeIssue(node),
+          stateName: node.state ? node.state.name : null,
+          stateType: node.state ? node.state.type : null,
+          priority: Number.isInteger(node.priority) ? node.priority : 0,
+        })),
+      );
+      const pageInfo = issues.pageInfo || {};
+      if (!pageInfo.hasNextPage) break;
+      after = pageInfo.endCursor;
+      if (!after) break;
+    }
+    return out;
   }
 
   async addComment(issueId, body) {

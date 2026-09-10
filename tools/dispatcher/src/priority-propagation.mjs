@@ -43,7 +43,7 @@ function describeCycle(memberIds, issueById) {
   return memberIds.map((id) => issueById.get(id)?.identifier || id).sort();
 }
 
-function analyzePriorityGraph(issues) {
+function analyzePriorityGraph(issues, priorityById = null) {
   const issueById = new Map();
   for (const issue of issues) issueById.set(issue.id, issue);
 
@@ -129,7 +129,11 @@ function analyzePriorityGraph(issues) {
     let bestPriority = 0;
     let driverId = members[0];
     for (const memberId of members) {
-      const currentPriority = normalizePriority(nonTerminalById.get(memberId)?.priority);
+      const currentPriority = normalizePriority(
+        priorityById && priorityById.has(memberId)
+          ? priorityById.get(memberId)
+          : nonTerminalById.get(memberId)?.priority,
+      );
       if (moreImportant(currentPriority, bestPriority)) {
         bestPriority = currentPriority;
         driverId = memberId;
@@ -172,14 +176,28 @@ export function computeEffectivePriorities(issues) {
   return analyzePriorityGraph(issues).effectiveById;
 }
 
+function defaultStateEntry(priority) {
+  const normalized = normalizePriority(priority);
+  return { lastPropagated: normalized, manualFloor: normalized };
+}
+
+function parseStateEntry(value) {
+  if (typeof value === "number") return defaultStateEntry(value);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const lastPropagated = normalizePriority(value.lastPropagated);
+  const manualFloor = normalizePriority(value.manualFloor);
+  return { lastPropagated, manualFloor };
+}
+
 function loadPropagationState(filePath) {
   if (!filePath || !fs.existsSync(filePath)) return {};
   const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
   const clean = {};
   for (const [issueId, value] of Object.entries(parsed)) {
-    const normalized = normalizePriority(value);
-    clean[issueId] = normalized;
+    const entry = parseStateEntry(value);
+    if (!entry) continue;
+    clean[issueId] = entry;
   }
   return clean;
 }
@@ -220,8 +238,15 @@ function priorityLabel(priority) {
  */
 export async function propagatePriorities(issues, ctx) {
   const { linearClient, stateFilePath, dryRun = false, logger = console } = ctx;
-  const { effectiveById, driverById, cycles } = analyzePriorityGraph(issues);
   const previousState = loadPropagationState(stateFilePath);
+  const baselinePriorityById = new Map();
+  for (const issue of issues) {
+    const entry = previousState[issue.id];
+    const current = normalizePriority(issue.priority);
+    const owns = entry && current === entry.lastPropagated;
+    baselinePriorityById.set(issue.id, owns ? entry.manualFloor : current);
+  }
+  const { effectiveById, driverById, cycles } = analyzePriorityGraph(issues, baselinePriorityById);
   const nextState = {};
   const updates = [];
   const skipped = [];
@@ -236,17 +261,21 @@ export async function propagatePriorities(issues, ctx) {
 
     const current = normalizePriority(issue.priority);
     const effective = normalizePriority(effectiveById.get(issue.id));
-    const recorded = Object.prototype.hasOwnProperty.call(previousState, issue.id)
-      ? normalizePriority(previousState[issue.id])
-      : null;
+    const recorded = previousState[issue.id] || null;
 
-    const bootstrapOwned = recorded === null && current === effective;
-    const ownedByPropagation = (recorded !== null && current === recorded) || bootstrapOwned;
-    const desired = ownedByPropagation ? effective : (moreImportant(effective, current) ? effective : current);
+    const ownedByPropagation = Boolean(recorded) && current === recorded.lastPropagated;
+    const manualFloor = ownedByPropagation ? recorded.manualFloor : current;
+    const desired = ownedByPropagation
+      ? effective
+      : (moreImportant(effective, current) ? effective : current);
 
-    const manualMismatch = recorded !== null && current !== recorded;
-    if (manualMismatch) nextState[issue.id] = current;
-    else nextState[issue.id] = desired;
+    const stateOnSuccess = ownedByPropagation
+      ? { lastPropagated: desired, manualFloor }
+      : { lastPropagated: desired, manualFloor: current };
+    const stateOnFailure = ownedByPropagation
+      ? recorded
+      : { lastPropagated: current, manualFloor: current };
+    nextState[issue.id] = desired === current ? stateOnSuccess : stateOnFailure;
 
     if (desired === current) continue;
 
@@ -260,6 +289,8 @@ export async function propagatePriorities(issues, ctx) {
       to: desired,
       action,
       driverIdentifier: driverIssue?.identifier || driverId,
+      stateOnSuccess,
+      stateOnFailure,
     });
   }
 
@@ -286,7 +317,16 @@ export async function propagatePriorities(issues, ctx) {
 
   if (!dryRun) {
     for (const update of updates) {
-      await linearClient.updateIssuePriority(update.issueId, update.to);
+      const ok = await linearClient.updateIssuePriority(update.issueId, update.to);
+      if (!ok) {
+        nextState[update.issueId] = update.stateOnFailure;
+        (logger.warn || logger.log || (() => {})).call(
+          logger,
+          `${update.identifier}: failed to apply priority update ${update.from} -> ${update.to}; preserving previous ownership state`,
+        );
+      } else {
+        nextState[update.issueId] = update.stateOnSuccess;
+      }
     }
     savePropagationState(stateFilePath, nextState);
   }

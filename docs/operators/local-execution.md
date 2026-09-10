@@ -83,7 +83,7 @@ Priority propagation is dependency-aware and transitive on `blocks` edges (`A bl
 - Writable targets are only: `Backlog`, `Blocked`, `Spec Ready`, `Ready for Agent`, `Agent Working`, `In Review`, `Needs Input`, `Needs Human Decision`.
 - `Icebox`/`Triage` are never auto-written. If one would be raised, the dispatcher logs: `MOV-X (<state>) blocks <priorityLabel> MOV-Y — not auto-raising, review`.
 - Cycles are handled safely as a single mutually-reachable set; the pass logs the cycle once and continues.
-- Ownership of propagated values is tracked in `~/.config/moviecal/priority-propagation.json` (`{ "<issueId>": <lastPropagatedValue> }`). This enables idempotent no-op re-runs and allows relaxing only when propagation still owns the value (`current === recorded`).
+- Ownership of propagated values is tracked in `~/.config/moviecal/priority-propagation.json` (`{ "<issueId>": { "lastPropagated": <value>, "manualFloor": <value> } }`; legacy numeric entries are still read). This enables idempotent no-op re-runs, preserves the manual floor for later relaxations, and allows relaxing only when propagation still owns the value (`current === lastPropagated`).
 
 After propagation, `dispatcher run` executes the promoter over every issue in `Backlog` and `Blocked`. An issue is moved to `Ready for Agent` when **all** of:
 

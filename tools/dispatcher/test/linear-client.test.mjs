@@ -273,7 +273,63 @@ describe("LinearClient", () => {
     const { query, variables } = JSON.parse(fetchImpl.mock.calls[0][1].body);
     expect(query).toMatch(/priority/);
     expect(query).toMatch(/state\s*\{\s*name\s+type\s*\}/);
+    expect(query).toMatch(/pageInfo\s*\{\s*hasNextPage\s+endCursor\s*\}/);
     expect(variables.stateNames).toEqual(["Backlog", "Blocked"]);
+    expect(variables.after).toBeNull();
+  });
+
+  it("issuesForPriorityPropagation paginates through every page", async () => {
+    const firstNode = {
+      id: "id-101",
+      identifier: "MOV-101",
+      title: "First",
+      description: "",
+      url: "https://linear.app/moviecal/issue/MOV-101",
+      state: { name: "Backlog", type: "unstarted" },
+      project: null,
+      labels: { nodes: [] },
+      relations: { nodes: [] },
+      inverseRelations: { nodes: [] },
+      priority: 3,
+    };
+    const secondNode = {
+      ...firstNode,
+      id: "id-102",
+      identifier: "MOV-102",
+      url: "https://linear.app/moviecal/issue/MOV-102",
+      priority: 1,
+    };
+    const fetchImpl = vi.fn().mockImplementation(async (_url, init) => {
+      const { variables } = JSON.parse(init.body);
+      if (!variables.after) {
+        return {
+          json: async () => ({
+            data: {
+              issues: {
+                pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+                nodes: [firstNode],
+              },
+            },
+          }),
+        };
+      }
+      return {
+        json: async () => ({
+          data: {
+            issues: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [secondNode],
+            },
+          },
+        }),
+      };
+    });
+    const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+    const issues = await client.issuesForPriorityPropagation({ teamKey: "MOV", stateNames: ["Backlog"] });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(issues.map((x) => x.identifier)).toEqual(["MOV-101", "MOV-102"]);
   });
 
   it("updateIssuePriority sends an issueUpdate mutation with the priority input", async () => {

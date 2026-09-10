@@ -132,7 +132,15 @@ describe("propagatePriorities", () => {
 
   it("never updates terminal issues and prunes terminal/non-writable entries from state file", async () => {
     const statePath = tempStatePath();
-    fs.writeFileSync(statePath, JSON.stringify({ terminal: 1, triage: 2, keep: 1 }) + "\n", "utf8");
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({
+        terminal: { lastPropagated: 1, manualFloor: 1 },
+        triage: { lastPropagated: 2, manualFloor: 2 },
+        keep: { lastPropagated: 1, manualFloor: 1 },
+      }) + "\n",
+      "utf8",
+    );
     const linearClient = { updateIssuePriority: vi.fn().mockResolvedValue(true) };
 
     await propagatePriorities(
@@ -146,12 +154,12 @@ describe("propagatePriorities", () => {
 
     expect(linearClient.updateIssuePriority).not.toHaveBeenCalledWith("terminal", expect.anything());
     const stored = JSON.parse(fs.readFileSync(statePath, "utf8"));
-    expect(stored).toEqual({ keep: 1 });
+    expect(stored).toEqual({ keep: { lastPropagated: 1, manualFloor: 1 } });
   });
 
   it("leaves manual priority changes untouched when current !== recorded", async () => {
     const statePath = tempStatePath();
-    fs.writeFileSync(statePath, JSON.stringify({ a: 1 }) + "\n", "utf8");
+    fs.writeFileSync(statePath, JSON.stringify({ a: { lastPropagated: 1, manualFloor: 3 } }) + "\n", "utf8");
     const linearClient = { updateIssuePriority: vi.fn().mockResolvedValue(true) };
     const logger = fakeLogger();
 
@@ -161,12 +169,44 @@ describe("propagatePriorities", () => {
     );
     expect(linearClient.updateIssuePriority).not.toHaveBeenCalled();
     const stored = JSON.parse(fs.readFileSync(statePath, "utf8"));
-    expect(stored).toEqual({ a: 2 });
+    expect(stored).toEqual({ a: { lastPropagated: 2, manualFloor: 2 } });
+  });
+
+  it("relaxes an owned propagated raise when downstream driver goes away", async () => {
+    const statePath = tempStatePath();
+    fs.writeFileSync(statePath, JSON.stringify({ a: { lastPropagated: 1, manualFloor: 3 } }) + "\n", "utf8");
+    const linearClient = { updateIssuePriority: vi.fn().mockResolvedValue(true) };
+
+    await propagatePriorities(
+      [issue({ id: "a", identifier: "MOV-A", priority: 1, relations: [] })],
+      { linearClient, stateFilePath: statePath, logger: fakeLogger() },
+    );
+
+    expect(linearClient.updateIssuePriority).toHaveBeenCalledWith("a", 3);
+    const stored = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    expect(stored).toEqual({ a: { lastPropagated: 3, manualFloor: 3 } });
+  });
+
+  it("does not record ownership updates when Linear priority mutation fails", async () => {
+    const statePath = tempStatePath();
+    fs.writeFileSync(statePath, JSON.stringify({ a: { lastPropagated: 1, manualFloor: 3 } }) + "\n", "utf8");
+    const linearClient = { updateIssuePriority: vi.fn().mockResolvedValue(false) };
+    const logger = fakeLogger();
+
+    await propagatePriorities(
+      [issue({ id: "a", identifier: "MOV-A", priority: 1, relations: [] })],
+      { linearClient, stateFilePath: statePath, logger },
+    );
+
+    expect(linearClient.updateIssuePriority).toHaveBeenCalledWith("a", 3);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("failed to apply priority update"));
+    const stored = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    expect(stored).toEqual({ a: { lastPropagated: 1, manualFloor: 3 } });
   });
 
   it("dry-run reports intended changes without writes or state-file rewrites", async () => {
     const statePath = tempStatePath();
-    fs.writeFileSync(statePath, JSON.stringify({ a: 3 }) + "\n", "utf8");
+    fs.writeFileSync(statePath, JSON.stringify({ a: { lastPropagated: 3, manualFloor: 3 } }) + "\n", "utf8");
     const initial = fs.readFileSync(statePath, "utf8");
     const linearClient = { updateIssuePriority: vi.fn().mockResolvedValue(true) };
 
