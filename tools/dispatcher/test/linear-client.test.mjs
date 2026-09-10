@@ -224,6 +224,7 @@ describe("LinearClient", () => {
         ],
       },
     });
+
     const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
 
     const [issue] = await client.issuesForPromotion({ teamKey: "MOV", stateNames: ["Backlog", "Blocked"] });
@@ -239,6 +240,52 @@ describe("LinearClient", () => {
     const { query, variables } = JSON.parse(init.body);
     expect(query).toMatch(/state:\s*\{\s*name:\s*\{\s*in:\s*\$stateNames\s*\}\s*\}/);
     expect(variables.stateNames).toEqual(["Backlog", "Blocked"]);
+  });
+
+  it("issuesForPriorityPropagation includes state type and priority for non-terminal scans", async () => {
+    const fetchImpl = mockFetch({
+      issues: {
+        nodes: [
+          {
+            id: "id-101",
+            identifier: "MOV-101",
+            title: "Priority subject",
+            description: "",
+            url: "https://linear.app/moviecal/issue/MOV-101",
+            state: { name: "Backlog", type: "unstarted" },
+            project: null,
+            labels: { nodes: [] },
+            relations: { nodes: [{ type: "blocks", relatedIssue: { id: "id-102", state: { name: "Backlog" } } }] },
+            inverseRelations: { nodes: [] },
+            priority: 2,
+          },
+        ],
+      },
+    });
+    const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+    const [issue] = await client.issuesForPriorityPropagation({ teamKey: "MOV", stateNames: ["Backlog", "Blocked"] });
+
+    expect(issue.stateName).toBe("Backlog");
+    expect(issue.stateType).toBe("unstarted");
+    expect(issue.priority).toBe(2);
+
+    const { query, variables } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(query).toMatch(/priority/);
+    expect(query).toMatch(/state\s*\{\s*name\s+type\s*\}/);
+    expect(variables.stateNames).toEqual(["Backlog", "Blocked"]);
+  });
+
+  it("updateIssuePriority sends an issueUpdate mutation with the priority input", async () => {
+    const fetchImpl = mockFetch({ issueUpdate: { success: true } });
+    const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+    await client.updateIssuePriority("id-1", 1);
+
+    const { query, variables } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(query).toMatch(/issueUpdate/);
+    expect(query).toMatch(/priority:\s*\$priority/);
+    expect(variables).toEqual({ issueId: "id-1", priority: 1 });
   });
 
   describe("addBlocksRelation", () => {

@@ -29,14 +29,22 @@ function bodyOf(fnName) {
   throw new Error(`could not find end of ${fnName}`);
 }
 
-describe("dispatcher run-loop wiring (MOV-129)", () => {
-  it("cmdRunOnce awaits a promote pass before reading Ready for Agent", () => {
+describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
+  it("cmdRunOnce awaits reconcile -> propagate -> promote before reading Ready for Agent", () => {
     const body = bodyOf("cmdRunOnce");
-    const promoteAt = body.indexOf("promotePass(");
+    const reconcileAt = body.indexOf("await reconcileWorktrees(");
+    const propagateAt = body.indexOf("await propagatePass(");
+    const promoteAt = body.indexOf("await promotePass(");
     const dispatchReadAt = body.indexOf("issuesInState(");
+    expect(reconcileAt, "reconcileWorktrees() not called in cmdRunOnce").toBeGreaterThan(-1);
+    expect(propagateAt, "propagatePass() not called in cmdRunOnce").toBeGreaterThan(-1);
     expect(promoteAt, "promotePass() not called in cmdRunOnce").toBeGreaterThan(-1);
     expect(dispatchReadAt, "issuesInState() not called in cmdRunOnce").toBeGreaterThan(-1);
+    expect(reconcileAt).toBeLessThan(propagateAt);
+    expect(propagateAt).toBeLessThan(promoteAt);
     expect(promoteAt).toBeLessThan(dispatchReadAt);
+    expect(body).toMatch(/await\s+reconcileWorktrees\(/);
+    expect(body).toMatch(/await\s+propagatePass\(\)/);
     expect(body).toMatch(/await\s+promotePass\(\)/);
   });
 
@@ -45,6 +53,13 @@ describe("dispatcher run-loop wiring (MOV-129)", () => {
     expect(body).toMatch(/try\s*\{/);
     expect(body).toMatch(/catch/);
     expect(body).toMatch(/cmdPromoteOnce/);
+  });
+
+  it("propagatePass swallows errors so a propagation failure cannot abort dispatch", () => {
+    const body = bodyOf("propagatePass");
+    expect(body).toMatch(/try\s*\{/);
+    expect(body).toMatch(/catch/);
+    expect(body).toMatch(/cmdPrioritiesOnce/);
   });
 });
 

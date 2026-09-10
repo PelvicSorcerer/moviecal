@@ -15,6 +15,8 @@
 //   dispatcher promote [--dry-run] - move Backlog/Blocked issues that meet the
 //                                     readiness contract into Ready for Agent
 //                                     (MOV-129); the run loop does this each cycle
+//   dispatcher priorities [--dry-run] [--once] - dependency-aware priority
+//                                     propagation across incomplete issues
 //   dispatcher run --once          - process every currently-eligible Ready-for-Agent
 //                                     issue exactly once, then exit (real side effects:
 //                                     creates worktrees, spawns workers, opens PRs)
@@ -34,6 +36,7 @@ import {
   worktreeRoot,
   logRoot,
   worktreesStatePath,
+  priorityPropagationStatePath,
   loadLinearConfig,
   loadLinearAppConfig,
   resolveLinearAuth,
@@ -61,6 +64,7 @@ import { DispatcherLock, WorktreeManager } from "../src/worktree-manager.mjs";
 import { runOnce } from "../src/run-loop.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
+import { propagatePriorities, TERMINAL_PRIORITY_STATE_TYPES } from "../src/priority-propagation.mjs";
 import { spawnWorker } from "../src/worker-spawn.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "../src/worker-guard.mjs";
 import { publishWorkerResult } from "../src/worker-publish.mjs";
@@ -662,12 +666,59 @@ async function cmdPromoteOnce({ dryRun = false } = {}) {
   return 0;
 }
 
+async function cmdPrioritiesOnce({ dryRun = false } = {}) {
+  const built = buildLinearClient();
+  if (!built) return 1;
+  const { client: linearClient, teamKey } = built;
+  const states = await linearClient.workflowStates(teamKey);
+  const nonTerminalStateNames = states
+    .filter((state) => !TERMINAL_PRIORITY_STATE_TYPES.has((state.type || "").toLowerCase()))
+    .map((state) => state.name);
+
+  const issues = await linearClient.issuesForPriorityPropagation({ teamKey, stateNames: nonTerminalStateNames });
+  const result = await propagatePriorities(issues, {
+    linearClient,
+    stateFilePath: priorityPropagationStatePath(),
+    dryRun,
+    logger: console,
+  });
+
+  for (const update of result.updates) {
+    if (update.action === "raised") {
+      console.log(`${update.identifier}: ${update.from} -> ${update.to} (raised by ${update.driverIdentifier})`);
+    } else {
+      console.log(`${update.identifier}: ${update.from} -> ${update.to} (relaxed)`);
+    }
+  }
+  for (const skip of result.skipped) {
+    console.log(
+      `${skip.identifier} (${skip.stateName}): skipped (would raise to ${skip.to}, blocks ${skip.driverIdentifier})`,
+    );
+  }
+
+  if (dryRun) {
+    console.log("Dry run — no Linear priority updates or propagation state-file writes.");
+  } else {
+    console.log(`Applied ${result.wrote} propagated priority update(s).`);
+  }
+  return 0;
+}
+
 /** Run a promote pass inside the poll loop; never let it abort dispatch. */
 async function promotePass() {
   try {
     await cmdPromoteOnce({ dryRun: false });
   } catch (err) {
     console.error("Promote pass failed (continuing to dispatch):", err.message);
+  }
+}
+
+/** Run a priority propagation pass inside the poll loop; never abort dispatch. */
+async function propagatePass() {
+  try {
+    await cmdPrioritiesOnce({ dryRun: false });
+  } catch (err) {
+    console.error("Priority propagation pass failed (continuing to dispatch):", err.message);
   }
 }
 
@@ -685,6 +736,7 @@ async function cmdRunOnce() {
   // promotePass() and reportReviewCi() run below, so reconciliation never
   // races the promote/dispatch pass. It is the only call to that function.
   await reconcileWorktrees(linearClient, teamKey);
+  await propagatePass();
   await promotePass();
 
   if (!built) return 1;
@@ -766,6 +818,11 @@ async function main() {
       });
       break;
     }
+    case "priorities": {
+      const dryRun = rest.includes("--dry-run");
+      process.exitCode = await cmdPrioritiesOnce({ dryRun });
+      break;
+    }
     case "run": {
       const once = rest.includes("--once");
       const intervalFlagIdx = rest.indexOf("--interval");
@@ -775,7 +832,7 @@ async function main() {
     }
     default:
       console.error(
-        "Usage: dispatcher <doctor|dry-run|shadow|agent-signal|gc|promote|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
+        "Usage: dispatcher <doctor|dry-run|shadow|agent-signal|gc|promote|priorities|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
       );
       process.exitCode = 1;
   }

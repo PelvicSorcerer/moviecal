@@ -189,6 +189,30 @@ export class LinearClient {
     }));
   }
 
+  async issuesForPriorityPropagation({ teamKey, stateNames }) {
+    const query = `
+      query($teamKey: String!, $stateNames: [String!]!) {
+        issues(filter: {
+          team: { key: { eq: $teamKey } }
+          state: { name: { in: $stateNames } }
+        }) {
+          nodes {
+            ${ISSUE_FIELDS}
+            state { name type }
+            priority
+          }
+        }
+      }
+    `;
+    const data = await this.request(query, { teamKey, stateNames });
+    return data.issues.nodes.map((node) => ({
+      ...normalizeIssue(node),
+      stateName: node.state ? node.state.name : null,
+      stateType: node.state ? node.state.type : null,
+      priority: Number.isInteger(node.priority) ? node.priority : 0,
+    }));
+  }
+
   async addComment(issueId, body) {
     const mutation = `
       mutation($issueId: String!, $body: String!) {
@@ -216,6 +240,16 @@ export class LinearClient {
       }
     `;
     const data = await this.request(mutation, { issueId, stateId });
+    return data.issueUpdate.success;
+  }
+
+  async updateIssuePriority(issueId, priority) {
+    const mutation = `
+      mutation($issueId: String!, $priority: Int) {
+        issueUpdate(id: $issueId, input: { priority: $priority }) { success }
+      }
+    `;
+    const data = await this.request(mutation, { issueId, priority });
     return data.issueUpdate.success;
   }
 
