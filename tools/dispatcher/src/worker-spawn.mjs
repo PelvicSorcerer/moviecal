@@ -136,7 +136,9 @@ export function spawnWorker({
       });
       fs.writeFileSync(profilePath, profile, { mode: 0o600 });
       effectiveInvocation = guardedInvocation(invocation, { profilePath });
-      workerEnv = sanitizedWorkerEnvironment(process.env);
+      workerEnv = sanitizedWorkerEnvironment(process.env, {
+        worker: path.basename(invocation.command),
+      });
     }
     // detached: true (POSIX) makes the child the leader of its own process
     // group via setsid(), so its own pid doubles as the group id we reap on

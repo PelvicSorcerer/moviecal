@@ -122,7 +122,9 @@ describe("spawnWorker", () => {
   it("wraps both adapters in the shared sandbox and strips worker credentials", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
     const originalToken = process.env.GH_TOKEN;
+    const originalAnthropicKey = process.env.ANTHROPIC_API_KEY;
     process.env.GH_TOKEN = "ghp_this_must_not_reach_the_worker";
+    process.env.ANTHROPIC_API_KEY = "anthropic_parent_only";
     const calls = [];
     const spawnImpl = (command, args, opts) => {
       calls.push({ command, args, opts });
@@ -144,6 +146,8 @@ describe("spawnWorker", () => {
     } finally {
       if (originalToken == null) delete process.env.GH_TOKEN;
       else process.env.GH_TOKEN = originalToken;
+      if (originalAnthropicKey == null) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = originalAnthropicKey;
     }
     for (const [index, command] of ["claude", "codex"].entries()) {
       expect(calls[index].command).toBe("/usr/bin/sandbox-exec");
@@ -151,6 +155,12 @@ describe("spawnWorker", () => {
       expect(calls[index].opts.env).not.toHaveProperty("GH_TOKEN");
       expect(fs.readFileSync(path.join(tmpDir, command, "worker-sandbox.sb"), "utf8")).toContain("deny process-exec");
     }
+    expect(calls[0].opts.env).toMatchObject({
+      ANTHROPIC_API_KEY: "anthropic_parent_only",
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+    });
+    expect(calls[1].opts.env).not.toHaveProperty("ANTHROPIC_API_KEY");
+    expect(calls[1].opts.env).not.toHaveProperty("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB");
   });
 
   it("fails closed rather than spawning without the Mac safety boundary", async () => {
