@@ -113,21 +113,18 @@ cloud-eligible, regardless of its subject matter.
 |---|---|
 | **Linear issue** | The unit of work. Carries spec, acceptance criteria, Testing Expectations, dependencies, and the execution route. |
 | **Linear project / milestone** | Sequencing and release grouping. `blocks` relations, not milestones, gate dispatch. |
-| **Loops** | Intake, enrichment, and platform-splitting automation — triage raw intake into routed, spec'd issues. *Not enabled; gated on `MOV-141`.* |
-| **Agent Sessions** | Linear's richer surface for an agent's lifecycle on an issue — sessions, activities, prompts, stop signals, stale-session handling, PR linking. **Not used today.** The dispatcher currently acts through the ordinary GraphQL API as the `moviecal-dispatcher` app actor (`MOV-122`): comments + workflow-state changes, nothing more. The Agent Session interaction model is Developer Preview and is only *needed* for cloud/Loop delegation — see §Feasibility gates. |
-| **Linear Coding Session** | The cloud execution adapter. *Not enabled; gated on `MOV-141`.* |
+| **Loops** | Candidate intake, enrichment, and platform-splitting automation. **Unavailable on the current Basic plan**; an approved Business upgrade plus AI credits would be required (`MOV-141`). |
+| **Agent Sessions** | Linear's richer Developer Preview surface for an agent's lifecycle on an issue. **Disabled for `moviecal-dispatcher` and not a current dependency.** The dispatcher uses ordinary app-actor GraphQL comments, workflow state, route, and delegate fields instead (`MOV-122`, `MOV-141`). |
+| **Linear Coding Session** | The intended cloud execution adapter. The Basic plan is eligible and the workspace feature is on, but no moviecal environment or AI-credit pilot has been verified; `MOV-153` remains the configuration gate. |
 | **Local dispatcher** | The Mac execution adapter. Built and running (`MOV-120`); polls `Ready for Agent`, promotes from `Backlog` (`MOV-129`), provisions worktrees, spawns workers. |
 | **GitHub checks** | The merge gate. `master-protection` requires `lane-baseline`, `lane-unit`, `lane-integration`, `lane-browser`, `lane-review`, with `bypass_actors: []`. Identical for both adapters. |
 | **`AGENTS.md` + repo docs** | Rules that must hold even when Linear is unreachable. |
 
 ## Routing
 
-**`MOV-142` owns the routing label schema.** This section states the *intent*
-the schema must satisfy; the exact label names, group semantics, inference
-rules, and validation belong to that issue and may differ in detail. Any
-`execution:*` label names that appear elsewhere in this document, in
-`AGENTS.md`, or in the source-of-truth tables are **illustrative shorthand**
-pending `MOV-142` — the three routes are decided, their spelling is not.
+**`MOV-142` owns the routing label schema.** It provisioned the exact
+`execution:{cloud,mac,none}` labels, group semantics, inference rules, and
+validation used below.
 
 The intent: every executable issue carries an explicit, auditable route —
 three mutually-exclusive options, one per adapter plus one for "executes
@@ -184,9 +181,12 @@ lane is piloted (stage 7 below) regardless.
 
 ## Feasibility gates
 
-Every capability below is **unproven in this workspace** and must not be relied
-on until `MOV-141` records it as supported. Each has a named fallback so the
-architecture degrades rather than stalls.
+`MOV-141` validated every capability below on 2026-09-10. "Plan-supported" is
+not the same as "ready": unconfigured or Developer Preview surfaces stay behind
+their implementation gates, and each has a named fallback so the architecture
+degrades rather than stalls. See
+`docs/governance/mov-141-linear-capability-findings.md` for evidence and cost
+details.
 
 **These gates are asymmetric.** Every capability here is something the *cloud*
 path would newly depend on. None of them gates the Mac adapter, which is built,
@@ -196,12 +196,12 @@ and the system is exactly what it is today.
 
 | Capability | Status | Fallback if unsupported |
 |---|---|---|
-| Loops available on the workspace plan | unverified | Manual/`Triage` intake as today |
-| Loop can delegate directly to the `moviecal-dispatcher` agent | unverified | Route label + dispatcher polling |
-| Coding Session can be resumed/followed-up after CI or review feedback | unverified | Mac adapter takes the repair (`MOV-149`/`MOV-151`) |
-| Agent Session lifecycle (create / activity / prompt / stop-signal / stale-session / PR-link) for a custom app actor — needed to drive and follow a cloud Coding Session | unverified, **Developer Preview** | The dispatcher's existing behaviour is already the fallback: act as the `MOV-122` app actor through the plain GraphQL API (comments + state changes) and let the Mac adapter carry the work. The gate applies to the *cloud* interaction model, not to anything running today. |
-| Webhook delivery sufficient to replace polling | unverified | Retain 30s polling as the complete fallback |
-| AI-credit consumption per cloud session | unmeasured | Cloud lane stays off |
+| Loops available on the workspace plan | **unsupported on current Basic plan**; Business required | Manual/`Triage` intake as today |
+| Loop can delegate directly to the `moviecal-dispatcher` agent | **unproven and unnecessary** while Loops are unavailable | **Proven:** write `execution:mac` + `moviecal-dispatcher` delegate; dispatcher polling reads both (`MOV-165`) |
+| Coding Session can be resumed/followed-up after CI or review feedback | product-supported, but same-branch behavior **unproven in moviecal** until `MOV-153` | Human repairs the original cloud PR branch on the Mac; `MOV-149`/`MOV-157` must support existing cloud branches before automating the handoff |
+| Agent Session lifecycle (create / activity / prompt / stop-signal / stale-session / PR-link) for the custom app actor | **unsupported in current configuration**; live creation returned `agent sessions disabled`; API is Developer Preview | Continue stable app-actor GraphQL (issue fields, comments, states) and let the Mac adapter carry the work |
+| Webhook delivery sufficient to replace polling | **not configured and not required**; Agent Session UI requires the Agent Session event category plus an HTTPS receiver | Retain 30s polling as the complete durable-workflow fallback; never expose the Mac directly |
+| AI-credit consumption per cloud session | **known formula, not yet measured:** provider token cost + $0.25 per 20-minute sandbox block | Cloud pilot stays off until a human verifies/adds a capped balance and `MOV-153` records the first session's actual cost |
 
 **Developer Preview caveat.** Linear's custom Agent Session APIs are Developer
 Preview. Nothing on the critical path may depend on them without a non-preview
@@ -211,11 +211,12 @@ to the Mac lane, never halt it. To be explicit about scope: the dispatcher does
 uses only stable GraphQL (`commentCreate`, `issueUpdate`). This gate constrains
 what the *cloud* lane may build on, and retroactively condemns nothing.
 
-**Plan and cost.** Loops and Coding Sessions are paid-tier capabilities
-consuming Linear AI credits. Neither the required tier nor expected credit
-consumption is established. **No upgrade is authorized by this document** —
-`MOV-141` records the requirement and expected cost *before* any purchase or
-enablement.
+**Plan and cost.** The workspace is on Basic. Coding Sessions are eligible on
+Basic; Loops require Business (published annual pricing on the validation date:
+$16/user/month). Both consume prepaid AI credits. Coding Sessions cost provider
+tokens plus $0.25 per 20-minute sandbox block; Loop-only runs typically cost
+$0.07–$0.20. **No upgrade or AI-credit purchase is authorized by this
+document.** See the MOV-141 findings for the capped pilot budget.
 
 ## Rollout gates
 
@@ -264,7 +265,8 @@ unchanged. Nothing here introduces a one-way door.
   adopted. Coding Sessions are now the intended cloud adapter — **subject to
   the feasibility gates above**, and never for iOS work.
 - The blanket rejection of **Loops** on tier grounds in the same section. Loops
-  are now a candidate for intake, gated on `MOV-141`.
+  remain an intake candidate, but `MOV-141` confirmed that they require a
+  separately approved Business upgrade and AI-credit budget.
 
 Retired GitHub-Project-era material in `docs/operators/archive/` and
 `docs/planning/archive/` is unaffected and remains historical reference only.
