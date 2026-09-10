@@ -16,8 +16,9 @@ const source = readFileSync(
 function bodyOf(fnName) {
   const start = source.indexOf(`async function ${fnName}(`);
   expect(start, `${fnName} not found`).toBeGreaterThan(-1);
-  // crude brace match from the first "{" after the signature
-  const open = source.indexOf("{", start);
+  // crude brace match from the function body's "{", not any default-object "{"
+  const sigClose = source.indexOf(")", start);
+  const open = source.indexOf("{", sigClose);
   let depth = 0;
   for (let i = open; i < source.length; i++) {
     if (source[i] === "{") depth++;
@@ -60,6 +61,15 @@ describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
     expect(body).toMatch(/try\s*\{/);
     expect(body).toMatch(/catch/);
     expect(body).toMatch(/cmdPrioritiesOnce/);
+  });
+
+  it("standalone priorities command acquires the dispatcher lock for mutating runs", () => {
+    const body = bodyOf("cmdPriorities");
+    expect(body).toMatch(/if\s*\(dryRun\)\s*return\s+cmdPrioritiesOnce/);
+    expect(body).toMatch(/new DispatcherLock\(dispatcherLockPath\(\)\)/);
+    expect(body).toMatch(/lock\.acquire\(\)/);
+    expect(body).toMatch(/cmdPrioritiesOnce\(\{\s*dryRun:\s*false\s*\}\)/);
+    expect(body).toMatch(/finally\s*\{\s*lock\.release\(\)/);
   });
 });
 

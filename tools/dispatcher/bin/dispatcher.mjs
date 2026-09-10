@@ -704,6 +704,18 @@ async function cmdPrioritiesOnce({ dryRun = false } = {}) {
   return 0;
 }
 
+async function cmdPriorities({ dryRun = false } = {}) {
+  if (dryRun) return cmdPrioritiesOnce({ dryRun: true });
+  const lock = new DispatcherLock(dispatcherLockPath());
+  try { lock.acquire(); } catch (err) { console.error(err.message); return 2; }
+  process.once("exit", () => lock.release());
+  try {
+    return await cmdPrioritiesOnce({ dryRun: false });
+  } finally {
+    lock.release();
+  }
+}
+
 /** Run a promote pass inside the poll loop; never let it abort dispatch. */
 async function promotePass() {
   try {
@@ -820,7 +832,7 @@ async function main() {
     }
     case "priorities": {
       const dryRun = rest.includes("--dry-run");
-      process.exitCode = await cmdPrioritiesOnce({ dryRun });
+      process.exitCode = await cmdPriorities({ dryRun });
       break;
     }
     case "run": {

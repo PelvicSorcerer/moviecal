@@ -56,6 +56,24 @@ describe("computeEffectivePriorities", () => {
     const priorities = computeEffectivePriorities([a, done]);
     expect(priorities.get("a")).toBe(3);
   });
+
+  it("handles long dependency chains without stack overflow", () => {
+    const depth = 12000;
+    const issues = [];
+    for (let i = 0; i < depth; i++) {
+      issues.push(
+        issue({
+          id: `id-${i}`,
+          identifier: `MOV-${i}`,
+          priority: i === depth - 1 ? 1 : 4,
+          relations: i < depth - 1 ? [blocks(`id-${i + 1}`)] : [],
+        }),
+      );
+    }
+    const priorities = computeEffectivePriorities(issues);
+    expect(priorities.get("id-0")).toBe(1);
+    expect(priorities.get(`id-${depth - 1}`)).toBe(1);
+  });
 });
 
 describe("propagatePriorities", () => {
@@ -241,6 +259,43 @@ describe("propagatePriorities", () => {
     });
   });
 
+  it("skips dependent relaxations when the downstream driver update fails", async () => {
+    const statePath = tempStatePath();
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({
+        a: { lastPropagated: 1, manualFloor: 3 },
+        b: { lastPropagated: 1, manualFloor: 3 },
+      }) + "\n",
+      "utf8",
+    );
+    const linearClient = {
+      updateIssuePriority: vi.fn().mockImplementation(async (issueId) => {
+        if (issueId === "b") throw new Error("linear timeout");
+        return true;
+      }),
+    };
+    const logger = fakeLogger();
+
+    const result = await propagatePriorities(
+      [
+        issue({ id: "a", identifier: "MOV-A", priority: 1, relations: [blocks("b")] }),
+        issue({ id: "b", identifier: "MOV-B", priority: 1, relations: [] }),
+      ],
+      { linearClient, stateFilePath: statePath, logger },
+    );
+
+    expect(result.wrote).toBe(0);
+    expect(linearClient.updateIssuePriority).toHaveBeenCalledTimes(1);
+    expect(linearClient.updateIssuePriority).toHaveBeenCalledWith("b", 3);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("driver MOV-B failed to update"));
+    const stored = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    expect(stored).toEqual({
+      a: { lastPropagated: 1, manualFloor: 3 },
+      b: { lastPropagated: 1, manualFloor: 3 },
+    });
+  });
+
   it("dry-run reports intended changes without writes or state-file rewrites", async () => {
     const statePath = tempStatePath();
     fs.writeFileSync(statePath, JSON.stringify({ a: { lastPropagated: 3, manualFloor: 3 } }) + "\n", "utf8");
@@ -260,7 +315,23 @@ describe("propagatePriorities", () => {
     expect(fs.readFileSync(statePath, "utf8")).toBe(initial);
   });
 
-  it("tightens insecure state directory/file permissions while loading", async () => {
+  it("tightens insecure state directory/file permissions on non-dry runs", async () => {
+    const statePath = tempStatePath();
+    const dirPath = path.dirname(statePath);
+    fs.writeFileSync(statePath, JSON.stringify({ a: { lastPropagated: 1, manualFloor: 1 } }) + "\n", "utf8");
+    fs.chmodSync(dirPath, 0o755);
+    fs.chmodSync(statePath, 0o644);
+
+    await propagatePriorities(
+      [issue({ id: "a", identifier: "MOV-A", priority: 1, relations: [] })],
+      { linearClient: { updateIssuePriority: vi.fn().mockResolvedValue(true) }, stateFilePath: statePath, logger: fakeLogger() },
+    );
+
+    expect(fs.statSync(dirPath).mode & 0o077).toBe(0);
+    expect(fs.statSync(statePath).mode & 0o077).toBe(0);
+  });
+
+  it("dry-run does not mutate insecure state-file permissions", async () => {
     const statePath = tempStatePath();
     const dirPath = path.dirname(statePath);
     fs.writeFileSync(statePath, JSON.stringify({ a: { lastPropagated: 1, manualFloor: 1 } }) + "\n", "utf8");
@@ -272,7 +343,22 @@ describe("propagatePriorities", () => {
       { linearClient: { updateIssuePriority: vi.fn().mockResolvedValue(true) }, stateFilePath: statePath, logger: fakeLogger(), dryRun: true },
     );
 
-    expect(fs.statSync(dirPath).mode & 0o077).toBe(0);
-    expect(fs.statSync(statePath).mode & 0o077).toBe(0);
+    expect(fs.statSync(dirPath).mode & 0o077).toBe(0o55);
+    expect(fs.statSync(statePath).mode & 0o077).toBe(0o44);
+  });
+
+  it("does not rewrite the state file when state is unchanged", async () => {
+    const statePath = tempStatePath();
+    fs.writeFileSync(statePath, JSON.stringify({ a: { lastPropagated: 1, manualFloor: 1 } }) + "\n", "utf8");
+    const before = fs.statSync(statePath).mtimeMs;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await propagatePriorities(
+      [issue({ id: "a", identifier: "MOV-A", priority: 1, relations: [] })],
+      { linearClient: { updateIssuePriority: vi.fn().mockResolvedValue(true) }, stateFilePath: statePath, logger: fakeLogger() },
+    );
+
+    const after = fs.statSync(statePath).mtimeMs;
+    expect(after).toBe(before);
   });
 });

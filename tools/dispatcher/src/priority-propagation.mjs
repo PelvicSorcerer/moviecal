@@ -43,6 +43,122 @@ function describeCycle(memberIds, issueById) {
   return memberIds.map((id) => issueById.get(id)?.identifier || id).sort();
 }
 
+function compareStateEntries(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.lastPropagated === b.lastPropagated && a.manualFloor === b.manualFloor;
+}
+
+function statesEqual(a, b) {
+  const aKeys = Object.keys(a).sort();
+  const bKeys = Object.keys(b).sort();
+  if (aKeys.length !== bKeys.length) return false;
+  for (let i = 0; i < aKeys.length; i++) {
+    if (aKeys[i] !== bKeys[i]) return false;
+    if (!compareStateEntries(a[aKeys[i]], b[bKeys[i]])) return false;
+  }
+  return true;
+}
+
+function connectedComponents(adjacency) {
+  const ids = Array.from(adjacency.keys());
+  const visited = new Set();
+  const finishOrder = [];
+
+  for (const startId of ids) {
+    if (visited.has(startId)) continue;
+    const stack = [{ id: startId, entered: false }];
+    while (stack.length > 0) {
+      const frame = stack.pop();
+      if (!frame.entered) {
+        if (visited.has(frame.id)) continue;
+        visited.add(frame.id);
+        stack.push({ id: frame.id, entered: true });
+        for (const childId of adjacency.get(frame.id) || []) {
+          if (!visited.has(childId)) stack.push({ id: childId, entered: false });
+        }
+      } else {
+        finishOrder.push(frame.id);
+      }
+    }
+  }
+
+  const reverseAdjacency = new Map(ids.map((id) => [id, new Set()]));
+  for (const [id, children] of adjacency.entries()) {
+    for (const childId of children) {
+      if (!reverseAdjacency.has(childId)) reverseAdjacency.set(childId, new Set());
+      reverseAdjacency.get(childId).add(id);
+    }
+  }
+
+  const assigned = new Set();
+  const components = [];
+  for (let i = finishOrder.length - 1; i >= 0; i--) {
+    const startId = finishOrder[i];
+    if (assigned.has(startId)) continue;
+    const members = [];
+    const stack = [startId];
+    assigned.add(startId);
+    while (stack.length > 0) {
+      const id = stack.pop();
+      members.push(id);
+      for (const parentId of reverseAdjacency.get(id) || []) {
+        if (assigned.has(parentId)) continue;
+        assigned.add(parentId);
+        stack.push(parentId);
+      }
+    }
+    components.push(members);
+  }
+
+  return components;
+}
+
+function componentBestValues({ components, componentEdges, bestSelfByComponent }) {
+  const indegree = new Array(components.length).fill(0);
+  for (let from = 0; from < componentEdges.length; from++) {
+    for (const to of componentEdges[from]) indegree[to] += 1;
+  }
+
+  const queue = [];
+  for (let i = 0; i < indegree.length; i++) {
+    if (indegree[i] === 0) queue.push(i);
+  }
+
+  const topo = [];
+  while (queue.length > 0) {
+    const index = queue.shift();
+    topo.push(index);
+    for (const childIndex of componentEdges[index]) {
+      indegree[childIndex] -= 1;
+      if (indegree[childIndex] === 0) queue.push(childIndex);
+    }
+  }
+
+  if (topo.length !== components.length) {
+    for (let i = 0; i < components.length; i++) {
+      if (!topo.includes(i)) topo.push(i);
+    }
+  }
+
+  const bestByComponent = bestSelfByComponent.map((x) => ({ ...x }));
+  for (let i = topo.length - 1; i >= 0; i--) {
+    const index = topo[i];
+    let best = bestByComponent[index];
+    for (const childIndex of componentEdges[index]) {
+      const childBest = bestByComponent[childIndex];
+      if (
+        moreImportant(childBest.priority, best.priority) ||
+        (childBest.priority === best.priority && childBest.driverId !== best.driverId)
+      ) {
+        best = childBest;
+      }
+    }
+    bestByComponent[index] = best;
+  }
+  return bestByComponent;
+}
+
 function analyzePriorityGraph(issues, priorityById = null) {
   const issueById = new Map();
   for (const issue of issues) issueById.set(issue.id, issue);
@@ -61,44 +177,7 @@ function analyzePriorityGraph(issues, priorityById = null) {
     }
   }
 
-  const indexById = new Map();
-  const lowlinkById = new Map();
-  const stack = [];
-  const onStack = new Set();
-  const components = [];
-  let index = 0;
-
-  function strongConnect(id) {
-    indexById.set(id, index);
-    lowlinkById.set(id, index);
-    index += 1;
-    stack.push(id);
-    onStack.add(id);
-
-    for (const downstreamId of adjacency.get(id)) {
-      if (!indexById.has(downstreamId)) {
-        strongConnect(downstreamId);
-        lowlinkById.set(id, Math.min(lowlinkById.get(id), lowlinkById.get(downstreamId)));
-      } else if (onStack.has(downstreamId)) {
-        lowlinkById.set(id, Math.min(lowlinkById.get(id), indexById.get(downstreamId)));
-      }
-    }
-
-    if (lowlinkById.get(id) === indexById.get(id)) {
-      const members = [];
-      let popped;
-      do {
-        popped = stack.pop();
-        onStack.delete(popped);
-        members.push(popped);
-      } while (popped !== id);
-      components.push(members);
-    }
-  }
-
-  for (const issue of nonTerminalIssues) {
-    if (!indexById.has(issue.id)) strongConnect(issue.id);
-  }
+  const components = connectedComponents(adjacency);
 
   const componentIndexById = new Map();
   components.forEach((members, componentIndex) => {
@@ -108,7 +187,7 @@ function analyzePriorityGraph(issues, priorityById = null) {
   const componentEdges = components.map(() => new Set());
   components.forEach((members, fromComponent) => {
     for (const member of members) {
-      for (const downstreamId of adjacency.get(member)) {
+      for (const downstreamId of adjacency.get(member) || []) {
         const toComponent = componentIndexById.get(downstreamId);
         if (toComponent !== fromComponent) componentEdges[fromComponent].add(toComponent);
       }
@@ -142,17 +221,7 @@ function analyzePriorityGraph(issues, priorityById = null) {
     return { priority: bestPriority, driverId };
   });
 
-  const memo = new Map();
-  function bestForComponent(componentIndex) {
-    if (memo.has(componentIndex)) return memo.get(componentIndex);
-    let best = bestSelfByComponent[componentIndex];
-    for (const childIndex of componentEdges[componentIndex]) {
-      const childBest = bestForComponent(childIndex);
-      if (moreImportant(childBest.priority, best.priority)) best = childBest;
-    }
-    memo.set(componentIndex, best);
-    return best;
-  }
+  const bestByComponent = componentBestValues({ components, componentEdges, bestSelfByComponent });
 
   const effectiveById = new Map();
   const driverById = new Map();
@@ -164,7 +233,7 @@ function analyzePriorityGraph(issues, priorityById = null) {
       driverById.set(issue.id, issue.id);
       continue;
     }
-    const best = bestForComponent(componentIndexById.get(issue.id));
+    const best = bestByComponent[componentIndexById.get(issue.id)];
     effectiveById.set(issue.id, best.priority);
     driverById.set(issue.id, best.driverId);
   }
@@ -189,19 +258,19 @@ function parseStateEntry(value) {
   return { lastPropagated, manualFloor };
 }
 
-function loadPropagationState(filePath) {
-  if (!filePath || !fs.existsSync(filePath)) return {};
+function repairPermissions(filePath) {
   const dirPath = path.dirname(filePath);
   try {
-    if (fs.existsSync(dirPath) && (fs.statSync(dirPath).mode & 0o077)) {
-      fs.chmodSync(dirPath, 0o700);
-    }
+    if (fs.existsSync(dirPath) && (fs.statSync(dirPath).mode & 0o077)) fs.chmodSync(dirPath, 0o700);
   } catch {}
   try {
-    if (fs.statSync(filePath).mode & 0o077) {
-      fs.chmodSync(filePath, 0o600);
-    }
+    if (fs.existsSync(filePath) && (fs.statSync(filePath).mode & 0o077)) fs.chmodSync(filePath, 0o600);
   } catch {}
+}
+
+function loadPropagationState(filePath, { repair = true } = {}) {
+  if (!filePath || !fs.existsSync(filePath)) return {};
+  if (repair) repairPermissions(filePath);
   const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
   const clean = {};
@@ -216,9 +285,6 @@ function loadPropagationState(filePath) {
 function savePropagationState(filePath, state) {
   const dirPath = path.dirname(filePath);
   fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 });
-  try {
-    if (fs.statSync(dirPath).mode & 0o077) fs.chmodSync(dirPath, 0o700);
-  } catch {}
   const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   const fd = fs.openSync(tempPath, "w", 0o600);
   try {
@@ -229,9 +295,7 @@ function savePropagationState(filePath, state) {
   }
   fs.chmodSync(tempPath, 0o600);
   fs.renameSync(tempPath, filePath);
-  try {
-    if (fs.statSync(filePath).mode & 0o077) fs.chmodSync(filePath, 0o600);
-  } catch {}
+  repairPermissions(filePath);
 }
 
 function priorityLabel(priority) {
@@ -246,6 +310,38 @@ function priorityLabel(priority) {
   );
 }
 
+function orderUpdates(updates) {
+  const byId = new Map(updates.map((u) => [u.issueId, u]));
+  const dependents = new Map(updates.map((u) => [u.issueId, new Set()]));
+  const indegree = new Map(updates.map((u) => [u.issueId, 0]));
+
+  for (const update of updates) {
+    if (!update.driverId || update.driverId === update.issueId) continue;
+    if (!byId.has(update.driverId)) continue;
+    dependents.get(update.driverId).add(update.issueId);
+    indegree.set(update.issueId, (indegree.get(update.issueId) || 0) + 1);
+  }
+
+  const queue = updates
+    .filter((u) => (indegree.get(u.issueId) || 0) === 0)
+    .sort((a, b) => (a.identifier || "").localeCompare(b.identifier || ""));
+
+  const ordered = [];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    ordered.push(current);
+    for (const childId of dependents.get(current.issueId) || []) {
+      indegree.set(childId, (indegree.get(childId) || 0) - 1);
+      if ((indegree.get(childId) || 0) === 0) queue.push(byId.get(childId));
+    }
+    queue.sort((a, b) => (a.identifier || "").localeCompare(b.identifier || ""));
+  }
+
+  if (ordered.length === updates.length) return ordered;
+  const seen = new Set(ordered.map((u) => u.issueId));
+  return [...ordered, ...updates.filter((u) => !seen.has(u.issueId))];
+}
+
 /**
  * @param {object[]} issues
  * @param {object} ctx
@@ -256,7 +352,8 @@ function priorityLabel(priority) {
  */
 export async function propagatePriorities(issues, ctx) {
   const { linearClient, stateFilePath, dryRun = false, logger = console } = ctx;
-  const previousState = loadPropagationState(stateFilePath);
+  const previousState = loadPropagationState(stateFilePath, { repair: !dryRun });
+
   const baselinePriorityById = new Map();
   for (const issue of issues) {
     const entry = previousState[issue.id];
@@ -264,6 +361,7 @@ export async function propagatePriorities(issues, ctx) {
     const owns = entry && current === entry.lastPropagated;
     baselinePriorityById.set(issue.id, owns ? entry.manualFloor : current);
   }
+
   const { effectiveById, driverById, cycles } = analyzePriorityGraph(issues, baselinePriorityById);
   const nextState = {};
   const updates = [];
@@ -306,6 +404,7 @@ export async function propagatePriorities(issues, ctx) {
       from: current,
       to: desired,
       action,
+      driverId,
       driverIdentifier: driverIssue?.identifier || driverId,
       stateOnSuccess,
       stateOnFailure,
@@ -335,11 +434,24 @@ export async function propagatePriorities(issues, ctx) {
 
   if (!dryRun) {
     let wrote = 0;
-    for (const update of updates) {
+    const failedIssueIds = new Set();
+    const orderedUpdates = orderUpdates(updates);
+
+    for (const update of orderedUpdates) {
+      if (update.driverId && update.driverId !== update.issueId && failedIssueIds.has(update.driverId)) {
+        nextState[update.issueId] = update.stateOnFailure;
+        (logger.warn || logger.log || (() => {})).call(
+          logger,
+          `${update.identifier}: skipped priority update ${update.from} -> ${update.to} because driver ${update.driverIdentifier} failed to update`,
+        );
+        continue;
+      }
+
       try {
         const ok = await linearClient.updateIssuePriority(update.issueId, update.to);
         if (!ok) {
           nextState[update.issueId] = update.stateOnFailure;
+          failedIssueIds.add(update.issueId);
           (logger.warn || logger.log || (() => {})).call(
             logger,
             `${update.identifier}: failed to apply priority update ${update.from} -> ${update.to}; preserving previous ownership state`,
@@ -350,13 +462,16 @@ export async function propagatePriorities(issues, ctx) {
         }
       } catch (err) {
         nextState[update.issueId] = update.stateOnFailure;
+        failedIssueIds.add(update.issueId);
         (logger.warn || logger.log || (() => {})).call(
           logger,
           `${update.identifier}: failed to apply priority update ${update.from} -> ${update.to} (${err.message}); preserving previous ownership state`,
         );
       }
     }
-    savePropagationState(stateFilePath, nextState);
+
+    if (!statesEqual(previousState, nextState)) savePropagationState(stateFilePath, nextState);
+
     return {
       updates,
       skipped,
