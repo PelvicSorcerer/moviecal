@@ -126,7 +126,7 @@ Any rule that constrains code lives in the repo. Any rule that constrains proces
 | What to build, why, priority, acceptance criteria, discussion, decisions, **desired** status, release planning, agent delegation, human ownership | **Linear** |
 | Source code, tests, CI config, dispatcher code, testing lanes, security constraints, coding conventions, `AGENTS.md`, architecture docs | **Git repository** |
 | Branches, commits, PRs, code review, CI results, releases, external bug intake — **delivered** status | **GitHub** |
-| Which execution adapter runs a given issue (cloud vs Mac) | **Linear label** (`execution:*`, `MOV-142`), materialized before dispatch |
+| Which execution adapter runs a given issue (cloud vs Mac) | **A Linear route label**, scheme defined by `MOV-142` (not yet provisioned), materialized on the issue before dispatch |
 | Live agent progress narration, tool calls, intermediate reasoning | **Run logs** — dispatcher run logs (Mac adapter) or Linear Agent Session activity (cloud adapter); referenced from Linear, never authoritative |
 
 Where Linear and GitHub disagree about whether something *shipped*, GitHub wins and Linear is corrected to match. Where they disagree about whether something *should* ship, Linear wins. See `docs/governance/hybrid-execution-architecture.md` §Source-of-truth boundaries.

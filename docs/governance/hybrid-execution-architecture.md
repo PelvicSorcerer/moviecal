@@ -56,7 +56,7 @@ Extends the table in `docs/governance/linear-information-architecture.md`:
 | What to build, why, priority, acceptance criteria, discussion, decisions, **desired** status, release planning, agent delegation, human ownership | **Linear** |
 | Source code, tests, CI config, dispatcher code, testing lanes, security constraints, coding conventions, `AGENTS.md`, architecture docs | **Git repository** |
 | Branches, commits, PRs, code review, CI results, releases, external bug intake — **delivered** state | **GitHub** |
-| Which adapter executes a given issue | **Linear label** (`execution:*`, `MOV-142`), materialized before dispatch |
+| Which adapter executes a given issue | **A Linear route label**, scheme per `MOV-142` (`execution:*` used as shorthand here); materialized on the issue before dispatch |
 | Live agent progress narration, tool calls, intermediate reasoning | **Run logs** — dispatcher run logs (Mac) or Linear Agent Session activity (cloud); referenced from Linear, never authoritative |
 
 Where Linear and GitHub disagree about whether something shipped, **GitHub
@@ -123,11 +123,14 @@ cloud-eligible, regardless of its subject matter.
 
 **`MOV-142` owns the routing label schema.** This section states the *intent*
 the schema must satisfy; the exact label names, group semantics, inference
-rules, and validation belong to that issue and may differ in detail.
+rules, and validation belong to that issue and may differ in detail. Any
+`execution:*` label names that appear elsewhere in this document, in
+`AGENTS.md`, or in the source-of-truth tables are **illustrative shorthand**
+pending `MOV-142` — the three routes are decided, their spelling is not.
 
 The intent: every executable issue carries an explicit, auditable route —
-proposed as three mutually-exclusive labels, one per adapter plus one for
-"executes nowhere":
+three mutually-exclusive options, one per adapter plus one for "executes
+nowhere":
 
 - **Mac** — iOS Companion App project, anything Xcode-dependent, anything
   needing a local secret or the self-hosted runner. This is also the default
@@ -149,6 +152,12 @@ dispatcher's preflight gates decide *when*; the route decides *where*.
 Every capability below is **unproven in this workspace** and must not be relied
 on until `MOV-141` records it as supported. Each has a named fallback so the
 architecture degrades rather than stalls.
+
+**These gates are asymmetric.** Every capability here is something the *cloud*
+path would newly depend on. None of them gates the Mac adapter, which is built,
+running, and depends on none of these — its "fallback" column is, in every case,
+just what it already does. If every gate below fails, the Mac lane is unaffected
+and the system is exactly what it is today.
 
 | Capability | Status | Fallback if unsupported |
 |---|---|---|
