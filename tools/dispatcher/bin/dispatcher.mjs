@@ -42,6 +42,7 @@ import { LinearClient } from "../src/linear-client.mjs";
 import { getAppToken } from "../src/linear-app-auth.mjs";
 import { evaluatePreflight, worktreeName, branchName } from "../src/preflight.mjs";
 import { resolveRouting } from "../src/worker-routing.mjs";
+import { inferExecutionRoute, resolveExecutionRoute } from "../src/execution-routing.mjs";
 import { WorktreeManager } from "../src/worktree-manager.mjs";
 import { runOnce } from "../src/run-loop.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
@@ -211,6 +212,7 @@ async function cmdDryRun({ fixturePath } = {}) {
   console.log(`${issues.length} issue(s) in Ready for Agent:\n`);
   for (const issue of issues) {
     const routing = resolveRouting(issue);
+    const execution = resolveExecutionRoute(issue);
     const name = worktreeName(issue.identifier, issue.title);
     const branch = branchName(issue.identifier, issue.title);
     const context = {
@@ -228,6 +230,7 @@ async function cmdDryRun({ fixturePath } = {}) {
     console.log(`  worktree: ${path.join(worktreeRoot(), name)}`);
     console.log(`  branch:   ${branch}`);
     console.log(`  worker:   ${routing.worker} (model: ${routing.model})${routing.ok ? "" : `  [ROUTING BLOCKED: ${routing.reason}]`}`);
+    console.log(`  execution: ${execution.ok ? execution.route : `INVALID — ${execution.reason}`} (inferred ${inferExecutionRoute(issue)})`);
     console.log(`  preflight: ${preflight.ok ? "PASS" : `BLOCKED — ${preflight.reason}`}`);
     console.log("");
   }

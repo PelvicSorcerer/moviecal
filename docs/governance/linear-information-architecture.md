@@ -77,6 +77,7 @@ This state list is the supervision surface a human uses to answer: what's waitin
 - `needs-secrets` — dispatcher refuses to start until the required local secret is present (replaces GitHub `Needs Infra/Secrets`)
 - `type:{feat,fix,chore,docs,test}` — work type (absorbs the old `Track = Docs` / `Migration` distinction)
 - `upgrade:{multi-system,ambiguous-spec,security-critical,prior-failure,architecture}` — cites the upgrade condition when `model:strong` is applied (see `docs/operators/worker-routing.md`); the dispatcher's routing logic requires at least one of these alongside `model:strong`
+- `execution:{cloud,mac,none}` — mutually-exclusive execution adapter route, provisioned as one Linear label group by `tools/dispatcher/scripts/provision-linear-workspace.mjs`; `type:coordination` issues use `execution:none` and never auto-promote
 
 No separate `migration` label: the historical-import marker is Linear's own auto-applied `Migrated` label (added to every issue by the GitHub Issues import assistant), not a hand-rolled one. A `migration` label was created here in Stage 3 before that was known, then deleted once confirmed unused — see "GitHub Issues: migration and ongoing sync" below.
 

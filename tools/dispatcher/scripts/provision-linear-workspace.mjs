@@ -117,10 +117,23 @@ async function main() {
 
   // --- Labels ---
   const labelsData = await gql(
-    `query($teamId: ID) { issueLabels(filter: { team: { id: { eq: $teamId } } }) { nodes { id name } } }`,
+    `query($teamId: ID) { issueLabels(first: 100, filter: { team: { id: { eq: $teamId } } }) { nodes { id name isGroup } } }`,
     { teamId: team.id },
   );
-  const existingLabels = new Set(labelsData.issueLabels.nodes.map((l) => l.name));
+  const existingLabelNodes = labelsData.issueLabels.nodes;
+  const existingLabels = new Set(existingLabelNodes.map((l) => l.name));
+
+  let executionGroup = existingLabelNodes.find((label) => label.name === "execution" && label.isGroup);
+  if (!executionGroup) {
+    const groupData = await gql(
+      `mutation($input: IssueLabelCreateInput!) { issueLabelCreate(input: $input) { success issueLabel { id name } } }`,
+      { input: { teamId: team.id, name: "execution", color: "#7c3aed", isGroup: true } },
+    );
+    executionGroup = groupData.issueLabelCreate.issueLabel;
+    log("  label group created: execution");
+  } else {
+    log("  [exists] label group 'execution'");
+  }
 
   const labelPlan = [
     ...["watchlist", "calendar", "auth", "database", "tests", "deployment", "docs", "process"].map((a) => `area:${a}`),
@@ -138,13 +151,19 @@ async function main() {
     ...["multi-system", "ambiguous-spec", "security-critical", "prior-failure", "architecture"].map(
       (c) => `upgrade:${c}`,
     ),
+    "type:coordination",
   ];
+
+  const executionLabels = ["execution:cloud", "execution:mac", "execution:none"];
+  labelPlan.push(...executionLabels);
 
   for (const name of labelPlan) {
     if (existingLabels.has(name)) continue;
+    const input = { teamId: team.id, name, color: executionLabels.includes(name) ? "#7c3aed" : "#bec2c8" };
+    if (executionLabels.includes(name)) input.parentId = executionGroup.id;
     await gql(
       `mutation($input: IssueLabelCreateInput!) { issueLabelCreate(input: $input) { success } }`,
-      { input: { teamId: team.id, name, color: "#bec2c8" } },
+      { input },
     );
     log(`  label created: ${name}`);
   }

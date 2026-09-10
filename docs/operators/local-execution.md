@@ -62,6 +62,13 @@ For a `Blocked` issue there is one extra condition: its most recent `**Dispatche
 
 On promotion the promoter comments `Auto-promoted to Ready for Agent — …` (which, via the app-actor identity from MOV-122, notifies the repo owner). It is idempotent: a promoted issue is no longer in `Backlog`/`Blocked`, so a second pass does nothing.
 
+Before promotion, the issue must also carry exactly one materialized
+`execution:{cloud,mac,none}` label. The dispatcher infers routes for dry-run
+and classification purposes, but does not silently write or dispatch an
+unmaterialized inference. `execution:none` is reserved for issues labeled
+`type:coordination`; those coordination parents are intentionally excluded
+from the automated promoter because they must not produce their own PR.
+
 `blocks` relations plus the preflight gates below do all **sequencing**; the promoter only judges **readiness**. There is no per-issue human promotion step. To hold a specced issue out of the automated flow, move it to `Spec Ready` — the promoter never touches that state.
 
 ## Preflight gates

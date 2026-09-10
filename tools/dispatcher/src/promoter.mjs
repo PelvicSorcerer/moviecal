@@ -11,6 +11,8 @@
 // (`promoteEligible`) so the contract is fully unit-testable with fakes.
 // See docs/operators/local-execution.md §Automated promotion and MOV-129.
 
+import { resolveExecutionRoute } from "./execution-routing.mjs";
+
 const ACCEPTANCE_HEADING_RE = /^#{1,6}[ \t]*acceptance criteria\b/im;
 const TESTING_HEADING_RE = /^#{1,6}[ \t]*testing expectations\b/im;
 const ANY_HEADING_RE = /^#{1,6}[ \t]+\S/m;
@@ -66,6 +68,13 @@ export function evaluatePromotion(issue, ctx) {
   }
   if (labels.includes("human-only")) {
     return { promote: false, reason: "labeled human-only" };
+  }
+  const execution = resolveExecutionRoute(issue);
+  if (!execution.ok) {
+    return { promote: false, reason: `execution route invalid: ${execution.reason}` };
+  }
+  if (execution.route === "none") {
+    return { promote: false, reason: "execution:none coordination issue" };
   }
   if (!sectionHasContent(issue.description, ACCEPTANCE_HEADING_RE)) {
     return { promote: false, reason: "no non-empty acceptance-criteria section" };

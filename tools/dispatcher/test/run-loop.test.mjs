@@ -92,7 +92,7 @@ const ISSUE = {
   description: "Do the fix.",
   url: "https://linear.app/moviecal/issue/MOV-1",
   project: null,
-  labels: [],
+  labels: ["execution:mac"],
   blockedByIds: [],
 };
 
@@ -163,7 +163,7 @@ describe("runOnce", () => {
     const ctx = baseCtx({ applyStagedWorkflowEditFn });
     const issue = {
       ...ISSUE,
-      labels: ["ci:workflow-edit-authorized"],
+      labels: ["ci:workflow-edit-authorized", "execution:mac"],
       description: "Workflow-edit: .github/workflows/ios-verify.yml",
     };
 
@@ -182,7 +182,7 @@ describe("runOnce", () => {
     const ctx = baseCtx({ applyStagedWorkflowEditFn });
     const issue = {
       ...ISSUE,
-      labels: ["ci:workflow-edit-authorized"],
+      labels: ["ci:workflow-edit-authorized", "execution:mac"],
       description: "Workflow-edit: .github/workflows/ios-verify.yml",
     };
 

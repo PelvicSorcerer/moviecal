@@ -147,6 +147,21 @@ ambiguous or conflicting route fails validation rather than defaulting silently.
 Sequencing is unchanged and adapter-independent: `blocks` relations plus the
 dispatcher's preflight gates decide *when*; the route decides *where*.
 
+MOV-142 materializes these routes as a mutually-exclusive Linear label group:
+`execution:cloud`, `execution:mac`, or `execution:none`. Inference is
+deterministic but never sufficient by itself: the inferred label must be
+written to the issue before promotion or dispatch. Coordination issues labeled
+`type:coordination` infer `execution:none` and are excluded from automated
+promotion; the iOS Companion App project, Xcode/Simulator/runner work, and
+work needing a local secret infer `execution:mac`; supported non-iOS projects
+infer `execution:cloud`; anything ambiguous falls back to `execution:mac`.
+
+Validation rejects missing, conflicting, or semantically invalid labels (for
+example, `execution:none` on an executable issue). The cloud adapter remains
+disabled until its rollout gate is satisfied, so a materialized cloud route is
+currently reported for the cloud adapter rather than executed by the local
+dispatcher.
+
 ## Feasibility gates
 
 Every capability below is **unproven in this workspace** and must not be relied

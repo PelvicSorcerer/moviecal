@@ -10,6 +10,7 @@
 import path from "node:path";
 import { evaluatePreflight, worktreeName, branchName, resolveWorkflowEditAuthorization } from "./preflight.mjs";
 import { resolveRouting, workerInvocation } from "./worker-routing.mjs";
+import { resolveExecutionRoute } from "./execution-routing.mjs";
 import { generateBrief } from "./brief.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
 
@@ -135,6 +136,23 @@ async function processIssue(issue, ctx) {
     await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
     await linearClient.addComment(issue.id, `**Dispatcher routing failed:** ${routing.reason}`);
     return { issue: issue.identifier, outcome: "needs-human", reason: routing.reason };
+  }
+
+  const execution = resolveExecutionRoute(issue);
+  if (!execution.ok) {
+    await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
+    await linearClient.addComment(issue.id, `**Dispatcher execution route failed:** ${execution.reason}`);
+    return { issue: issue.identifier, outcome: "needs-human", reason: execution.reason };
+  }
+  if (execution.route === "none") {
+    await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
+    await linearClient.addComment(issue.id, "**Dispatcher skipped coordination issue:** execution:none issues do not produce PRs.");
+    return { issue: issue.identifier, outcome: "coordination-skipped", reason: "execution:none coordination issue" };
+  }
+  if (execution.route === "cloud") {
+    await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
+    await linearClient.addComment(issue.id, "**Dispatcher cannot execute cloud route:** the Linear-managed cloud adapter is not enabled yet.");
+    return { issue: issue.identifier, outcome: "cloud-unavailable", reason: "cloud adapter is not enabled" };
   }
 
   const entry = worktreeManager.create({
