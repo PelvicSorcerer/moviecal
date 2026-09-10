@@ -62,6 +62,22 @@ For a `Blocked` issue there is one extra condition: its most recent `**Dispatche
 
 On promotion the promoter comments `Auto-promoted to Ready for Agent — …` (which, via the app-actor identity from MOV-122, notifies the repo owner). It is idempotent: a promoted issue is no longer in `Backlog`/`Blocked`, so a second pass does nothing.
 
+**Execution routing (MOV-142) — labels and inference only, not enforced yet.**
+`execution:{cloud,mac,none}` is a mutually-exclusive Linear label group,
+provisioned idempotently by `tools/dispatcher/scripts/provision-linear-workspace.mjs`.
+`tools/dispatcher/src/execution-routing.mjs` provides the pure inference and
+validation logic (`inferExecutionRoute`, `resolveExecutionRoute`,
+`isCoordinationIssue`), and `dispatcher dry-run` prints each issue's route +
+inference. The **only** place a route affects behaviour today is the promoter:
+an issue that infers `execution:none` (i.e. carries `type:coordination`) never
+auto-promotes, because a coordination parent must not produce its own PR.
+
+Restricting local dispatch to Mac-routed issues — rejecting cloud, missing, or
+conflicting routes at dispatch time — is **`MOV-143`**, which also backfills
+`execution:*` labels onto the existing backlog first so nothing breaks on the
+switch. Until then the dispatcher ignores the route for `execution:mac` and
+label-less issues alike.
+
 `blocks` relations plus the preflight gates below do all **sequencing**; the promoter only judges **readiness**. There is no per-issue human promotion step. To hold a specced issue out of the automated flow, move it to `Spec Ready` — the promoter never touches that state.
 
 ## Preflight gates

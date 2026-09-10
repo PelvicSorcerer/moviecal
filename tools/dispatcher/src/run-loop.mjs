@@ -137,6 +137,12 @@ async function processIssue(issue, ctx) {
     return { issue: issue.identifier, outcome: "needs-human", reason: routing.reason };
   }
 
+  // Note: the dispatcher does not yet enforce the execution route at dispatch
+  // time — restricting local dispatch to Mac-routed issues (and rejecting
+  // unmaterialized / cloud / coordination routes here) is MOV-143's scope, and
+  // needs the existing backlog labelled first. MOV-142 only provisions the
+  // labels + inference and keeps coordination issues out of the promoter.
+
   const entry = worktreeManager.create({
     id: issue.identifier,
     name,

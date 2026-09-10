@@ -140,12 +140,32 @@ nowhere":
 - **None** — coordination/umbrella issues that must never produce their own PR
   (e.g. `MOV-139`); excluded from the automated promoter.
 
-The route may be *inferred* by rule but must be **materialized on the issue
-before dispatch** so the decision is auditable after the fact. An issue with an
-ambiguous or conflicting route fails validation rather than defaulting silently.
+The route may be *inferred* by rule, but the target state is that it is
+**materialized on the issue before dispatch** so the decision is auditable
+after the fact, with an ambiguous or conflicting route failing validation
+rather than defaulting silently. `MOV-142` provisions the labels and the
+inference/validation logic; `MOV-143` makes materialization a hard
+precondition for dispatch (and backfills the existing backlog first). Until
+then the dispatcher does not require a materialized route.
 
 Sequencing is unchanged and adapter-independent: `blocks` relations plus the
 dispatcher's preflight gates decide *when*; the route decides *where*.
+
+`MOV-142` provisions these routes as a mutually-exclusive Linear label group
+(`execution:cloud` / `execution:mac` / `execution:none`) and supplies the
+deterministic inference: `type:coordination` → `execution:none`; the iOS
+Companion App project, Xcode/Simulator/runner work, and local-secret work →
+`execution:mac`; supported non-iOS projects → `execution:cloud`; anything
+ambiguous → `execution:mac`. Inference is advisory — the label must be
+materialized on the issue to be authoritative.
+
+`MOV-142` wires this into exactly one behaviour: an issue that infers
+`execution:none` never auto-promotes. **Enforcing routes at dispatch** —
+restricting the local dispatcher to Mac-routed issues and rejecting cloud,
+missing, or conflicting routes — is `MOV-143`, which first backfills the
+existing backlog with inferred labels so the switch breaks nothing. A
+`execution:cloud` issue is not runnable until the cloud lane is piloted (stage
+7 below) regardless.
 
 ## Feasibility gates
 

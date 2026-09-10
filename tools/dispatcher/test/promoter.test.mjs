@@ -46,6 +46,17 @@ describe("evaluatePromotion", () => {
     expect(v.reason).toMatch(/human-only/);
   });
 
+  it("rejects a coordination parent (type:coordination) even with a complete description", () => {
+    const v = evaluatePromotion(issue({ labels: ["type:coordination"] }), { isBlockerSatisfied: ALL_SATISFIED });
+    expect(v.promote).toBe(false);
+    expect(v.reason).toMatch(/coordination issue/);
+  });
+
+  it("promotes an ordinary issue with no execution:* label (route enforcement is MOV-143, not the promoter)", () => {
+    const v = evaluatePromotion(issue({ labels: [] }), { isBlockerSatisfied: ALL_SATISFIED });
+    expect(v.promote).toBe(true);
+  });
+
   it("rejects a missing acceptance-criteria section", () => {
     const v = evaluatePromotion(
       issue({ description: "### Testing Expectations\n- unit: yes." }),
