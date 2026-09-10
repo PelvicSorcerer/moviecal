@@ -364,7 +364,15 @@ describe("runOnce", () => {
 
     expect(result.outcome).toBe("spawn-error");
     expect(ctx.worktreeManager.statusCalls).toEqual([{ id: "MOV-1", status: "failed" }]);
+    expect(ctx.writeWorkerAuditFn).toHaveBeenCalledWith("/fake/logs/MOV-1-fix-the-thing", expect.objectContaining({
+      issue: "MOV-1",
+      phase: "spawn",
+      ok: false,
+      violations: [expect.objectContaining({ reason: expect.stringContaining("ENOENT") })],
+    }));
     expect(ctx.linearClient.calls.at(-1).body).toContain("ENOENT");
+    expect(ctx.linearClient.calls.at(-1).body).toContain("SHA-256");
+    expect(ctx.linearClient.calls.at(-1).body).toContain("no worker ran and no remote mutation was attempted");
   });
 
   it("blocks on the concurrency limit before creating a worktree", async () => {

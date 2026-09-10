@@ -252,11 +252,34 @@ async function processIssue(issue, ctx) {
       workerTimeoutMs,
     );
   } catch (err) {
+    const violation = {
+      action: "worker safety boundary",
+      reason: `worker could not start under the required safety boundary: ${err.message}`,
+    };
+    let spawnAuditRecord;
+    try {
+      spawnAuditRecord = writeWorkerAuditFn(logDir, {
+        issue: issue.identifier,
+        worker: routing.worker,
+        phase: "spawn",
+        ok: false,
+        violations: [violation],
+      });
+    } catch {
+      // The Linear record below remains the final audit backstop if the local
+      // filesystem is itself unavailable. Never weaken the fail-closed path.
+    }
     worktreeManager.markStatus(issue.identifier, "failed");
     await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
     await linearClient.addComment(
       issue.id,
-      `**Dispatcher failed to start the worker:** ${err.message}\n\nRun log: \`${logDir}\``,
+      [
+        `**Dispatcher failed to start the worker under the required safety boundary:** ${err.message}`,
+        "",
+        `Audit record: \`${spawnAuditRecord?.path || logDir}\`${spawnAuditRecord?.sha256 ? ` (SHA-256 \`${spawnAuditRecord.sha256}\`)` : ""}`,
+        "",
+        "The issue was moved to `Needs Human Decision`; no worker ran and no remote mutation was attempted.",
+      ].join("\n"),
     );
     return { issue: issue.identifier, outcome: "spawn-error", error: err.message };
   }
