@@ -1,6 +1,6 @@
 # Linear workspace information architecture
 
-This document is the authoritative design for how `moviecal` uses Linear as the product/work-item/agent-governance control plane. It replaces the GitHub Project (`moviecal Delivery`) as the source of live queue state. See `docs/operators/local-execution.md` for how a Linear work item becomes local execution on this Mac, and `docs/operators/archive/` for the retired GitHub-Project-centric model this supersedes.
+This document is the authoritative design for how `moviecal` uses Linear as the product/work-item/agent-governance control plane. It replaces the GitHub Project (`moviecal Delivery`) as the source of live queue state. See `docs/governance/hybrid-execution-architecture.md` for the two-adapter (Linear-managed cloud + local Mac) execution model this workspace design feeds, `docs/operators/local-execution.md` for how a Linear work item becomes execution on the Mac adapter, and `docs/operators/archive/` for the retired GitHub-Project-centric model this supersedes.
 
 ## Why Linear, and why this shape
 
@@ -10,7 +10,9 @@ This design deliberately does not reproduce the GitHub Project's fields one-for-
 
 ## Plan
 
-**Free**, to start. Free includes issues, projects, cycles, Triage, labels, estimates, custom views, API + webhooks, and GitHub Issues Sync — everything this design needs. The binding constraint on Free is a 250-issue cap; importing ~110 GitHub issues leaves headroom. Upgrade to Basic ($10/user/mo annual) only if that cap is reached. Do not upgrade to Business for Coding Sessions — those run in Linear's own cloud sandbox on Linear AI credits, which is the opposite of this repo's "local Mac is the execution environment" architecture.
+**Free**, to start. Free includes issues, projects, cycles, Triage, labels, estimates, custom views, API + webhooks, and GitHub Issues Sync — everything this workspace design needs. The binding constraint on Free is a 250-issue cap; importing ~110 GitHub issues leaves headroom. Upgrade to Basic ($10/user/mo annual) only if that cap is reached.
+
+**Paid-tier capabilities (Loops, Coding Sessions) are now in scope but not authorized.** The hybrid execution architecture (`docs/governance/hybrid-execution-architecture.md`) makes Linear Coding Sessions the intended *cloud* execution adapter and Loops a candidate for intake — superseding this document's earlier blanket rejection of both. Neither is enabled. The required plan tier and expected AI-credit consumption are **unmeasured**, and `MOV-141` must record them before any purchase or enablement. Nothing here authorizes an upgrade.
 
 **Initiatives:** basic initiative creation and linking (used below) is enabled on this workspace — the repo owner unlocked it directly in Linear (exact mechanism not confirmed from the API side; possibly a trial or a workspace-level toggle distinct from a full Business subscription). One sub-feature remains gated regardless: assigning an initiative a "lead team" (`initiativeCreate`'s `leadTeamId` field) still returns `FEATURE_NOT_ACCESSIBLE` ("Subscribe to the Business plan to access team initiatives in your workspace"). That's not needed here — with a single team (`MOV`), a lead-team assignment wouldn't add anything — so `provision-linear-workspace.mjs` creates initiatives without it.
 
@@ -105,9 +107,10 @@ The supervision dashboard for a human overseeing autonomous work. **Build these 
 ## Deliberately not adopted
 
 - **Cycles** — recurring sprint ceremony has no value for a solo, agent-paced project with no velocity commitment to report. Milestones give sequencing without the calendar overhead.
-- **Linear Coding Sessions** — runs in Linear's cloud sandbox on Linear AI credits; the local dispatcher (`docs/operators/local-execution.md`) supersedes this for the "This Mac = primary execution environment" architecture.
-- **Triage Intelligence / Loops / Insights / Asks** — Business-plan features; this project's intake volume does not justify the tier.
+- **Triage Intelligence / Insights / Asks** — Business-plan features; this project's intake volume does not justify the tier.
 - **Project health / updates** — solo project, no external stakeholders to report to. Revisit if that changes.
+
+**No longer rejected — now gated instead:** **Linear Coding Sessions** and **Loops** were previously listed here as deliberately not adopted (Coding Sessions because cloud execution contradicted a Mac-only architecture; Loops on tier grounds). The hybrid execution architecture supersedes both rejections: Coding Sessions are the intended **cloud execution adapter** for eligible non-iOS work, and Loops are a candidate for intake/enrichment. Neither is adopted *yet* — both are gated on `MOV-141`'s feasibility and cost findings. See `docs/governance/hybrid-execution-architecture.md` §Feasibility gates. Cloud execution never covers iOS/Xcode work, which stays on the Mac adapter permanently.
 
 ## Agent Guidance vs. repository files
 
@@ -120,10 +123,13 @@ Any rule that constrains code lives in the repo. Any rule that constrains proces
 
 | Domain | Authority |
 |---|---|
-| What to build, why, priority, acceptance criteria, discussion, decisions, status, release planning, agent delegation, human ownership | **Linear** |
+| What to build, why, priority, acceptance criteria, discussion, decisions, **desired** status, release planning, agent delegation, human ownership | **Linear** |
 | Source code, tests, CI config, dispatcher code, testing lanes, security constraints, coding conventions, `AGENTS.md`, architecture docs | **Git repository** |
-| Branches, commits, PRs, code review, CI results, releases, external bug intake | **GitHub** |
-| Live agent progress narration, tool calls, intermediate reasoning | **Dispatcher run logs** (referenced from Linear, never authoritative) |
+| Branches, commits, PRs, code review, CI results, releases, external bug intake — **delivered** status | **GitHub** |
+| Which execution adapter runs a given issue (cloud vs Mac) | **A Linear route label**, scheme defined by `MOV-142` (not yet provisioned), materialized on the issue before dispatch |
+| Live agent progress narration, tool calls, intermediate reasoning | **Run logs** — dispatcher run logs (Mac adapter) or Linear Agent Session activity (cloud adapter); referenced from Linear, never authoritative |
+
+Where Linear and GitHub disagree about whether something *shipped*, GitHub wins and Linear is corrected to match. Where they disagree about whether something *should* ship, Linear wins. See `docs/governance/hybrid-execution-architecture.md` §Source-of-truth boundaries.
 
 No agent conversation is ever a source of truth. Every decision an agent makes that affects the work must be written to Linear (as a comment) or to the repo (as code/docs) before the session ends. If it only exists in a chat transcript, it did not happen.
 
