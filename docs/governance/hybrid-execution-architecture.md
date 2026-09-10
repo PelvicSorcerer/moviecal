@@ -56,7 +56,8 @@ Extends the table in `docs/governance/linear-information-architecture.md`:
 | What to build, why, priority, acceptance criteria, discussion, decisions, **desired** status, release planning, agent delegation, human ownership | **Linear** |
 | Source code, tests, CI config, dispatcher code, testing lanes, security constraints, coding conventions, `AGENTS.md`, architecture docs | **Git repository** |
 | Branches, commits, PRs, code review, CI results, releases, external bug intake — **delivered** state | **GitHub** |
-| Which adapter executes a given issue | **A Linear route label**, scheme per `MOV-142` (`execution:*` used as shorthand here); materialized on the issue before dispatch |
+| Which adapter executes a given issue | **A Linear route label** (`execution:{cloud,mac,none}`, `MOV-142`); materialized on the issue before dispatch and enforced there (`MOV-143`) |
+| Who may drive a given issue's lifecycle locally | **The Linear `delegate` field** — `moviecal-dispatcher` is the one local dispatcher writer (`MOV-143`) |
 | Live agent progress narration, tool calls, intermediate reasoning | **Run logs** — dispatcher run logs (Mac) or Linear Agent Session activity (cloud); referenced from Linear, never authoritative |
 
 Where Linear and GitHub disagree about whether something shipped, **GitHub
@@ -140,13 +141,22 @@ nowhere":
 - **None** — coordination/umbrella issues that must never produce their own PR
   (e.g. `MOV-139`); excluded from the automated promoter.
 
-The route may be *inferred* by rule, but the target state is that it is
-**materialized on the issue before dispatch** so the decision is auditable
-after the fact, with an ambiguous or conflicting route failing validation
-rather than defaulting silently. `MOV-142` provisions the labels and the
-inference/validation logic; `MOV-143` makes materialization a hard
-precondition for dispatch (and backfills the existing backlog first). Until
-then the dispatcher does not require a materialized route.
+The route may be *inferred* by rule, but it is **materialized on the issue
+before dispatch** so the decision is auditable after the fact, with an
+ambiguous or conflicting route failing validation rather than defaulting
+silently. `MOV-142` provisioned the labels and the inference/validation logic;
+`MOV-143` made materialization a hard precondition for dispatch. Inference is
+advisory and never satisfies the gate on its own.
+
+Routing answers *which* adapter; it does not by itself answer *who may write*.
+`MOV-143` pairs it with a second, independent condition — the issue's Linear
+**delegate** — so that the two together give exactly one routing authority (the
+`execution:*` label) and exactly one local dispatcher writer (the
+`moviecal-dispatcher` delegate). Neither is a lock, and neither is implied by a
+workflow-state change: Linear offers no compare-and-set on state, so moving an
+issue to `Agent Working` reports a claim rather than establishing one. Any
+future adapter must bring its own writer identity rather than inheriting
+"claim anything in `Ready for Agent`".
 
 Sequencing is unchanged and adapter-independent: `blocks` relations plus the
 dispatcher's preflight gates decide *when*; the route decides *where*.
@@ -159,13 +169,18 @@ Companion App project, Xcode/Simulator/runner work, and local-secret work →
 ambiguous → `execution:mac`. Inference is advisory — the label must be
 materialized on the issue to be authoritative.
 
-`MOV-142` wires this into exactly one behaviour: an issue that infers
-`execution:none` never auto-promotes. **Enforcing routes at dispatch** —
-restricting the local dispatcher to Mac-routed issues and rejecting cloud,
-missing, or conflicting routes — is `MOV-143`, which first backfills the
-existing backlog with inferred labels so the switch breaks nothing. A
-`execution:cloud` issue is not runnable until the cloud lane is piloted (stage
-7 below) regardless.
+`MOV-142` wired this into exactly one behaviour: an issue that infers
+`execution:none` never auto-promotes. `MOV-143` added the second: the local
+dispatcher claims **only** issues labeled `execution:mac` *and* delegated to
+`moviecal-dispatcher`, silently skipping cloud-routed, coordination-only, and
+differently-delegated issues, and escalating a missing or conflicting route on
+an issue delegated to it. It re-reads the issue immediately before committing,
+so a route or delegation changed mid-flight is a safe no-op rather than a lost
+race. Applying the labels and delegations to the existing backlog is an
+operator step, not part of that change — `dispatcher dry-run` reports exactly
+which queued issues are executable (`docs/operators/local-execution.md`
+§Dispatch trigger). An `execution:cloud` issue is not runnable until the cloud
+lane is piloted (stage 7 below) regardless.
 
 ## Feasibility gates
 
@@ -213,8 +228,8 @@ reversible.
 3. **Routing provisioned** (`MOV-142`) — `execution:*` labels exist, validation
    rejects conflicts, coordination issues excluded from promotion.
 4. **Mac lane hardened** (`MOV-143`–`MOV-146`) — dispatch restricted to
-   Mac-routed issues, singleton/crash-recovery, worker safety enforcement,
-   service verified.
+   Mac-routed, `moviecal-dispatcher`-delegated issues (`MOV-143`, done);
+   singleton/crash-recovery, worker safety enforcement, service verified.
 5. **Observation before action** (`MOV-147`, `MOV-148`, `MOV-152`) — CI/review
    state is observed and reported to Linear before anything reacts to it.
 6. **Bounded repair** (`MOV-149`, `MOV-150`, `MOV-151`) — human-triggered

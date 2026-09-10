@@ -47,7 +47,25 @@ Dispatcher code lives in `tools/dispatcher/` in this repository (TypeScript, usi
 
 ## Dispatch trigger
 
-The dispatcher polls Linear for issues in workflow state `Ready for Agent` that are delegated to it. (A future phase may register a Linear Agent App for webhook-driven dispatch instead of polling; both share the same downstream pipeline.)
+The dispatcher polls Linear for issues in workflow state `Ready for Agent`, then claims only the ones that satisfy **both** halves of the boundary below (MOV-143, `tools/dispatcher/src/dispatch-eligibility.mjs`). (A future phase may register a Linear Agent App for webhook-driven dispatch instead of polling; both share the same downstream pipeline.)
+
+| Question | Single authority | Where it lives |
+|---|---|---|
+| **Which** adapter may execute this issue? | the materialized `execution:*` label on the Linear issue | Linear label group `execution:{cloud,mac,none}` (MOV-142) |
+| **Who** may write to this issue's lifecycle locally? | the `moviecal-dispatcher` delegate | Linear's `delegate` field on the issue |
+
+Inference (`inferExecutionRoute`) is **advisory only** and never satisfies the route half — a route that was merely inferrable but never applied is treated as no route at all. There is exactly one routing authority (the label) and exactly one local dispatcher writer (the `moviecal-dispatcher` delegate); an issue must name both to be dispatched here.
+
+Anything else is one of two outcomes, and the difference matters:
+
+- **Skipped, silently, with no Linear write at all** — `execution:cloud` (the cloud adapter's issue), `execution:none` (a coordination parent that must never produce a PR), or delegated to somebody else. The dispatcher is not that issue's writer, and a 30-second poll loop commenting on every pass would be both noise and a boundary violation. `dispatcher dry-run` is where you see these decisions.
+- **Moved to `Needs Human Decision` with a comment** — the issue *is* delegated here (so this dispatcher is its writer) but carries no `execution:*` label, more than one, or one that contradicts the issue (`execution:cloud` on iOS/Xcode work, `execution:none` on executable work). No adapter can safely run it; a human fixes the route and moves it back to `Ready for Agent`.
+
+**A workflow-state change is not a claim.** Moving an issue to `Agent Working` *reports* that work started; it does not reserve the issue, and nothing in the dispatcher may treat it as though it did. Linear's API offers no compare-and-set on workflow state, so two pollers could both "win" that transition and neither would learn it lost. Exclusivity comes from exactly one route and one delegate naming exactly one executor — and, within the Mac lane, from the worktree path already existing (§Preflight gates, gate 7).
+
+Because routing and delegation are ordinary Linear fields a human can change at any moment — including while a queued issue waits for a concurrency slot — the dispatcher **re-reads the issue immediately before it commits** (`LinearClient.issueSnapshot`) and re-runs the same gate against that fresh snapshot. If the delegate was removed, the route changed, the issue left `Ready for Agent`, or it is no longer readable, the result is a safe no-op: no worktree, no state change, no comment. It simply reappears in a later poll if it becomes eligible again.
+
+**Delegation is a prerequisite, not a formality.** An issue that is specced, promoted, and correctly labeled `execution:mac` still will not run until it is delegated to `moviecal-dispatcher` in Linear. `dispatcher doctor` prints the identity being matched, and `dispatcher dry-run` prints each queued issue's delegate and eligibility, so an empty run is diagnosable rather than mysterious. The identity is matched against the app's workspace name and, when set, `LINEAR_APP_ACTOR_ID` from `~/.config/moviecal/linear-app.env` (MOV-122); either identifier qualifies. Setting that variable to the actor's real UUID (it currently holds the app *name*) tightens the match.
 
 ## Automated promotion
 
@@ -62,34 +80,39 @@ For a `Blocked` issue there is one extra condition: its most recent `**Dispatche
 
 On promotion the promoter comments `Auto-promoted to Ready for Agent — …` (which, via the app-actor identity from MOV-122, notifies the repo owner). It is idempotent: a promoted issue is no longer in `Backlog`/`Blocked`, so a second pass does nothing.
 
-**Execution routing (MOV-142) — labels and inference only, not enforced yet.**
-`execution:{cloud,mac,none}` is a mutually-exclusive Linear label group,
-provisioned idempotently by `tools/dispatcher/scripts/provision-linear-workspace.mjs`.
+**Execution routing.** `execution:{cloud,mac,none}` is a mutually-exclusive
+Linear label group, provisioned idempotently by
+`tools/dispatcher/scripts/provision-linear-workspace.mjs` (MOV-142).
 `tools/dispatcher/src/execution-routing.mjs` provides the pure inference and
 validation logic (`inferExecutionRoute`, `resolveExecutionRoute`,
-`isCoordinationIssue`), and `dispatcher dry-run` prints each issue's route +
-inference. The **only** place a route affects behaviour today is the promoter:
-an issue that infers `execution:none` (i.e. carries `type:coordination`) never
-auto-promotes, because a coordination parent must not produce its own PR.
+`isCoordinationIssue`). It affects two things:
 
-Restricting local dispatch to Mac-routed issues — rejecting cloud, missing, or
-conflicting routes at dispatch time — is **`MOV-143`**, which also backfills
-`execution:*` labels onto the existing backlog first so nothing breaks on the
-switch. Until then the dispatcher ignores the route for `execution:mac` and
-label-less issues alike.
+- **the promoter** — an issue that infers `execution:none` (i.e. carries
+  `type:coordination`) never auto-promotes, because a coordination parent must
+  not produce its own PR. This one is inference-based and needs no label.
+- **dispatch** — the route must be *materialized* as a label, and must be
+  `execution:mac`, before the local dispatcher will claim the issue (MOV-143).
+  See §Dispatch trigger for the full gate, including the delegation half.
+
+Note the asymmetry: promotion tolerates an unlabeled issue, dispatch does not.
+An issue can therefore be promoted into `Ready for Agent` and then sit there
+until a route is applied — visible in `dispatcher dry-run`, and escalated to
+`Needs Human Decision` on the next dispatch pass if it is already delegated to
+`moviecal-dispatcher`.
 
 `blocks` relations plus the preflight gates below do all **sequencing**; the promoter only judges **readiness**. There is no per-issue human promotion step. To hold a specced issue out of the automated flow, move it to `Spec Ready` — the promoter never touches that state.
 
 ## Preflight gates
 
-Before starting work on an issue, all of the following must pass, or the issue moves to `Blocked` with a comment naming the failed gate:
+These run **after** the §Dispatch trigger gate has established that the issue is this adapter's to claim at all — "is this issue ours?" is a separate question from "is our issue ready?", and conflating them produces `Blocked` comments on issues that belong to another lane. Before starting work on an issue, all of the following must pass, or the issue moves to `Blocked` with a comment naming the failed gate:
 
 1. No unresolved `blocked by` relations.
 2. Not labeled `human-only`.
 3. Not labeled `needs-secrets` unless the named local secret is actually present.
 4. If the issue is in the **iOS Companion App** project: the self-hosted macOS runner (`moviecal-ios-runner`, labels `self-hosted, macOS, ios`) is online.
 5. A concurrency slot is free (default: 2 simultaneous worktrees).
-6. `origin/master` is fetched and the target worktree path is unused.
+6. `origin/master` is fetched.
+7. The target worktree path is unused. This is also what makes overlapping poll cycles safe: a second cycle that sees the same issue collides here and reports `Blocked` rather than spawning a second worker. It is a real filesystem mutex — unlike the `Agent Working` state change, which is only a report (§Dispatch trigger).
 
 ## Worktree lifecycle
 
@@ -216,11 +239,13 @@ The plist's own `StandardOutPath`/`StandardErrorPath` (`~/Library/Logs/moviecal-
 
 ## Standing health check
 
-`dispatcher doctor` is a read-only command that asserts: Linear auth works, `gh` auth works, the worktree root is writable, `~/.config/moviecal/env.local` exists and is mode 600, `claude` and `codex` are on `PATH`, `origin/master` is fetchable, and the iOS self-hosted runner is reachable. If `~/.config/moviecal/linear-app.env` is present it additionally checks the file is mode 600 and that an app-actor token can be minted from it (MOV-122); if it is absent that check is a no-op pass. Run it after any environment change and before relying on the dispatcher for real work.
+`dispatcher doctor` is a read-only command that asserts: Linear auth works, `gh` auth works, the worktree root is writable, `~/.config/moviecal/env.local` exists and is mode 600, `claude` and `codex` are on `PATH`, `origin/master` is fetchable, and the iOS self-hosted runner is reachable. It also prints the **local dispatch identity** — the delegate an issue must name to be claimed here (MOV-143) — which is informational, not a pass/fail gate. If `~/.config/moviecal/linear-app.env` is present it additionally checks the file is mode 600 and that an app-actor token can be minted from it (MOV-122); if it is absent that check is a no-op pass. Run it after any environment change and before relying on the dispatcher for real work.
 
 ## Known gaps / follow-ups
 
 - Dispatch is currently poll-based (default 30s interval, `dispatcher run [--interval ms]`). A Linear Agent App (webhook-driven) is a planned follow-up, not yet implemented.
+- **Backfill is an operator task, not a code task.** MOV-143 makes `execution:mac` + the `moviecal-dispatcher` delegate hard preconditions, so any queued issue missing either one stops being dispatched the moment the daemon restarts onto this code. Run `dispatcher dry-run` first: it lists every `Ready for Agent` issue with its route, delegate, and eligibility, and ends with an `Executable on this Mac: n/m` line. Apply the missing labels and delegations before restarting the service.
+- The delegate match accepts the app's workspace *name* as well as `LINEAR_APP_ACTOR_ID`, because that variable currently holds the name rather than the actor UUID. That is looser than an id-only match by design (see `dispatch-eligibility.mjs`); setting the variable to the real actor UUID tightens it without any code change.
 - `dispatcher run` is implemented and unit-tested against every outcome (preflight block, routing block, worker success, worker failure, worker exits 0 with no PR and a clean worktree, worker exits 0 with no PR and an `abandoned-dirty` worktree, spawn error), but has not yet been exercised against the live Linear workspace — that first real run is migration Stage 10 (end-to-end verification), tracked in `docs/planning/decision-log.md`.
 - Docker is not installed on this Mac, so `npm run lane:real-stack` / `lane:full-stack` stay CI-only locally; use the `supabase-verify` GitHub Actions workflow as the authoritative DB gate.
 - MOV-115 (two-way GitHub sync) is **done** — see `docs/governance/linear-information-architecture.md` §GitHub Issues: migration and ongoing sync.

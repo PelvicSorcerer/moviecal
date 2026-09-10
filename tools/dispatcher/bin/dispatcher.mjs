@@ -32,6 +32,7 @@ import {
   loadLinearConfig,
   loadLinearAppConfig,
   resolveLinearAuth,
+  resolveDispatcherDelegate,
   checkSecretFileMode,
   DEFAULT_CONCURRENCY,
   DEFAULT_WORKER_TIMEOUT_MS,
@@ -43,6 +44,11 @@ import { getAppToken } from "../src/linear-app-auth.mjs";
 import { evaluatePreflight, worktreeName, branchName } from "../src/preflight.mjs";
 import { resolveRouting } from "../src/worker-routing.mjs";
 import { inferExecutionRoute, resolveExecutionRoute } from "../src/execution-routing.mjs";
+import {
+  describeDelegate,
+  evaluateLocalDispatch,
+  selectCloudCandidates,
+} from "../src/dispatch-eligibility.mjs";
 import { WorktreeManager } from "../src/worktree-manager.mjs";
 import { runOnce } from "../src/run-loop.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
@@ -144,6 +150,17 @@ async function cmdDoctor() {
     });
   }
 
+  // Dispatch identity (MOV-143) — which delegate an issue must name to be claimed here.
+  const delegate = resolveDispatcherDelegate();
+  checks.push({
+    name: "local dispatch identity",
+    ok: true,
+    detail:
+      delegate.id && delegate.id !== delegate.name
+        ? `claims issues delegated to "${delegate.name}" or actor id ${delegate.id}`
+        : `claims issues delegated to "${delegate.name}" (by name; set LINEAR_APP_ACTOR_ID in ${linearAppEnvPath()} to the actor UUID to also match by id)`,
+  });
+
   // claude / codex on PATH
   for (const bin of ["claude", "codex"]) {
     const which = tryRun(() => execFileSync("which", [bin], { encoding: "utf8" }).trim());
@@ -209,10 +226,13 @@ async function cmdDryRun({ fixturePath } = {}) {
   });
   const activeWorktreeCount = tryRun(() => manager.activeCount());
 
+  const dispatcherDelegate = resolveDispatcherDelegate();
+
   console.log(`${issues.length} issue(s) in Ready for Agent:\n`);
   for (const issue of issues) {
     const routing = resolveRouting(issue);
     const execution = resolveExecutionRoute(issue);
+    const eligibility = evaluateLocalDispatch(issue, { expectedDelegate: dispatcherDelegate });
     const name = worktreeName(issue.identifier, issue.title);
     const branch = branchName(issue.identifier, issue.title);
     const context = {
@@ -231,9 +251,23 @@ async function cmdDryRun({ fixturePath } = {}) {
     console.log(`  branch:   ${branch}`);
     console.log(`  worker:   ${routing.worker} (model: ${routing.model})${routing.ok ? "" : `  [ROUTING BLOCKED: ${routing.reason}]`}`);
     console.log(`  execution: ${execution.ok ? execution.route : `INVALID — ${execution.reason}`} (inferred ${inferExecutionRoute(issue)})`);
+    console.log(`  delegate: ${describeDelegate(issue.delegate)}`);
+    console.log(
+      `  local dispatch: ${eligibility.eligible ? "ELIGIBLE" : `${eligibility.action.toUpperCase()} — ${eligibility.reason}`}`,
+    );
     console.log(`  preflight: ${preflight.ok ? "PASS" : `BLOCKED — ${preflight.reason}`}`);
     console.log("");
   }
+
+  // MOV-143: make the adapter split visible, so it is obvious at a glance
+  // whether an issue is being declined because it belongs to the (not yet
+  // enabled) cloud lane or because its route/delegation is simply wrong.
+  const executable = issues.filter((issue) => evaluateLocalDispatch(issue, { expectedDelegate: dispatcherDelegate }).eligible);
+  const cloud = selectCloudCandidates(issues);
+  console.log(`Executable on this Mac: ${executable.length}/${issues.length}${executable.length ? ` (${executable.map((i) => i.identifier).join(", ")})` : ""}`);
+  console.log(
+    `Cloud-routed (not executable here; the cloud adapter is not enabled): ${cloud.length}${cloud.length ? ` (${cloud.map((i) => i.identifier).join(", ")})` : ""}`,
+  );
   console.log("Dry run only — no worktree, branch, or Linear state was changed.");
   return 0;
 }
@@ -324,6 +358,10 @@ async function buildRunContext(linearClient, teamKey, issues) {
     findPrForBranchFn: (branch, repo) => findPrForBranch(branch, repo, ghRunner),
     uncommittedChangesFn: (worktreePath) => worktreeManager.uncommittedChanges(worktreePath),
     applyStagedWorkflowEditFn: (worktreePath, authorizedPath) => applyStagedWorkflowEdit(worktreePath, authorizedPath),
+    // MOV-143: the route + delegate gate, and the live re-read that makes a
+    // mid-flight routing/delegation change a no-op instead of a lost race.
+    dispatcherDelegate: resolveDispatcherDelegate(),
+    refreshIssueFn: (issue) => linearClient.issueSnapshot(issue.id),
   };
 }
 
