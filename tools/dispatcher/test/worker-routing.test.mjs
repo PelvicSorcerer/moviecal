@@ -1,10 +1,21 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import {
   parseRoutingLabels,
   resolveRouting,
   workerInvocation,
   modelIdForTier,
+  codexReasoningEffortForTier,
+  codexModelIdForTier,
 } from "../src/worker-routing.mjs";
+
+const CODEX_ENV_VARS = [
+  "MOVIECAL_CODEX_EFFORT_CHEAP",
+  "MOVIECAL_CODEX_EFFORT_DEFAULT",
+  "MOVIECAL_CODEX_EFFORT_STRONG",
+  "MOVIECAL_CODEX_MODEL_CHEAP",
+  "MOVIECAL_CODEX_MODEL_DEFAULT",
+  "MOVIECAL_CODEX_MODEL_STRONG",
+];
 
 describe("parseRoutingLabels", () => {
   it("returns nulls when no routing labels are present", () => {
@@ -91,11 +102,104 @@ describe("workerInvocation", () => {
   it("builds a codex invocation with the workspace-write sandbox, no brief-path arg (stdin instead)", () => {
     const invocation = workerInvocation("codex", "default");
     expect(invocation.command).toBe("codex");
-    expect(invocation.args).toEqual(["exec", "--sandbox", "workspace-write"]);
+    expect(invocation.args).toEqual([
+      "exec",
+      "--sandbox",
+      "workspace-write",
+      "-c",
+      "model_reasoning_effort=medium",
+    ]);
   });
 
   it("throws for an unknown worker", () => {
     expect(() => workerInvocation("gemini", "default")).toThrow(/unknown worker/);
+  });
+
+  describe("codex tier mapping", () => {
+    afterEach(() => {
+      for (const key of CODEX_ENV_VARS) delete process.env[key];
+    });
+
+    it("maps cheap/default/strong to low/medium/high reasoning effort by default", () => {
+      expect(workerInvocation("codex", "cheap").args).toContain("model_reasoning_effort=low");
+      expect(workerInvocation("codex", "default").args).toContain("model_reasoning_effort=medium");
+      expect(workerInvocation("codex", "strong").args).toContain("model_reasoning_effort=high");
+    });
+
+    it("omits --model entirely when no override is configured", () => {
+      const invocation = workerInvocation("codex", "strong");
+      expect(invocation.args).not.toContain("--model");
+    });
+
+    it("honors MOVIECAL_CODEX_EFFORT_STRONG when set", () => {
+      process.env.MOVIECAL_CODEX_EFFORT_STRONG = "custom-high";
+      const invocation = workerInvocation("codex", "strong");
+      expect(invocation.args).toContain("model_reasoning_effort=custom-high");
+    });
+
+    it("honors MOVIECAL_CODEX_MODEL_STRONG when set", () => {
+      process.env.MOVIECAL_CODEX_MODEL_STRONG = "gpt-5.6-strong";
+      const invocation = workerInvocation("codex", "strong");
+      expect(invocation.args).toEqual([
+        "exec",
+        "--sandbox",
+        "workspace-write",
+        "-c",
+        "model_reasoning_effort=high",
+        "--model",
+        "gpt-5.6-strong",
+      ]);
+    });
+
+    it("does not apply the strong override to other tiers", () => {
+      process.env.MOVIECAL_CODEX_EFFORT_STRONG = "custom-high";
+      process.env.MOVIECAL_CODEX_MODEL_STRONG = "gpt-5.6-strong";
+      const invocation = workerInvocation("codex", "default");
+      expect(invocation.args).toEqual([
+        "exec",
+        "--sandbox",
+        "workspace-write",
+        "-c",
+        "model_reasoning_effort=medium",
+      ]);
+    });
+  });
+});
+
+describe("codexReasoningEffortForTier", () => {
+  afterEach(() => {
+    for (const key of CODEX_ENV_VARS) delete process.env[key];
+  });
+
+  it("defaults to low/medium/high", () => {
+    expect(codexReasoningEffortForTier("cheap")).toBe("low");
+    expect(codexReasoningEffortForTier("default")).toBe("medium");
+    expect(codexReasoningEffortForTier("strong")).toBe("high");
+  });
+
+  it("throws for an unknown tier", () => {
+    expect(() => codexReasoningEffortForTier("bogus")).toThrow(/unknown model tier/);
+  });
+});
+
+describe("codexModelIdForTier", () => {
+  afterEach(() => {
+    for (const key of CODEX_ENV_VARS) delete process.env[key];
+  });
+
+  it("returns null with no override configured (falls through to ~/.codex/config.toml)", () => {
+    expect(codexModelIdForTier("cheap")).toBeNull();
+    expect(codexModelIdForTier("default")).toBeNull();
+    expect(codexModelIdForTier("strong")).toBeNull();
+  });
+
+  it("returns the override when set", () => {
+    process.env.MOVIECAL_CODEX_MODEL_CHEAP = "gpt-5.6-mini";
+    expect(codexModelIdForTier("cheap")).toBe("gpt-5.6-mini");
+  });
+
+  it("throws for an unknown tier", () => {
+    expect(() => codexModelIdForTier("bogus")).toThrow(/unknown model tier/);
   });
 });
 
