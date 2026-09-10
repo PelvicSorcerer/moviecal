@@ -7,8 +7,19 @@
 // only cleans up entries already marked "merged"/"failed"/"abandoned". A
 // merged PR's worktree just sat there until someone noticed and cleaned it up
 // by hand (see docs/planning/decision-log.md, MOV-117 cleanup).
+//
+// MOV-152 extends this from worktree-only bookkeeping to a Linear backstop:
+// Linear's own GitHub integration is expected to move a merged PR's issue to
+// Done via a magic word in the PR body (e.g. "Fixes MOV-123"), but that sync
+// is external and can fail or lag. `reconcileReviewWorktrees` independently
+// re-checks the Linear issue's live state and idempotently finishes the
+// transition if the integration hasn't, and preserves evidence + escalates
+// to a human when a PR closes without merging (which the GitHub integration
+// does not resolve at all — an issue could otherwise sit in "In Review"
+// forever). See docs/operators/local-execution.md §Reconciliation.
 
 import { execFileSync } from "node:child_process";
+import { COMPLETED_BLOCKER_STATE_NAMES } from "./dependency-gate.mjs";
 
 export function defaultRunner(command, args, opts = {}) {
   return execFileSync(command, args, { encoding: "utf8", ...opts });
@@ -159,39 +170,153 @@ export function checkPrState(prNumber, repo, runner = defaultRunner) {
 }
 
 /**
- * Sweep every worktree currently in "review" status that has a recorded
- * `prNumber`, check its real PR state, and react:
- *   - MERGED -> worktree marked "merged" (dispatcher gc will clean it up)
- *   - CLOSED (not merged) -> worktree marked "abandoned" (7-day retention path)
- *   - OPEN -> left alone
+ * Idempotently ensure a merged PR's Linear issue reaches `Done`, as a
+ * backstop for Linear's own GitHub magic-word sync (MOV-152). Reads the
+ * issue's live state first so a sync that already happened (or a manual
+ * close) is never double-written or double-commented.
  *
- * Entries in "review" status with no recorded `prNumber` (e.g. from before
- * this reconciliation existed) are skipped, not errored on.
+ * @returns {Promise<{synced: boolean, alreadyDone?: boolean, reason?: string}>}
+ */
+async function ensureLinearMergeSynced(entry, ctx) {
+  const { linearClient, doneStateId } = ctx;
+  if (!linearClient || !entry.linearIssueId) {
+    return { synced: false, reason: "no linearClient/linearIssueId configured" };
+  }
+  const snapshot = await linearClient.issueSnapshot(entry.linearIssueId);
+  if (!snapshot) return { synced: false, reason: "could not read Linear issue" };
+  if (COMPLETED_BLOCKER_STATE_NAMES.has(snapshot.stateName)) {
+    return { synced: true, alreadyDone: true };
+  }
+  if (!doneStateId) return { synced: false, reason: "no doneStateId configured" };
+  await linearClient.moveToState(entry.linearIssueId, doneStateId);
+  await linearClient.addComment(
+    entry.linearIssueId,
+    `**Dispatcher backstop:** GitHub reports PR #${entry.prNumber}${entry.prUrl ? ` (${entry.prUrl})` : ""} merged, but the issue had not yet synced to Done — moved automatically.`,
+  );
+  return { synced: true, alreadyDone: false };
+}
+
+/**
+ * Preserve evidence and, unless the issue is already in a terminal state,
+ * escalate to `Needs Human Decision` when a PR closes without merging
+ * (MOV-152). A closed-unmerged PR is inherently ambiguous — abandoned,
+ * superseded, or intentionally rejected — so this never guesses an outcome;
+ * it only ever hands the decision to a human, or confirms one was already
+ * made (issue already terminal).
+ *
+ * @returns {Promise<{synced: boolean, escalated?: boolean, reason?: string}>}
+ */
+async function escalateClosedUnmerged(entry, ctx) {
+  const { linearClient, needsHumanDecisionStateId } = ctx;
+  if (!linearClient || !entry.linearIssueId) {
+    return { synced: false, reason: "no linearClient/linearIssueId configured" };
+  }
+  const snapshot = await linearClient.issueSnapshot(entry.linearIssueId);
+  if (!snapshot) return { synced: false, reason: "could not read Linear issue" };
+
+  const evidence = `**Dispatcher backstop:** PR #${entry.prNumber}${entry.prUrl ? ` (${entry.prUrl})` : ""} for branch \`${entry.branch || "unknown"}\` was closed without merging.`;
+  if (COMPLETED_BLOCKER_STATE_NAMES.has(snapshot.stateName)) {
+    await linearClient.addComment(entry.linearIssueId, `${evidence} Issue is already "${snapshot.stateName}" — no further action needed.`);
+    return { synced: true, escalated: false };
+  }
+  if (!needsHumanDecisionStateId) return { synced: false, reason: "no needsHumanDecisionStateId configured" };
+  await linearClient.moveToState(entry.linearIssueId, needsHumanDecisionStateId);
+  await linearClient.addComment(
+    entry.linearIssueId,
+    `${evidence} Issue was "${snapshot.stateName}" — moved to Needs Human Decision, since a closed-unmerged PR cannot be resolved automatically.`,
+  );
+  return { synced: true, escalated: true };
+}
+
+/**
+ * Sweep every worktree with a recorded `prNumber` and react to its real PR
+ * state:
+ *   - "review" entries get a fresh `gh pr view`/observation check:
+ *     - MERGED -> worktree marked "merged" (dispatcher gc will clean it up)
+ *     - CLOSED (not merged) -> worktree marked "abandoned" (7-day retention path)
+ *     - OPEN -> left alone
+ *   - "merged"/"abandoned" entries that haven't yet confirmed their Linear
+ *     sync (`linearSynced` unset) are retried on every pass, independent of
+ *     GitHub state, until the Linear-side write succeeds -- this is what
+ *     makes the backstop survive a transient Linear API failure (MOV-152).
+ *
+ * When `ctx.linearClient` is supplied, a MERGED outcome idempotently ensures
+ * the Linear issue reaches `Done` (`ensureLinearMergeSynced`) and a CLOSED
+ * (unmerged) outcome preserves evidence and escalates to `Needs Human
+ * Decision` unless the issue is already terminal (`escalateClosedUnmerged`).
+ * Without a `linearClient`, only the worktree-bookkeeping half runs, same as
+ * before MOV-152.
+ *
+ * Entries with no recorded `prNumber` (e.g. from before this reconciliation
+ * existed) are skipped, not errored on.
  *
  * @param {object} worktreeManager - WorktreeManager instance (or a fake)
  * @param {object} ctx
  * @param {string} ctx.ghRepo - "owner/name"
  * @param {(prNumber: number, repo: string) => {state: string, mergedAt: string|null}} [ctx.checkPrStateFn]
  * @param {(prNumber: number, repo: string) => object} [ctx.observePrFn] - richer read-only observation
- * @returns {Array<{ id: string, prNumber: number, from: string, to: "merged" | "abandoned" }>}
+ * @param {object} [ctx.linearClient] - LinearClient instance (or a fake); omit to skip the Linear backstop entirely
+ * @param {string} [ctx.doneStateId] - Linear workflow-state id for "Done"
+ * @param {string} [ctx.needsHumanDecisionStateId] - Linear workflow-state id for "Needs Human Decision"
+ * @returns {Promise<Array<{ id: string, prNumber: number, from: string, to: "merged" | "abandoned" }>>}
  */
-export function reconcileReviewWorktrees(worktreeManager, ctx) {
-  const { ghRepo, checkPrStateFn, observePrFn } = ctx;
+export async function reconcileReviewWorktrees(worktreeManager, ctx) {
+  const { ghRepo, checkPrStateFn, observePrFn, linearClient } = ctx;
   const state = worktreeManager.loadState();
   const changes = [];
-  const markIfReview = (id, status) => worktreeManager.markStatusIf
-    ? worktreeManager.markStatusIf(id, "review", status)
-    : (worktreeManager.markStatus(id, status), true);
+  const markIfReview = (id, status, extra = {}) => worktreeManager.markStatusIf
+    ? worktreeManager.markStatusIf(id, "review", status, extra)
+    : (worktreeManager.markStatus(id, status, extra), true);
+  const markLinearSynced = (id) => {
+    if (worktreeManager.updateEntry) worktreeManager.updateEntry(id, { linearSynced: true });
+  };
 
   for (const [id, entry] of Object.entries(state)) {
-    if (entry.status !== "review" || !entry.prNumber) continue;
+    if (!entry.prNumber) continue;
 
-    const pr = observePrFn ? observePrFn(entry.prNumber, ghRepo) : checkPrStateFn(entry.prNumber, ghRepo);
-    if (!pr || pr.observationError) continue;
-    if (pr.state === "MERGED") {
-      if (markIfReview(id, "merged")) changes.push({ id, prNumber: entry.prNumber, from: "review", to: "merged" });
-    } else if (pr.state === "CLOSED") {
-      if (markIfReview(id, "abandoned")) changes.push({ id, prNumber: entry.prNumber, from: "review", to: "abandoned" });
+    const isFreshReview = entry.status === "review";
+    const isPendingLinearRetry = ["merged", "abandoned"].includes(entry.status) && !entry.linearSynced && linearClient;
+    if (!isFreshReview && !isPendingLinearRetry) continue;
+
+    let outcomeState;
+    let extra = {};
+    if (isFreshReview) {
+      const pr = observePrFn ? observePrFn(entry.prNumber, ghRepo) : checkPrStateFn(entry.prNumber, ghRepo);
+      if (!pr || pr.observationError) continue;
+      outcomeState = pr.state;
+      extra = { mergedAt: pr.mergedAt ?? null, headSha: pr.headSha ?? null };
+    } else {
+      outcomeState = entry.status === "merged" ? "MERGED" : "CLOSED";
+    }
+
+    if (outcomeState === "MERGED") {
+      if (isFreshReview) {
+        if (markIfReview(id, "merged", extra)) changes.push({ id, prNumber: entry.prNumber, from: "review", to: "merged" });
+      }
+      if (linearClient) {
+        // A Linear-side failure here (e.g. a transient API error) must not
+        // abort reconciliation of every other entry in this same sweep --
+        // leaving `linearSynced` unset is enough for the next poll cycle to
+        // retry just this one issue.
+        try {
+          const result = await ensureLinearMergeSynced({ ...entry, ...extra }, ctx);
+          if (result.synced) markLinearSynced(id);
+        } catch (error) {
+          console.error(`${id}: Linear merge-sync backstop failed (retrying next pass):`, error.message);
+        }
+      }
+    } else if (outcomeState === "CLOSED") {
+      if (isFreshReview) {
+        if (markIfReview(id, "abandoned", extra)) changes.push({ id, prNumber: entry.prNumber, from: "review", to: "abandoned" });
+      }
+      if (linearClient) {
+        try {
+          const result = await escalateClosedUnmerged({ ...entry, ...extra }, ctx);
+          if (result.synced) markLinearSynced(id);
+        } catch (error) {
+          console.error(`${id}: Linear closed-unmerged escalation failed (retrying next pass):`, error.message);
+        }
+      }
     }
     // OPEN: nothing to do yet.
   }

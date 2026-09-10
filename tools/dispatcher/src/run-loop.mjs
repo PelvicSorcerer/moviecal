@@ -201,6 +201,7 @@ async function processIssue(issue, ctx) {
     worker: routing.worker,
     model: routing.model,
     linearUrl: issue.url,
+    linearIssueId: issue.id,
     envLocalSource,
   });
 

@@ -49,11 +49,11 @@ describe("generateBrief", () => {
     expect(brief).toContain("risk:low");
   });
 
-  it("references the required PR conventions (Test Impact, Linear reference, draft PR)", () => {
+  it("references the required PR conventions (Test Impact, a Linear closing reference, draft PR)", () => {
     const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
     expect(brief).toMatch(/draft/i);
     expect(brief).toContain("Test Impact");
-    expect(brief).toContain("Linear: MOV-42");
+    expect(brief).toContain("Fixes MOV-42");
   });
 
   it("instructs the worker to run verification synchronously rather than background a build and exit (MOV-137)", () => {

@@ -155,53 +155,70 @@ describe("reconcileReviewWorktrees", () => {
     let state = structuredClone(initialState);
     return {
       loadState: () => structuredClone(state),
-      markStatus: (id, status) => {
-        state[id] = { ...state[id], status };
+      markStatus: (id, status, extra = {}) => {
+        state[id] = { ...state[id], status, ...extra };
+      },
+      updateEntry: (id, extra = {}) => {
+        state[id] = { ...state[id], ...extra };
       },
       _finalState: () => state,
     };
   }
 
-  it("marks a merged PR's worktree as merged", () => {
+  function fakeLinearClient({ snapshots = {} } = {}) {
+    const calls = [];
+    return {
+      calls,
+      issueSnapshot: async (id) => snapshots[id] ?? null,
+      moveToState: async (issueId, stateId) => {
+        calls.push({ type: "moveToState", issueId, stateId });
+      },
+      addComment: async (issueId, body) => {
+        calls.push({ type: "addComment", issueId, body });
+      },
+    };
+  }
+
+  it("marks a merged PR's worktree as merged", async () => {
     const manager = fakeManager({
       "MOV-1": { id: "MOV-1", status: "review", prNumber: 42 },
     });
     const checkPrStateFn = () => ({ state: "MERGED", mergedAt: "2026-09-08T00:00:00Z" });
 
-    const changes = reconcileReviewWorktrees(manager, { ghRepo: "owner/repo", checkPrStateFn });
+    const changes = await reconcileReviewWorktrees(manager, { ghRepo: "owner/repo", checkPrStateFn });
 
     expect(changes).toEqual([{ id: "MOV-1", prNumber: 42, from: "review", to: "merged" }]);
     expect(manager._finalState()["MOV-1"].status).toBe("merged");
   });
 
-  it("marks a closed-without-merging PR's worktree as abandoned", () => {
+  it("marks a closed-without-merging PR's worktree as abandoned", async () => {
     const manager = fakeManager({
       "MOV-1": { id: "MOV-1", status: "review", prNumber: 7 },
     });
     const checkPrStateFn = () => ({ state: "CLOSED", mergedAt: null });
 
-    const changes = reconcileReviewWorktrees(manager, { ghRepo: "owner/repo", checkPrStateFn });
+    const changes = await reconcileReviewWorktrees(manager, { ghRepo: "owner/repo", checkPrStateFn });
 
     expect(changes).toEqual([{ id: "MOV-1", prNumber: 7, from: "review", to: "abandoned" }]);
     expect(manager._finalState()["MOV-1"].status).toBe("abandoned");
   });
 
-  it("leaves a still-open PR's worktree alone", () => {
+  it("leaves a still-open PR's worktree alone", async () => {
     const manager = fakeManager({
       "MOV-1": { id: "MOV-1", status: "review", prNumber: 9 },
     });
     const checkPrStateFn = () => ({ state: "OPEN", mergedAt: null });
 
-    const changes = reconcileReviewWorktrees(manager, { ghRepo: "owner/repo", checkPrStateFn });
+    const changes = await reconcileReviewWorktrees(manager, { ghRepo: "owner/repo", checkPrStateFn });
 
     expect(changes).toEqual([]);
     expect(manager._finalState()["MOV-1"].status).toBe("review");
   });
 
-  it("skips entries not in review status", () => {
+  it("skips entries not in review status (and with no pending Linear sync)", async () => {
     const manager = fakeManager({
       "MOV-1": { id: "MOV-1", status: "active", prNumber: 1 },
-      "MOV-2": { id: "MOV-2", status: "merged", prNumber: 2 },
+      "MOV-2": { id: "MOV-2", status: "merged", prNumber: 2, linearSynced: true },
     });
     let called = false;
     const checkPrStateFn = () => {
@@ -209,13 +226,13 @@ describe("reconcileReviewWorktrees", () => {
       return { state: "MERGED", mergedAt: null };
     };
 
-    const changes = reconcileReviewWorktrees(manager, { ghRepo: "owner/repo", checkPrStateFn });
+    const changes = await reconcileReviewWorktrees(manager, { ghRepo: "owner/repo", checkPrStateFn });
 
     expect(changes).toEqual([]);
     expect(called).toBe(false);
   });
 
-  it("skips review entries with no recorded prNumber", () => {
+  it("skips review entries with no recorded prNumber", async () => {
     const manager = fakeManager({
       "MOV-1": { id: "MOV-1", status: "review" },
     });
@@ -225,9 +242,177 @@ describe("reconcileReviewWorktrees", () => {
       return { state: "MERGED", mergedAt: null };
     };
 
-    const changes = reconcileReviewWorktrees(manager, { ghRepo: "owner/repo", checkPrStateFn });
+    const changes = await reconcileReviewWorktrees(manager, { ghRepo: "owner/repo", checkPrStateFn });
 
     expect(changes).toEqual([]);
     expect(called).toBe(false);
+  });
+
+  describe("Linear backstop (MOV-152)", () => {
+    it("merge with successful sync: moves a non-terminal Linear issue to Done and comments", async () => {
+      const manager = fakeManager({
+        "MOV-1": { id: "MOV-1", status: "review", prNumber: 42, prUrl: "https://github.com/o/r/pull/42", linearIssueId: "issue-uuid-1" },
+      });
+      const checkPrStateFn = () => ({ state: "MERGED", mergedAt: "2026-09-08T00:00:00Z" });
+      const linearClient = fakeLinearClient({ snapshots: { "issue-uuid-1": { stateName: "In Review" } } });
+
+      const changes = await reconcileReviewWorktrees(manager, {
+        ghRepo: "owner/repo",
+        checkPrStateFn,
+        linearClient,
+        doneStateId: "state-done",
+      });
+
+      expect(changes).toEqual([{ id: "MOV-1", prNumber: 42, from: "review", to: "merged" }]);
+      expect(linearClient.calls).toEqual([
+        { type: "moveToState", issueId: "issue-uuid-1", stateId: "state-done" },
+        { type: "addComment", issueId: "issue-uuid-1", body: expect.stringContaining("merged") },
+      ]);
+      expect(manager._finalState()["MOV-1"].linearSynced).toBe(true);
+    });
+
+    it("merge with delayed/missing Linear sync: retries on a later pass once a linearClient is available", async () => {
+      // First pass: PR is already known-merged locally (e.g. from a prior
+      // worktree-only reconciliation) but nothing has confirmed the Linear
+      // side yet -- no linearSynced flag.
+      const manager = fakeManager({
+        "MOV-1": { id: "MOV-1", status: "merged", prNumber: 42, linearIssueId: "issue-uuid-1" },
+      });
+      const linearClient = fakeLinearClient({ snapshots: { "issue-uuid-1": { stateName: "In Review" } } });
+
+      const changes = await reconcileReviewWorktrees(manager, {
+        ghRepo: "owner/repo",
+        checkPrStateFn: () => { throw new Error("should not re-check GitHub for an already-merged entry"); },
+        linearClient,
+        doneStateId: "state-done",
+      });
+
+      // No worktree-status transition (it was already merged) -- only the
+      // Linear side was pending.
+      expect(changes).toEqual([]);
+      expect(linearClient.calls[0]).toEqual({ type: "moveToState", issueId: "issue-uuid-1", stateId: "state-done" });
+      expect(manager._finalState()["MOV-1"].linearSynced).toBe(true);
+    });
+
+    it("merge with a Linear API failure: swallows the error, leaves linearSynced unset, and still processes other entries", async () => {
+      const manager = fakeManager({
+        "MOV-1": { id: "MOV-1", status: "merged", prNumber: 42, linearIssueId: "issue-uuid-1" },
+        "MOV-2": { id: "MOV-2", status: "merged", prNumber: 43, linearIssueId: "issue-uuid-2" },
+      });
+      const linearClient = {
+        issueSnapshot: async (id) => {
+          if (id === "issue-uuid-1") throw new Error("Linear API is down");
+          return { stateName: "In Review" };
+        },
+        calls: [],
+        moveToState: async function (issueId, stateId) { this.calls.push({ type: "moveToState", issueId, stateId }); },
+        addComment: async function (issueId, body) { this.calls.push({ type: "addComment", issueId, body }); },
+      };
+
+      const changes = await reconcileReviewWorktrees(manager, { ghRepo: "owner/repo", linearClient, doneStateId: "state-done" });
+
+      expect(changes).toEqual([]);
+      expect(manager._finalState()["MOV-1"].linearSynced).toBeUndefined();
+      // The other entry's sync still went through despite MOV-1's failure.
+      expect(manager._finalState()["MOV-2"].linearSynced).toBe(true);
+      expect(linearClient.calls).toEqual([
+        { type: "moveToState", issueId: "issue-uuid-2", stateId: "state-done" },
+        { type: "addComment", issueId: "issue-uuid-2", body: expect.stringContaining("merged") },
+      ]);
+    });
+
+    it("closed-unmerged PR: preserves evidence and escalates a nonterminal issue to Needs Human Decision", async () => {
+      const manager = fakeManager({
+        "MOV-1": { id: "MOV-1", status: "review", prNumber: 7, prUrl: "https://github.com/o/r/pull/7", branch: "agent/MOV-1-fix", linearIssueId: "issue-uuid-1" },
+      });
+      const checkPrStateFn = () => ({ state: "CLOSED", mergedAt: null });
+      const linearClient = fakeLinearClient({ snapshots: { "issue-uuid-1": { stateName: "In Review" } } });
+
+      const changes = await reconcileReviewWorktrees(manager, {
+        ghRepo: "owner/repo",
+        checkPrStateFn,
+        linearClient,
+        needsHumanDecisionStateId: "state-needs-human",
+      });
+
+      expect(changes).toEqual([{ id: "MOV-1", prNumber: 7, from: "review", to: "abandoned" }]);
+      expect(linearClient.calls).toEqual([
+        { type: "moveToState", issueId: "issue-uuid-1", stateId: "state-needs-human" },
+        { type: "addComment", issueId: "issue-uuid-1", body: expect.stringContaining("closed without merging") },
+      ]);
+      expect(manager._finalState()["MOV-1"].linearSynced).toBe(true);
+    });
+
+    it("already-terminal issue: a merged PR whose issue is already Done is not re-written, only confirmed", async () => {
+      const manager = fakeManager({
+        "MOV-1": { id: "MOV-1", status: "review", prNumber: 42, linearIssueId: "issue-uuid-1" },
+      });
+      const checkPrStateFn = () => ({ state: "MERGED", mergedAt: "2026-09-08T00:00:00Z" });
+      const linearClient = fakeLinearClient({ snapshots: { "issue-uuid-1": { stateName: "Done" } } });
+
+      const changes = await reconcileReviewWorktrees(manager, {
+        ghRepo: "owner/repo",
+        checkPrStateFn,
+        linearClient,
+        doneStateId: "state-done",
+      });
+
+      expect(changes).toEqual([{ id: "MOV-1", prNumber: 42, from: "review", to: "merged" }]);
+      expect(linearClient.calls).toEqual([]);
+      expect(manager._finalState()["MOV-1"].linearSynced).toBe(true);
+    });
+
+    it("already-terminal issue: a closed-unmerged PR whose issue is already Canceled only gets an evidence comment, no escalation", async () => {
+      const manager = fakeManager({
+        "MOV-1": { id: "MOV-1", status: "review", prNumber: 7, linearIssueId: "issue-uuid-1" },
+      });
+      const checkPrStateFn = () => ({ state: "CLOSED", mergedAt: null });
+      const linearClient = fakeLinearClient({ snapshots: { "issue-uuid-1": { stateName: "Canceled" } } });
+
+      const changes = await reconcileReviewWorktrees(manager, {
+        ghRepo: "owner/repo",
+        checkPrStateFn,
+        linearClient,
+        needsHumanDecisionStateId: "state-needs-human",
+      });
+
+      expect(changes).toEqual([{ id: "MOV-1", prNumber: 7, from: "review", to: "abandoned" }]);
+      expect(linearClient.calls).toEqual([
+        { type: "addComment", issueId: "issue-uuid-1", body: expect.stringContaining("already \"Canceled\"") },
+      ]);
+      expect(manager._finalState()["MOV-1"].linearSynced).toBe(true);
+    });
+
+    it("repeated reconciliation is idempotent: a second pass makes no further Linear calls", async () => {
+      const manager = fakeManager({
+        "MOV-1": { id: "MOV-1", status: "review", prNumber: 42, linearIssueId: "issue-uuid-1" },
+      });
+      const checkPrStateFn = () => ({ state: "MERGED", mergedAt: "2026-09-08T00:00:00Z" });
+      const linearClient = fakeLinearClient({ snapshots: { "issue-uuid-1": { stateName: "In Review" } } });
+      const ctx = { ghRepo: "owner/repo", checkPrStateFn, linearClient, doneStateId: "state-done" };
+
+      const first = await reconcileReviewWorktrees(manager, ctx);
+      expect(first).toEqual([{ id: "MOV-1", prNumber: 42, from: "review", to: "merged" }]);
+      expect(linearClient.calls).toHaveLength(2);
+
+      const second = await reconcileReviewWorktrees(manager, {
+        ...ctx,
+        checkPrStateFn: () => { throw new Error("should not re-check GitHub once merged+synced"); },
+      });
+      expect(second).toEqual([]);
+      expect(linearClient.calls).toHaveLength(2); // unchanged -- no new Linear writes
+    });
+
+    it("does not touch Linear at all when no linearClient is configured", async () => {
+      const manager = fakeManager({
+        "MOV-1": { id: "MOV-1", status: "review", prNumber: 42, linearIssueId: "issue-uuid-1" },
+      });
+      const checkPrStateFn = () => ({ state: "MERGED", mergedAt: "2026-09-08T00:00:00Z" });
+
+      const changes = await reconcileReviewWorktrees(manager, { ghRepo: "owner/repo", checkPrStateFn });
+
+      expect(changes).toEqual([{ id: "MOV-1", prNumber: 42, from: "review", to: "merged" }]);
+      expect(manager._finalState()["MOV-1"].linearSynced).toBeUndefined();
+    });
   });
 });
