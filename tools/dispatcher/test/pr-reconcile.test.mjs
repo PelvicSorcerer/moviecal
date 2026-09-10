@@ -1,5 +1,122 @@
 import { describe, it, expect } from "vitest";
-import { checkPrState, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
+import {
+  aggregateCheckResults,
+  checkPrObservation,
+  checkPrState,
+  normalizeCheckOutcome,
+  observePullRequest,
+  reconcileReviewWorktrees,
+} from "../src/pr-reconcile.mjs";
+
+describe("normalizeCheckOutcome", () => {
+  it.each([
+    [{ status: "QUEUED" }, "pending"],
+    [{ status: "IN_PROGRESS" }, "pending"],
+    [{ conclusion: "SUCCESS" }, "success"],
+    [{ conclusion: "FAILURE" }, "failure"],
+    [{ conclusion: "TIMED_OUT" }, "timed-out"],
+    [{ conclusion: "CANCELLED" }, "canceled"],
+    [{ conclusion: "SKIPPED" }, "skipped"],
+    [{ conclusion: "NEUTRAL" }, "neutral"],
+    [{ logsAvailable: false }, "unavailable-log"],
+  ])("normalizes %j to %s", (check, expected) => {
+    expect(normalizeCheckOutcome(check)).toBe(expected);
+  });
+});
+
+describe("aggregateCheckResults", () => {
+  it("rolls up out-of-order duplicates for the current SHA and ignores stale/optional failures", () => {
+    const result = aggregateCheckResults({
+      headSha: "new",
+      requiredChecks: ["build"],
+      checks: [
+        { name: "optional-lint", sha: "new", conclusion: "FAILURE" },
+        { name: "build", sha: "new", status: "IN_PROGRESS" },
+        { name: "build", sha: "old", conclusion: "FAILURE" },
+        { name: "build", sha: "new", conclusion: "SUCCESS" },
+      ],
+    });
+
+    expect(result.required).toEqual([expect.objectContaining({ name: "build", outcome: "success", required: true, sha: "new" })]);
+    expect(result.ignoredStale).toBe(1);
+    expect(result.actionable).toBe(false);
+    expect(result.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "optional-lint", outcome: "failure", required: false }),
+    ]));
+  });
+
+  it("keeps required checks pending until terminal or an explicit timeout", () => {
+    const pending = aggregateCheckResults({
+      headSha: "sha",
+      requiredChecks: ["external"],
+      checks: [{ name: "external", sha: "sha", status: "PENDING", logsAvailable: false }],
+    });
+    expect(pending.pending).toBe(true);
+    expect(pending.terminal).toBe(false);
+    expect(pending.actionable).toBe(false);
+    expect(pending.required[0]).toMatchObject({ outcome: "pending", logAvailable: false });
+
+    const timedOut = aggregateCheckResults({
+      headSha: "sha",
+      requiredChecks: ["external"],
+      checks: [{ name: "external", sha: "sha", status: "PENDING", logsAvailable: false }],
+      timeoutAt: "2020-01-01T00:00:00Z",
+      now: new Date("2020-01-02T00:00:00Z").getTime(),
+    });
+    expect(timedOut).toMatchObject({ pending: false, timedOut: true, terminal: true, actionable: false });
+  });
+});
+
+describe("observePullRequest", () => {
+  it("keeps human changes, blocking review checks, and advisory comments distinct", () => {
+    const observation = observePullRequest({
+      pr: { state: "OPEN", isDraft: false, headRefOid: "sha", reviewDecision: "CHANGES_REQUESTED" },
+      requiredChecks: ["review-gate"],
+      checks: [{ name: "review-gate", sha: "sha", conclusion: "FAILURE" }],
+      reviews: [{ state: "REQUEST_CHANGES", body: "Please revise" }],
+      comments: [{ body: "Looks good", required: false }],
+    });
+    expect(observation.actionable).toBe(true);
+    expect(observation.review.requestedChanges).toHaveLength(1);
+    expect(observation.review.blockingRequiredChecks).toHaveLength(1);
+    expect(observation.review.advisoryComments).toHaveLength(1);
+  });
+
+  it("does not make a draft actionable", () => {
+    expect(observePullRequest({
+      pr: { state: "OPEN", isDraft: true, headRefOid: "sha" },
+      requiredChecks: ["build"],
+      checks: [{ name: "build", sha: "sha", conclusion: "FAILURE" }],
+    }).actionable).toBe(false);
+  });
+});
+
+describe("checkPrObservation", () => {
+  it("returns a recoverable observation error for CLI/API parse failures", () => {
+    const result = checkPrObservation(42, "owner/repo", () => "not json");
+    expect(result).toEqual({
+      observationError: { recoverable: true, message: expect.any(String) },
+      state: "UNAVAILABLE",
+      actionable: false,
+    });
+  });
+
+  it("reads PR data and required contexts without mutating repository state", () => {
+    const calls = [];
+    const runner = (command, args) => {
+      calls.push([command, args]);
+      if (args[0] === "pr") return JSON.stringify({
+        state: "OPEN", isDraft: false, headRefOid: "sha", baseRefName: "master",
+        statusCheckRollup: [{ name: "build", sha: "sha", conclusion: "FAILURE" }],
+      });
+      return JSON.stringify({ contexts: ["build"] });
+    };
+    const result = checkPrObservation(42, "owner/repo", runner);
+    expect(result).toMatchObject({ state: "OPEN", headSha: "sha", actionable: true });
+    expect(calls).toHaveLength(2);
+    expect(calls[1][1][1]).toBe("repos/owner/repo/branches/master/protection/required_status_checks");
+  });
+});
 
 describe("checkPrState", () => {
   it("calls gh pr view with the expected args and parses the result", () => {
