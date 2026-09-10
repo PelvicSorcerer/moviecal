@@ -8,6 +8,8 @@ Stage 8 of the Linear/GitHub/local-Mac dev-governance migration is functionally 
 
 A Claude worker is invoked as `claude -p --model <id> --permission-mode dontAsk`, scoped by `.claude/settings.json` at the repo root (allow/deny rules matching the hard-deny list in `docs/operators/local-execution.md` §Security model). Getting a headless `claude -p` session to run at all — without hanging, and with its permission rules actually applied — needed two things verified directly against the installed CLI (v2.1.208), not assumed from docs: `--permission-mode dontAsk` (the newer `acceptEdits` + `--permission-prompts none` combination needs a version this Mac doesn't have), and pre-trusting the repo's main checkout path in `~/.claude.json` (`claude-trust.mjs`, wired into `WorktreeManager.create()`) — workspace trust for `.claude/settings.json` is anchored to that one path across every worktree, not to each worktree's own path.
 
+The safety boundary intentionally has no permissive fallback. Claude's project policy sets `sandbox.failIfUnavailable: true` and forbids unsandboxed commands, while the shared guard requires the outer macOS Seatbelt profile. If either layer is unavailable or cannot be applied, the worker must not start; the dispatcher integration fails closed to `Needs Human Decision` and preserves the failure in its checksummed audit record and Linear evidence comment. Operators must repair the host or configuration rather than disable a layer to keep unattended work running.
+
 ## Commands
 
 ```
