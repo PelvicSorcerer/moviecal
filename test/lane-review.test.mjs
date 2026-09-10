@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { resolveSensitivePathAck, runHeuristics } from "../scripts/lane-review.mjs";
+import {
+  resolveSensitivePathAck,
+  resolveAiAck,
+  runHeuristics,
+  applyAiAck,
+} from "../scripts/lane-review.mjs";
 
 describe("resolveSensitivePathAck", () => {
   it("neither label nor marker -> not acknowledged, no problem (normal PR)", () => {
@@ -79,5 +84,95 @@ describe("runHeuristics sensitive-path gating", () => {
     const hugeDiff = Array.from({ length: 1600 }, (_, i) => `+ line ${i}`).join("\n");
     const findings = runHeuristics(["AGENTS.md"], hugeDiff, ACK);
     expect(findings.some((f) => /scope threshold/.test(f.summary) && f.severity === "block")).toBe(true);
+  });
+});
+
+describe("resolveAiAck", () => {
+  it("neither label nor marker -> not acknowledged, no problem", () => {
+    expect(resolveAiAck({ prBody: "a normal PR", labels: ["type:fix"] })).toEqual({
+      acknowledged: false,
+      problem: null,
+    });
+  });
+
+  it("label without marker -> not acknowledged, names the missing marker", () => {
+    const r = resolveAiAck({ prBody: "no marker", labels: ["lane-review-ai-ack"] });
+    expect(r.acknowledged).toBe(false);
+    expect(r.problem).toMatch(/lane-review-ai-ack: <reason>/);
+  });
+
+  it("marker without label -> not acknowledged, names the missing label", () => {
+    const r = resolveAiAck({ prBody: "lane-review-ai-ack: false positive on the loop claim", labels: [] });
+    expect(r.acknowledged).toBe(false);
+    expect(r.problem).toMatch(/not labeled "lane-review-ai-ack"/);
+  });
+
+  it("label + marker -> acknowledged with the trimmed reason", () => {
+    const r = resolveAiAck({
+      prBody: "context\n\nlane-review-ai-ack:   model misread the await chain (MOV-150)  \n",
+      labels: ["type:fix", "lane-review-ai-ack"],
+    });
+    expect(r).toEqual({ acknowledged: true, reason: "model misread the await chain (MOV-150)" });
+  });
+
+  it("uses a marker distinct from the sensitive-path ack marker", () => {
+    // A sensitive-path ack line must NOT satisfy the AI ack, and vice versa.
+    expect(resolveAiAck({ prBody: "lane-review-ack: something", labels: ["lane-review-ai-ack"] }).acknowledged).toBe(
+      false
+    );
+    expect(
+      resolveSensitivePathAck({ prBody: "lane-review-ai-ack: something", labels: ["sensitive-path-ack"] }).acknowledged
+    ).toBe(false);
+  });
+});
+
+describe("applyAiAck", () => {
+  const NO_ACK = { acknowledged: false, problem: null };
+  const ACK = { acknowledged: true, reason: "confirmed false positive" };
+  const MISMATCH = { acknowledged: false, problem: 'labeled "lane-review-ai-ack" but the PR body has no marker' };
+
+  it("passes an ai-skipped warn through untouched", () => {
+    const input = [{ severity: "warn", kind: "ai-skipped", summary: "ANTHROPIC_API_KEY not set" }];
+    expect(applyAiAck(input, NO_ACK)).toEqual(input);
+  });
+
+  it("leaves an ai-model block as block, with an ack hint, when unacknowledged", () => {
+    const out = applyAiAck([{ severity: "block", kind: "ai-model", summary: "possible SQL injection" }], NO_ACK);
+    expect(out[0].severity).toBe("block");
+    expect(out[0].summary).toMatch(/lane-review-ai-ack/);
+  });
+
+  it("downgrades an ai-model block to warn when acknowledged, recording the reason", () => {
+    const out = applyAiAck([{ severity: "block", kind: "ai-model", summary: "claims an infinite loop" }], ACK);
+    expect(out[0].severity).toBe("warn");
+    expect(out[0].summary).toMatch(/AI block acknowledged/);
+    expect(out[0].summary).toMatch(/confirmed false positive/);
+  });
+
+  it("keeps an ai-model block as block and surfaces the label/marker mismatch", () => {
+    const out = applyAiAck([{ severity: "block", kind: "ai-model", summary: "scope creep" }], MISMATCH);
+    expect(out[0].severity).toBe("block");
+    expect(out[0].summary).toMatch(/no marker/);
+  });
+
+  it("NEVER downgrades an ai-infra block, even when acknowledged", () => {
+    const out = applyAiAck(
+      [{ severity: "block", kind: "ai-infra", summary: "AI review pass returned invalid JSON" }],
+      ACK
+    );
+    expect(out[0].severity).toBe("block");
+    expect(out[0].summary).toBe("AI review pass returned invalid JSON");
+  });
+
+  it("leaves ai-model warns alone regardless of ack", () => {
+    const input = [{ severity: "warn", kind: "ai-model", summary: "minor nit" }];
+    expect(applyAiAck(input, ACK)).toEqual(input);
+  });
+
+  it("does not mutate its input", () => {
+    const input = [{ severity: "block", kind: "ai-model", summary: "x" }];
+    const snapshot = JSON.parse(JSON.stringify(input));
+    applyAiAck(input, ACK);
+    expect(input).toEqual(snapshot);
   });
 });

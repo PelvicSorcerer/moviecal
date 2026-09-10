@@ -9,12 +9,33 @@
 // a required status check. This script IS that check: it fails (non-zero exit)
 // on a blocking finding, and never posts anything that counts as a GitHub review.
 //
-// Two layers:
-//  1. Heuristic checks — always run, need no external credential, and cannot be
-//     bypassed by omitting a secret.
-//  2. An AI review pass — runs only when ANTHROPIC_API_KEY is present. Its absence
-//     is a warning, not a failure, so this lane can be added to required status
-//     checks immediately without depending on secret provisioning first.
+// Two layers, with deliberately different trust properties (MOV-150):
+//
+//  1. Deterministic heuristic checks (sensitive-path, secret-shaped strings,
+//     diff size) — always run, need no external credential, cannot be bypassed
+//     by omitting a secret. These are FAIL-CLOSED and non-advisory: a heuristic
+//     `block` fails the check. The only downgrade is the narrow, auditable
+//     sensitive-path acknowledgement (label + `lane-review-ack:` marker); secret
+//     and diff-size blocks are never downgradeable.
+//
+//  2. An AI review pass — a non-deterministic model call. Its substantive
+//     findings are ADVISORY by default: a model `block` still fails the check,
+//     but (unlike a heuristic block) it can be downgraded to a warning with an
+//     explicit, auditable acknowledgement — the `lane-review-ai-ack` label plus
+//     a `lane-review-ai-ack: <reason>` line in the PR body. This exists because
+//     the AI layer has produced false-positive blocks with no override path.
+//
+//     Trust boundary for layer 2: "advisory" applies only to what the model
+//     *says about the diff*. If the AI is CONFIGURED (ANTHROPIC_API_KEY present)
+//     but cannot run or returns an unusable response, that is a loss of scrutiny,
+//     not a clean pass — it fails the check as a NON-downgradeable `block`. Only
+//     when ANTHROPIC_API_KEY is absent entirely is the skipped AI pass a mere
+//     warning, so this lane can stay a required status check without depending on
+//     secret provisioning first.
+//
+// Findings are computed fresh from the diff at HEAD every run and are stamped
+// with the PR head SHA in the log and summary comment, so a stale comment from
+// an earlier push is never mistaken for the current verdict.
 //
 // Exit 0: no blocking finding. Exit 1: at least one blocking finding.
 
@@ -31,6 +52,15 @@ import { pathToFileURL } from "node:url";
 // model (MOV-134).
 const SENSITIVE_PATH_ACK_LABEL = "sensitive-path-ack";
 const SENSITIVE_PATH_ACK_MARKER_RE = /^lane-review-ack:[ \t]*(\S.*?)\s*$/im;
+
+// A substantive AI-review `block` (the model's judgement about the diff) is
+// advisory: it still fails the check, but the repo owner can downgrade it to a
+// `warn` — same fail-closed shape as the sensitive-path ack above — by adding
+// this label AND a `lane-review-ai-ack: <reason>` line to the PR body. This does
+// NOT cover an AI pass that was configured but failed to run or returned garbage:
+// that is a non-downgradeable `block` (loss of scrutiny, not a model opinion).
+const AI_ACK_LABEL = "lane-review-ai-ack";
+const AI_ACK_MARKER_RE = /^lane-review-ai-ack:[ \t]*(\S.*?)\s*$/im;
 
 const SENSITIVE_PATH_PATTERNS = [
   /^\.github\/workflows\//,
@@ -103,6 +133,31 @@ export function resolveSensitivePathAck({ prBody = "", labels = [] } = {}) {
   return { acknowledged: true, reason: markerMatch[1].trim() };
 }
 
+/**
+ * Decide whether a substantive AI-review `block` has been explicitly
+ * acknowledged. Same truth table and return shape as resolveSensitivePathAck,
+ * keyed on the `lane-review-ai-ack` label + `lane-review-ai-ack: <reason>` line.
+ */
+export function resolveAiAck({ prBody = "", labels = [] } = {}) {
+  const hasLabel = labels.includes(AI_ACK_LABEL);
+  const markerMatch = AI_ACK_MARKER_RE.exec(prBody || "");
+
+  if (!hasLabel && !markerMatch) return { acknowledged: false, problem: null };
+  if (hasLabel && !markerMatch) {
+    return {
+      acknowledged: false,
+      problem: `labeled "${AI_ACK_LABEL}" but the PR body has no "lane-review-ai-ack: <reason>" line`,
+    };
+  }
+  if (!hasLabel && markerMatch) {
+    return {
+      acknowledged: false,
+      problem: `PR body has a "lane-review-ai-ack:" line but the PR is not labeled "${AI_ACK_LABEL}"`,
+    };
+  }
+  return { acknowledged: true, reason: markerMatch[1].trim() };
+}
+
 export function runHeuristics(files, diffText, ack = { acknowledged: false, problem: null }) {
   const findings = [];
 
@@ -141,14 +196,24 @@ export function runHeuristics(files, diffText, ack = { acknowledged: false, prob
   return findings;
 }
 
+// Each finding carries a `kind` so main() can apply the right trust rule:
+//   "ai-skipped" — key absent; AI pass never attempted. warn (lane stays green
+//                  without secret provisioning).
+//   "ai-infra"   — key present but the pass could not produce a usable verdict
+//                  (HTTP error, unparseable / invalid JSON). block, and NOT
+//                  downgradeable by lane-review-ai-ack — this is lost scrutiny.
+//   "ai-model"   — a judgement the model made about the diff. Advisory: a
+//                  `block` still fails, but lane-review-ai-ack can downgrade it.
 async function runAiReview(diffText, prTitle, prBody) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return {
       ran: false,
+      configured: false,
       findings: [
         {
           severity: "warn",
+          kind: "ai-skipped",
           summary: "ANTHROPIC_API_KEY not set — AI review pass skipped; heuristic checks only",
         },
       ],
@@ -188,10 +253,12 @@ ${diffForModel}`;
     const body = await res.text().catch(() => "");
     return {
       ran: false,
+      configured: true,
       findings: [
         {
-          severity: "warn",
-          summary: `AI review pass failed to run (HTTP ${res.status}): ${body.slice(0, 300)}`,
+          severity: "block",
+          kind: "ai-infra",
+          summary: `AI review pass is configured but failed to run (HTTP ${res.status}): ${body.slice(0, 300)} — this is lost review scrutiny, not a pass; re-run once the API is reachable`,
         },
       ],
     };
@@ -203,7 +270,14 @@ ${diffForModel}`;
   if (!match) {
     return {
       ran: true,
-      findings: [{ severity: "warn", summary: "AI review pass returned an unparseable response — treated as non-blocking" }],
+      configured: true,
+      findings: [
+        {
+          severity: "block",
+          kind: "ai-infra",
+          summary: "AI review pass returned an unparseable response — cannot confirm the diff was reviewed; re-run",
+        },
+      ],
     };
   }
 
@@ -212,19 +286,57 @@ ${diffForModel}`;
     const findings = Array.isArray(parsed.findings) ? parsed.findings : [];
     return {
       ran: true,
-      findings: findings.filter(
-        (f) => f && typeof f.summary === "string" && (f.severity === "block" || f.severity === "warn")
-      ),
+      configured: true,
+      findings: findings
+        .filter((f) => f && typeof f.summary === "string" && (f.severity === "block" || f.severity === "warn"))
+        .map((f) => ({ severity: f.severity, kind: "ai-model", summary: f.summary })),
     };
   } catch {
     return {
       ran: true,
-      findings: [{ severity: "warn", summary: "AI review pass returned invalid JSON — treated as non-blocking" }],
+      configured: true,
+      findings: [
+        {
+          severity: "block",
+          kind: "ai-infra",
+          summary: "AI review pass returned invalid JSON — cannot confirm the diff was reviewed; re-run",
+        },
+      ],
     };
   }
 }
 
-async function postSummaryComment(findings) {
+/**
+ * Apply the lane-review-ai-ack downgrade to AI-review findings.
+ *  - "ai-model" `block` findings are advisory: downgraded to `warn` when the ack
+ *    is present, annotated (still `block`) when the label/marker are mismatched,
+ *    left as `block` with a how-to-ack hint otherwise.
+ *  - "ai-infra" `block` findings are NEVER downgraded — a configured-but-broken
+ *    AI pass is lost scrutiny, not a model opinion.
+ *  - Everything else (warns, the ai-skipped notice) passes through untouched.
+ * Pure: returns a new array, does not mutate its input.
+ */
+export function applyAiAck(aiFindings = [], ack = { acknowledged: false, problem: null }) {
+  return aiFindings.map((f) => {
+    if (f.kind !== "ai-model" || f.severity !== "block") return { ...f };
+    if (ack.acknowledged) {
+      return {
+        ...f,
+        severity: "warn",
+        summary: `${f.summary} — AI block acknowledged (${AI_ACK_LABEL} + lane-review-ai-ack: "${ack.reason}")`,
+      };
+    }
+    if (ack.problem) {
+      return { ...f, summary: `${f.summary} — ${ack.problem}` };
+    }
+    return {
+      ...f,
+      summary: `${f.summary} — if this is a false positive, add the "${AI_ACK_LABEL}" label AND a "lane-review-ai-ack: <reason>" line to the PR body to downgrade it to a warning`,
+    };
+  });
+}
+
+async function postSummaryComment(findings, headSha) {
   const token = process.env.GITHUB_TOKEN;
   const repo = process.env.GITHUB_REPOSITORY;
   const eventPath = process.env.GITHUB_EVENT_PATH;
@@ -243,6 +355,7 @@ async function postSummaryComment(findings) {
   const warnings = findings.filter((f) => f.severity === "warn");
 
   const lines = ["### lane-review (automated, non-approving)"];
+  if (headSha) lines.push(`Findings for head \`${headSha}\`. A comment for a different SHA is stale — re-check the latest run.`);
   if (findings.length === 0) {
     lines.push("No findings.");
   } else {
@@ -257,7 +370,7 @@ async function postSummaryComment(findings) {
   }
   lines.push(
     "",
-    "_This is a required status check, not a GitHub review/approval — it never approves a PR. See `docs/operators/local-execution.md` §Security model._"
+    "_This is a required status check, not a GitHub review/approval — it never approves a PR. Deterministic heuristic blocks (sensitive-path, secrets, diff-size) are fail-closed; a substantive AI-review block is advisory and downgradeable with the `lane-review-ai-ack` label + marker, but a configured AI pass that could not run still fails. See `docs/operators/local-execution.md` §Security model._"
   );
 
   try {
@@ -288,23 +401,54 @@ function getPrLabels() {
   }
 }
 
+/**
+ * The PR head commit these findings describe. Preferred source is the event
+ * payload's pull_request.head.sha (the branch tip); GITHUB_SHA on a
+ * pull_request event is the ephemeral merge commit, used only as a fallback.
+ * Stamped into the log and summary comment so a stale comment from an earlier
+ * push is not mistaken for the current verdict.
+ */
+function getHeadSha() {
+  const eventPath = process.env.GITHUB_EVENT_PATH;
+  if (eventPath) {
+    try {
+      const event = JSON.parse(readFileSync(eventPath, "utf8"));
+      const sha = event?.pull_request?.head?.sha;
+      if (sha) return sha;
+    } catch {
+      /* fall through */
+    }
+  }
+  return process.env.GITHUB_SHA || "unknown";
+}
+
 async function main() {
   const base = resolveBaseRef();
   const files = getChangedFiles(base);
   const diffText = getDiff(base);
 
-  const ack = resolveSensitivePathAck({ prBody: process.env.PR_BODY, labels: getPrLabels() });
+  const labels = getPrLabels();
+  const headSha = getHeadSha();
+
+  const ack = resolveSensitivePathAck({ prBody: process.env.PR_BODY, labels });
   const heuristicFindings = runHeuristics(files, diffText, ack);
+
   const aiResult = await runAiReview(diffText, process.env.PR_TITLE, process.env.PR_BODY);
+  const aiAck = resolveAiAck({ prBody: process.env.PR_BODY, labels });
+  const aiFindings = applyAiAck(aiResult.findings, aiAck);
 
-  const allFindings = [...heuristicFindings, ...aiResult.findings];
+  const allFindings = [...heuristicFindings, ...aiFindings];
 
-  console.log(`lane-review: ${files.length} file(s) changed, AI pass ${aiResult.ran ? "ran" : "skipped"}`);
+  console.log(
+    `lane-review: ${files.length} file(s) changed at ${headSha}, AI pass ${
+      aiResult.ran ? "ran" : aiResult.configured ? "configured but did not complete" : "skipped (no key)"
+    }`
+  );
   for (const f of allFindings) {
     console.log(`  [${f.severity}] ${f.summary}`);
   }
 
-  await postSummaryComment(allFindings);
+  await postSummaryComment(allFindings, headSha);
 
   const blocking = allFindings.some((f) => f.severity === "block");
   if (blocking) {
