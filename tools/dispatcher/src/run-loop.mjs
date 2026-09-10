@@ -10,6 +10,7 @@
 import path from "node:path";
 import { evaluatePreflight, worktreeName, branchName, resolveWorkflowEditAuthorization } from "./preflight.mjs";
 import { resolveRouting, workerInvocation } from "./worker-routing.mjs";
+import { confirmStillClaimable, evaluateLocalDispatch } from "./dispatch-eligibility.mjs";
 import { generateBrief } from "./brief.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
 
@@ -33,6 +34,8 @@ import { tailLogs } from "./worker-spawn.mjs";
  * @param {number} ctx.workerTimeoutMs - MOV-138: a worker that hasn't exited after this many ms is killed and its issue moved to Needs Human Decision
  * @param {(worktreePath: string) => string[]} [ctx.uncommittedChangesFn] - MOV-137; defaults to "always clean" if not provided (tests that don't care about this can omit it)
  * @param {(worktreePath: string, authorizedPath: string) => {applied: boolean, path?: string, reason?: string}} [ctx.applyStagedWorkflowEditFn] - MOV-121; defaults to a no-op if not provided (tests that don't care about this can omit it)
+ * @param {{id?: string|null, name?: string|null}} [ctx.dispatcherDelegate] - MOV-143: the delegate an issue must name for this dispatcher to claim it; defaults to matching `moviecal-dispatcher` by name
+ * @param {(issue: object) => Promise<object|null>} [ctx.refreshIssueFn] - MOV-143: re-read an issue immediately before committing to it, so a route/delegation change since the poll snapshot is a safe no-op; defaults to reusing the snapshot (tests that don't exercise the race can omit it)
  * @returns {Promise<Array<{issue: string, outcome: string, [key: string]: unknown}>>}
  */
 export async function runOnce(issues, ctx) {
@@ -108,7 +111,34 @@ async function processIssue(issue, ctx) {
     workerTimeoutMs,
     uncommittedChangesFn = () => [],
     applyStagedWorkflowEditFn = () => ({ applied: false, reason: "not configured" }),
+    dispatcherDelegate = {},
+    refreshIssueFn = async (snapshot) => snapshot,
   } = ctx;
+
+  // MOV-143: before anything else, is this issue even ours? An issue routed to
+  // another adapter, routed nowhere (coordination), or delegated to somebody
+  // else is not this dispatcher's to claim *or* to comment on — skipping is
+  // silent by design, since a poll cycle every 30s would otherwise narrate its
+  // own restraint forever. Only an issue delegated here can be escalated by
+  // here, because only then is this dispatcher that issue's writer.
+  const eligibility = evaluateLocalDispatch(issue, { expectedDelegate: dispatcherDelegate });
+  if (!eligibility.eligible) {
+    if (eligibility.action === "escalate") {
+      await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
+      await linearClient.addComment(
+        issue.id,
+        [
+          `**Dispatcher cannot execute this issue:** ${eligibility.reason}`,
+          "",
+          "The local Mac dispatcher only claims issues that carry exactly one valid `execution:mac` label and are delegated to `moviecal-dispatcher`. Fix the route (or re-delegate the issue) and move it back to `Ready for Agent`.",
+          "",
+          "See docs/operators/local-execution.md §Dispatch trigger.",
+        ].join("\n"),
+      );
+      return { issue: issue.identifier, outcome: "needs-human", reason: eligibility.reason };
+    }
+    return { issue: issue.identifier, outcome: "not-eligible", reason: eligibility.reason };
+  }
 
   const name = worktreeName(issue.identifier, issue.title);
   const branch = branchName(issue.identifier, issue.title);
@@ -137,11 +167,32 @@ async function processIssue(issue, ctx) {
     return { issue: issue.identifier, outcome: "needs-human", reason: routing.reason };
   }
 
-  // Note: the dispatcher does not yet enforce the execution route at dispatch
-  // time — restricting local dispatch to Mac-routed issues (and rejecting
-  // unmaterialized / cloud / coordination routes here) is MOV-143's scope, and
-  // needs the existing backlog labelled first. MOV-142 only provisions the
-  // labels + inference and keeps coordination issues out of the promoter.
+  // MOV-143: last check before this becomes irreversible. Everything above
+  // reasoned about the poll snapshot, and a human can change an issue's route,
+  // its delegate, or its workflow state at any point in between — including
+  // while a queued issue waited for a concurrency slot, which can be the whole
+  // length of another worker's run. Re-read and re-decide. Losing that race is
+  // a no-op: no worktree, no state change, no comment. The issue is not
+  // "claimed" until the worktree exists; the `Agent Working` transition below
+  // reports that claim, it does not constitute one (Linear offers no
+  // compare-and-set on workflow state, so it could never be a lock).
+  let fresh;
+  try {
+    fresh = await refreshIssueFn(issue);
+  } catch (err) {
+    // Fail closed, and only for this issue: a transient Linear error means we
+    // cannot show the issue is still ours, which is not the same as showing it
+    // is. Rethrowing would abort every other issue in the batch too.
+    return {
+      issue: issue.identifier,
+      outcome: "not-eligible",
+      reason: `could not re-read the issue before starting: ${err.message}`,
+    };
+  }
+  const stillClaimable = confirmStillClaimable(fresh, { expectedDelegate: dispatcherDelegate });
+  if (!stillClaimable.claimable) {
+    return { issue: issue.identifier, outcome: "not-eligible", reason: stillClaimable.reason };
+  }
 
   const entry = worktreeManager.create({
     id: issue.identifier,

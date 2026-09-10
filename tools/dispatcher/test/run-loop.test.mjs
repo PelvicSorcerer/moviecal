@@ -37,6 +37,29 @@ function fakeWorktreeManager({ activeCount = 0, pathFree = true } = {}) {
   };
 }
 
+/**
+ * A worktree manager that actually tracks taken paths, so a second pass over
+ * the same issue collides the way the real one does (MOV-143 idempotency).
+ */
+function statefulWorktreeManager() {
+  const taken = new Set();
+  return {
+    createCalls: [],
+    statusCalls: [],
+    activeCount: () => taken.size,
+    isPathFree: (p) => !taken.has(p),
+    create(args) {
+      const path = `/fake/worktrees/${args.name}`;
+      taken.add(path);
+      this.createCalls.push(args);
+      return { path, ...args };
+    },
+    markStatus(id, status, extra = {}) {
+      this.statusCalls.push({ id, status, ...extra });
+    },
+  };
+}
+
 function baseCtx(overrides = {}) {
   const linearClient = fakeLinearClient();
   const worktreeManager = fakeWorktreeManager();
@@ -44,6 +67,7 @@ function baseCtx(overrides = {}) {
     linearClient,
     stateIds: STATE_IDS,
     worktreeManager,
+    dispatcherDelegate: DISPATCHER_DELEGATE,
     concurrencyLimit: 2,
     workerTimeoutMs: 2_700_000,
     iosRunnerOnline: true,
@@ -85,6 +109,12 @@ async function flushMicrotasks() {
   }
 }
 
+// MOV-143: the dispatcher claims an issue only when it is routed to this
+// adapter AND delegated to it, so every fixture that is *meant* to dispatch
+// carries both. Tests that add a label must keep `execution:mac` — dropping it
+// changes what is being tested from "unready" to "not ours".
+const DISPATCHER_DELEGATE = { id: "actor-dispatcher", name: "moviecal-dispatcher" };
+
 const ISSUE = {
   id: "id-1",
   identifier: "MOV-1",
@@ -92,14 +122,15 @@ const ISSUE = {
   description: "Do the fix.",
   url: "https://linear.app/moviecal/issue/MOV-1",
   project: null,
-  labels: [],
+  labels: ["execution:mac"],
+  delegate: { id: "actor-dispatcher", name: "moviecal-dispatcher", displayName: "moviecal-dispatcher" },
   blockedByIds: [],
 };
 
 describe("runOnce", () => {
   it("moves a human-only issue to blocked without touching the worktree manager", async () => {
     const ctx = baseCtx();
-    const issue = { ...ISSUE, labels: ["human-only"] };
+    const issue = { ...ISSUE, labels: [...ISSUE.labels, "human-only"] };
 
     const [result] = await runOnce([issue], ctx);
 
@@ -114,7 +145,7 @@ describe("runOnce", () => {
 
   it("moves an issue with an uncited model:strong to needs-human without spawning a worker", async () => {
     const ctx = baseCtx();
-    const issue = { ...ISSUE, labels: ["model:strong"] };
+    const issue = { ...ISSUE, labels: [...ISSUE.labels, "model:strong"] };
 
     const [result] = await runOnce([issue], ctx);
 
@@ -163,7 +194,7 @@ describe("runOnce", () => {
     const ctx = baseCtx({ applyStagedWorkflowEditFn });
     const issue = {
       ...ISSUE,
-      labels: ["ci:workflow-edit-authorized"],
+      labels: [...ISSUE.labels, "ci:workflow-edit-authorized"],
       description: "Workflow-edit: .github/workflows/ios-verify.yml",
     };
 
@@ -182,7 +213,7 @@ describe("runOnce", () => {
     const ctx = baseCtx({ applyStagedWorkflowEditFn });
     const issue = {
       ...ISSUE,
-      labels: ["ci:workflow-edit-authorized"],
+      labels: [...ISSUE.labels, "ci:workflow-edit-authorized"],
       description: "Workflow-edit: .github/workflows/ios-verify.yml",
     };
 
@@ -287,7 +318,7 @@ describe("runOnce", () => {
   it("processes multiple issues independently in one pass", async () => {
     const ctx = baseCtx();
     const issueA = { ...ISSUE, id: "id-a", identifier: "MOV-a" };
-    const issueB = { ...ISSUE, id: "id-b", identifier: "MOV-b", labels: ["human-only"] };
+    const issueB = { ...ISSUE, id: "id-b", identifier: "MOV-b", labels: [...ISSUE.labels, "human-only"] };
 
     const results = await runOnce([issueA, issueB], ctx);
 
@@ -338,6 +369,217 @@ describe("runOnce", () => {
 
       expect(result.outcome).toBe("in-review");
       expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("route + delegation gate (MOV-143)", () => {
+    /** Every way an issue can fail to be this dispatcher's to claim, and stay untouched. */
+    const notOurs = [
+      ["cloud-routed", { project: "Calendar Feed", labels: ["execution:cloud"] }],
+      ["coordination-only", { labels: ["type:coordination", "execution:none"] }],
+      ["delegated to a human", { delegate: { id: "user-adam", name: "Adam", displayName: "Adam" } }],
+      ["not delegated at all", { delegate: null }],
+      ["cloud-routed AND delegated elsewhere", { project: "Calendar Feed", labels: ["execution:cloud"], delegate: null }],
+    ];
+
+    it.each(notOurs)("skips a %s issue with no worktree, no worker, and no Linear write", async (_label, patch) => {
+      const ctx = baseCtx();
+      const issue = { ...ISSUE, ...patch };
+
+      const [result] = await runOnce([issue], ctx);
+
+      expect(result.outcome).toBe("not-eligible");
+      expect(ctx.worktreeManager.createCalls).toHaveLength(0);
+      expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+      // The whole point: the dispatcher is not this issue's writer.
+      expect(ctx.linearClient.calls).toEqual([]);
+    });
+
+    it("keeps a correctly Mac-routed, correctly delegated issue eligible", async () => {
+      const ctx = baseCtx();
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("in-review");
+      expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("escalates an un-routed issue that is delegated here, then never sees it again", async () => {
+      const ctx = baseCtx();
+      const issue = { ...ISSUE, labels: [] };
+
+      const [result] = await runOnce([issue], ctx);
+
+      expect(result.outcome).toBe("needs-human");
+      expect(result.reason).toMatch(/missing execution label/);
+      expect(ctx.linearClient.calls[0]).toEqual({
+        type: "moveToState",
+        issueId: "id-1",
+        stateId: "state-needs-human",
+      });
+      expect(ctx.linearClient.calls[1].body).toMatch(/execution:mac/);
+      expect(ctx.worktreeManager.createCalls).toHaveLength(0);
+      expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+    });
+
+    it("escalates conflicting execution labels instead of picking one", async () => {
+      const ctx = baseCtx();
+      const issue = { ...ISSUE, labels: ["execution:mac", "execution:cloud"] };
+
+      const [result] = await runOnce([issue], ctx);
+
+      expect(result.outcome).toBe("needs-human");
+      expect(result.reason).toMatch(/multiple execution labels/);
+      expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+    });
+
+    it("does not escalate an un-routed issue delegated elsewhere — not its writer", async () => {
+      const ctx = baseCtx();
+      const issue = { ...ISSUE, labels: [], delegate: { id: "user-adam", name: "Adam" } };
+
+      const [result] = await runOnce([issue], ctx);
+
+      expect(result.outcome).toBe("not-eligible");
+      expect(ctx.linearClient.calls).toEqual([]);
+    });
+
+    describe("re-check immediately before the worker starts", () => {
+      /** The dispatcher re-reads the issue; the test decides what it now looks like. */
+      function ctxWithRefresh(freshIssue) {
+        const refreshIssueFn = vi.fn(async () => freshIssue);
+        return { ctx: baseCtx({ refreshIssueFn }), refreshIssueFn };
+      }
+
+      it("no-ops when the delegate was removed after the poll snapshot", async () => {
+        const { ctx, refreshIssueFn } = ctxWithRefresh({ ...ISSUE, stateName: "Ready for Agent", delegate: null });
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(refreshIssueFn).toHaveBeenCalledTimes(1);
+        expect(result.outcome).toBe("not-eligible");
+        expect(result.reason).toMatch(/delegated to nobody, not moviecal-dispatcher/);
+        expect(ctx.worktreeManager.createCalls).toHaveLength(0);
+        expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+        expect(ctx.linearClient.calls).toEqual([]);
+      });
+
+      it("no-ops when the route was removed after the poll snapshot", async () => {
+        const { ctx } = ctxWithRefresh({ ...ISSUE, stateName: "Ready for Agent", labels: [] });
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result.outcome).toBe("not-eligible");
+        expect(ctx.worktreeManager.createCalls).toHaveLength(0);
+        expect(ctx.linearClient.calls).toEqual([]);
+      });
+
+      it("no-ops when the route flipped to cloud after the poll snapshot", async () => {
+        const { ctx } = ctxWithRefresh({
+          ...ISSUE,
+          stateName: "Ready for Agent",
+          project: "Calendar Feed",
+          labels: ["execution:cloud"],
+        });
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result.outcome).toBe("not-eligible");
+        expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+      });
+
+      it("no-ops when someone else already moved the issue out of Ready for Agent", async () => {
+        const { ctx } = ctxWithRefresh({ ...ISSUE, stateName: "Agent Working" });
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result.outcome).toBe("not-eligible");
+        expect(result.reason).toMatch(/moved to "Agent Working"/);
+        expect(ctx.linearClient.calls).toEqual([]);
+      });
+
+      it("no-ops when the issue is no longer readable at all", async () => {
+        const { ctx } = ctxWithRefresh(null);
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result.outcome).toBe("not-eligible");
+        expect(ctx.worktreeManager.createCalls).toHaveLength(0);
+      });
+
+      it("fails closed on a re-read error, without aborting the rest of the batch", async () => {
+        const healthy = { ...ISSUE, id: "id-ok", identifier: "MOV-ok" };
+        const refreshIssueFn = vi.fn(async (issue) => {
+          if (issue.identifier === "MOV-1") throw new Error("Linear API error: rate limited");
+          return { ...issue, stateName: "Ready for Agent" };
+        });
+        const ctx = baseCtx({ refreshIssueFn, worktreeManager: statefulWorktreeManager() });
+
+        const results = await runOnce([ISSUE, healthy], ctx);
+
+        expect(results.find((r) => r.issue === "MOV-1")).toMatchObject({
+          outcome: "not-eligible",
+          reason: expect.stringMatching(/could not re-read the issue.*rate limited/),
+        });
+        expect(results.find((r) => r.issue === "MOV-ok").outcome).toBe("in-review");
+        expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+      });
+
+      it("re-checks before the worktree exists, not after — the state move is a report, not a lock", async () => {
+        const { ctx, refreshIssueFn } = ctxWithRefresh({ ...ISSUE, stateName: "Ready for Agent" });
+
+        await runOnce([ISSUE], ctx);
+
+        // A claim that has to be undone is not a no-op; nothing may be created
+        // or announced until the re-read has confirmed the issue is still ours.
+        const firstWrite = ctx.linearClient.calls[0];
+        expect(refreshIssueFn).toHaveBeenCalledTimes(1);
+        expect(firstWrite).toEqual({ type: "moveToState", issueId: "id-1", stateId: "state-agent-working" });
+      });
+    });
+
+    describe("duplicate poll cycles over the same snapshot", () => {
+      it("dispatches once — the second cycle collides on the worktree path, it does not re-spawn", async () => {
+        const ctx = baseCtx({ worktreeManager: statefulWorktreeManager() });
+
+        const [first] = await runOnce([ISSUE], ctx);
+        const [second] = await runOnce([ISSUE], ctx);
+
+        expect(first.outcome).toBe("in-review");
+        expect(second.outcome).toBe("blocked");
+        expect(second.reason).toMatch(/worktree path already in use/);
+        expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+        expect(ctx.worktreeManager.createCalls).toHaveLength(1);
+      });
+
+      it("stays a no-op across repeated cycles for an ineligible issue — no comment spam", async () => {
+        const ctx = baseCtx({ worktreeManager: statefulWorktreeManager() });
+        const issue = { ...ISSUE, project: "Calendar Feed", labels: ["execution:cloud"] };
+
+        const outcomes = [];
+        for (let cycle = 0; cycle < 3; cycle += 1) {
+          outcomes.push((await runOnce([issue], ctx))[0].outcome);
+        }
+
+        expect(outcomes).toEqual(["not-eligible", "not-eligible", "not-eligible"]);
+        expect(ctx.linearClient.calls).toEqual([]);
+        expect(ctx.worktreeManager.createCalls).toHaveLength(0);
+      });
+
+      it("escalates an unroutable issue at most once per cycle, with identical output each time", async () => {
+        const ctx = baseCtx({ worktreeManager: statefulWorktreeManager() });
+        const issue = { ...ISSUE, labels: [] };
+
+        const [first] = await runOnce([issue], ctx);
+        const callsAfterFirst = ctx.linearClient.calls.length;
+        const [second] = await runOnce([issue], ctx);
+
+        // In production the escalation moves it out of "Ready for Agent", so a
+        // second cycle never sees it. If it somehow does, the decision is the
+        // same one and nothing has been half-claimed in between.
+        expect(second).toEqual(first);
+        expect(ctx.linearClient.calls.length).toBe(callsAfterFirst * 2);
+        expect(ctx.worktreeManager.createCalls).toHaveLength(0);
+      });
     });
   });
 

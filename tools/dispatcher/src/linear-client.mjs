@@ -6,8 +6,38 @@
 // workspace shape this queries against.
 
 import { getAppToken } from "./linear-app-auth.mjs";
+import { normalizeDelegate } from "./dispatch-eligibility.mjs";
 
 const LINEAR_API_URL = "https://api.linear.app/graphql";
+
+/**
+ * The issue selection every dispatcher query shares. Kept in one place so the
+ * batch queries and the single-issue re-read (`issueSnapshot`) can never drift
+ * apart — a snapshot missing a field the batch has would silently change a
+ * dispatch decision at exactly the moment it matters most.
+ *
+ * `delegate` (MOV-143) is Linear's agent-delegation field: the actor an issue
+ * is handed to. It is `null` for the ordinary undelegated case.
+ */
+const ISSUE_FIELDS = `
+  id
+  identifier
+  title
+  description
+  url
+  project { name }
+  delegate { id name displayName }
+  labels { nodes { name } }
+  relations { nodes {
+    type
+    relatedIssue { id state { name } }
+  } }
+  inverseRelations { nodes {
+    type
+    issue { id state { name } }
+    relatedIssue { id }
+  } }
+`;
 
 export class LinearClient {
   /**
@@ -81,11 +111,13 @@ export class LinearClient {
   }
 
   /**
-   * Issues in a given workflow state name, for a given team, delegated to
-   * this dispatcher (by convention: assigned to the account whose API key
-   * this is, or carrying a specific "delegate" label — the exact delegation
-   * signal depends on which Linear delegation surface is available; see
-   * docs/operators/local-execution.md's "assumptions I could not verify").
+   * Every issue in a given workflow state name, for a given team. This is a
+   * plain state query and is deliberately **not** filtered by delegation:
+   * `delegate` is selected and normalized so the dispatcher can apply the
+   * MOV-143 route + delegate gate itself (`dispatch-eligibility.mjs`), and see
+   * — in `dispatcher dry-run` — exactly which queued issues it is declining
+   * and why. Filtering server-side would make an issue it should have claimed
+   * indistinguishable from one that does not exist.
    */
   async issuesInState({ teamKey, stateName }) {
     const query = `
@@ -95,28 +127,36 @@ export class LinearClient {
           state: { name: { eq: $stateName } }
         }) {
           nodes {
-            id
-            identifier
-            title
-            description
-            url
-            project { name }
-            labels { nodes { name } }
-            relations { nodes {
-              type
-              relatedIssue { id state { name } }
-            } }
-            inverseRelations { nodes {
-              type
-              issue { id state { name } }
-              relatedIssue { id }
-            } }
+            ${ISSUE_FIELDS}
           }
         }
       }
     `;
     const data = await this.request(query, { teamKey, stateName });
     return data.issues.nodes.map(normalizeIssue);
+  }
+
+  /**
+   * Re-read a single issue by id, with its current workflow state (MOV-143).
+   * Used immediately before the dispatcher commits to an issue, so a route or
+   * delegation change made after the poll snapshot is seen and honoured rather
+   * than raced past. Returns `null` when the issue is gone or not visible to
+   * this credential — which the caller treats as "do not claim", never as
+   * "unchanged".
+   */
+  async issueSnapshot(issueId) {
+    const query = `
+      query($id: String!) {
+        issue(id: $id) {
+          ${ISSUE_FIELDS}
+          state { name }
+        }
+      }
+    `;
+    const data = await this.request(query, { id: issueId });
+    const node = data && data.issue;
+    if (!node) return null;
+    return { ...normalizeIssue(node), stateName: node.state ? node.state.name : null };
   }
 
   /**
@@ -134,23 +174,8 @@ export class LinearClient {
           state: { name: { in: $stateNames } }
         }) {
           nodes {
-            id
-            identifier
-            title
-            description
-            url
+            ${ISSUE_FIELDS}
             state { name }
-            project { name }
-            labels { nodes { name } }
-            relations { nodes {
-              type
-              relatedIssue { id state { name } }
-            } }
-            inverseRelations { nodes {
-              type
-              issue { id state { name } }
-              relatedIssue { id }
-            } }
             comments(last: 20) { nodes { body } }
           }
         }
@@ -263,6 +288,9 @@ function normalizeIssue(node) {
     description: node.description || "",
     url: node.url,
     project: node.project ? node.project.name : null,
+    // MOV-143: the actor this issue is delegated to, or null. Normalized here
+    // (rather than at each decision site) so every consumer sees one shape.
+    delegate: normalizeDelegate(node.delegate),
     labels: node.labels.nodes.map((l) => l.name),
     // A "blocks" entry under this issue's own `relations` means THIS issue
     // blocks the related one (a dependent) -- the inverse of what "blocked

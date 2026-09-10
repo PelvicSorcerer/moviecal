@@ -7,6 +7,7 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { LOCAL_DISPATCHER_DELEGATE } from "./dispatch-eligibility.mjs";
 
 export const REPO_ROOT = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),
@@ -109,6 +110,19 @@ export function loadLinearAppConfig(envPath = linearAppEnvPath()) {
     actorId: env.LINEAR_APP_ACTOR_ID || process.env.LINEAR_APP_ACTOR_ID || null,
     scopes: env.LINEAR_APP_SCOPES || process.env.LINEAR_APP_SCOPES || null,
   };
+}
+
+/**
+ * The identity the local dispatcher claims work as (MOV-143). An issue's
+ * Linear `delegate` must match this before the Mac adapter will run it — see
+ * `dispatch-eligibility.mjs` and docs/operators/local-execution.md §Dispatch
+ * trigger. The app-actor id (`linear-app.env`, MOV-122) is authoritative when
+ * configured; the name is the fallback for the personal-API-key path, which
+ * has no actor id of its own.
+ */
+export function resolveDispatcherDelegate({ linearAppPath = linearAppEnvPath() } = {}) {
+  const { actorId } = loadLinearAppConfig(linearAppPath);
+  return { id: actorId || null, name: LOCAL_DISPATCHER_DELEGATE };
 }
 
 /**

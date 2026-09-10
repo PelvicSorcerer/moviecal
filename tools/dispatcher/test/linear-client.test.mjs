@@ -75,6 +75,7 @@ describe("LinearClient", () => {
         description: "Full description text.",
         url: "https://linear.app/moviecal/issue/MOV-126",
         project: "Calendar Feed",
+        delegate: null,
         labels: ["area:calendar", "worker:codex"],
         blockedByIds: ["id-125"],
         inverseRelations: [
@@ -120,6 +121,85 @@ describe("LinearClient", () => {
     const [issue] = await client.issuesInState({ teamKey: "MOV", stateName: "Ready for Agent" });
     expect(issue.project).toBeNull();
     expect(issue.blockedByIds).toEqual([]);
+  });
+
+  describe("delegate normalization (MOV-143)", () => {
+    function issueNode(delegate) {
+      return {
+        id: "id-1",
+        identifier: "MOV-1",
+        title: "T",
+        url: "https://linear.app/moviecal/issue/MOV-1",
+        project: null,
+        delegate,
+        labels: { nodes: [] },
+        relations: { nodes: [] },
+      };
+    }
+
+    it("selects the delegate field on the Ready-for-Agent query", async () => {
+      const fetchImpl = mockFetch({ issues: { nodes: [] } });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      await client.issuesInState({ teamKey: "MOV", stateName: "Ready for Agent" });
+
+      const { query } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+      expect(query).toMatch(/delegate\s*\{\s*id\s+name\s+displayName\s*\}/);
+    });
+
+    it("normalizes a delegated issue to {id, name, displayName}", async () => {
+      const fetchImpl = mockFetch({
+        issues: { nodes: [issueNode({ id: "actor-1", name: "moviecal-dispatcher", displayName: "moviecal-dispatcher" })] },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const [issue] = await client.issuesInState({ teamKey: "MOV", stateName: "Ready for Agent" });
+
+      expect(issue.delegate).toEqual({ id: "actor-1", name: "moviecal-dispatcher", displayName: "moviecal-dispatcher" });
+    });
+
+    it("normalizes an undelegated issue to null", async () => {
+      const fetchImpl = mockFetch({ issues: { nodes: [issueNode(null)] } });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const [issue] = await client.issuesInState({ teamKey: "MOV", stateName: "Ready for Agent" });
+
+      expect(issue.delegate).toBeNull();
+    });
+  });
+
+  describe("issueSnapshot (MOV-143)", () => {
+    it("re-reads one issue by id with its current state, delegate, and labels", async () => {
+      const fetchImpl = mockFetch({
+        issue: {
+          id: "id-1",
+          identifier: "MOV-1",
+          title: "T",
+          url: "https://linear.app/moviecal/issue/MOV-1",
+          project: null,
+          delegate: { id: "actor-1", name: "moviecal-dispatcher", displayName: null },
+          state: { name: "Ready for Agent" },
+          labels: { nodes: [{ name: "execution:mac" }] },
+          relations: { nodes: [] },
+        },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const snapshot = await client.issueSnapshot("id-1");
+
+      expect(snapshot).toMatchObject({
+        identifier: "MOV-1",
+        stateName: "Ready for Agent",
+        labels: ["execution:mac"],
+        delegate: { id: "actor-1", name: "moviecal-dispatcher", displayName: null },
+      });
+      expect(JSON.parse(fetchImpl.mock.calls[0][1].body).variables).toEqual({ id: "id-1" });
+    });
+
+    it("returns null when the issue is gone or invisible to this credential", async () => {
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl: mockFetch({ issue: null }) });
+      expect(await client.issueSnapshot("id-gone")).toBeNull();
+    });
   });
 
   it("issuesForPromotion adds stateName + recentComments and filters by a state list (MOV-129)", async () => {
