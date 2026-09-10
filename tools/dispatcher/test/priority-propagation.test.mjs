@@ -331,6 +331,26 @@ describe("propagatePriorities", () => {
     expect(fs.statSync(statePath).mode & 0o077).toBe(0);
   });
 
+  it("fails when insecure state-file permissions cannot be repaired", async () => {
+    const statePath = tempStatePath();
+    fs.writeFileSync(statePath, JSON.stringify({ a: { lastPropagated: 1, manualFloor: 1 } }) + "\n", "utf8");
+    fs.chmodSync(statePath, 0o644);
+    const chmodSpy = vi.spyOn(fs, "chmodSync").mockImplementation(() => {
+      throw new Error("permission denied");
+    });
+
+    try {
+      await expect(
+        propagatePriorities(
+          [issue({ id: "a", identifier: "MOV-A", priority: 1, relations: [] })],
+          { linearClient: { updateIssuePriority: vi.fn().mockResolvedValue(true) }, stateFilePath: statePath, logger: fakeLogger() },
+        ),
+      ).rejects.toThrow(/permission denied/);
+    } finally {
+      chmodSpy.mockRestore();
+    }
+  });
+
   it("dry-run does not mutate insecure state-file permissions", async () => {
     const statePath = tempStatePath();
     const dirPath = path.dirname(statePath);

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { COMPLETED_BLOCKER_STATE_NAMES } from "./dependency-gate.mjs";
 
 export const TERMINAL_PRIORITY_STATE_TYPES = new Set(["completed", "canceled", "duplicate"]);
-export const TERMINAL_PRIORITY_STATE_NAMES = new Set(["Done", "Released", "Canceled", "Duplicate"]);
 export const NON_WRITABLE_PRIORITY_STATE_NAMES = new Set(["Icebox", "Triage"]);
 export const WRITABLE_PRIORITY_STATE_NAMES = new Set([
   "Backlog",
@@ -28,7 +28,7 @@ function stateType(issue) {
 }
 
 function isTerminalIssue(issue) {
-  return TERMINAL_PRIORITY_STATE_TYPES.has(stateType(issue)) || TERMINAL_PRIORITY_STATE_NAMES.has(issue?.stateName || "");
+  return TERMINAL_PRIORITY_STATE_TYPES.has(stateType(issue)) || COMPLETED_BLOCKER_STATE_NAMES.has(issue?.stateName || "");
 }
 
 function isWritableIssue(issue) {
@@ -126,8 +126,9 @@ function componentBestValues({ components, componentEdges, bestSelfByComponent }
   }
 
   const topo = [];
-  while (queue.length > 0) {
-    const index = queue.shift();
+  let queueHead = 0;
+  while (queueHead < queue.length) {
+    const index = queue[queueHead++];
     topo.push(index);
     for (const childIndex of componentEdges[index]) {
       indegree[childIndex] -= 1;
@@ -136,8 +137,10 @@ function componentBestValues({ components, componentEdges, bestSelfByComponent }
   }
 
   if (topo.length !== components.length) {
+    const seen = new Array(components.length).fill(false);
+    for (const idx of topo) seen[idx] = true;
     for (let i = 0; i < components.length; i++) {
-      if (!topo.includes(i)) topo.push(i);
+      if (!seen[i]) topo.push(i);
     }
   }
 
@@ -260,12 +263,18 @@ function parseStateEntry(value) {
 
 function repairPermissions(filePath) {
   const dirPath = path.dirname(filePath);
-  try {
-    if (fs.existsSync(dirPath) && (fs.statSync(dirPath).mode & 0o077)) fs.chmodSync(dirPath, 0o700);
-  } catch {}
-  try {
-    if (fs.existsSync(filePath) && (fs.statSync(filePath).mode & 0o077)) fs.chmodSync(filePath, 0o600);
-  } catch {}
+  if (fs.existsSync(dirPath) && (fs.statSync(dirPath).mode & 0o077)) {
+    fs.chmodSync(dirPath, 0o700);
+    if (fs.statSync(dirPath).mode & 0o077) {
+      throw new Error(`priority propagation state directory must be mode 700: ${dirPath}`);
+    }
+  }
+  if (fs.existsSync(filePath) && (fs.statSync(filePath).mode & 0o077)) {
+    fs.chmodSync(filePath, 0o600);
+    if (fs.statSync(filePath).mode & 0o077) {
+      throw new Error(`priority propagation state file must be mode 600: ${filePath}`);
+    }
+  }
 }
 
 function loadPropagationState(filePath, { repair = true } = {}) {
@@ -322,19 +331,17 @@ function orderUpdates(updates) {
     indegree.set(update.issueId, (indegree.get(update.issueId) || 0) + 1);
   }
 
-  const queue = updates
-    .filter((u) => (indegree.get(u.issueId) || 0) === 0)
-    .sort((a, b) => (a.identifier || "").localeCompare(b.identifier || ""));
+  const queue = updates.filter((u) => (indegree.get(u.issueId) || 0) === 0);
 
   const ordered = [];
-  while (queue.length > 0) {
-    const current = queue.shift();
+  let queueHead = 0;
+  while (queueHead < queue.length) {
+    const current = queue[queueHead++];
     ordered.push(current);
     for (const childId of dependents.get(current.issueId) || []) {
       indegree.set(childId, (indegree.get(childId) || 0) - 1);
       if ((indegree.get(childId) || 0) === 0) queue.push(byId.get(childId));
     }
-    queue.sort((a, b) => (a.identifier || "").localeCompare(b.identifier || ""));
   }
 
   if (ordered.length === updates.length) return ordered;
