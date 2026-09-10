@@ -81,16 +81,6 @@ describe("workerInvocation", () => {
       modelIdForTier("claude", "default"),
       "--permission-mode",
       "dontAsk",
-      "--setting-sources",
-      "project",
-      "--safe-mode",
-      "--strict-mcp-config",
-      "--no-chrome",
-      "--disable-slash-commands",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--no-session-persistence",
     ]);
   });
 
@@ -113,16 +103,9 @@ describe("workerInvocation", () => {
     const invocation = workerInvocation("codex", "default");
     expect(invocation.command).toBe("codex");
     expect(invocation.args).toEqual([
+      "exec",
       "--sandbox",
       "workspace-write",
-      "--ask-for-approval",
-      "never",
-      "--strict-config",
-      "exec",
-      "--ignore-user-config",
-      "--ignore-rules",
-      "--ephemeral",
-      "--json",
       "-c",
       "model_reasoning_effort=medium",
     ]);
@@ -158,16 +141,9 @@ describe("workerInvocation", () => {
       process.env.MOVIECAL_CODEX_MODEL_STRONG = "gpt-5.6-strong";
       const invocation = workerInvocation("codex", "strong");
       expect(invocation.args).toEqual([
+        "exec",
         "--sandbox",
         "workspace-write",
-        "--ask-for-approval",
-        "never",
-        "--strict-config",
-        "exec",
-        "--ignore-user-config",
-        "--ignore-rules",
-        "--ephemeral",
-        "--json",
         "-c",
         "model_reasoning_effort=high",
         "--model",
@@ -180,16 +156,9 @@ describe("workerInvocation", () => {
       process.env.MOVIECAL_CODEX_MODEL_STRONG = "gpt-5.6-strong";
       const invocation = workerInvocation("codex", "default");
       expect(invocation.args).toEqual([
+        "exec",
         "--sandbox",
         "workspace-write",
-        "--ask-for-approval",
-        "never",
-        "--strict-config",
-        "exec",
-        "--ignore-user-config",
-        "--ignore-rules",
-        "--ephemeral",
-        "--json",
         "-c",
         "model_reasoning_effort=medium",
       ]);

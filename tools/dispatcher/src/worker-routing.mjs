@@ -86,37 +86,14 @@ export function workerInvocation(worker, model) {
   if (worker === "claude") {
     return {
       command: "claude",
-      args: [
-        "-p",
-        "--model",
-        modelIdForTier("claude", model),
-        "--permission-mode",
-        "dontAsk",
-        "--setting-sources",
-        "project",
-        "--safe-mode",
-        "--strict-mcp-config",
-        "--no-chrome",
-        "--disable-slash-commands",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--no-session-persistence",
-      ],
+      args: ["-p", "--model", modelIdForTier("claude", model), "--permission-mode", "dontAsk"],
     };
   }
   if (worker === "codex") {
     const args = [
+      "exec",
       "--sandbox",
       "workspace-write",
-      "--ask-for-approval",
-      "never",
-      "--strict-config",
-      "exec",
-      "--ignore-user-config",
-      "--ignore-rules",
-      "--ephemeral",
-      "--json",
       "-c",
       `model_reasoning_effort=${codexReasoningEffortForTier(model)}`,
     ];

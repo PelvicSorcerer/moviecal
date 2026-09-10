@@ -151,7 +151,7 @@ export class WorktreeManager {
    * Create a new worktree + branch from origin/master and record it.
    * Returns the state entry.
    */
-  create({ id, name, branch, worker, model, linearUrl, linearIssueId, envLocalSource, repository }) {
+  create({ id, name, branch, worker, model, linearUrl, linearIssueId, envLocalSource }) {
     const worktreePath = path.join(this.worktreeRoot, name);
     if (!this.isPathFree(worktreePath)) {
       throw new Error(`worktree path already exists: ${worktreePath}`);
@@ -201,13 +201,6 @@ export class WorktreeManager {
       // this to write back to the issue (moveToState/addComment) once the PR
       // it opened resolves, independent of GitHub's own magic-word sync.
       linearIssueId: linearIssueId || null,
-      // Stored in the dispatcher-owned mode-600 registry, outside the
-      // worker's worktree. Repair admission requires this provenance and the
-      // live PR's same-repository/branch identity to agree (MOV-145).
-      provenance: {
-        executor: "moviecal-dispatcher",
-        repository: repository || null,
-      },
       status: "active",
       pid: process.pid,
       workerPid: null,

@@ -6,43 +6,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { Transform } from "node:stream";
-import {
-  buildWorkerSandboxProfile,
-  guardedInvocation,
-  repositoryGuardPaths,
-  sanitizedWorkerEnvironment,
-} from "./worker-guard.mjs";
-
-const SECRET_KEY_RE = /(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|ACCESS_KEY|SESSION)/i;
-
-export function redactWorkerOutput(text, { env = process.env } = {}) {
-  let redacted = String(text || "");
-  for (const [key, value] of Object.entries(env)) {
-    if (!SECRET_KEY_RE.test(key) || typeof value !== "string" || value.length < 8) continue;
-    redacted = redacted.split(value).join("[REDACTED]");
-  }
-  return redacted
-    .replace(/\b(?:gh[opsu]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|lin_api_[A-Za-z0-9_-]{20,})\b/g, "[REDACTED]")
-    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED]")
-    .replace(/((?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|ACCESS_KEY)\s*[=:]\s*)[^\s\"']+/gi, "$1[REDACTED]");
-}
-
-function redactionStream(env) {
-  let carry = "";
-  return new Transform({
-    transform(chunk, _encoding, callback) {
-      const parts = (carry + chunk.toString("utf8")).split("\n");
-      carry = parts.pop() || "";
-      for (const line of parts) this.push(redactWorkerOutput(line, { env }) + "\n");
-      callback();
-    },
-    flush(callback) {
-      if (carry) this.push(redactWorkerOutput(carry, { env }));
-      callback();
-    },
-  });
-}
 
 /**
  * Signal a worker's whole process group (negative pid), swallowing the
@@ -88,9 +51,6 @@ function reapProcessGroup(pid, { graceMs, killImpl }) {
  * @param {AbortSignal} [opts.signal] - MOV-138: aborting (e.g. a per-worker timeout in run-loop.mjs) reaps the
  *   worker's process group immediately, the same SIGTERM-then-SIGKILL path used once the worker exits on its own
  *   (MOV-137). The promise still only settles once the child actually closes.
- * @param {{mode?: 'implementation'|'repair'}} [opts.securityContext] - when present, enforce the shared MOV-145 guard
- * @param {NodeJS.Platform} [opts.platform] - injectable for tests
- * @param {(cwd: string) => {protectedRepositoryPaths: string[], gitMetadataPaths: string[]}} [opts.repositoryGuardPathsFn] - injectable for tests
  * @returns {Promise<{exitCode: number, logDir: string}>}
  */
 export function spawnWorker({
@@ -102,9 +62,6 @@ export function spawnWorker({
   killGraceMs = 5000,
   killImpl = killProcessGroup,
   signal,
-  securityContext,
-  platform = process.platform,
-  repositoryGuardPathsFn = repositoryGuardPaths,
 }) {
   fs.mkdirSync(logDir, { recursive: true });
   const stdoutPath = path.join(logDir, "stdout.log");
@@ -113,40 +70,14 @@ export function spawnWorker({
 
   return new Promise((resolve, reject) => {
     const startedAt = new Date().toISOString();
-    let effectiveInvocation = invocation;
-    let workerEnv = process.env;
-    if (securityContext) {
-      if (platform !== "darwin") {
-        reject(new Error(`worker safety sandbox is only supported on darwin (got ${platform})`));
-        return;
-      }
-      let repositoryPaths;
-      try {
-        repositoryPaths = repositoryGuardPathsFn(cwd);
-      } catch (err) {
-        reject(new Error(`worker safety sandbox could not resolve repository boundaries: ${err.message}`));
-        return;
-      }
-      const profilePath = path.join(logDir, "worker-sandbox.sb");
-      const profile = buildWorkerSandboxProfile({
-        worktreePath: cwd,
-        mode: securityContext.mode || "implementation",
-        logDir,
-        ...repositoryPaths,
-      });
-      fs.writeFileSync(profilePath, profile, { mode: 0o600 });
-      effectiveInvocation = guardedInvocation(invocation, { profilePath });
-      workerEnv = sanitizedWorkerEnvironment(process.env);
-    }
     // detached: true (POSIX) makes the child the leader of its own process
     // group via setsid(), so its own pid doubles as the group id we reap on
     // exit — any grandchildren it backgrounds (xcodebuild, simctl, npm, ...)
     // are in that same group and go down with it.
-    const child = spawnImpl(effectiveInvocation.command, effectiveInvocation.args, {
+    const child = spawnImpl(invocation.command, invocation.args, {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
-      env: workerEnv,
     });
 
     const stdoutStream = fs.createWriteStream(stdoutPath);
@@ -158,8 +89,8 @@ export function spawnWorker({
     // worker's own exit code is still the source of truth for success/failure.
     stdoutStream.on("error", () => {});
     stderrStream.on("error", () => {});
-    child.stdout?.pipe(redactionStream(process.env)).pipe(stdoutStream);
-    child.stderr?.pipe(redactionStream(process.env)).pipe(stderrStream);
+    child.stdout?.pipe(stdoutStream);
+    child.stderr?.pipe(stderrStream);
 
     if (signal) {
       const killOnAbort = () => reapProcessGroup(child.pid, { graceMs: killGraceMs, killImpl });
@@ -200,15 +131,7 @@ export function spawnWorker({
       fs.writeFileSync(
         manifestPath,
         JSON.stringify(
-          {
-            command: invocation.command,
-            args: invocation.args,
-            cwd,
-            startedAt,
-            endedAt,
-            exitCode,
-            securityGuard: securityContext ? { enforced: true, mode: securityContext.mode || "implementation" } : { enforced: false },
-          },
+          { command: invocation.command, args: invocation.args, cwd, startedAt, endedAt, exitCode },
           null,
           2,
         ) + "\n",

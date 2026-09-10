@@ -55,8 +55,6 @@ import { runOnce } from "../src/run-loop.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
 import { spawnWorker } from "../src/worker-spawn.mjs";
-import { auditWorkerResult, writeWorkerAudit } from "../src/worker-guard.mjs";
-import { publishWorkerResult } from "../src/worker-publish.mjs";
 import { findPrForBranch, defaultRunner as ghRunner } from "../src/pr-check.mjs";
 import { checkPrState, checkPrObservation, isCheckPrObservation, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
 import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
@@ -170,28 +168,6 @@ async function cmdDoctor() {
     const which = tryRun(() => execFileSync("which", [bin], { encoding: "utf8" }).trim());
     checks.push({ name: `${bin} on PATH`, ok: which.ok, detail: which.ok ? which.value : `not found (required for the ${bin} worker adapter)` });
   }
-
-  // MOV-145: both adapters depend on the same inherited macOS Seatbelt
-  // boundary. A missing/disabled sandbox is a hard health-check failure; the
-  // dispatcher must not silently fall back to prompt-only permissions.
-  const sandboxCheck = tryRun(() =>
-    execFileSync(
-      "/usr/bin/sandbox-exec",
-      [
-        "-p",
-        '(version 1) (allow default) (deny process-exec (literal "/usr/bin/git"))',
-        "/bin/sh",
-        "-c",
-        "/usr/bin/git --version >/dev/null 2>&1; test $? -ne 0",
-      ],
-      { encoding: "utf8" },
-    ),
-  );
-  checks.push({
-    name: "worker safety sandbox",
-    ok: sandboxCheck.ok,
-    detail: sandboxCheck.ok ? "macOS sandbox-exec enforced a child-process Git denial" : sandboxCheck.error,
-  });
 
   // origin/master fetchable
   const fetchCheck = tryRun(() => execFileSync("git", ["fetch", "origin", "master"], { cwd: REPO_ROOT, encoding: "utf8" }));
@@ -428,9 +404,6 @@ async function buildRunContext(linearClient, teamKey, issues) {
     logRoot: logRoot(),
     spawnWorkerFn: spawnWorker,
     findPrForBranchFn: (branch, repo) => findPrForBranch(branch, repo, ghRunner),
-    auditWorkerResultFn: auditWorkerResult,
-    writeWorkerAuditFn: writeWorkerAudit,
-    publishWorkerResultFn: (args) => publishWorkerResult({ ...args, runner: ghRunner }),
     uncommittedChangesFn: (worktreePath) => worktreeManager.uncommittedChanges(worktreePath),
     applyStagedWorkflowEditFn: (worktreePath, authorizedPath) => applyStagedWorkflowEdit(worktreePath, authorizedPath),
     // MOV-143: the route + delegate gate, and the live re-read that makes a

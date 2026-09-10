@@ -11,7 +11,6 @@ function fakeFs(files) {
       return store.get(p);
     },
     writeFileSync: (p, content) => store.set(p, content),
-    unlinkSync: (p) => store.delete(p),
     mkdirSync: () => {},
     _store: store,
   };
@@ -32,7 +31,7 @@ describe("applyStagedWorkflowEdit", () => {
     expect(calls).toEqual([]);
   });
 
-  it("moves staged content into place and leaves commit/publication to the trusted dispatcher", () => {
+  it("writes the staged content into place and commits+pushes when a proposal exists", () => {
     const stagedPath = path.join(
       "/repo/worktree",
       "tools",
@@ -41,14 +40,27 @@ describe("applyStagedWorkflowEdit", () => {
       "ios-verify.yml",
     );
     const fsImpl = fakeFs({ [stagedPath]: "name: ios-verify\non: [pull_request]\n" });
+    const calls = [];
+    const runner = (cmd, args, opts) => {
+      calls.push({ cmd, args, cwd: opts?.cwd });
+      return "";
+    };
+
     const result = applyStagedWorkflowEdit("/repo/worktree", ".github/workflows/ios-verify.yml", {
       fsImpl,
+      runner,
     });
 
     expect(result).toEqual({ applied: true, path: ".github/workflows/ios-verify.yml" });
 
     const targetPath = path.join("/repo/worktree", ".github/workflows/ios-verify.yml");
     expect(fsImpl._store.get(targetPath)).toBe("name: ios-verify\non: [pull_request]\n");
-    expect(fsImpl._store.has(stagedPath)).toBe(false);
+
+    expect(calls[0]).toMatchObject({ cmd: "git", cwd: "/repo/worktree" });
+    expect(calls[0].args).toContain("rm");
+    expect(calls[1].args).toEqual(["add", ".github/workflows/ios-verify.yml"]);
+    expect(calls[2].args[0]).toBe("commit");
+    expect(calls[3].args).toEqual(["push"]);
+    for (const c of calls) expect(c.cwd).toBe("/repo/worktree");
   });
 });

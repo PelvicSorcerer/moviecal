@@ -71,14 +71,7 @@ describe("aggregateCheckResults", () => {
 describe("observePullRequest", () => {
   it("keeps human changes, blocking review checks, and advisory comments distinct", () => {
     const observation = observePullRequest({
-      pr: {
-        state: "OPEN",
-        isDraft: false,
-        headRefOid: "sha",
-        headRefName: "agent/MOV-1-fix",
-        headRepository: { name: "repo", nameWithOwner: "owner/repo" },
-        reviewDecision: "CHANGES_REQUESTED",
-      },
+      pr: { state: "OPEN", isDraft: false, headRefOid: "sha", reviewDecision: "CHANGES_REQUESTED" },
       requiredChecks: ["review-gate"],
       checks: [{ name: "review-gate", sha: "sha", conclusion: "FAILURE" }],
       reviews: [{ state: "REQUEST_CHANGES", body: "Please revise" }],
@@ -88,7 +81,6 @@ describe("observePullRequest", () => {
     expect(observation.review.requestedChanges).toHaveLength(1);
     expect(observation.review.blockingRequiredChecks).toHaveLength(1);
     expect(observation.review.advisoryComments).toHaveLength(1);
-    expect(observation).toMatchObject({ headBranch: "agent/MOV-1-fix", headRepository: "owner/repo" });
   });
 
   it("does not make a draft actionable", () => {

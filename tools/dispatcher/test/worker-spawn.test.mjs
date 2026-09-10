@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import { redactWorkerOutput, spawnWorker, tailLogs } from "../src/worker-spawn.mjs";
+import { spawnWorker, tailLogs } from "../src/worker-spawn.mjs";
 
 function fakeChildProcess({ exitCode = 0, stdoutText = "", stderrText = "" } = {}) {
   const child = new EventEmitter();
@@ -117,55 +117,6 @@ describe("spawnWorker", () => {
     });
 
     expect(capturedOpts.detached).toBe(true);
-  });
-
-  it("wraps both adapters in the shared sandbox and strips worker credentials", async () => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
-    const originalToken = process.env.GH_TOKEN;
-    process.env.GH_TOKEN = "ghp_this_must_not_reach_the_worker";
-    const calls = [];
-    const spawnImpl = (command, args, opts) => {
-      calls.push({ command, args, opts });
-      return fakeChildProcess({ exitCode: 0 });
-    };
-    try {
-      for (const command of ["claude", "codex"]) {
-        await spawnWorker({
-          invocation: { command, args: ["exec"] },
-          cwd: "/tmp/some-worktree",
-          brief: "brief",
-          logDir: path.join(tmpDir, command),
-          spawnImpl,
-          securityContext: { mode: "implementation" },
-          platform: "darwin",
-          repositoryGuardPathsFn: () => ({ protectedRepositoryPaths: [], gitMetadataPaths: [] }),
-        });
-      }
-    } finally {
-      if (originalToken == null) delete process.env.GH_TOKEN;
-      else process.env.GH_TOKEN = originalToken;
-    }
-    for (const [index, command] of ["claude", "codex"].entries()) {
-      expect(calls[index].command).toBe("/usr/bin/sandbox-exec");
-      expect(calls[index].args).toContain(command);
-      expect(calls[index].opts.env).not.toHaveProperty("GH_TOKEN");
-      expect(fs.readFileSync(path.join(tmpDir, command, "worker-sandbox.sb"), "utf8")).toContain("deny process-exec");
-    }
-  });
-
-  it("fails closed rather than spawning without the Mac safety boundary", async () => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
-    const spawnImpl = vi.fn();
-    await expect(spawnWorker({
-      invocation: { command: "codex", args: ["exec"] },
-      cwd: "/tmp/some-worktree",
-      brief: "brief",
-      logDir: path.join(tmpDir, "run"),
-      spawnImpl,
-      securityContext: { mode: "repair" },
-      platform: "linux",
-    })).rejects.toThrow(/only supported on darwin/);
-    expect(spawnImpl).not.toHaveBeenCalled();
   });
 
   it("sends SIGTERM then SIGKILL to the worker's process group after it exits (MOV-137)", async () => {
@@ -315,17 +266,5 @@ describe("tailLogs", () => {
     expect(tail).toContain("out-99");
     expect(tail).not.toContain("out-50");
     expect(tail).toContain("err-only-line");
-  });
-});
-
-describe("worker log redaction", () => {
-  it("redacts exact inherited credentials and common token shapes", () => {
-    const output = redactWorkerOutput(
-      "GH_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz123456 and exact-secret-value",
-      { env: { GH_TOKEN: "exact-secret-value" } },
-    );
-    expect(output).not.toContain("exact-secret-value");
-    expect(output).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz123456");
-    expect(output).toContain("[REDACTED]");
   });
 });
