@@ -468,17 +468,19 @@ async function promotePass() {
 }
 
 async function cmdRunOnce() {
+  // buildLinearClient() must run first: reconcileWorktrees() below takes its
+  // result (a possibly-undefined client/teamKey) as arguments, and degrades
+  // to worktree-only bookkeeping when there's no live Linear credential --
+  // see reconcileWorktrees() for that fallback. The rest of this function
+  // reuses the same linearClient/teamKey rather than re-deriving them.
   const built = buildLinearClient();
+  const linearClient = built?.client;
+  const teamKey = built?.teamKey;
 
-  // Reconciliation runs even without a live Linear credential (worktree
-  // bookkeeping alone is still useful, and the Linear backstop is designed
-  // to retry on whichever future poll cycle does have one) -- see
-  // reconcileWorktrees() for how it degrades without a client.
-  await reconcileWorktrees(built?.client, built?.teamKey);
+  await reconcileWorktrees(linearClient, teamKey);
   await promotePass();
 
   if (!built) return 1;
-  const { client: linearClient, teamKey } = built;
   const issues = await linearClient.issuesInState({
     teamKey,
     stateName: RUN_STATE_NAMES.readyForAgent,

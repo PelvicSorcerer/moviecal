@@ -283,7 +283,9 @@ export async function reconcileReviewWorktrees(worktreeManager, ctx) {
         try {
           const result = await ensureLinearMergeSynced({ ...entry, ...extra }, ctx);
           if (result.synced) markLinearSynced(id);
-        } catch { /* retried on the next reconciliation pass */ }
+        } catch (error) {
+          console.error(`${id}: Linear merge-sync backstop failed (retrying next pass):`, error.message);
+        }
       }
     } else if (outcomeState === "CLOSED") {
       if (isFreshReview) {
@@ -293,7 +295,9 @@ export async function reconcileReviewWorktrees(worktreeManager, ctx) {
         try {
           const result = await escalateClosedUnmerged({ ...entry, ...extra }, ctx);
           if (result.synced) markLinearSynced(id);
-        } catch { /* retried on the next reconciliation pass */ }
+        } catch (error) {
+          console.error(`${id}: Linear closed-unmerged escalation failed (retrying next pass):`, error.message);
+        }
       }
     }
     // OPEN: nothing to do yet.
