@@ -57,7 +57,7 @@ import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
 import { spawnWorker } from "../src/worker-spawn.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "../src/worker-guard.mjs";
 import { publishWorkerResult } from "../src/worker-publish.mjs";
-import { findPrForBranch, defaultRunner as ghRunner } from "../src/pr-check.mjs";
+import { defaultRunner as ghRunner } from "../src/pr-check.mjs";
 import { checkPrState, checkPrObservation, isCheckPrObservation, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
 import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
 import { applyStagedWorkflowEdit } from "../src/workflow-edit-apply.mjs";
@@ -427,7 +427,6 @@ async function buildRunContext(linearClient, teamKey, issues) {
     ghRepo: GITHUB_REPO,
     logRoot: logRoot(),
     spawnWorkerFn: spawnWorker,
-    findPrForBranchFn: (branch, repo) => findPrForBranch(branch, repo, ghRunner),
     auditWorkerResultFn: auditWorkerResult,
     writeWorkerAuditFn: writeWorkerAudit,
     publishWorkerResultFn: (args) => publishWorkerResult({ ...args, runner: ghRunner }),

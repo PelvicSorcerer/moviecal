@@ -80,6 +80,7 @@ function baseCtx(overrides = {}) {
     findPrForBranchFn: vi.fn(() => ({ number: 1, url: "https://github.com/owner/repo/pull/1", isDraft: true, headSha: "sha-1" })),
     auditWorkerResultFn: vi.fn(() => ({ ok: true, violations: [] })),
     writeWorkerAuditFn: vi.fn(() => ({ path: "/fake/logs/x/security-audit.json", sha256: "abc123" })),
+    publishWorkerResultFn: vi.fn(() => ({ number: 1, url: "https://github.com/owner/repo/pull/1", isDraft: true, headSha: "sha-1" })),
     ...overrides,
   };
 }
@@ -286,6 +287,17 @@ describe("runOnce", () => {
     expect(result.pr).toBe("https://github.com/owner/repo/pull/4");
   });
 
+  it("fails closed when the trusted dispatcher publisher is not configured", async () => {
+    const ctx = baseCtx({ publishWorkerResultFn: undefined });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result).toMatchObject({ outcome: "publish-failed", error: "trusted dispatcher publisher is not configured" });
+    expect(ctx.findPrForBranchFn).not.toHaveBeenCalled();
+    expect(ctx.worktreeManager.statusCalls).toEqual([{ id: "MOV-1", status: "failed" }]);
+    expect(ctx.linearClient.calls.at(-1).body).toContain("trusted dispatcher publisher is not configured");
+  });
+
   it("marks the worktree failed and reports needs-human-decision with log tail when the worker exits non-zero", async () => {
     const ctx = baseCtx({ spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir: "/fake/logs/MOV-1" })) });
 
@@ -300,7 +312,7 @@ describe("runOnce", () => {
 
   it("marks failed and reports needs-human-decision when the worker exits 0, opens no PR, and the worktree is clean", async () => {
     const ctx = baseCtx({
-      findPrForBranchFn: vi.fn(() => null),
+      publishWorkerResultFn: vi.fn(() => null),
       uncommittedChangesFn: vi.fn(() => []),
     });
 
@@ -313,7 +325,7 @@ describe("runOnce", () => {
   });
 
   it("defaults to no-pr when uncommittedChangesFn is not provided (existing callers unaffected)", async () => {
-    const ctx = baseCtx({ findPrForBranchFn: vi.fn(() => null) });
+    const ctx = baseCtx({ publishWorkerResultFn: vi.fn(() => null) });
 
     const [result] = await runOnce([ISSUE], ctx);
 
@@ -323,7 +335,7 @@ describe("runOnce", () => {
   it("reports abandoned-dirty (MOV-137) when the worker exits 0 with uncommitted changes and no PR", async () => {
     const uncommittedChangesFn = vi.fn(() => ["src/Auth.swift", "src/AuthTests.swift"]);
     const ctx = baseCtx({
-      findPrForBranchFn: vi.fn(() => null),
+      publishWorkerResultFn: vi.fn(() => null),
       uncommittedChangesFn,
     });
 

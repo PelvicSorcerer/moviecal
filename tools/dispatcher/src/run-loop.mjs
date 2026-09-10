@@ -31,14 +31,13 @@ import { auditWorkerResult, writeWorkerAudit } from "./worker-guard.mjs";
  * @param {string} ctx.logRoot
  * @param {(args: object) => Promise<{exitCode: number, logDir: string}>} ctx.spawnWorkerFn - given a `signal` (AbortSignal, MOV-138), a real
  *   implementation should kill the worker's process group when it fires; see worker-spawn.mjs.
- * @param {(branch: string, repo: string) => {number:number,url:string,isDraft:boolean}|null} ctx.findPrForBranchFn
  * @param {number} ctx.workerTimeoutMs - MOV-138: a worker that hasn't exited after this many ms is killed and its issue moved to Needs Human Decision
  * @param {(worktreePath: string) => string[]} [ctx.uncommittedChangesFn] - MOV-137; defaults to "always clean" if not provided (tests that don't care about this can omit it)
  * @param {(worktreePath: string, authorizedPath: string) => {applied: boolean, path?: string, reason?: string}} [ctx.applyStagedWorkflowEditFn] - MOV-121; defaults to a no-op if not provided (tests that don't care about this can omit it)
  * @param {'implementation'|'repair'} [ctx.workerMode] - MOV-145; repair mode has stricter protected paths and never applies staged workflow proposals
  * @param {(args: object) => object} [ctx.auditWorkerResultFn] - MOV-145; validates structured tool calls and the resulting diff before publication
  * @param {(logDir: string, report: object) => object} [ctx.writeWorkerAuditFn] - MOV-145; persists an audit record outside the worktree
- * @param {(args: object) => object} [ctx.publishWorkerResultFn] - MOV-145; trusted dispatcher-side non-force push and draft PR creation
+ * @param {(args: object) => object} ctx.publishWorkerResultFn - MOV-145; required trusted dispatcher-side non-force push and draft PR creation
  * @param {{id?: string|null, name?: string|null}} [ctx.dispatcherDelegate] - MOV-143: the delegate an issue must name for this dispatcher to claim it; defaults to matching `moviecal-dispatcher` by name
  * @param {(issue: object) => Promise<object|null>} [ctx.refreshIssueFn] - MOV-143: re-read an issue immediately before committing to it, so a route/delegation change since the poll snapshot is a safe no-op; defaults to reusing the snapshot (tests that don't exercise the race can omit it)
  * @returns {Promise<Array<{issue: string, outcome: string, [key: string]: unknown}>>}
@@ -112,14 +111,13 @@ async function processIssue(issue, ctx) {
     ghRepo,
     logRoot,
     spawnWorkerFn,
-    findPrForBranchFn,
     workerTimeoutMs,
     uncommittedChangesFn = () => [],
     applyStagedWorkflowEditFn = () => ({ applied: false, reason: "not configured" }),
     workerMode = "implementation",
     auditWorkerResultFn = auditWorkerResult,
     writeWorkerAuditFn = writeWorkerAudit,
-    publishWorkerResultFn = null,
+    publishWorkerResultFn,
     dispatcherDelegate = {},
     refreshIssueFn = async (snapshot) => snapshot,
   } = ctx;
@@ -381,9 +379,10 @@ async function processIssue(issue, ctx) {
 
   let pr;
   try {
-    pr = publishWorkerResultFn
-      ? publishWorkerResultFn({ worktreePath: entry.path, branch, repo: ghRepo, issue })
-      : findPrForBranchFn(branch, ghRepo);
+    if (typeof publishWorkerResultFn !== "function") {
+      throw new Error("trusted dispatcher publisher is not configured");
+    }
+    pr = publishWorkerResultFn({ worktreePath: entry.path, branch, repo: ghRepo, issue });
   } catch (err) {
     worktreeManager.markStatus(issue.identifier, "failed");
     await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
