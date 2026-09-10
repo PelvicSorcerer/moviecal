@@ -549,6 +549,9 @@ async function cmdRunOnce() {
   const linearClient = built?.client;
   const teamKey = built?.teamKey;
 
+  // reconcileWorktrees() is async: this await must fully complete before
+  // promotePass() and reportReviewCi() run below, so reconciliation never
+  // races the promote/dispatch pass. It is the only call to that function.
   await reconcileWorktrees(linearClient, teamKey);
   await promotePass();
 
