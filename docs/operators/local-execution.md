@@ -172,8 +172,106 @@ At each transition the dispatcher writes to the Linear issue:
 | CI completes | Comment with check conclusions |
 | PR merges | State → `Done` (automatic, via the GitHub magic word, e.g. `Fixes MOV-123`) |
 | Worker fails or hits a hard-deny action | State → `Blocked` or `Needs Human Decision`; comment with the last ~50 log lines and the run-log path |
+| Stopped at a safe boundary (§Stop controls) | Comment explaining why — **and nothing else**; the state is left where whoever stopped it put it |
 
 No agent conversation is a source of truth. Anything that matters must be written to Linear or to the repository before the session ends.
+
+### One lifecycle, two publication surfaces (MOV-158)
+
+Everything in that table after the claim is published through a single
+lifecycle (`tools/dispatcher/src/agent-lifecycle.mjs`). A transition is
+described **once** — a kind, a plain-text summary, and the markdown a human
+needs — and `renderLifecycleEvent()` (`agent-session.mjs`) turns that one
+description into both possible surfaces. The publisher then picks exactly one:
+
+1. a first-class **Linear Agent Activity** on an Agent Session, when that
+   capability is available; otherwise
+2. the **app-actor comment** the dispatcher has always written.
+
+Workflow-**state** transitions are outside that either/or and are written
+whichever surface wins: state is durable control data that Linear's views, the
+promoter, and `pr-reconcile.mjs` all read. **The issue, branch, and PR are the
+durable identity.** Sessions and comments are presentation and history — never
+authoritative control state, and never something a later attempt has to resume
+to stay correct.
+
+**Today, surface 2 is always the one that runs, and that is the supported
+configuration.** `MOV-141` found Agent Sessions **disabled** for the
+`moviecal-dispatcher` app: enabling them requires the OAuth app to subscribe to
+Agent Session events and expose a reachable HTTPS receiver, which the local Mac
+must not do. `MOV-159` is the decision gate for whether a signed relay is worth
+its attack surface; `MOV-166` owns any live enablement and validation. See
+`docs/governance/mov-141-linear-capability-findings.md`.
+
+The layer is therefore off unless `MOVIECAL_AGENT_SESSIONS` is explicitly set,
+and off is not a degraded mode — it is the complete operational lifecycle. With
+it on and the app still unentitled, the dispatcher makes exactly **one** failed
+`agentSessionCreateOnIssue` per process, latches the answer, and publishes
+comments for the rest of the daemon's life. It never repeatedly attempts a
+mutation Linear has already refused. `dispatcher doctor` prints which surface is
+configured; it deliberately does not probe entitlement, because the only probe
+is a mutation and `doctor` is read-only.
+
+The Agent Session mutation documents in `linear-client.mjs` are transcribed from
+Linear's published Developer Preview docs and have **never returned successfully
+against this workspace**. They are deliberately concentrated in one module,
+every failure is non-fatal, and the PR URL is published both in an activity body
+and via the external-link mutation — so a wrong field name on one path degrades
+rather than loses the link.
+
+### Stop controls
+
+An attempt can be halted, and the halt is honoured at named **safe interruption
+boundaries** (`INTERRUPTION_BOUNDARIES` in `agent-signals.mjs`) — never
+mid-edit: `before-claim`, `during-worker`, `after-worker`,
+`before-workflow-edit`, `before-pr-report`.
+
+Two sources feed one controller:
+
+- **Polling** — the working control today, needing no entitlement and no
+  inbound connectivity. While a worker runs, the dispatcher re-reads the issue
+  every `MOVIECAL_STOP_POLL_MS` (default 60s; `0` disables the watcher) and
+  stops if the delegation was removed, the route changed, or the issue moved to
+  a state it does not work under (`Ready for Agent` and `Agent Working` are the
+  two compatible states — both, because a re-read can race the dispatcher's own
+  transition). A stop during the worker kills its process group, exactly as a
+  timeout does.
+- **Agent Session `stop` payloads** — the low-latency path, unavailable today.
+  `handleAgentSignal()` normalizes, verifies, and replays them through the *same*
+  controller, so enabling the receiver would change latency and nothing else.
+
+Two rules that are easy to get wrong and are enforced in code:
+
+- **A failed re-read is not a stop.** A transient Linear error fails open and
+  retries next tick; treating a network blip as a human asking to halt would
+  kill healthy work. A re-read that *succeeds* and shows the issue gone is
+  different, and does stop.
+- **A de-delegated issue stops silently.** If the delegation was removed, this
+  dispatcher is no longer that issue's writer, and commenting anyway is exactly
+  the boundary violation §Dispatch trigger exists to prevent. Only a stop where
+  the dispatcher is still the writer gets a single explanatory comment, and no
+  stop ever changes the workflow state.
+
+**There is no inbound listener, receiver, relay, port, or webhook secret**, and
+`tools/dispatcher/test/dispatcher-wiring.test.mjs` asserts structurally that
+none appears. To exercise the inbound half, replay a saved payload:
+
+```
+dispatcher agent-signal --fixture tools/dispatcher/fixtures/agent-session-stop.example.json
+```
+
+That command is read-only: it normalizes the payload, applies the trust policy,
+runs it through the stop controller twice to show the replay is a no-op, prints
+what would happen, and mutates nothing. The example fixture is hand-written from
+Linear's published preview docs — not captured from a live delivery, because
+there is no receiver to capture one with.
+
+**Prompt trust.** A follow-up prompt is trusted only when it comes from a real
+workspace user, and never from this dispatcher's own actor (an agent acting on
+its own emitted activity is a feedback loop, not a follow-up). A **stop** is
+deliberately *not* subject to that policy: refusing to stop because the
+requester was not on an allowlist is the wrong failure mode. Stops are always
+honoured; only instructions need trust.
 
 ## Security model
 
@@ -266,11 +364,12 @@ The plist's own `StandardOutPath`/`StandardErrorPath` (`~/Library/Logs/moviecal-
 
 ## Standing health check
 
-`dispatcher doctor` is a read-only command that asserts: Linear auth works, `gh` auth works, the worktree root is writable, `~/.config/moviecal/env.local` exists and is mode 600, `claude` and `codex` are on `PATH`, `origin/master` is fetchable, and the iOS self-hosted runner is reachable. It also prints the **local dispatch identity** — the delegate an issue must name to be claimed here (MOV-143) — which is informational, not a pass/fail gate. If `~/.config/moviecal/linear-app.env` is present it additionally checks the file is mode 600 and that an app-actor token can be minted from it (MOV-122); if it is absent that check is a no-op pass. Run it after any environment change and before relying on the dispatcher for real work.
+`dispatcher doctor` is a read-only command that asserts: Linear auth works, `gh` auth works, the worktree root is writable, `~/.config/moviecal/env.local` exists and is mode 600, `claude` and `codex` are on `PATH`, `origin/master` is fetchable, and the iOS self-hosted runner is reachable. It also prints the **local dispatch identity** — the delegate an issue must name to be claimed here (MOV-143) — and which **lifecycle publication surface** is configured (MOV-158), both informational rather than pass/fail gates. The Agent Session line reports configuration only: the sole way to test entitlement is `agentSessionCreateOnIssue`, which is a mutation, and `doctor` never mutates. If `~/.config/moviecal/linear-app.env` is present it additionally checks the file is mode 600 and that an app-actor token can be minted from it (MOV-122); if it is absent that check is a no-op pass. Run it after any environment change and before relying on the dispatcher for real work.
 
 ## Known gaps / follow-ups
 
-- Dispatch is currently poll-based (default 30s interval, `dispatcher run [--interval ms]`). A Linear Agent App (webhook-driven) is a planned follow-up, not yet implemented.
+- Dispatch is currently poll-based (default 30s interval, `dispatcher run [--interval ms]`), and so are the stop controls (§Stop controls). Webhook-driven dispatch is **blocked on an architecture decision, not on implementation**: the dispatcher-side contract for Linear Agent Sessions is built and feature-gated (MOV-158), but Linear requires a reachable HTTPS receiver the local Mac must not expose. `MOV-159` decides whether a signed relay is worth its attack surface; `MOV-166` owns live enablement and validation if it is. Polling remains the complete lifecycle either way.
+- The Agent Session mutation shapes in `linear-client.mjs` have never been exercised against a live session (MOV-141: `agent sessions disabled`). They are unverified until `MOV-166`; every path through them is non-fatal and falls back to comments.
 - **Backfill is an operator task, not a code task.** MOV-143 makes `execution:mac` + the `moviecal-dispatcher` delegate hard preconditions, so any queued issue missing either one stops being dispatched the moment the daemon restarts onto this code. Run `dispatcher dry-run` first: it lists every `Ready for Agent` issue with its route, delegate, and eligibility, and ends with an `Executable on this Mac: n/m` line. Apply the missing labels and delegations before restarting the service.
 - The delegate match accepts the app's workspace *name* as well as `LINEAR_APP_ACTOR_ID`, because that variable currently holds the name rather than the actor UUID. That is looser than an id-only match by design (see `dispatch-eligibility.mjs`); setting the variable to the real actor UUID tightens it without any code change.
 - `dispatcher run` is implemented and unit-tested against every outcome (preflight block, routing block, worker success, worker failure, worker exits 0 with no PR and a clean worktree, worker exits 0 with no PR and an `abandoned-dirty` worktree, spawn error), but has not yet been exercised against the live Linear workspace — that first real run is migration Stage 10 (end-to-end verification), tracked in `docs/planning/decision-log.md`.

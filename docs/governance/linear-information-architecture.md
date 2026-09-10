@@ -129,6 +129,7 @@ Any rule that constrains code lives in the repo. Any rule that constrains proces
 | Branches, commits, PRs, code review, CI results, releases, external bug intake — **delivered** status | **GitHub** |
 | Which execution adapter runs a given issue (cloud vs Mac) | **A Linear route label**, scheme defined by `MOV-142` (not yet provisioned), materialized on the issue before dispatch |
 | Live agent progress narration, tool calls, intermediate reasoning | **Run logs** — dispatcher run logs (Mac adapter) or Linear Agent Session activity (cloud adapter); referenced from Linear, never authoritative |
+| An attempt's lifecycle presentation (acknowledgement, PR link, errors, stop) | **Linear comments**, or Agent Activities when that capability is available (MOV-158). Presentation and history only: the authoritative identity of a piece of work is the **issue + branch + PR**, never a session id. A session or comment can be lost, replayed, or replaced by a new linked attempt without changing what the work *is*. |
 
 Where Linear and GitHub disagree about whether something *shipped*, GitHub wins and Linear is corrected to match. Where they disagree about whether something *should* ship, Linear wins. See `docs/governance/hybrid-execution-architecture.md` §Source-of-truth boundaries.
 

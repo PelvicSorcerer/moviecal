@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { runOnce } from "../src/run-loop.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
+import { AgentSessionBridge } from "../src/agent-session.mjs";
 
 const STATE_IDS = {
   blocked: "state-blocked",
@@ -102,10 +103,16 @@ function deferredSpawnWorkerFn() {
   return { fn, windows, controls };
 }
 
-/** Flush pending microtasks so in-flight promise chains settle before assertions. */
+/**
+ * Flush pending microtasks so in-flight promise chains settle before
+ * assertions. Each `setImmediate` hop drains the *entire* microtask queue, so
+ * this does not have to be re-tuned every time a code path gains an `await`
+ * before `spawnWorkerFn` (which is exactly what MOV-158's lifecycle
+ * publication did to it).
+ */
 async function flushMicrotasks() {
-  for (let i = 0; i < 20; i += 1) {
-    await Promise.resolve();
+  for (let i = 0; i < 5; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
   }
 }
 
@@ -687,6 +694,256 @@ describe("runOnce", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("lifecycle publication and stop controls (MOV-158)", () => {
+    /** A Linear client that also speaks the Agent Session surface. */
+    function sessionCapableClient() {
+      const client = fakeLinearClient();
+      client.activities = [];
+      client.createAgentSessionOnIssue = vi.fn(async () => ({ id: "session-1" }));
+      client.createAgentActivity = vi.fn(async function ({ agentSessionId, content }) {
+        this.activities.push({ agentSessionId, content });
+        return true;
+      });
+      client.updateAgentSessionExternalLink = vi.fn(async () => true);
+      return client;
+    }
+
+    /** A snapshot the stop poller will read. `stateName` drives the incompatible-state case. */
+    function freshSnapshot(overrides = {}) {
+      return { ...ISSUE, stateName: "Agent Working", ...overrides };
+    }
+
+    it("publishes the whole lifecycle as app-actor comments when sessions are off (the default)", async () => {
+      const ctx = baseCtx();
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("in-review");
+      const comments = ctx.linearClient.calls.filter((c) => c.type === "addComment").map((c) => c.body);
+      expect(comments[0]).toContain("**Dispatcher started work.**");
+      expect(comments.at(-1)).toContain("**Pull request opened:**");
+    });
+
+    it("publishes Agent Activities instead of comments when a session is available", async () => {
+      const linearClient = sessionCapableClient();
+      const ctx = baseCtx({
+        linearClient,
+        agentSessionBridgeFn: () => new AgentSessionBridge({ linearClient, enabled: true }),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("in-review");
+      expect(linearClient.addComment).not.toHaveBeenCalled();
+      expect(linearClient.activities.map((a) => a.content.type)).toEqual(["thought", "action"]);
+      // The state transitions are written either way — they are control data.
+      expect(linearClient.calls.filter((c) => c.type === "moveToState").map((c) => c.stateId)).toEqual([
+        "state-agent-working",
+        "state-in-review",
+      ]);
+    });
+
+    it("attaches the PR URL to the session as an external link as well as in the activity", async () => {
+      const linearClient = sessionCapableClient();
+      const ctx = baseCtx({
+        linearClient,
+        agentSessionBridgeFn: () => new AgentSessionBridge({ linearClient, enabled: true }),
+      });
+
+      await runOnce([ISSUE], ctx);
+
+      expect(linearClient.updateAgentSessionExternalLink).toHaveBeenCalledWith(
+        "session-1",
+        "https://github.com/owner/repo/pull/1",
+      );
+    });
+
+    it("persists the session record so the next attempt can resolve attach-vs-new (polling recovery)", async () => {
+      const linearClient = sessionCapableClient();
+      const persistAgentSessionFn = vi.fn();
+      const ctx = baseCtx({
+        linearClient,
+        persistAgentSessionFn,
+        agentSessionBridgeFn: () => new AgentSessionBridge({ linearClient, enabled: true }),
+      });
+
+      await runOnce([ISSUE], ctx);
+
+      expect(persistAgentSessionFn).toHaveBeenCalledWith("MOV-1", expect.objectContaining({ id: "session-1" }));
+    });
+
+    it("opens a new linked session when the prior one is terminal, keeping issue/branch/PR identity", async () => {
+      const linearClient = sessionCapableClient();
+      const ctx = baseCtx({
+        linearClient,
+        readAgentSessionFn: () => ({ id: "session-prior", status: "complete", attempt: 1 }),
+        agentSessionBridgeFn: () => new AgentSessionBridge({ linearClient, enabled: true }),
+      });
+
+      await runOnce([ISSUE], ctx);
+
+      expect(linearClient.createAgentSessionOnIssue).toHaveBeenCalledTimes(1);
+      const ackBody = linearClient.activities[0].content.body;
+      expect(ackBody).toContain("MOV-1");
+      expect(ackBody).toContain("agent/MOV-1-fix-the-thing");
+      expect(ackBody).toContain("attempt 2");
+      expect(ackBody).toContain("continues session session-prior");
+    });
+
+    it("keeps working, and keeps commenting, when the Agent Session API is unavailable", async () => {
+      const linearClient = sessionCapableClient();
+      linearClient.createAgentSessionOnIssue = vi.fn(async () => {
+        throw new Error("Linear API error: agent sessions disabled");
+      });
+      const ctx = baseCtx({
+        linearClient,
+        agentSessionBridgeFn: () => new AgentSessionBridge({ linearClient, enabled: true }),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("in-review");
+      expect(linearClient.addComment).toHaveBeenCalledTimes(2);
+      expect(linearClient.createAgentActivity).not.toHaveBeenCalled();
+    });
+
+    it("stops silently at the pre-claim boundary when the delegation was removed", async () => {
+      const ctx = baseCtx({ refreshIssueFn: vi.fn(async () => freshSnapshot({ delegate: null, stateName: "Ready for Agent" })) });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("not-eligible");
+      expect(ctx.linearClient.calls).toEqual([]);
+      expect(ctx.worktreeManager.createCalls).toEqual([]);
+      expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+    });
+
+    it("stops the worker and writes nothing further when the issue is de-delegated mid-run", async () => {
+      let releaseWorker;
+      const workerPromise = new Promise((resolve) => {
+        releaseWorker = () => resolve({ exitCode: 0, logDir: "/fake/logs/x" });
+      });
+      let capturedSignal;
+      let refreshCount = 0;
+      const ctx = baseCtx({
+        stopPollIntervalMs: 1,
+        spawnWorkerFn: vi.fn((args) => {
+          capturedSignal = args.signal;
+          return workerPromise;
+        }),
+        // First call is the pre-claim re-read (still ours), then the human
+        // removes the delegation while the worker runs.
+        refreshIssueFn: vi.fn(async () => {
+          refreshCount += 1;
+          return refreshCount === 1 ? freshSnapshot({ stateName: "Ready for Agent" }) : freshSnapshot({ delegate: null });
+        }),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("stopped");
+      expect(result.reported).toBe(false);
+      expect(capturedSignal.aborted).toBe(true);
+      // Exactly one write happened for this issue — the `Agent Working` claim
+      // report from before the stop. Nothing after the boundary.
+      expect(ctx.linearClient.calls.filter((c) => c.type === "addComment")).toHaveLength(1);
+      expect(ctx.worktreeManager.statusCalls).toEqual([
+        { id: "MOV-1", status: "abandoned", stopReason: expect.stringMatching(/delegated to nobody/) },
+      ]);
+      expect(ctx.findPrForBranchFn).not.toHaveBeenCalled();
+      releaseWorker();
+    });
+
+    it("explains itself once when stopped by a cancellation it is still the writer for", async () => {
+      let releaseWorker;
+      const workerPromise = new Promise((resolve) => {
+        releaseWorker = () => resolve({ exitCode: 0, logDir: "/fake/logs/x" });
+      });
+      let refreshCount = 0;
+      const ctx = baseCtx({
+        stopPollIntervalMs: 1,
+        spawnWorkerFn: vi.fn(() => workerPromise),
+        refreshIssueFn: vi.fn(async () => {
+          refreshCount += 1;
+          return refreshCount === 1 ? freshSnapshot({ stateName: "Ready for Agent" }) : freshSnapshot({ stateName: "Canceled" });
+        }),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result).toMatchObject({ outcome: "stopped", reported: true });
+      const comments = ctx.linearClient.calls.filter((c) => c.type === "addComment");
+      expect(comments).toHaveLength(2);
+      expect(comments.at(-1).body).toContain("**Dispatcher stopped at a safe interruption boundary.**");
+      expect(comments.at(-1).body).toContain("Canceled");
+      // A stop never moves the issue: whoever stopped it already chose a state.
+      expect(ctx.linearClient.calls.filter((c) => c.type === "moveToState").map((c) => c.stateId)).toEqual([
+        "state-agent-working",
+      ]);
+      releaseWorker();
+    });
+
+    it("drops queued activities rather than writing them after a silent stop", async () => {
+      // A transient failure earlier in the run leaves an activity queued for
+      // retry. If the attempt then stops because the delegation was removed,
+      // flushing that queue would be a write to an issue this dispatcher no
+      // longer owns — the exact boundary violation the stop exists to prevent.
+      const linearClient = sessionCapableClient();
+      linearClient.createAgentActivity = vi.fn(async () => {
+        throw new Error("fetch failed");
+      });
+      let releaseWorker;
+      const workerPromise = new Promise((resolve) => {
+        releaseWorker = () => resolve({ exitCode: 0, logDir: "/fake/logs/x" });
+      });
+      let refreshCount = 0;
+      const ctx = baseCtx({
+        linearClient,
+        stopPollIntervalMs: 1,
+        agentSessionBridgeFn: () => new AgentSessionBridge({ linearClient, enabled: true }),
+        spawnWorkerFn: vi.fn(() => workerPromise),
+        refreshIssueFn: vi.fn(async () => {
+          refreshCount += 1;
+          return refreshCount === 1 ? freshSnapshot({ stateName: "Ready for Agent" }) : freshSnapshot({ delegate: null });
+        }),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result).toMatchObject({ outcome: "stopped", reported: false });
+      // One attempt (the acknowledgement, which failed and queued) and no retry.
+      expect(linearClient.createAgentActivity).toHaveBeenCalledTimes(1);
+      releaseWorker();
+    });
+
+    it("does not treat a transient Linear failure during the stop poll as a stop", async () => {
+      let refreshCount = 0;
+      const ctx = baseCtx({
+        stopPollIntervalMs: 1,
+        logger: { error: vi.fn() },
+        refreshIssueFn: vi.fn(async () => {
+          refreshCount += 1;
+          if (refreshCount === 1) return freshSnapshot({ stateName: "Ready for Agent" });
+          throw new Error("Linear API error: 503");
+        }),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("in-review");
+    });
+
+    it("leaves the stop watcher off, and makes no extra re-reads, when the interval is 0", async () => {
+      const refreshIssueFn = vi.fn(async () => freshSnapshot({ stateName: "Ready for Agent" }));
+      const ctx = baseCtx({ refreshIssueFn, stopPollIntervalMs: 0 });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("in-review");
+      expect(refreshIssueFn).toHaveBeenCalledTimes(1);
     });
   });
 });

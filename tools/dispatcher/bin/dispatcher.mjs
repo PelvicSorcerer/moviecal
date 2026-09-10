@@ -6,6 +6,11 @@
 //   dispatcher dry-run             - fetch Ready-for-Agent issues and print the plan
 //                                     without touching any worktree, branch, or Linear
 //                                     state (safe to run with a live or missing key)
+//   dispatcher agent-signal --fixture <path>
+//                                  - replay a saved Linear Agent Session payload through
+//                                     the normalization/trust/stop logic and print what it
+//                                     would do. Read-only, and deliberately NOT a listener:
+//                                     there is no receiver, port, or secret (MOV-158/159)
 //   dispatcher gc                  - prune merged/stale worktrees and old run logs
 //   dispatcher promote [--dry-run] - move Backlog/Blocked issues that meet the
 //                                     readiness contract into Ready for Agent
@@ -33,9 +38,11 @@ import {
   loadLinearAppConfig,
   resolveLinearAuth,
   resolveDispatcherDelegate,
+  agentSessionsEnabled,
   checkSecretFileMode,
   DEFAULT_CONCURRENCY,
   DEFAULT_WORKER_TIMEOUT_MS,
+  DEFAULT_STOP_POLL_INTERVAL_MS,
   RUN_LOG_RETENTION_DAYS,
   REPO_ROOT,
   dispatcherLockPath,
@@ -59,9 +66,18 @@ import { findPrForBranch, defaultRunner as ghRunner } from "../src/pr-check.mjs"
 import { checkPrState, checkPrObservation, isCheckPrObservation, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
 import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
 import { applyStagedWorkflowEdit } from "../src/workflow-edit-apply.mjs";
+import { AgentSessionBridge, createAgentSessionCapability } from "../src/agent-session.mjs";
+import { SignalLedger, StopController, handleAgentSignal } from "../src/agent-signals.mjs";
 
 const IOS_RUNNER_NAME = "moviecal-ios-runner";
 const GITHUB_REPO = "PelvicSorcerer/moviecal";
+
+/**
+ * One entitlement latch for the whole process (MOV-158). The first `agent
+ * sessions disabled` rejection turns the enrichment layer off for the life of
+ * the daemon instead of costing one doomed mutation per issue per poll cycle.
+ */
+const agentSessionCapability = createAgentSessionCapability();
 
 /**
  * Build the LinearClient the real run/dry-run path authenticates with:
@@ -161,6 +177,18 @@ async function cmdDoctor() {
       delegate.id && delegate.id !== delegate.name
         ? `claims issues delegated to "${delegate.name}" or actor id ${delegate.id}`
         : `claims issues delegated to "${delegate.name}" (by name; set LINEAR_APP_ACTOR_ID in ${linearAppEnvPath()} to the actor UUID to also match by id)`,
+  });
+
+  // Agent Session enrichment layer (MOV-158). Informational, never a gate, and
+  // deliberately does **not** probe the API: the only way to test entitlement
+  // is `agentSessionCreateOnIssue`, which is a mutation, and `doctor` is
+  // read-only. MOV-141 already recorded the live answer.
+  checks.push({
+    name: "Linear Agent Sessions",
+    ok: true,
+    detail: agentSessionsEnabled()
+      ? "enabled (MOVIECAL_AGENT_SESSIONS) — activities are attempted once per attempt and fall back to app-actor comments if the app is not entitled"
+      : "off (default) — lifecycle publishes as app-actor comments + state transitions, which is the complete surface; see docs/governance/mov-141-linear-capability-findings.md",
   });
 
   // claude / codex on PATH
@@ -410,7 +438,85 @@ async function buildRunContext(linearClient, teamKey, issues) {
     // mid-flight routing/delegation change a no-op instead of a lost race.
     dispatcherDelegate: resolveDispatcherDelegate(),
     refreshIssueFn: (issue) => linearClient.issueSnapshot(issue.id),
+    // MOV-158: the optional Agent Session enrichment layer, and the polling
+    // stop control that works without it. The bridge is built per attempt but
+    // shares one process-wide entitlement latch; with sessions off (the
+    // default, and the only working configuration today) every lifecycle event
+    // publishes as the app-actor comment it always did.
+    agentSessionBridgeFn: () =>
+      new AgentSessionBridge({
+        linearClient,
+        enabled: agentSessionsEnabled(),
+        capability: agentSessionCapability,
+      }),
+    readAgentSessionFn: (issueIdentifier) => {
+      try {
+        return worktreeManager.loadState()[issueIdentifier]?.agentSession || null;
+      } catch {
+        return null;
+      }
+    },
+    persistAgentSessionFn: (issueIdentifier, snapshot) => {
+      // Best-effort bookkeeping: the registry entry may already be gone (a
+      // concurrent gc), and losing it only costs the next attempt its
+      // attach-vs-new-session hint, never correctness.
+      try {
+        worktreeManager.updateEntry(issueIdentifier, { agentSession: snapshot });
+      } catch {
+        /* no record to annotate */
+      }
+    },
+    stopPollIntervalMs: Number(process.env.MOVIECAL_STOP_POLL_MS ?? DEFAULT_STOP_POLL_INTERVAL_MS),
   };
+}
+
+/**
+ * Replay one Agent Session webhook payload from a file, with no listener and
+ * no network (MOV-158).
+ *
+ * This is how the inbound half is exercised by hand: MOV-141 found Agent
+ * Sessions disabled for this app, and enabling them would need a reachable
+ * HTTPS receiver the local Mac must not expose (MOV-159 is that decision
+ * gate). The normalization, trust, and stop-control logic is real and shared
+ * with the polling path; only the transport is absent. This command reports
+ * what *would* happen and changes nothing — no Linear write, no worktree, no
+ * worker.
+ */
+function cmdAgentSignal({ fixturePath } = {}) {
+  if (!fixturePath) {
+    console.error("agent-signal requires --fixture <path to a saved Agent Session payload>");
+    return 1;
+  }
+  let payload;
+  try {
+    payload = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
+  } catch (err) {
+    console.error(`could not read the agent-signal fixture: ${err.message}`);
+    return 1;
+  }
+  const controller = new StopController();
+  const ledger = new SignalLedger();
+  const first = handleAgentSignal(payload, { controller, ledger });
+  // Replayed immediately against the same ledger, because "a retried delivery
+  // must be a no-op" is the property worth showing, not an implementation
+  // detail.
+  const replay = handleAgentSignal(payload, { controller, ledger });
+  console.log(
+    JSON.stringify(
+      {
+        mode: "agent-signal",
+        readOnly: true,
+        listener: false,
+        first,
+        replay,
+        stopRequest: controller.stopRequest,
+        wouldMutateLinear: false,
+      },
+      null,
+      2,
+    ),
+  );
+  return 0;
 }
 
 /**
@@ -627,6 +733,13 @@ async function main() {
       process.exitCode = await cmdPromoteOnce({ dryRun });
       break;
     }
+    case "agent-signal": {
+      const fixtureFlagIdx = rest.indexOf("--fixture");
+      process.exitCode = cmdAgentSignal({
+        fixturePath: fixtureFlagIdx === -1 ? undefined : rest[fixtureFlagIdx + 1],
+      });
+      break;
+    }
     case "run": {
       const once = rest.includes("--once");
       const intervalFlagIdx = rest.indexOf("--interval");
@@ -635,7 +748,9 @@ async function main() {
       break;
     }
     default:
-      console.error("Usage: dispatcher <doctor|dry-run|shadow|gc|promote|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]");
+      console.error(
+        "Usage: dispatcher <doctor|dry-run|shadow|agent-signal|gc|promote|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
+      );
       process.exitCode = 1;
   }
 }

@@ -111,6 +111,34 @@ infrastructure is an optional richer interaction layer, not a prerequisite for
 local dispatch. `MOV-159` remains the decision gate for whether its latency and
 operational value justify the added attack surface.
 
+### What MOV-158 did with this finding
+
+`MOV-158` built the dispatcher-side half and stopped exactly at the boundary
+above. It added **no** listener, receiver, relay, port, webhook secret, plan
+change, or paid-credit dependency — `tools/dispatcher/test/dispatcher-wiring.test.mjs`
+asserts structurally that none has since appeared. Concretely:
+
+- One semantic lifecycle, serialized once, published as an Agent Activity when
+  the capability is available and as an app-actor comment when it is not. The
+  comment surface is the complete operational lifecycle, not a degraded mode.
+- Capability detection latched per process, so the `agent sessions disabled`
+  rejection above costs at most one failed mutation per daemon lifetime rather
+  than one per issue per poll cycle.
+- Stale recovery and new linked attempts, following the 30-minute contract
+  documented above. Identity is the issue + branch + PR, so a CI repair that
+  needs a fresh session still reads as the same work.
+- Inbound `prompted`/`stop` payload verification, normalization, trust, and
+  idempotent replay — all driven by fixtures and `dispatcher agent-signal
+  --fixture`, with no transport.
+- Polling stop controls (de-delegation, cancellation, incompatible state)
+  honoured at explicit safe interruption boundaries. This is the half that
+  works today with no entitlement.
+
+The mutation shapes in `linear-client.mjs` remain **unverified against a live
+session**. `MOV-166` owns live enablement and validation, and is the issue that
+would first exercise them for real. See
+`docs/operators/local-execution.md` §Reporting back to Linear and §Stop controls.
+
 ## Sources and reproducibility
 
 Official product documentation, retrieved 2026-09-10:

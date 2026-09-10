@@ -276,6 +276,94 @@ export class LinearClient {
     return created;
   }
 
+  /**
+   * Open an Agent Session on an issue under this app's own identity (MOV-158).
+   *
+   * **Developer Preview, and unverified against this workspace.** MOV-141's
+   * live probe got `agent sessions disabled` back from this exact mutation, so
+   * the document below is transcribed from Linear's published preview docs and
+   * has never returned a session here. It is deliberately the only place that
+   * shape is written down, and every caller
+   * (`agent-session.mjs`'s `AgentSessionBridge`) treats a failure as
+   * "sessions are unavailable, keep using comments" rather than as an error on
+   * the issue. See docs/governance/mov-141-linear-capability-findings.md.
+   */
+  async createAgentSessionOnIssue({ issueId }) {
+    if (!issueId) throw new Error("createAgentSessionOnIssue requires an issueId");
+    const mutation = `
+      mutation($issueId: String!) {
+        agentSessionCreateOnIssue(input: { issueId: $issueId }) {
+          success
+          agentSession { id status }
+        }
+      }
+    `;
+    const data = await this.request(mutation, { issueId });
+    const session = data && data.agentSessionCreateOnIssue && data.agentSessionCreateOnIssue.agentSession;
+    if (!session || !session.id) throw new Error("agentSessionCreateOnIssue returned no agent session");
+    return { id: session.id, status: session.status || null };
+  }
+
+  /**
+   * Emit one semantic Agent Activity. `content` is the serialized shape from
+   * `agent-session.mjs`'s `activityFor()` — a thought, action, elicitation,
+   * response, or error. Linear derives the session's status from the activity
+   * type, which is why the dispatcher never sets status separately.
+   */
+  async createAgentActivity({ agentSessionId, content }) {
+    if (!agentSessionId) throw new Error("createAgentActivity requires an agentSessionId");
+    if (!content || typeof content !== "object") throw new Error("createAgentActivity requires a content object");
+    const mutation = `
+      mutation($agentSessionId: String!, $content: AgentActivityContentInput!) {
+        agentActivityCreate(input: { agentSessionId: $agentSessionId, content: $content }) {
+          success
+          agentActivity { id }
+        }
+      }
+    `;
+    const data = await this.request(mutation, { agentSessionId, content });
+    return Boolean(data && data.agentActivityCreate && data.agentActivityCreate.success);
+  }
+
+  /**
+   * Point the session's external URL at the PR it produced, so the issue shows
+   * the PR link without anyone reading a local run log.
+   *
+   * Same preview caveat as above — and this one is why `activityFor()` also
+   * puts the PR URL in the activity body: if this field name is wrong, the
+   * link still renders, and the failure is logged rather than fatal.
+   */
+  async updateAgentSessionExternalLink(agentSessionId, externalUrl) {
+    if (!agentSessionId) throw new Error("updateAgentSessionExternalLink requires an agentSessionId");
+    if (!externalUrl) throw new Error("updateAgentSessionExternalLink requires an externalUrl");
+    const mutation = `
+      mutation($id: String!, $externalUrl: String!) {
+        agentSessionUpdate(id: $id, input: { externalUrl: $externalUrl }) { success }
+      }
+    `;
+    const data = await this.request(mutation, { id: agentSessionId, externalUrl });
+    return Boolean(data && data.agentSessionUpdate && data.agentSessionUpdate.success);
+  }
+
+  /**
+   * Read a session back, so a later attempt can tell "still live" from
+   * "finished, open a new linked one". Returns `null` when the session is gone
+   * or Agent Sessions are not readable by this credential — which callers
+   * treat the same as "no prior session".
+   */
+  async agentSession(agentSessionId) {
+    if (!agentSessionId) return null;
+    const query = `
+      query($id: String!) {
+        agentSession(id: $id) { id status updatedAt }
+      }
+    `;
+    const data = await this.request(query, { id: agentSessionId });
+    const node = data && data.agentSession;
+    if (!node) return null;
+    return { id: node.id, status: node.status || null, lastActivityAt: node.updatedAt || null };
+  }
+
   async workflowStates(teamKey) {
     const query = `
       query($teamKey: String!) {

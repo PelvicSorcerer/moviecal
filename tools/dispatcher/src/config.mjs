@@ -58,6 +58,12 @@ export const FAILED_WORKTREE_RETENTION_DAYS = 7;
 // killed rather than freeze the poll loop forever. 45 minutes comfortably
 // exceeds a healthy `npm run verify` + implementation pass.
 export const DEFAULT_WORKER_TIMEOUT_MS = 2_700_000;
+// MOV-158: how often to re-read a claimed issue while its worker runs, so a
+// de-delegation or cancellation is honoured within a minute instead of after a
+// 45-minute worker. One extra `issueSnapshot` per minute per active worker, and
+// the Mac adapter runs one worker at a time. Set MOVIECAL_STOP_POLL_MS=0 to
+// disable the watcher; the boundary checks around it still run.
+export const DEFAULT_STOP_POLL_INTERVAL_MS = 60_000;
 
 /** Parse a simple KEY=VALUE dotenv-style file. Returns {} if the file is missing. */
 export function parseEnvFile(filePath) {
@@ -130,6 +136,22 @@ export function loadLinearAppConfig(envPath = linearAppEnvPath()) {
 export function resolveDispatcherDelegate({ linearAppPath = linearAppEnvPath() } = {}) {
   const { actorId } = loadLinearAppConfig(linearAppPath);
   return { id: actorId || null, name: LOCAL_DISPATCHER_DELEGATE };
+}
+
+/**
+ * Is the (optional) Linear Agent Session enrichment layer switched on?
+ * (MOV-158.)
+ *
+ * Off unless `MOVIECAL_AGENT_SESSIONS` is explicitly truthy, and off is the
+ * correct setting today: MOV-141 found Agent Sessions **disabled** for the
+ * `moviecal-dispatcher` app, and enabling them needs an approved HTTPS event
+ * receiver that does not exist (MOV-159 decides whether to build one; MOV-166
+ * owns live enablement). Nothing about this flag adds a listener, a secret, or
+ * a plan change — with it on and no entitlement, the dispatcher makes one
+ * failed mutation, latches the answer, and keeps using comments.
+ */
+export function agentSessionsEnabled(env = process.env) {
+  return ["1", "true", "yes", "on"].includes(String(env.MOVIECAL_AGENT_SESSIONS ?? "").trim().toLowerCase());
 }
 
 /**
