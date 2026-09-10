@@ -140,9 +140,13 @@ nowhere":
 - **None** — coordination/umbrella issues that must never produce their own PR
   (e.g. `MOV-139`); excluded from the automated promoter.
 
-The route may be *inferred* by rule but must be **materialized on the issue
-before dispatch** so the decision is auditable after the fact. An issue with an
-ambiguous or conflicting route fails validation rather than defaulting silently.
+The route may be *inferred* by rule, but the target state is that it is
+**materialized on the issue before dispatch** so the decision is auditable
+after the fact, with an ambiguous or conflicting route failing validation
+rather than defaulting silently. `MOV-142` provisions the labels and the
+inference/validation logic; `MOV-143` makes materialization a hard
+precondition for dispatch (and backfills the existing backlog first). Until
+then the dispatcher does not require a materialized route.
 
 Sequencing is unchanged and adapter-independent: `blocks` relations plus the
 dispatcher's preflight gates decide *when*; the route decides *where*.

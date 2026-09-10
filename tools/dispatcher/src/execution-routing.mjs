@@ -40,8 +40,10 @@ export function inferExecutionRoute(issue = {}) {
 }
 
 /**
- * Validate the materialized route. Missing labels are rejected even when an
- * inference is available: inference is advisory until materialized in Linear.
+ * Validate a materialized route. Returns `ok: false` for a missing, multiple,
+ * or semantically-mismatched label — inference is advisory and does not
+ * satisfy this. Callers decide whether to enforce the result: MOV-142 uses it
+ * only for `dispatcher dry-run` output; MOV-143 makes it a dispatch gate.
  */
 export function resolveExecutionRoute(issue = {}) {
   const labels = parseExecutionLabels(issue.labels || []);
