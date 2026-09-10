@@ -38,6 +38,29 @@ describe("worker guard", () => {
     expect(env).not.toHaveProperty("SSH_AUTH_SOCK");
   });
 
+  it("keeps Claude authentication in the parent but scrubs it from subprocesses", () => {
+    const source = {
+      ANTHROPIC_API_KEY: "anthropic-secret",
+      ANTHROPIC_AUTH_TOKEN: "anthropic-token",
+      CLAUDE_CODE_OAUTH_TOKEN: "claude-oauth",
+      GH_TOKEN: "github-secret",
+    };
+    const claude = sanitizedWorkerEnvironment(source, { worker: "claude" });
+    expect(claude).toMatchObject({
+      ANTHROPIC_API_KEY: "anthropic-secret",
+      ANTHROPIC_AUTH_TOKEN: "anthropic-token",
+      CLAUDE_CODE_OAUTH_TOKEN: "claude-oauth",
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+    });
+    expect(claude).not.toHaveProperty("GH_TOKEN");
+
+    const codex = sanitizedWorkerEnvironment(source, { worker: "codex" });
+    expect(codex).not.toHaveProperty("ANTHROPIC_API_KEY");
+    expect(codex).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+    expect(codex).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(codex).not.toHaveProperty("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB");
+  });
+
   it("builds one inherited sandbox for both adapters with protected writes and credential reads denied", () => {
     const profile = buildWorkerSandboxProfile({
       worktreePath: "/tmp/worktree",

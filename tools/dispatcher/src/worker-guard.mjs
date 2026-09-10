@@ -63,6 +63,11 @@ const ENV_ALLOWLIST = new Set([
   "NODE_OPTIONS",
   "CI",
 ]);
+const CLAUDE_PARENT_CREDENTIALS = new Set([
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+]);
 
 function normalizePath(value) {
   return String(value || "").replaceAll("\\", "/").replace(/^\.\//, "");
@@ -76,13 +81,19 @@ function isProtected(filePath, mode) {
   );
 }
 
-/** Remove credentials that a model-generated child process must never inherit. */
-export function sanitizedWorkerEnvironment(source = process.env) {
+/**
+ * Remove credentials from the worker environment. Claude's own provider
+ * credential is retained only by its parent process so it can call the model;
+ * Claude then scrubs that credential from every Bash, hook, and MCP child.
+ */
+export function sanitizedWorkerEnvironment(source = process.env, { worker } = {}) {
   const env = {};
   for (const [key, value] of Object.entries(source)) {
     if (value == null) continue;
-    if (ENV_ALLOWLIST.has(key) || !CREDENTIAL_ENV_RE.test(key)) env[key] = value;
+    const isClaudeProviderCredential = worker === "claude" && CLAUDE_PARENT_CREDENTIALS.has(key);
+    if (isClaudeProviderCredential || ENV_ALLOWLIST.has(key) || !CREDENTIAL_ENV_RE.test(key)) env[key] = value;
   }
+  if (worker === "claude") env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = "1";
   env.GIT_TERMINAL_PROMPT = "0";
   env.GIT_ASKPASS = "/usr/bin/false";
   env.GIT_CONFIG_GLOBAL = "/dev/null";

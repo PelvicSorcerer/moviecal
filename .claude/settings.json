@@ -1,5 +1,8 @@
 {
   "$comment": "Defense in depth for dispatcher-spawned Claude workers. MOV-145 gives both adapters an inherited macOS guard, native network-isolated command sandboxes, stripped privileged credentials, structured auditing, and dispatcher-only Git/publication. Workers leave filesystem changes only; Git and all remote mutation are denied.",
+  "env": {
+    "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1"
+  },
   "permissions": {
     "allow": [
       "Read",
