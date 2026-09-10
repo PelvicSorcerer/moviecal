@@ -191,6 +191,17 @@ function parseStateEntry(value) {
 
 function loadPropagationState(filePath) {
   if (!filePath || !fs.existsSync(filePath)) return {};
+  const dirPath = path.dirname(filePath);
+  try {
+    if (fs.existsSync(dirPath) && (fs.statSync(dirPath).mode & 0o077)) {
+      fs.chmodSync(dirPath, 0o700);
+    }
+  } catch {}
+  try {
+    if (fs.statSync(filePath).mode & 0o077) {
+      fs.chmodSync(filePath, 0o600);
+    }
+  } catch {}
   const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
   const clean = {};
@@ -203,7 +214,11 @@ function loadPropagationState(filePath) {
 }
 
 function savePropagationState(filePath, state) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const dirPath = path.dirname(filePath);
+  fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 });
+  try {
+    if (fs.statSync(dirPath).mode & 0o077) fs.chmodSync(dirPath, 0o700);
+  } catch {}
   const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   const fd = fs.openSync(tempPath, "w", 0o600);
   try {
@@ -214,6 +229,9 @@ function savePropagationState(filePath, state) {
   }
   fs.chmodSync(tempPath, 0o600);
   fs.renameSync(tempPath, filePath);
+  try {
+    if (fs.statSync(filePath).mode & 0o077) fs.chmodSync(filePath, 0o600);
+  } catch {}
 }
 
 function priorityLabel(priority) {

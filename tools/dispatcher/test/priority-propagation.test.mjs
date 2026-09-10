@@ -259,4 +259,20 @@ describe("propagatePriorities", () => {
     expect(linearClient.updateIssuePriority).not.toHaveBeenCalled();
     expect(fs.readFileSync(statePath, "utf8")).toBe(initial);
   });
+
+  it("tightens insecure state directory/file permissions while loading", async () => {
+    const statePath = tempStatePath();
+    const dirPath = path.dirname(statePath);
+    fs.writeFileSync(statePath, JSON.stringify({ a: { lastPropagated: 1, manualFloor: 1 } }) + "\n", "utf8");
+    fs.chmodSync(dirPath, 0o755);
+    fs.chmodSync(statePath, 0o644);
+
+    await propagatePriorities(
+      [issue({ id: "a", identifier: "MOV-A", priority: 1, relations: [] })],
+      { linearClient: { updateIssuePriority: vi.fn().mockResolvedValue(true) }, stateFilePath: statePath, logger: fakeLogger(), dryRun: true },
+    );
+
+    expect(fs.statSync(dirPath).mode & 0o077).toBe(0);
+    expect(fs.statSync(statePath).mode & 0o077).toBe(0);
+  });
 });
