@@ -29,10 +29,19 @@ One Linear-centered engineering lifecycle with **two execution backends**:
 4. **The local Mac** handles Xcode/iOS work, and remains the fallback for
    anything the cloud lane cannot do.
 
-Cloud and Mac are **execution adapters behind one behavioral contract** (below),
-not two parallel systems with separate lifecycles. An issue is executed by
-exactly one adapter, and both report into the same Linear states and the same
-GitHub PR flow.
+Cloud and Mac are modelled as **execution adapters behind one behavioral
+contract** (below), not two parallel systems with separate lifecycles. An issue
+is executed by exactly one adapter, and both report into the same Linear states
+and the same GitHub PR flow.
+
+**What exists today vs. what this describes.** Only the **Mac adapter** is built
+and running (`docs/operators/local-execution.md`). The behavioral contract below
+is **normative** — the spec any adapter must meet — not a description of
+something enforced across two adapters today. Nothing validates a candidate
+adapter against it yet; that is `MOV-153`–`MOV-155`'s job when the cloud lane is
+piloted. Read the contract as the requirement the cloud adapter is being held
+to, and the property the Mac adapter is already checked against by virtue of
+being the thing the contract was written from.
 
 **The cloud lane cannot build, test, or ship iOS.** Xcode, the iOS Simulator,
 and the self-hosted macOS runner exist only on the Mac. No amount of cloud
@@ -55,6 +64,11 @@ wins** and Linear is corrected to match. Where they disagree about whether
 something *should* ship, **Linear wins**.
 
 ## The execution adapter contract
+
+This section is **normative and forward-looking**. It states what any execution
+adapter must do. The Mac adapter meets it today (it is the reference
+implementation the contract was extracted from); the cloud adapter must be shown
+to meet it before it carries real work (§Rollout gates, stage 7).
 
 An execution adapter is anything that satisfies:
 
@@ -99,7 +113,7 @@ cloud-eligible, regardless of its subject matter.
 | **Linear issue** | The unit of work. Carries spec, acceptance criteria, Testing Expectations, dependencies, and the execution route. |
 | **Linear project / milestone** | Sequencing and release grouping. `blocks` relations, not milestones, gate dispatch. |
 | **Loops** | Intake, enrichment, and platform-splitting automation — triage raw intake into routed, spec'd issues. *Not enabled; gated on `MOV-141`.* |
-| **Agent Sessions** | Linear's surface for an agent's activity on an issue (the `moviecal-dispatcher` app actor, `MOV-122`). Progress narration and stop signals. *Custom Agent APIs are Developer Preview — see §Feasibility gates.* |
+| **Agent Sessions** | Linear's richer surface for an agent's lifecycle on an issue — sessions, activities, prompts, stop signals, stale-session handling, PR linking. **Not used today.** The dispatcher currently acts through the ordinary GraphQL API as the `moviecal-dispatcher` app actor (`MOV-122`): comments + workflow-state changes, nothing more. The Agent Session interaction model is Developer Preview and is only *needed* for cloud/Loop delegation — see §Feasibility gates. |
 | **Linear Coding Session** | The cloud execution adapter. *Not enabled; gated on `MOV-141`.* |
 | **Local dispatcher** | The Mac execution adapter. Built and running (`MOV-120`); polls `Ready for Agent`, promotes from `Backlog` (`MOV-129`), provisions worktrees, spawns workers. |
 | **GitHub checks** | The merge gate. `master-protection` requires `lane-baseline`, `lane-unit`, `lane-integration`, `lane-browser`, `lane-review`, with `bypass_actors: []`. Identical for both adapters. |
@@ -107,21 +121,28 @@ cloud-eligible, regardless of its subject matter.
 
 ## Routing
 
-Every executable issue carries exactly one mutually-exclusive route label
-(specified in `MOV-142`, **not yet provisioned**):
+**`MOV-142` owns the routing label schema.** This section states the *intent*
+the schema must satisfy; the exact label names, group semantics, inference
+rules, and validation belong to that issue and may differ in detail.
 
-- `execution:mac` — iOS Companion App project, anything Xcode-dependent,
-  anything needing a local secret or the self-hosted runner.
-- `execution:cloud` — eligible non-iOS work.
-- `execution:none` — coordination/umbrella issues that must never produce their
-  own PR (e.g. `MOV-139`).
+The intent: every executable issue carries an explicit, auditable route —
+proposed as three mutually-exclusive labels, one per adapter plus one for
+"executes nowhere":
 
-Route may be *inferred* by rule, but must be **materialized on the issue before
-dispatch** so the decision is auditable after the fact. An issue with zero or
-multiple execution labels fails validation rather than defaulting.
+- **Mac** — iOS Companion App project, anything Xcode-dependent, anything
+  needing a local secret or the self-hosted runner. This is also the default
+  and the fallback: an issue whose route is unclear goes here.
+- **Cloud** — eligible non-iOS work, once the cloud adapter is piloted and
+  proven (§Rollout gates).
+- **None** — coordination/umbrella issues that must never produce their own PR
+  (e.g. `MOV-139`); excluded from the automated promoter.
+
+The route may be *inferred* by rule but must be **materialized on the issue
+before dispatch** so the decision is auditable after the fact. An issue with an
+ambiguous or conflicting route fails validation rather than defaulting silently.
 
 Sequencing is unchanged and adapter-independent: `blocks` relations plus the
-dispatcher's preflight gates decide *when*; the route label decides *where*.
+dispatcher's preflight gates decide *when*; the route decides *where*.
 
 ## Feasibility gates
 
@@ -134,14 +155,17 @@ architecture degrades rather than stalls.
 | Loops available on the workspace plan | unverified | Manual/`Triage` intake as today |
 | Loop can delegate directly to the `moviecal-dispatcher` agent | unverified | Route label + dispatcher polling |
 | Coding Session can be resumed/followed-up after CI or review feedback | unverified | Mac adapter takes the repair (`MOV-149`/`MOV-151`) |
-| Agent Session create / activity / prompt / stop-signal / stale-session / PR-link for a custom app actor | unverified, **Developer Preview** | Linear comments + state changes (today's `MOV-122` behaviour) |
+| Agent Session lifecycle (create / activity / prompt / stop-signal / stale-session / PR-link) for a custom app actor — needed to drive and follow a cloud Coding Session | unverified, **Developer Preview** | The dispatcher's existing behaviour is already the fallback: act as the `MOV-122` app actor through the plain GraphQL API (comments + state changes) and let the Mac adapter carry the work. The gate applies to the *cloud* interaction model, not to anything running today. |
 | Webhook delivery sufficient to replace polling | unverified | Retain 30s polling as the complete fallback |
 | AI-credit consumption per cloud session | unmeasured | Cloud lane stays off |
 
-**Developer Preview caveat.** Linear's custom Agent APIs are Developer Preview.
-Nothing on the critical path may depend on them without a non-preview fallback
-that is itself proven. A preview API breaking must degrade the system to the
-Mac lane, never halt it.
+**Developer Preview caveat.** Linear's custom Agent Session APIs are Developer
+Preview. Nothing on the critical path may depend on them without a non-preview
+fallback that is itself proven. A preview API breaking must degrade the system
+to the Mac lane, never halt it. To be explicit about scope: the dispatcher does
+**not** use these APIs today — it authenticates as the `MOV-122` app actor and
+uses only stable GraphQL (`commentCreate`, `issueUpdate`). This gate constrains
+what the *cloud* lane may build on, and retroactively condemns nothing.
 
 **Plan and cost.** Loops and Coding Sessions are paid-tier capabilities
 consuming Linear AI credits. Neither the required tier nor expected credit
