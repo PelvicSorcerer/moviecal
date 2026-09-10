@@ -195,6 +195,17 @@ describe("WorktreeManager", () => {
     expect(entry.linearIssueId).toBeNull();
   });
 
+  it("records dispatcher/repository provenance outside the worker worktree for repair admission", () => {
+    const entry = manager.create({
+      id: "MOV-1",
+      name: "MOV-1-fix",
+      branch: "agent/MOV-1-fix",
+      repository: "owner/repo",
+    });
+    expect(entry.provenance).toEqual({ executor: "moviecal-dispatcher", repository: "owner/repo" });
+    expect(manager.loadState()["MOV-1"].provenance).toEqual(entry.provenance);
+  });
+
   it("updateEntry merges fields without touching status or endedAt (MOV-152)", () => {
     manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
     manager.markStatus("MOV-1", "merged");

@@ -18,17 +18,18 @@ describe("findPrForBranch", () => {
         "--head",
         "agent/MOV-1-fix",
         "--json",
-        "number,url,isDraft",
+        "number,url,isDraft,headRefOid",
         "--limit",
         "1",
       ]);
-      return JSON.stringify([{ number: 42, url: "https://github.com/owner/repo/pull/42", isDraft: true }]);
+      return JSON.stringify([{ number: 42, url: "https://github.com/owner/repo/pull/42", isDraft: true, headRefOid: "abc123" }]);
     };
 
     expect(findPrForBranch("agent/MOV-1-fix", "owner/repo", runner)).toEqual({
       number: 42,
       url: "https://github.com/owner/repo/pull/42",
       isDraft: true,
+      headSha: "abc123",
     });
   });
 });
