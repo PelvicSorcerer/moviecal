@@ -316,25 +316,41 @@ export async function propagatePriorities(issues, ctx) {
   }
 
   if (!dryRun) {
+    let wrote = 0;
     for (const update of updates) {
-      const ok = await linearClient.updateIssuePriority(update.issueId, update.to);
-      if (!ok) {
+      try {
+        const ok = await linearClient.updateIssuePriority(update.issueId, update.to);
+        if (!ok) {
+          nextState[update.issueId] = update.stateOnFailure;
+          (logger.warn || logger.log || (() => {})).call(
+            logger,
+            `${update.identifier}: failed to apply priority update ${update.from} -> ${update.to}; preserving previous ownership state`,
+          );
+        } else {
+          nextState[update.issueId] = update.stateOnSuccess;
+          wrote += 1;
+        }
+      } catch (err) {
         nextState[update.issueId] = update.stateOnFailure;
         (logger.warn || logger.log || (() => {})).call(
           logger,
-          `${update.identifier}: failed to apply priority update ${update.from} -> ${update.to}; preserving previous ownership state`,
+          `${update.identifier}: failed to apply priority update ${update.from} -> ${update.to} (${err.message}); preserving previous ownership state`,
         );
-      } else {
-        nextState[update.issueId] = update.stateOnSuccess;
       }
     }
     savePropagationState(stateFilePath, nextState);
+    return {
+      updates,
+      skipped,
+      cycles,
+      wrote,
+    };
   }
 
   return {
     updates,
     skipped,
     cycles,
-    wrote: !dryRun ? updates.length : 0,
+    wrote: 0,
   };
 }

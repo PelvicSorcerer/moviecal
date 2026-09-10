@@ -204,6 +204,43 @@ describe("propagatePriorities", () => {
     expect(stored).toEqual({ a: { lastPropagated: 1, manualFloor: 3 } });
   });
 
+  it("continues after a thrown update failure and reports only successful writes", async () => {
+    const statePath = tempStatePath();
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({
+        a: { lastPropagated: 1, manualFloor: 3 },
+        c: { lastPropagated: 4, manualFloor: 4 },
+      }) + "\n",
+      "utf8",
+    );
+    const linearClient = {
+      updateIssuePriority: vi.fn().mockImplementation(async (issueId) => {
+        if (issueId === "a") throw new Error("network down");
+        return true;
+      }),
+    };
+    const logger = fakeLogger();
+    const result = await propagatePriorities(
+      [
+        issue({ id: "a", identifier: "MOV-A", priority: 1, relations: [] }),
+        issue({ id: "c", identifier: "MOV-C", priority: 4, relations: [blocks("d")] }),
+        issue({ id: "d", identifier: "MOV-D", priority: 2 }),
+      ],
+      { linearClient, stateFilePath: statePath, logger },
+    );
+
+    expect(linearClient.updateIssuePriority).toHaveBeenCalledTimes(2);
+    expect(result.wrote).toBe(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("network down"));
+    const stored = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    expect(stored).toEqual({
+      a: { lastPropagated: 1, manualFloor: 3 },
+      c: { lastPropagated: 2, manualFloor: 4 },
+      d: { lastPropagated: 2, manualFloor: 2 },
+    });
+  });
+
   it("dry-run reports intended changes without writes or state-file rewrites", async () => {
     const statePath = tempStatePath();
     fs.writeFileSync(statePath, JSON.stringify({ a: { lastPropagated: 3, manualFloor: 3 } }) + "\n", "utf8");

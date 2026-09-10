@@ -340,6 +340,7 @@ describe("LinearClient", () => {
 
     const { query, variables } = JSON.parse(fetchImpl.mock.calls[0][1].body);
     expect(query).toMatch(/issueUpdate/);
+    expect(query).toMatch(/\$priority:\s*Float/);
     expect(query).toMatch(/priority:\s*\$priority/);
     expect(variables).toEqual({ issueId: "id-1", priority: 1 });
   });
