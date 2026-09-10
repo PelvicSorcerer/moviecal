@@ -265,6 +265,8 @@ async function processIssue(issue, ctx) {
     return { issue: issue.identifier, outcome: "timeout", timeoutMs: workerTimeoutMs };
   }
 
+  if (spawnResult.pid) worktreeManager.setWorkerPid(issue.identifier, spawnResult.pid);
+
   if (spawnResult.exitCode !== 0) {
     worktreeManager.markStatus(issue.identifier, "failed");
     await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);

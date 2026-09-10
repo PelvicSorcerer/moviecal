@@ -66,6 +66,7 @@ All runtime configuration lives outside the repository under `~/.config/moviecal
 |---|---|
 | `~/.config/moviecal/linear.env` | `LINEAR_API_KEY=...` (and optionally `LINEAR_TEAM_KEY=...`, default `MOV`) |
 | `~/.config/moviecal/env.local` | disposable/dev Supabase + TMDb credentials, symlinked into every worker worktree as `.env.local` |
-| `~/.config/moviecal/worktrees.json` | dispatcher's own bookkeeping of active/merged/failed worktrees |
+| `~/.config/moviecal/worktrees.json` | dispatcher's own bookkeeping of active/merged/failed worktrees (atomic writes with `.bak` recovery) |
+| `~/.config/moviecal/dispatcher.lock` | singleton lock; a second mutating dispatcher exits read-only |
 
 Override the worktree root or log directory for local testing with `MOVIECAL_WORKTREE_ROOT` / `MOVIECAL_LOG_ROOT`.

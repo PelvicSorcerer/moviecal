@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { WorktreeManager } from "../src/worktree-manager.mjs";
+import { DispatcherLock, WorktreeManager } from "../src/worktree-manager.mjs";
 
 function fakeRunner(calls, { mainWorktreePath = "/fake/main/checkout" } = {}) {
   return (command, args, opts) => {
@@ -205,5 +205,39 @@ describe("WorktreeManager", () => {
     manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
     const mode = fs.statSync(statePath).mode & 0o777;
     expect(mode).toBe(0o600);
+  });
+
+  it("uses the backup when the primary state is interrupted or corrupt", () => {
+    manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+    manager.markStatus("MOV-1", "review", { prNumber: 42 });
+    fs.writeFileSync(statePath, "{\"MOV-1\":", "utf8");
+
+    expect(manager.loadState()["MOV-1"]).toMatchObject({ id: "MOV-1", status: "active" });
+  });
+
+  it("does not silently turn an unrecoverable corrupt registry into an empty one", () => {
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(statePath, "not json", "utf8");
+    expect(() => manager.loadState()).toThrow(/corrupt and no valid backup/);
+  });
+
+  it("recovers active assignments with missing workers or worktrees", () => {
+    manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+    manager.setWorkerPid("MOV-1", 1234);
+    const changes = manager.reconcileStartup({ isPidAlive: () => false });
+    expect(changes[0]).toMatchObject({ id: "MOV-1", from: "active", to: "abandoned" });
+    expect(manager.loadState()["MOV-1"].recoveryReason).toMatch(/worker stopped/);
+  });
+
+  it("allows only one live dispatcher lock", () => {
+    const lockPath = path.join(tmpRoot, "config", "dispatcher.lock");
+    const first = new DispatcherLock(lockPath, { pid: process.pid });
+    const second = new DispatcherLock(lockPath, { pid: process.pid + 1 });
+    first.acquire();
+    expect(() => second.acquire()).toThrow(/already running/);
+    first.release();
+    second.acquire();
+    second.release();
+    expect(fs.existsSync(lockPath)).toBe(false);
   });
 });
