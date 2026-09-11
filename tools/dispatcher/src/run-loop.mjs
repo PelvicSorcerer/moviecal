@@ -14,6 +14,9 @@ import { confirmStillClaimable, evaluateLocalDispatch } from "./dispatch-eligibi
 import { generateBrief } from "./brief.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "./worker-guard.mjs";
+import { LifecyclePublisher } from "./agent-lifecycle.mjs";
+import { nullAgentSessionBridge } from "./agent-session.mjs";
+import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-signals.mjs";
 
 /**
  * @param {object[]} issues - from LinearClient.issuesInState()
@@ -40,6 +43,10 @@ import { auditWorkerResult, writeWorkerAudit } from "./worker-guard.mjs";
  * @param {(args: object) => object} ctx.publishWorkerResultFn - MOV-145; required trusted dispatcher-side non-force push and draft PR creation
  * @param {{id?: string|null, name?: string|null}} [ctx.dispatcherDelegate] - MOV-143: the delegate an issue must name for this dispatcher to claim it; defaults to matching `moviecal-dispatcher` by name
  * @param {(issue: object) => Promise<object|null>} [ctx.refreshIssueFn] - MOV-143: re-read an issue immediately before committing to it, so a route/delegation change since the poll snapshot is a safe no-op; defaults to reusing the snapshot (tests that don't exercise the race can omit it)
+ * @param {() => object} [ctx.agentSessionBridgeFn] - MOV-158: build the (feature-gated) Agent Session bridge for one attempt; defaults to a permanently-disabled bridge, so lifecycle events publish as app-actor comments exactly as they did before
+ * @param {(issueIdentifier: string) => object|null} [ctx.readAgentSessionFn] - MOV-158: the prior attempt's persisted session record, used to decide attach-vs-new-linked-session; defaults to "no prior session"
+ * @param {(issueIdentifier: string, snapshot: object) => void} [ctx.persistAgentSessionFn] - MOV-158: persist this attempt's session record for the next one; defaults to a no-op
+ * @param {number} [ctx.stopPollIntervalMs] - MOV-158: how often to re-read the issue while a worker runs, so a de-delegation/cancellation is honoured at the next safe boundary instead of after a 45-minute worker; 0 (the default) disables the watcher entirely
  * @returns {Promise<Array<{issue: string, outcome: string, [key: string]: unknown}>>}
  */
 export async function runOnce(issues, ctx) {
@@ -87,6 +94,8 @@ export async function runOnce(issues, ctx) {
 }
 
 const WORKER_TIMEOUT = Symbol("worker-timeout");
+/** MOV-158: a stop was observed while the worker ran, and the worker's process group was killed. */
+const WORKER_STOPPED = Symbol("worker-stopped");
 
 /** Race a worker's promise against a timeout, resolving to WORKER_TIMEOUT if the timer wins. */
 function raceWorkerTimeout(promise, timeoutMs) {
@@ -120,6 +129,11 @@ async function processIssue(issue, ctx) {
     publishWorkerResultFn,
     dispatcherDelegate = {},
     refreshIssueFn = async (snapshot) => snapshot,
+    agentSessionBridgeFn = () => nullAgentSessionBridge(),
+    readAgentSessionFn = () => null,
+    persistAgentSessionFn = () => {},
+    stopPollIntervalMs = 0,
+    logger = console,
   } = ctx;
 
   // MOV-143: before anything else, is this issue even ours? An issue routed to
@@ -196,9 +210,17 @@ async function processIssue(issue, ctx) {
       reason: `could not re-read the issue before starting: ${err.message}`,
     };
   }
+  // MOV-158: the same re-read is also the first safe interruption boundary. A
+  // de-delegation, cancellation, or incompatible state observed here halts the
+  // attempt before anything exists to clean up, and — because this dispatcher
+  // is no longer that issue's writer — silently.
+  const stopController = new StopController();
   const stillClaimable = confirmStillClaimable(fresh, { expectedDelegate: dispatcherDelegate });
   if (!stillClaimable.claimable) {
-    return { issue: issue.identifier, outcome: "not-eligible", reason: stillClaimable.reason };
+    stopController.request({ source: "polling", reason: stillClaimable.reason, detail: null, mayWrite: false });
+  }
+  if (stopController.checkpoint("before-claim").halt) {
+    return { issue: issue.identifier, outcome: "not-eligible", reason: stopController.stopRequest.reason };
   }
 
   const entry = worktreeManager.create({
@@ -213,17 +235,162 @@ async function processIssue(issue, ctx) {
     repository: ghRepo,
   });
 
-  await linearClient.moveToState(issue.id, stateIds.agentWorking);
-  await linearClient.addComment(
-    issue.id,
-    [
-      "**Dispatcher started work.**",
-      "",
+  // Everything from here on is published through one lifecycle surface
+  // (MOV-158): a first-class Agent Activity when sessions are available, and
+  // the same app-actor comment the dispatcher has always written when they are
+  // not — which is every run today (MOV-141). Workflow-state transitions are
+  // written either way; they are control data, not presentation.
+  const publisher = new LifecyclePublisher({
+    linearClient,
+    bridge: agentSessionBridgeFn(),
+    logger,
+    context: {
+      issue: { id: issue.id, identifier: issue.identifier, url: issue.url },
+      branch,
+      worktreePath: entry.path,
+      worker: routing.worker,
+      model: routing.model,
+    },
+  });
+  await publisher.begin({ existing: readAgentSessionFn(issue.identifier) });
+
+  try {
+    return await runClaimedAttempt({
+      issue,
+      entry,
+      branch,
+      routing,
+      publisher,
+      stopController,
+      ctx: {
+        stateIds,
+        worktreeManager,
+        ghRepo,
+        logRoot,
+        spawnWorkerFn,
+        workerTimeoutMs,
+        uncommittedChangesFn,
+        applyStagedWorkflowEditFn,
+        workerMode,
+        auditWorkerResultFn,
+        writeWorkerAuditFn,
+        publishWorkerResultFn,
+        dispatcherDelegate,
+        refreshIssueFn,
+        stopPollIntervalMs,
+        logger,
+      },
+    });
+  } finally {
+    // Non-fatal bookkeeping, and deliberately in a `finally`: the session
+    // record must survive every exit path, including the failure ones, or the
+    // next attempt cannot tell "resume this" from "open a new linked session".
+    //
+    // The retry queue is the one thing a stop can forbid. Flushing it writes
+    // activities to the issue, so an attempt stopped *without* write permission
+    // (its delegation was removed — we are not that issue's writer any more)
+    // must drop the queue rather than let a transient failure earlier in the
+    // run turn into a write after the boundary.
+    const stoppedSilently = stopController.stopped && !stopController.stopRequest.mayWrite;
+    if (!stoppedSilently) {
+      try {
+        await publisher.flushPending();
+      } catch (error) {
+        logger.error(`Could not flush queued Agent Activities for ${issue.identifier}: ${error.message}`);
+      }
+    }
+    try {
+      persistAgentSessionFn(issue.identifier, publisher.snapshot());
+    } catch (error) {
+      logger.error(`Could not persist the Agent Session record for ${issue.identifier}: ${error.message}`);
+    }
+  }
+}
+
+/**
+ * Report a stop and halt. The dispatcher writes **at most one** thing after a
+ * stop: an explanation of why it stopped, and only when it is still the
+ * issue's writer. A stop that came from a removed delegation writes nothing at
+ * all — commenting on an issue that is no longer ours is the boundary
+ * violation `dispatch-eligibility.mjs` exists to prevent.
+ *
+ * The issue's workflow state is deliberately left alone. Whoever stopped the
+ * work already decided where it should sit; moving it would overwrite that.
+ */
+async function reportStop(request, { issue, publisher, worktreeManager }) {
+  worktreeManager.markStatus(issue.identifier, "abandoned", { stopReason: request.reason });
+  if (request.mayWrite) {
+    await publisher.publish("stopped", {
+      summary: `Dispatcher stopped work on ${issue.identifier}: ${request.reason}`,
+      headline: "**Dispatcher stopped at a safe interruption boundary.**",
+      sections: [
+        `Reason: ${request.reason}`,
+        request.detail ? `Detail: ${request.detail}` : null,
+        `Signal source: ${request.source}`,
+        "",
+        "No further changes were made and no further writes will be made for this attempt. The branch and any pushed commits are untouched; the worktree is retained for 7 days.",
+      ].filter(Boolean),
+    });
+  }
+  return {
+    issue: issue.identifier,
+    outcome: "stopped",
+    reason: request.reason,
+    source: request.source,
+    reported: Boolean(request.mayWrite),
+  };
+}
+
+/**
+ * The claimed half of an attempt: the worktree exists, so from here every exit
+ * has to leave the registry and the Linear issue in a coherent state.
+ */
+async function runClaimedAttempt({ issue, entry, branch, routing, publisher, stopController, ctx }) {
+  const {
+    stateIds,
+    worktreeManager,
+    ghRepo,
+    logRoot,
+    spawnWorkerFn,
+    workerTimeoutMs,
+    uncommittedChangesFn,
+    applyStagedWorkflowEditFn,
+    workerMode,
+    auditWorkerResultFn,
+    writeWorkerAuditFn,
+    publishWorkerResultFn,
+    dispatcherDelegate,
+    refreshIssueFn,
+    stopPollIntervalMs,
+    logger,
+  } = ctx;
+
+  await publisher.publish("acknowledged", {
+    stateId: stateIds.agentWorking,
+    summary: `Dispatcher picked up ${issue.identifier} on the local Mac adapter.`,
+    headline: "**Dispatcher started work.**",
+    sections: [
       `Worktree: \`${entry.path}\``,
       `Branch: \`${branch}\``,
       `Worker: ${routing.worker} (model: ${routing.model})`,
-    ].join("\n"),
-  );
+    ],
+  });
+
+  /**
+   * Re-read the issue and decide whether a human has taken it away from us.
+   * Returns null — "keep going" — on any error, because a transient Linear
+   * failure is not a human asking to halt.
+   */
+  const observeStop = async () => {
+    let snapshot;
+    try {
+      snapshot = await refreshIssueFn(issue);
+    } catch (error) {
+      logger.error(`Stop poll for ${issue.identifier} could not re-read the issue (continuing): ${error.message}`);
+      return null;
+    }
+    return detectStopFromSnapshot(snapshot, { expectedDelegate: dispatcherDelegate });
+  };
 
   const brief = generateBrief(issue, {
     branch,
@@ -233,22 +400,34 @@ async function processIssue(issue, ctx) {
     upgradeConditions: routing.upgradeConditions,
   });
   const invocation = workerInvocation(routing.worker, routing.model);
-  const logDir = path.join(logRoot, name);
+  const logDir = path.join(logRoot, entry.name);
 
+  // Two abort controllers with different jobs: `abortController` kills the
+  // worker's process group (MOV-137/138), `watcherAbort` retires the stop
+  // watcher once the worker has settled so no timer outlives the attempt.
   const abortController = new AbortController();
+  const watcherAbort = new AbortController();
   let spawnResult;
   try {
-    spawnResult = await raceWorkerTimeout(
-      spawnWorkerFn({
-        invocation,
-        cwd: entry.path,
-        brief,
-        logDir,
-        signal: abortController.signal,
-        securityContext: { mode: workerMode },
-      }),
-      workerTimeoutMs,
-    );
+    const workerPromise = spawnWorkerFn({
+      invocation,
+      cwd: entry.path,
+      brief,
+      logDir,
+      signal: abortController.signal,
+      securityContext: { mode: workerMode },
+    });
+    // The race below owns this rejection; these no-op handlers only stop Node
+    // reporting the loser of the race as an unhandled rejection.
+    Promise.resolve(workerPromise).catch(() => {});
+    const stopPromise = watchForStop({
+      controller: stopController,
+      observeStopFn: observeStop,
+      intervalMs: stopPollIntervalMs,
+      signal: watcherAbort.signal,
+    }).then((request) => (request ? WORKER_STOPPED : workerPromise));
+    stopPromise.catch(() => {});
+    spawnResult = await raceWorkerTimeout(Promise.race([workerPromise, stopPromise]), workerTimeoutMs);
   } catch (err) {
     const violation = {
       action: "worker safety boundary",
@@ -268,18 +447,34 @@ async function processIssue(issue, ctx) {
       // filesystem is itself unavailable. Never weaken the fail-closed path.
     }
     worktreeManager.markStatus(issue.identifier, "failed");
-    await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
-    await linearClient.addComment(
-      issue.id,
-      [
-        `**Dispatcher failed to start the worker under the required safety boundary:** ${err.message}`,
-        "",
+    await publisher.publish("error", {
+      stateId: stateIds.needsHumanDecision,
+      summary: `Dispatcher failed to start the worker under the required safety boundary: ${err.message}`,
+      headline: `**Dispatcher failed to start the worker under the required safety boundary:** ${err.message}`,
+      sections: [
         `Audit record: \`${spawnAuditRecord?.path || logDir}\`${spawnAuditRecord?.sha256 ? ` (SHA-256 \`${spawnAuditRecord.sha256}\`)` : ""}`,
         "",
         "The issue was moved to `Needs Human Decision`; no worker ran and no remote mutation was attempted.",
-      ].join("\n"),
-    );
+      ],
+    });
     return { issue: issue.identifier, outcome: "spawn-error", error: err.message };
+  } finally {
+    watcherAbort.abort();
+  }
+
+  if (spawnResult === WORKER_STOPPED) {
+    // MOV-158, `during-worker` boundary: a human took the issue away while the
+    // worker ran. Kill its process group the same way a timeout does, then
+    // honour the stop at a boundary rather than mid-edit.
+    //
+    // The return is unconditional, not gated on `halt`. `WORKER_STOPPED` is
+    // only ever produced *because* a stop was recorded, so `halt` is true by
+    // construction — but falling through with a Symbol in `spawnResult` would
+    // read `spawnResult.exitCode` as `undefined` and misreport a stopped
+    // attempt as `worker-failed`. Structure it so that cannot happen.
+    abortController.abort();
+    stopController.checkpoint("during-worker");
+    return reportStop(stopController.stopRequest, { issue, publisher, worktreeManager });
   }
 
   if (spawnResult === WORKER_TIMEOUT) {
@@ -288,23 +483,22 @@ async function processIssue(issue, ctx) {
     // human rather than let a hang (MOV-106) freeze the rest of the batch.
     abortController.abort();
     worktreeManager.markStatus(issue.identifier, "failed");
-    await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
-    await linearClient.addComment(
-      issue.id,
-      [
-        `**Worker timed out after ${workerTimeoutMs}ms and was killed.**`,
-        "",
-        "```",
-        tailLogs(logDir, 30),
-        "```",
-        "",
-        `Full run log: \`${logDir}\``,
-      ].join("\n"),
-    );
+    await publisher.publish("error", {
+      stateId: stateIds.needsHumanDecision,
+      summary: `Worker timed out after ${workerTimeoutMs}ms and was killed.`,
+      headline: `**Worker timed out after ${workerTimeoutMs}ms and was killed.**`,
+      sections: ["```", tailLogs(logDir, 30), "```", "", `Full run log: \`${logDir}\``],
+    });
     return { issue: issue.identifier, outcome: "timeout", timeoutMs: workerTimeoutMs };
   }
 
   if (spawnResult.pid) worktreeManager.setWorkerPid(issue.identifier, spawnResult.pid);
+
+  // MOV-158, `after-worker` boundary: the worker has exited and nothing has
+  // been reported yet, so honouring a stop here costs no completed work.
+  if (stopController.checkpoint("after-worker").halt) {
+    return reportStop(stopController.stopRequest, { issue, publisher, worktreeManager });
+  }
 
   let securityReport;
   let auditRecord;
@@ -330,48 +524,47 @@ async function processIssue(issue, ctx) {
 
   if (!securityReport.ok) {
     worktreeManager.markStatus(issue.identifier, "failed");
-    await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
-    await linearClient.addComment(
-      issue.id,
-      [
-        "**Worker safety boundary blocked publication.**",
-        "",
+    await publisher.publish("error", {
+      stateId: stateIds.needsHumanDecision,
+      summary: "Worker safety boundary blocked publication.",
+      headline: "**Worker safety boundary blocked publication.**",
+      sections: [
         ...securityReport.violations.map((violation) => `- ${violation.reason}: \`${String(violation.action).slice(0, 500)}\``),
         "",
         `Audit record: \`${auditRecord?.path || logDir}\`${auditRecord?.sha256 ? ` (SHA-256 \`${auditRecord.sha256}\`)` : ""}`,
         "",
         "The issue was moved to `Needs Human Decision`; no dispatcher push, PR mutation, or staged workflow application was performed.",
-      ].join("\n"),
-    );
+      ],
+    });
     return { issue: issue.identifier, outcome: "security-blocked", violations: securityReport.violations };
   }
 
   if (spawnResult.exitCode !== 0) {
     worktreeManager.markStatus(issue.identifier, "failed");
-    await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
-    await linearClient.addComment(
-      issue.id,
-      [
-        `**Worker exited with code ${spawnResult.exitCode}.**`,
-        "",
-        "```",
-        tailLogs(logDir, 50),
-        "```",
-        "",
-        `Full run log: \`${logDir}\``,
-      ].join("\n"),
-    );
+    await publisher.publish("error", {
+      stateId: stateIds.needsHumanDecision,
+      summary: `Worker exited with code ${spawnResult.exitCode}.`,
+      headline: `**Worker exited with code ${spawnResult.exitCode}.**`,
+      sections: ["```", tailLogs(logDir, 50), "```", "", `Full run log: \`${logDir}\``],
+    });
     return { issue: issue.identifier, outcome: "worker-failed", exitCode: spawnResult.exitCode };
   }
 
   const workflowAuth = resolveWorkflowEditAuthorization(issue);
   if (workflowAuth.authorized && workerMode !== "repair") {
+    // MOV-158, `before-workflow-edit` boundary: applying a staged proposal
+    // commits and pushes on the worker's behalf, so a pending stop has to be
+    // honoured before it, not after.
+    if (stopController.checkpoint("before-workflow-edit").halt) {
+      return reportStop(stopController.stopRequest, { issue, publisher, worktreeManager });
+    }
     const applyResult = applyStagedWorkflowEditFn(entry.path, workflowAuth.path);
     if (applyResult.applied) {
-      await linearClient.addComment(
-        issue.id,
-        `**Applied staged workflow-edit proposal:** \`${workflowAuth.path}\`. Written by the worker to \`tools/dispatcher/pending-workflow-edits/\`; applied by the dispatcher itself and included in its trusted commit — see docs/operators/local-execution.md §Security model (MOV-121). The PR (once opened) will still visibly contain this diff and \`lane-review\` will flag it as requiring explicit sign-off before merge.`,
-      );
+      await publisher.publish("progress", {
+        action: "Applied staged workflow-edit proposal",
+        summary: `Applied staged workflow-edit proposal: ${workflowAuth.path}`,
+        headline: `**Applied staged workflow-edit proposal:** \`${workflowAuth.path}\`. Written by the worker to \`tools/dispatcher/pending-workflow-edits/\`; applied by the dispatcher itself and included in its trusted commit — see docs/operators/local-execution.md §Security model (MOV-121). The PR (once opened) will still visibly contain this diff and \`lane-review\` will flag it as requiring explicit sign-off before merge.`,
+      });
     }
     // A staged file simply not existing is normal (the worker may have decided
     // not to touch the workflow after all) — not an error, no comment needed.
@@ -385,24 +578,24 @@ async function processIssue(issue, ctx) {
     pr = publishWorkerResultFn({ worktreePath: entry.path, branch, repo: ghRepo, issue });
   } catch (err) {
     worktreeManager.markStatus(issue.identifier, "failed");
-    await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
-    await linearClient.addComment(
-      issue.id,
-      `**Dispatcher refused or failed to publish the audited worker result:** ${err.message}\n\nAudit record: \`${auditRecord?.path || logDir}\``,
-    );
+    await publisher.publish("error", {
+      stateId: stateIds.needsHumanDecision,
+      summary: `Dispatcher refused or failed to publish the audited worker result: ${err.message}`,
+      headline: `**Dispatcher refused or failed to publish the audited worker result:** ${err.message}`,
+      sections: [`Audit record: \`${auditRecord?.path || logDir}\``],
+    });
     return { issue: issue.identifier, outcome: "publish-failed", error: err.message };
   }
   if (!pr) {
     worktreeManager.markStatus(issue.identifier, "failed");
-    await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
 
     const uncommittedPaths = uncommittedChangesFn(entry.path);
     if (uncommittedPaths.length > 0) {
-      await linearClient.addComment(
-        issue.id,
-        [
-          `**Dispatcher found unpublished changes after the trusted publication step for branch \`${branch}\`.** Publication failed closed; inspect the retained worktree and audit before retrying.`,
-          "",
+      await publisher.publish("error", {
+        stateId: stateIds.needsHumanDecision,
+        summary: `Dispatcher found unpublished changes after the trusted publication step for branch ${branch}.`,
+        headline: `**Dispatcher found unpublished changes after the trusted publication step for branch \`${branch}\`.** Publication failed closed; inspect the retained worktree and audit before retrying.`,
+        sections: [
           "Uncommitted paths:",
           "```",
           uncommittedPaths.join("\n"),
@@ -414,16 +607,24 @@ async function processIssue(issue, ctx) {
           "```",
           "",
           `Full run log: \`${logDir}\``,
-        ].join("\n"),
-      );
+        ],
+      });
       return { issue: issue.identifier, outcome: "abandoned-dirty", uncommittedPaths };
     }
 
-    await linearClient.addComment(
-      issue.id,
-      `**Worker exited 0 but the trusted dispatcher found no PR for branch \`${branch}\`.** Run log: \`${logDir}\``,
-    );
+    await publisher.publish("error", {
+      stateId: stateIds.needsHumanDecision,
+      summary: `Worker exited 0 but the trusted dispatcher found no PR for branch ${branch}.`,
+      headline: `**Worker exited 0 but the trusted dispatcher found no PR for branch \`${branch}\`.** Run log: \`${logDir}\``,
+    });
     return { issue: issue.identifier, outcome: "no-pr" };
+  }
+
+  // MOV-158, `before-pr-report` boundary: the PR itself exists on GitHub and a
+  // stop does not withdraw it — but the `In Review` transition and the PR-link
+  // publication are writes, and a stopped attempt makes none.
+  if (stopController.checkpoint("before-pr-report").halt) {
+    return reportStop(stopController.stopRequest, { issue, publisher, worktreeManager });
   }
 
   worktreeManager.markStatus(issue.identifier, "review", {
@@ -431,7 +632,11 @@ async function processIssue(issue, ctx) {
     prUrl: pr.url,
     headSha: pr.headSha || null,
   });
-  await linearClient.moveToState(issue.id, stateIds.inReview);
-  await linearClient.addComment(issue.id, `**Pull request opened:** ${pr.url}${pr.isDraft ? " (draft)" : ""}`);
+  publisher.setContext({ prUrl: pr.url });
+  await publisher.publish("pr-opened", {
+    stateId: stateIds.inReview,
+    summary: `Pull request opened: ${pr.url}${pr.isDraft ? " (draft)" : ""}`,
+    headline: `**Pull request opened:** ${pr.url}${pr.isDraft ? " (draft)" : ""}`,
+  });
   return { issue: issue.identifier, outcome: "in-review", pr: pr.url };
 }
