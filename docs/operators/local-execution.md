@@ -69,7 +69,23 @@ Because routing and delegation are ordinary Linear fields a human can change at 
 
 ## Automated promotion
 
-`Ready for Agent` is filled automatically, not by hand (MOV-129). Each poll cycle, before the dispatch scan, `dispatcher run` runs a **promote pass** (`tools/dispatcher/src/promoter.mjs`; also standalone as `dispatcher promote [--dry-run]`) over every issue in `Backlog` and `Blocked`. An issue is moved to `Ready for Agent` when **all** of:
+`Ready for Agent` is filled automatically, not by hand (MOV-129), and the dispatcher now runs **priority propagation before promotion** (MOV-366). Poll-cycle order is:
+
+1. `reconcileWorktrees`
+2. `propagatePriorities` (`dispatcher priorities [--dry-run] [--once]`)
+3. `promotePass` (`dispatcher promote [--dry-run]`)
+4. dispatch scan over `Ready for Agent`
+
+Priority propagation is dependency-aware and transitive on `blocks` edges (`A blocks B blocks C` raises both `A` and `B` from `C`). Priority comparisons use `rank(priority)` where `0 -> Infinity` so ordering is `1 (Urgent) < 2 < 3 < 4 < 0 (No priority)`. Effective priority for an issue is the most important value across itself plus every incomplete downstream dependent it blocks.
+
+- Graph traversal includes all non-terminal issues, including `Icebox` and `Triage`, so transitive chains are computed correctly.
+- Terminal workflow-state types (`completed`, `canceled`, `duplicate`; e.g. `Done`, `Released`, `Canceled`, `Duplicate`) never contribute to upstream raises and are never written.
+- Writable targets are only: `Backlog`, `Blocked`, `Spec Ready`, `Ready for Agent`, `Agent Working`, `In Review`, `Needs Input`, `Needs Human Decision`.
+- `Icebox`/`Triage` are never auto-written. If one would be raised, the dispatcher logs: `MOV-X (<state>) blocks <priorityLabel> MOV-Y — not auto-raising, review`.
+- Cycles are handled safely as a single mutually-reachable set; the pass logs the cycle once and continues.
+- Ownership of propagated values is tracked in `~/.config/moviecal/priority-propagation.json` (`{ "<issueId>": { "lastPropagated": <value>, "manualFloor": <value> } }`; legacy numeric entries are still read). This enables idempotent no-op re-runs, preserves the manual floor for later relaxations, and allows relaxing only when propagation still owns the value (`current === lastPropagated`).
+
+After propagation, `dispatcher run` executes the promoter over every issue in `Backlog` and `Blocked`. An issue is moved to `Ready for Agent` when **all** of:
 
 - it is **not** labeled `human-only`;
 - its description has a non-empty **acceptance-criteria** section (heading matching `/^#+\s*acceptance criteria/i`);
