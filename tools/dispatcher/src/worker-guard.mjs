@@ -134,7 +134,6 @@ export function buildWorkerSandboxProfile({
     "/usr/bin/scp",
     "/usr/bin/sftp",
     "/usr/bin/curl",
-    "/usr/bin/security",
     "/usr/local/bin/vercel",
     "/opt/homebrew/bin/vercel",
   ];

@@ -69,6 +69,13 @@ describe("worker guard", () => {
     });
     expect(profile).toContain('(deny process-exec (literal "/usr/bin/git"))');
     expect(profile).toContain('(deny process-exec (literal "/usr/local/bin/gh"))');
+    // MOV-174: /usr/bin/security is intentionally NOT denied. Claude Code's own
+    // startup credential probe (`security find-generic-password -s "Claude
+    // Code..."`) always runs, regardless of ANTHROPIC_API_KEY/
+    // CLAUDE_CODE_OAUTH_TOKEN, and a blanket exec deny crashed every worker
+    // before it could do any work. A worker invoking `security` itself is
+    // still caught by security-policy.mjs's post-hoc transcript audit.
+    expect(profile).not.toContain('/usr/bin/security');
     expect(profile).toContain('(deny file-read* (subpath "/Users/test/.config/gh"))');
     expect(profile).toContain('(deny file-write* (literal "/tmp/worktree/.git"))');
     expect(profile).toContain('(deny file-write* (subpath "/tmp/worktree/.github/workflows"))');
