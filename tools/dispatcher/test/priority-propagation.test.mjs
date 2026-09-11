@@ -288,7 +288,7 @@ describe("propagatePriorities", () => {
     expect(result.wrote).toBe(0);
     expect(linearClient.updateIssuePriority).toHaveBeenCalledTimes(1);
     expect(linearClient.updateIssuePriority).toHaveBeenCalledWith("b", 3);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("driver MOV-B failed to update"));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("downstream relaxation failed"));
     const stored = JSON.parse(fs.readFileSync(statePath, "utf8"));
     expect(stored).toEqual({
       a: { lastPropagated: 1, manualFloor: 3 },
@@ -298,22 +298,12 @@ describe("propagatePriorities", () => {
 
   it("does not relax an ancestor when any downstream owned relaxation fails", async () => {
     const statePath = tempStatePath();
-    fs.writeFileSync(
-      statePath,
-      JSON.stringify({
-        a: { lastPropagated: 1, manualFloor: 4 },
-        b: { lastPropagated: 1, manualFloor: 4 },
-      }) + "\n",
-      "utf8",
-    );
-    const linearClient = {
-      updateIssuePriority: vi.fn().mockImplementation(async (issueId) => {
-        if (issueId === "b") throw new Error("linear timeout");
-        return true;
-      }),
-    };
+    fs.writeFileSync(statePath, JSON.stringify({ a: { lastPropagated: 1, manualFloor: 4 }, b: { lastPropagated: 1, manualFloor: 4 } }) + "\n", "utf8");
+    const linearClient = { updateIssuePriority: vi.fn().mockImplementation(async (issueId) => {
+      if (issueId === "b") throw new Error("linear timeout");
+      return true;
+    }) };
     const logger = fakeLogger();
-
     await propagatePriorities(
       [
         issue({ id: "a", identifier: "MOV-A", priority: 1, relations: [blocks("b"), blocks("c")] }),
@@ -322,14 +312,10 @@ describe("propagatePriorities", () => {
       ],
       { linearClient, stateFilePath: statePath, logger },
     );
-
-    // C is the selected graph driver for A (priority 2), but B remains
-    // urgent when its own relaxation fails. A must not be relaxed to 2.
     expect(linearClient.updateIssuePriority).toHaveBeenCalledTimes(1);
     expect(linearClient.updateIssuePriority).toHaveBeenCalledWith("b", 4);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("downstream relaxation failed"));
   });
-
   it("recovers ownership when final state persistence fails after a successful Linear mutation", async () => {
     const statePath = tempStatePath();
     fs.writeFileSync(statePath, JSON.stringify({ a: { lastPropagated: 1, manualFloor: 3 } }) + "\n", "utf8");
@@ -337,21 +323,16 @@ describe("propagatePriorities", () => {
     let renameCalls = 0;
     const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((...args) => {
       renameCalls += 1;
-      if (renameCalls === 2) throw new Error("disk full");
+      if (renameCalls >= 2) throw new Error("disk full");
       return originalRename(...args);
     });
-
     try {
-      await propagatePriorities(
-        [issue({ id: "a", identifier: "MOV-A", priority: 1 })],
-        { linearClient: { updateIssuePriority: vi.fn().mockResolvedValue(true) }, stateFilePath: statePath, logger: fakeLogger() },
-      );
+      await propagatePriorities([issue({ id: "a", identifier: "MOV-A", priority: 1 })], {
+        linearClient: { updateIssuePriority: vi.fn().mockResolvedValue(true) }, stateFilePath: statePath, logger: fakeLogger(),
+      });
     } finally {
       renameSpy.mockRestore();
     }
-
-    // The durable intent from before the mutation lets the next pass recognize
-    // the live value as propagated rather than incorrectly treating it as manual.
     expect(JSON.parse(fs.readFileSync(statePath, "utf8"))).toEqual({
       a: { lastPropagated: 1, manualFloor: 3, pending: 3 },
     });

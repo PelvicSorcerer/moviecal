@@ -266,10 +266,6 @@ function parseStateEntry(value) {
   return { lastPropagated, manualFloor, ...(pending === undefined ? {} : { pending }) };
 }
 
-// A successful Linear mutation can be followed by a local crash or disk error.
-// Persisting an intent first makes that window recoverable: on the next pass the
-// live priority tells us whether the mutation landed and therefore whether the
-// dispatcher still owns the value.
 function resolvePendingState(loadedState, issues) {
   const resolved = {};
   for (const issue of issues) {
@@ -285,7 +281,6 @@ function resolvePendingState(loadedState, issues) {
     } else if (current === entry.lastPropagated) {
       resolved[issue.id] = { lastPropagated: entry.lastPropagated, manualFloor: entry.manualFloor };
     } else {
-      // Neither the pre-mutation nor intended value is live: a human changed it.
       resolved[issue.id] = { lastPropagated: current, manualFloor: current };
     }
   }
@@ -463,10 +458,6 @@ export async function propagatePriorities(issues, ctx) {
     });
   }
 
-  // Every upstream relaxation relies on its direct downstream relaxations
-  // completing, not merely the one that wins the driver tie-break. A skipped
-  // direct relaxation is itself recorded as failed, carrying that protection
-  // transitively upstream without repeatedly traversing the full graph.
   const updateIds = new Set(updates.map((update) => update.issueId));
   const directDownstreamById = new Map(issues.map((issue) => [
     issue.id,
@@ -508,12 +499,11 @@ export async function propagatePriorities(issues, ctx) {
     const failedRelaxationIds = new Set();
     const orderedUpdates = orderUpdates(updates);
     let persistedState = loadedState;
+    let finalizationFailed = false;
 
     const persist = (state) => {
       if (!statesEqual(persistedState, state)) {
         savePropagationState(stateFilePath, state);
-        // `nextState` is mutated as individual Linear writes settle; retain a
-        // snapshot of what actually reached disk rather than its live object.
         persistedState = JSON.parse(JSON.stringify(state));
       }
     };
@@ -529,9 +519,6 @@ export async function propagatePriorities(issues, ctx) {
         continue;
       }
 
-      // Save intent before mutating Linear. If finalization fails after a
-      // successful mutation, this pending marker is reconciled from Linear on
-      // the next pass instead of mistaking the propagated value for a manual one.
       nextState[update.issueId] = { ...update.stateOnFailure, pending: update.to };
       persist(nextState);
 
@@ -551,8 +538,7 @@ export async function propagatePriorities(issues, ctx) {
           try {
             persist(nextState);
           } catch (err) {
-            // The intent is already durable, so recovery on the next pass is
-            // safe even if this finalization write cannot complete now.
+            finalizationFailed = true;
             (logger.warn || logger.log || (() => {})).call(
               logger,
               `${update.identifier}: priority update succeeded but ownership finalization failed (${err.message}); pending state will be reconciled next pass`,
@@ -570,7 +556,15 @@ export async function propagatePriorities(issues, ctx) {
       }
     }
 
-    persist(nextState);
+    try {
+      persist(nextState);
+    } catch (err) {
+      if (!finalizationFailed) throw err;
+      (logger.warn || logger.log || (() => {})).call(
+        logger,
+        `Priority propagation ownership finalization remains pending (${err.message}); it will be reconciled next pass`,
+      );
+    }
 
     return {
       updates,
