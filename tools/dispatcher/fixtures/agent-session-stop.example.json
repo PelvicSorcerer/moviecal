@@ -1,0 +1,25 @@
+{
+  "_comment": "Example Linear Agent Session `stop` delivery, for `dispatcher agent-signal --fixture` (MOV-158). Hand-written from Linear's published Developer Preview docs, not captured from a live delivery -- Agent Sessions are disabled for the moviecal-dispatcher app (MOV-141) and there is no receiver to capture one with (MOV-159). Contains no credential, signature, or real user data.",
+  "type": "AgentSessionEvent",
+  "action": "stop",
+  "webhookId": "example-webhook-id",
+  "agentSession": {
+    "id": "example-session-id",
+    "issue": {
+      "id": "example-issue-uuid",
+      "identifier": "MOV-000"
+    }
+  },
+  "agentActivity": {
+    "id": "example-activity-id",
+    "content": {
+      "type": "prompt",
+      "body": "stop, I want to take this over by hand"
+    }
+  },
+  "actor": {
+    "id": "example-user-id",
+    "name": "Example User",
+    "type": "user"
+  }
+}
