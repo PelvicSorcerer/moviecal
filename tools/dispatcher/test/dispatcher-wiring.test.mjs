@@ -16,8 +16,9 @@ const source = readFileSync(
 function bodyOf(fnName) {
   const start = source.indexOf(`async function ${fnName}(`);
   expect(start, `${fnName} not found`).toBeGreaterThan(-1);
-  // crude brace match from the first "{" after the signature
-  const open = source.indexOf("{", start);
+  // crude brace match from the function body's "{", not any default-object "{"
+  const sigClose = source.indexOf(")", start);
+  const open = source.indexOf("{", sigClose);
   let depth = 0;
   for (let i = open; i < source.length; i++) {
     if (source[i] === "{") depth++;
@@ -29,14 +30,22 @@ function bodyOf(fnName) {
   throw new Error(`could not find end of ${fnName}`);
 }
 
-describe("dispatcher run-loop wiring (MOV-129)", () => {
-  it("cmdRunOnce awaits a promote pass before reading Ready for Agent", () => {
+describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
+  it("cmdRunOnce awaits reconcile -> propagate -> promote before reading Ready for Agent", () => {
     const body = bodyOf("cmdRunOnce");
-    const promoteAt = body.indexOf("promotePass(");
+    const reconcileAt = body.indexOf("await reconcileWorktrees(");
+    const propagateAt = body.indexOf("await propagatePass(");
+    const promoteAt = body.indexOf("await promotePass(");
     const dispatchReadAt = body.indexOf("issuesInState(");
+    expect(reconcileAt, "reconcileWorktrees() not called in cmdRunOnce").toBeGreaterThan(-1);
+    expect(propagateAt, "propagatePass() not called in cmdRunOnce").toBeGreaterThan(-1);
     expect(promoteAt, "promotePass() not called in cmdRunOnce").toBeGreaterThan(-1);
     expect(dispatchReadAt, "issuesInState() not called in cmdRunOnce").toBeGreaterThan(-1);
+    expect(reconcileAt).toBeLessThan(propagateAt);
+    expect(propagateAt).toBeLessThan(promoteAt);
     expect(promoteAt).toBeLessThan(dispatchReadAt);
+    expect(body).toMatch(/await\s+reconcileWorktrees\(/);
+    expect(body).toMatch(/await\s+propagatePass\(\)/);
     expect(body).toMatch(/await\s+promotePass\(\)/);
   });
 
@@ -45,6 +54,22 @@ describe("dispatcher run-loop wiring (MOV-129)", () => {
     expect(body).toMatch(/try\s*\{/);
     expect(body).toMatch(/catch/);
     expect(body).toMatch(/cmdPromoteOnce/);
+  });
+
+  it("propagatePass swallows errors so a propagation failure cannot abort dispatch", () => {
+    const body = bodyOf("propagatePass");
+    expect(body).toMatch(/try\s*\{/);
+    expect(body).toMatch(/catch/);
+    expect(body).toMatch(/cmdPrioritiesOnce/);
+  });
+
+  it("standalone priorities command acquires the dispatcher lock for mutating runs", () => {
+    const body = bodyOf("cmdPriorities");
+    expect(body).toMatch(/if\s*\(dryRun\)\s*return\s+cmdPrioritiesOnce/);
+    expect(body).toMatch(/new DispatcherLock\(dispatcherLockPath\(\)\)/);
+    expect(body).toMatch(/lock\.acquire\(\)/);
+    expect(body).toMatch(/cmdPrioritiesOnce\(\{\s*dryRun:\s*false\s*\}\)/);
+    expect(body).toMatch(/finally\s*\{\s*lock\.release\(\)/);
   });
 });
 
@@ -92,6 +117,7 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       "envLocalPath",
       "linearAppEnvPath",
       "linearEnvPath",
+      "priorityPropagationStatePath",
       "worktreesStatePath",
     ]);
     for (const [name, text] of dispatcherSources) {
@@ -113,7 +139,7 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
 
   it("registers agent-signal as a read-only command that mutates nothing", () => {
     expect(source).toMatch(/case "agent-signal":/);
-    expect(source).toMatch(/dispatcher <doctor\|dry-run\|shadow\|agent-signal\|gc\|promote\|run>/);
+    expect(source).toMatch(/dispatcher <doctor\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|run>/);
     const body = source.slice(source.indexOf("function cmdAgentSignal("));
     const end = body.indexOf("\n}\n");
     const fn = body.slice(0, end);

@@ -4,7 +4,7 @@ The local process that turns a Linear issue into a running agent against an isol
 
 ## Status
 
-`doctor`, `dry-run`, `gc`, and `run` are implemented and unit-tested. **`dispatcher run` has real side effects** — it creates worktrees and spawns a real `claude`/`codex` process, but the worker itself has no Git or GitHub mutation authority. The worker produces verified filesystem changes; the dispatcher audits its sandboxed structured transcript and diff, then creates the commit and performs the exact non-force branch push and draft-PR creation. The first live run after a dispatcher/security upgrade remains a deliberate, supervised operator action.
+`doctor`, `dry-run`, `shadow`, `promote`, `priorities`, `gc`, and `run` are implemented and unit-tested. **`dispatcher run` and non-dry-run `dispatcher priorities` have real side effects** — they can mutate Linear state and local dispatcher state; `dispatcher run` also creates worktrees and spawns a real `claude`/`codex` process. The worker itself has no Git or GitHub mutation authority. The worker produces verified filesystem changes; the dispatcher audits its sandboxed structured transcript and diff, then creates the commit and performs the exact non-force branch push and draft-PR creation. The first live run after a dispatcher/security upgrade remains a deliberate, supervised operator action.
 
 A Claude worker is invoked in structured-output `dontAsk` mode and Codex in structured-output `workspace-write --ask-for-approval never` mode. Both are wrapped in the same inherited macOS sandbox; vendor-specific controls are defense in depth. Getting a headless Claude session to run without hanging still requires pre-trusting the repo's main checkout path in `~/.claude.json` (`claude-trust.mjs`, wired into `WorktreeManager.create()`).
 
@@ -16,6 +16,8 @@ The safety boundary intentionally has no permissive fallback. Claude's project p
 node tools/dispatcher/bin/dispatcher.mjs doctor
 node tools/dispatcher/bin/dispatcher.mjs dry-run [--fixture path/to/issues.json]
 node tools/dispatcher/bin/dispatcher.mjs shadow --pr <number> [--fixture path/to/observation.json]
+node tools/dispatcher/bin/dispatcher.mjs promote [--dry-run]
+node tools/dispatcher/bin/dispatcher.mjs priorities [--dry-run]
 node tools/dispatcher/bin/dispatcher.mjs gc
 node tools/dispatcher/bin/dispatcher.mjs run --once            # one pass over eligible issues, then exit
 node tools/dispatcher/bin/dispatcher.mjs run [--interval ms]   # poll loop (default 30000ms)
@@ -33,6 +35,8 @@ not machine-control messages.
 
 - **`doctor`** is read-only. It checks: Linear API auth, `gh` auth, worktree root writable, `.env.local` present and mode 600, `claude`/`codex` on `PATH`, the macOS worker sandbox can actually be applied, `origin/master` fetchable, and the self-hosted iOS runner's online status. Run it after any environment change.
 - **`dry-run`** fetches issues in the `Ready for Agent` Linear state (or reads a fixture JSON file with `--fixture`, for testing without a live Linear connection) and prints the worktree path, branch name, worker/model routing decision, and preflight verdict for each — without creating anything.
+- **`promote`** runs the automated Backlog/Blocked promotion rules; `--dry-run` reports what would move to `Ready for Agent`.
+- **`priorities`** runs dependency-aware priority propagation; `--dry-run` reports raise/relax/skip outcomes and writes nothing.
 - **`gc`** prunes merged worktrees immediately and failed/abandoned worktrees older than the retention window, plus run logs older than 90 days.
 - **`run`** is the real loop: for each issue in `Ready for Agent`, runs preflight (§ below), provisions a worktree, spawns the guarded worker with the issue as its brief (piped via stdin), waits for it to exit, audits the transcript/diff, commits and publishes the accepted result through dispatcher-owned credentials, and reports every transition back to Linear. See `docs/operators/local-execution.md` for the full state-transition table.
 

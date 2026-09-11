@@ -36,6 +36,10 @@ export function worktreesStatePath() {
   return path.join(configDir(), "worktrees.json");
 }
 
+export function priorityPropagationStatePath() {
+  return path.join(configDir(), "priority-propagation.json");
+}
+
 export function dispatcherLockPath() {
   return path.join(configDir(), "dispatcher.lock");
 }
