@@ -37,6 +37,17 @@ describe("classifyAction", () => {
     expect(classifyAction("gh pr view 42 --json title").verdict).toBe("hard-deny");
   });
 
+  // MOV-174: /usr/bin/security is no longer denied at the sandbox-exec level
+  // (Claude Code's own startup Keychain probe needs it), so this audit is now
+  // the only backstop against a worker reading Keychain secrets itself.
+  it.each([
+    'security find-generic-password -a user -w -s "iCloud"',
+    "security dump-keychain",
+    "security export-keychain",
+  ])("hard-denies a worker invoking keychain access directly: %s", (command) => {
+    expect(classifyAction(command).verdict).toBe("hard-deny");
+  });
+
   it("hard-denies editing a workflow file", () => {
     expect(classifyAction("edit .github/workflows/verify.yml").verdict).toBe("hard-deny");
   });
