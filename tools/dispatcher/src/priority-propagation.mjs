@@ -261,15 +261,26 @@ function parseStateEntry(value) {
   return { lastPropagated, manualFloor };
 }
 
+function statOrNull(targetPath) {
+  try {
+    return fs.statSync(targetPath);
+  } catch (error) {
+    if (error && error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 function repairPermissions(filePath) {
   const dirPath = path.dirname(filePath);
-  if (fs.existsSync(dirPath) && (fs.statSync(dirPath).mode & 0o077)) {
+  const dirStat = statOrNull(dirPath);
+  if (dirStat && (dirStat.mode & 0o077)) {
     fs.chmodSync(dirPath, 0o700);
     if (fs.statSync(dirPath).mode & 0o077) {
       throw new Error(`priority propagation state directory must be mode 700: ${dirPath}`);
     }
   }
-  if (fs.existsSync(filePath) && (fs.statSync(filePath).mode & 0o077)) {
+  const fileStat = statOrNull(filePath);
+  if (fileStat && (fileStat.mode & 0o077)) {
     fs.chmodSync(filePath, 0o600);
     if (fs.statSync(filePath).mode & 0o077) {
       throw new Error(`priority propagation state file must be mode 600: ${filePath}`);
@@ -278,8 +289,9 @@ function repairPermissions(filePath) {
 }
 
 function loadPropagationState(filePath, { repair = true } = {}) {
-  if (!filePath || !fs.existsSync(filePath)) return {};
+  if (!filePath) return {};
   if (repair) repairPermissions(filePath);
+  if (!filePath || !fs.existsSync(filePath)) return {};
   const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
   const clean = {};

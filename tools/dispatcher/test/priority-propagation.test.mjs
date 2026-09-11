@@ -331,6 +331,20 @@ describe("propagatePriorities", () => {
     expect(fs.statSync(statePath).mode & 0o077).toBe(0);
   });
 
+  it("tightens insecure state directory permissions even when state file does not exist", async () => {
+    const dirPath = fs.mkdtempSync(path.join(os.tmpdir(), "priority-propagation-"));
+    fs.chmodSync(dirPath, 0o755);
+    const statePath = path.join(dirPath, "priority-propagation.json");
+
+    await propagatePriorities(
+      [issue({ id: "done", identifier: "MOV-DONE", stateName: "Done", stateType: "completed", priority: 0 })],
+      { linearClient: { updateIssuePriority: vi.fn().mockResolvedValue(true) }, stateFilePath: statePath, logger: fakeLogger() },
+    );
+
+    expect(fs.statSync(dirPath).mode & 0o077).toBe(0);
+    expect(fs.existsSync(statePath)).toBe(false);
+  });
+
   it("fails when insecure state-file permissions cannot be repaired", async () => {
     const statePath = tempStatePath();
     fs.writeFileSync(statePath, JSON.stringify({ a: { lastPropagated: 1, manualFloor: 1 } }) + "\n", "utf8");
