@@ -46,7 +46,9 @@ function describeCycle(memberIds, issueById) {
 function compareStateEntries(a, b) {
   if (a === b) return true;
   if (!a || !b) return false;
-  return a.lastPropagated === b.lastPropagated && a.manualFloor === b.manualFloor;
+  return a.lastPropagated === b.lastPropagated
+    && a.manualFloor === b.manualFloor
+    && a.pending === b.pending;
 }
 
 function statesEqual(a, b) {
@@ -258,7 +260,36 @@ function parseStateEntry(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const lastPropagated = normalizePriority(value.lastPropagated);
   const manualFloor = normalizePriority(value.manualFloor);
-  return { lastPropagated, manualFloor };
+  const pending = Number.isInteger(value.pending) && value.pending >= 0 && value.pending <= 4
+    ? value.pending
+    : undefined;
+  return { lastPropagated, manualFloor, ...(pending === undefined ? {} : { pending }) };
+}
+
+// A successful Linear mutation can be followed by a local crash or disk error.
+// Persisting an intent first makes that window recoverable: on the next pass the
+// live priority tells us whether the mutation landed and therefore whether the
+// dispatcher still owns the value.
+function resolvePendingState(loadedState, issues) {
+  const resolved = {};
+  for (const issue of issues) {
+    const entry = loadedState[issue.id];
+    if (!entry) continue;
+    if (entry.pending === undefined) {
+      resolved[issue.id] = entry;
+      continue;
+    }
+    const current = normalizePriority(issue.priority);
+    if (current === entry.pending) {
+      resolved[issue.id] = { lastPropagated: entry.pending, manualFloor: entry.manualFloor };
+    } else if (current === entry.lastPropagated) {
+      resolved[issue.id] = { lastPropagated: entry.lastPropagated, manualFloor: entry.manualFloor };
+    } else {
+      // Neither the pre-mutation nor intended value is live: a human changed it.
+      resolved[issue.id] = { lastPropagated: current, manualFloor: current };
+    }
+  }
+  return resolved;
 }
 
 function statOrNull(targetPath) {
@@ -337,10 +368,11 @@ function orderUpdates(updates) {
   const indegree = new Map(updates.map((u) => [u.issueId, 0]));
 
   for (const update of updates) {
-    if (!update.driverId || update.driverId === update.issueId) continue;
-    if (!byId.has(update.driverId)) continue;
-    dependents.get(update.driverId).add(update.issueId);
-    indegree.set(update.issueId, (indegree.get(update.issueId) || 0) + 1);
+    for (const downstreamId of update.downstreamUpdateIds || []) {
+      if (!byId.has(downstreamId) || downstreamId === update.issueId) continue;
+      dependents.get(downstreamId).add(update.issueId);
+      indegree.set(update.issueId, (indegree.get(update.issueId) || 0) + 1);
+    }
   }
 
   const queue = updates.filter((u) => (indegree.get(u.issueId) || 0) === 0);
@@ -371,7 +403,8 @@ function orderUpdates(updates) {
  */
 export async function propagatePriorities(issues, ctx) {
   const { linearClient, stateFilePath, dryRun = false, logger = console } = ctx;
-  const previousState = loadPropagationState(stateFilePath, { repair: !dryRun });
+  const loadedState = loadPropagationState(stateFilePath, { repair: !dryRun });
+  const previousState = resolvePendingState(loadedState, issues);
 
   const baselinePriorityById = new Map();
   for (const issue of issues) {
@@ -430,6 +463,25 @@ export async function propagatePriorities(issues, ctx) {
     });
   }
 
+  // Every upstream relaxation relies on its direct downstream relaxations
+  // completing, not merely the one that wins the driver tie-break. A skipped
+  // direct relaxation is itself recorded as failed, carrying that protection
+  // transitively upstream without repeatedly traversing the full graph.
+  const updateIds = new Set(updates.map((update) => update.issueId));
+  const directDownstreamById = new Map(issues.map((issue) => [
+    issue.id,
+    isTerminalIssue(issue) ? [] : (issue.relations || [])
+      .filter((relation) => relation?.type === "blocks" && issueById.has(relation?.relatedIssue?.id))
+      .filter((relation) => !isTerminalIssue(issueById.get(relation.relatedIssue.id)))
+      .map((relation) => relation.relatedIssue.id),
+  ]));
+  for (const update of updates) {
+    update.downstreamUpdateIds = new Set(
+      (directDownstreamById.get(update.issueId) || [])
+        .filter((downstreamId) => downstreamId !== update.issueId && updateIds.has(downstreamId)),
+    );
+  }
+
   for (const issue of issues) {
     if (isTerminalIssue(issue)) continue;
     if (!NON_WRITABLE_PRIORITY_STATE_NAMES.has(issue.stateName || "")) continue;
@@ -453,43 +505,72 @@ export async function propagatePriorities(issues, ctx) {
 
   if (!dryRun) {
     let wrote = 0;
-    const failedIssueIds = new Set();
+    const failedRelaxationIds = new Set();
     const orderedUpdates = orderUpdates(updates);
+    let persistedState = loadedState;
+
+    const persist = (state) => {
+      if (!statesEqual(persistedState, state)) {
+        savePropagationState(stateFilePath, state);
+        // `nextState` is mutated as individual Linear writes settle; retain a
+        // snapshot of what actually reached disk rather than its live object.
+        persistedState = JSON.parse(JSON.stringify(state));
+      }
+    };
 
     for (const update of orderedUpdates) {
-      if (update.driverId && update.driverId !== update.issueId && failedIssueIds.has(update.driverId)) {
+      if (update.action === "relaxed" && [...update.downstreamUpdateIds].some((id) => failedRelaxationIds.has(id))) {
         nextState[update.issueId] = update.stateOnFailure;
+        failedRelaxationIds.add(update.issueId);
         (logger.warn || logger.log || (() => {})).call(
           logger,
-          `${update.identifier}: skipped priority update ${update.from} -> ${update.to} because driver ${update.driverIdentifier} failed to update`,
+          `${update.identifier}: skipped priority update ${update.from} -> ${update.to} because a downstream relaxation failed to update`,
         );
         continue;
       }
+
+      // Save intent before mutating Linear. If finalization fails after a
+      // successful mutation, this pending marker is reconciled from Linear on
+      // the next pass instead of mistaking the propagated value for a manual one.
+      nextState[update.issueId] = { ...update.stateOnFailure, pending: update.to };
+      persist(nextState);
 
       try {
         const ok = await linearClient.updateIssuePriority(update.issueId, update.to);
         if (!ok) {
           nextState[update.issueId] = update.stateOnFailure;
-          failedIssueIds.add(update.issueId);
+          if (update.action === "relaxed") failedRelaxationIds.add(update.issueId);
           (logger.warn || logger.log || (() => {})).call(
             logger,
             `${update.identifier}: failed to apply priority update ${update.from} -> ${update.to}; preserving previous ownership state`,
           );
+          persist(nextState);
         } else {
           nextState[update.issueId] = update.stateOnSuccess;
           wrote += 1;
+          try {
+            persist(nextState);
+          } catch (err) {
+            // The intent is already durable, so recovery on the next pass is
+            // safe even if this finalization write cannot complete now.
+            (logger.warn || logger.log || (() => {})).call(
+              logger,
+              `${update.identifier}: priority update succeeded but ownership finalization failed (${err.message}); pending state will be reconciled next pass`,
+            );
+          }
         }
       } catch (err) {
         nextState[update.issueId] = update.stateOnFailure;
-        failedIssueIds.add(update.issueId);
+        if (update.action === "relaxed") failedRelaxationIds.add(update.issueId);
         (logger.warn || logger.log || (() => {})).call(
           logger,
           `${update.identifier}: failed to apply priority update ${update.from} -> ${update.to} (${err.message}); preserving previous ownership state`,
         );
+        persist(nextState);
       }
     }
 
-    if (!statesEqual(previousState, nextState)) savePropagationState(stateFilePath, nextState);
+    persist(nextState);
 
     return {
       updates,
