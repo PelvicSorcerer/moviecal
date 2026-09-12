@@ -189,6 +189,7 @@ At each transition the dispatcher writes to the Linear issue:
 | CI completes | Comment with check conclusions |
 | PR merges | State → `Done` (automatic, via the GitHub magic word, e.g. `Fixes MOV-123`) |
 | Worker fails or hits a hard-deny action | State → `Blocked` or `Needs Human Decision`; comment with the last ~50 log lines and the run-log path |
+| Worker hits the nested-sandbox-crash signature (MOV-180, see §Security model) | State → `Ready for Agent` (requeued, **not** `Needs Human Decision`); comment naming the exact cause, that it is environment-wide rather than issue-specific, and that dispatch is paused until the breaker clears |
 | Stopped at a safe boundary (§Stop controls) | Comment explaining why — **and nothing else**; the state is left where whoever stopped it put it |
 
 No agent conversation is a source of truth. Anything that matters must be written to Linear or to the repository before the session ends.
@@ -304,6 +305,19 @@ honoured; only instructions need trust.
 - Both adapters emit structured tool events. Output is redacted before being written to disk, then `security-policy.mjs` audits command attempts (including alternate GitHub API paths) while the diff audit catches protected changes regardless of command construction.
 - Workers leave filesystem changes only. The dispatcher owns every Git and authenticated remote step, validates branch identity, stages and commits the audited result, confirms the worktree is clean, performs a non-force push with an explicit refspec, and creates or reuses the draft PR.
 - Any missing audit, sandbox failure, bypass-shaped tool call, protected diff, branch mismatch, or publication-gate failure moves the issue to `Needs Human Decision` and records a checksummed `security-audit.json` plus a Linear evidence comment. No workflow application or remote mutation follows a failed audit.
+
+**Nested-sandbox crash — recognized failure signature and manual recovery (MOV-180).** A distinct failure mode from the one above: `sandbox-exec: sandbox_apply: Operation not permitted`, exit code 71, on a worker's very first sandboxed subprocess call (even a trivial one like `echo`), with every subsequent attempt in that run — and from a freshly spawned subagent — failing identically. Root cause is macOS Seatbelt not supporting nested confinement: `worker-guard.mjs`'s `guardedInvocation` already wraps the worker process itself in one `sandbox-exec` profile (see above), and a process already confined by Seatbelt cannot apply a second `sandbox_apply` to its own children — so if the worker's own tool harness also tries to sandbox its child commands, the OS refuses the second application outright. This has been observed to affect every worker dispatched while it holds, not just one issue (confirmed on [MOV-172](https://linear.app/moviecal/issue/MOV-172) and [MOV-173](https://linear.app/moviecal/issue/MOV-173)'s concurrent runs, 2026-09-11), and is host-wide rather than issue-specific — re-running the same issue here will not help.
+
+The dispatcher recognizes this exact signature (`run-loop.mjs`, via `failure-classification.mjs`'s `classifyWorkerFailure()`) as its own failure class, distinct from an ordinary task failure, a rate-limit result, or a credential failure: it requeues the issue to `Ready for Agent` with a comment naming the cause instead of leaving it in `Needs Human Decision` looking like a real per-issue failure, and trips a persisted circuit breaker (`circuit-breaker.mjs`, `~/.config/moviecal/circuit-breakers.json`) that stops the dispatcher from starting any further issue until a subsequent worker run completes without hitting the signature again (mirroring the breaker shape [MOV-177](https://linear.app/moviecal/issue/MOV-177) uses for a dispatcher-credential failure). This detection is post-hoc, not preventive: whether the nested-`sandbox_apply` collision itself can be avoided at the source depends on the worker harness's own sandboxing behavior, which is outside this repository's control.
+
+**Manual recovery**, needed regardless of whether the breaker above has tripped, since the underlying condition does not clear itself: a clean unload-then-reload of the dispatcher's own launchd job.
+
+```
+launchctl bootout gui/$(id -u)/com.moviecal.dispatcher
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.moviecal.dispatcher.plist
+```
+
+**`launchctl kickstart -k` is not sufficient** — it has been observed to leave the same crash in place. `bootout` followed by `bootstrap` is a full unload and reload of the job, not just a process restart, and has been the only procedure confirmed to clear the condition (twice, in the same session that produced the confirmed signature above). Confirm recovery with `dispatcher doctor`'s "worker safety sandbox" check before assuming the Mac is healthy again.
 
 Repair mode is stricter: tests, test-runner configuration, dispatcher code, staged workflow proposals, and governance documentation are read-only. CI logs, PR bodies, diffs, and review comments are delimited as untrusted data by `generateRepairEvidence()`; they can inform a code fix but cannot alter the fixed mode, target, attempt budget, or tool authority. `validateRepairTarget()` admits only a retained `review` worktree whose dispatcher-owned provenance matches the configured repository and the live PR head repository, branch, and observed SHA. Forks, stale heads, and unknown branches are never repaired automatically.
 
