@@ -37,6 +37,7 @@ import {
   logRoot,
   worktreesStatePath,
   priorityPropagationStatePath,
+  circuitBreakerStatePath,
   loadLinearConfig,
   loadLinearAppConfig,
   resolveLinearAuth,
@@ -61,6 +62,7 @@ import {
   selectCloudCandidates,
 } from "../src/dispatch-eligibility.mjs";
 import { DispatcherLock, WorktreeManager } from "../src/worktree-manager.mjs";
+import { CircuitBreakerStore } from "../src/circuit-breaker.mjs";
 import { runOnce } from "../src/run-loop.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
@@ -445,8 +447,12 @@ async function buildRunContext(linearClient, teamKey, issues) {
       agentWorking: stateId(RUN_STATE_NAMES.agentWorking),
       needsHumanDecision: stateId(RUN_STATE_NAMES.needsHumanDecision),
       inReview: stateId(RUN_STATE_NAMES.inReview),
+      readyForAgent: stateId(RUN_STATE_NAMES.readyForAgent),
     },
     worktreeManager,
+    // MOV-180: host-wide nested-sandbox-crash breaker, persisted outside the
+    // repo so it survives a dispatcher restart (see circuit-breaker.mjs).
+    circuitBreaker: new CircuitBreakerStore(circuitBreakerStatePath()),
     // MOV-144: a config value above the single-flight resource policy is not
     // honored until a nonblocking supervisor exists.
     concurrencyLimit: Math.min(Number(process.env.MOVIECAL_CONCURRENCY || DEFAULT_CONCURRENCY), DEFAULT_CONCURRENCY),

@@ -40,6 +40,11 @@ export function priorityPropagationStatePath() {
   return path.join(configDir(), "priority-propagation.json");
 }
 
+/** MOV-180: persisted state for host-wide failure-signature circuit breakers (circuit-breaker.mjs). */
+export function circuitBreakerStatePath() {
+  return path.join(configDir(), "circuit-breakers.json");
+}
+
 export function dispatcherLockPath() {
   return path.join(configDir(), "dispatcher.lock");
 }

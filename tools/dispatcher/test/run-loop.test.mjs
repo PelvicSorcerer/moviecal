@@ -1,13 +1,18 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { runOnce } from "../src/run-loop.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { AgentSessionBridge } from "../src/agent-session.mjs";
+import { NESTED_SANDBOX_CRASH } from "../src/failure-classification.mjs";
 
 const STATE_IDS = {
   blocked: "state-blocked",
   agentWorking: "state-agent-working",
   needsHumanDecision: "state-needs-human",
   inReview: "state-in-review",
+  readyForAgent: "state-ready-for-agent",
 };
 
 function fakeLinearClient() {
@@ -1026,6 +1031,158 @@ describe("runOnce", () => {
 
       expect(result.outcome).toBe("in-review");
       expect(refreshIssueFn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("nested-sandbox-crash detection and circuit breaker (MOV-180)", () => {
+    /** A minimal fake CircuitBreakerStore that records every call, in-memory only. */
+    function fakeCircuitBreaker({ initiallyOpen = false } = {}) {
+      let open = initiallyOpen;
+      return {
+        calls: { isOpen: [], trip: [], clear: [] },
+        isOpen(name) {
+          this.calls.isOpen.push(name);
+          return open;
+        },
+        trip(name, reason) {
+          this.calls.trip.push({ name, reason });
+          open = true;
+        },
+        clear(name) {
+          this.calls.clear.push(name);
+          open = false;
+        },
+      };
+    }
+
+    let tmpLogRoot;
+    beforeEach(() => {
+      tmpLogRoot = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-run-loop-test-"));
+    });
+    afterEach(() => {
+      fs.rmSync(tmpLogRoot, { recursive: true, force: true });
+    });
+
+    /** Writes a real stdout.log containing the confirmed MOV-180 signature at `logDir`. */
+    function writeCrashLog(logDir) {
+      fs.mkdirSync(logDir, { recursive: true });
+      fs.writeFileSync(path.join(logDir, "stdout.log"), "Exit code 71\nsandbox-exec: sandbox_apply: Operation not permitted\n");
+    }
+
+    it("requeues to Ready for Agent with a distinct comment, and trips the breaker, on the confirmed signature", async () => {
+      const circuitBreaker = fakeCircuitBreaker();
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      writeCrashLog(logDir);
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        circuitBreaker,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 71, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result).toMatchObject({ outcome: "nested-sandbox-crash", exitCode: 71 });
+      expect(circuitBreaker.calls.trip).toEqual([
+        { name: NESTED_SANDBOX_CRASH, reason: expect.stringContaining("71") },
+      ]);
+
+      const lastMove = ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1);
+      expect(lastMove.stateId).toBe("state-ready-for-agent");
+
+      const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
+      expect(lastComment.body).toContain("Environment failure, not a task failure");
+      expect(lastComment.body).toMatch(/every worker on this mac/i);
+      expect(lastComment.body).toContain("Ready for Agent");
+      expect(lastComment.body).toContain("launchctl bootout");
+    });
+
+    it("does not requeue or trip the breaker for exit code 71 without the sandbox_apply text (not a false positive)", async () => {
+      const circuitBreaker = fakeCircuitBreaker();
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      fs.mkdirSync(logDir, { recursive: true });
+      fs.writeFileSync(path.join(logDir, "stdout.log"), "some other crash, coincidentally exit 71\n");
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        circuitBreaker,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 71, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("worker-failed");
+      expect(circuitBreaker.calls.trip).toEqual([]);
+      const lastMove = ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1);
+      expect(lastMove.stateId).toBe("state-needs-human");
+    });
+
+    it("leaves an ordinary (non-matching) worker failure completely unaffected — generic-failure path unchanged", async () => {
+      const circuitBreaker = fakeCircuitBreaker();
+      const ctx = baseCtx({
+        circuitBreaker,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir: "/fake/logs/MOV-1" })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("worker-failed");
+      expect(circuitBreaker.calls.trip).toEqual([]);
+      expect(circuitBreaker.calls.clear).toEqual([]);
+      const lastMove = ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1);
+      expect(lastMove.stateId).toBe("state-needs-human");
+    });
+
+    it("does not dispatch a further issue once the breaker is open — no worktree, no worker, no Linear write", async () => {
+      const circuitBreaker = fakeCircuitBreaker({ initiallyOpen: true });
+      const ctx = baseCtx({ circuitBreaker, worktreeManager: statefulWorktreeManager() });
+      const issueA = { ...ISSUE, id: "id-a", identifier: "MOV-a" };
+      const issueB = { ...ISSUE, id: "id-b", identifier: "MOV-b" };
+
+      const results = await runOnce([issueA, issueB], ctx);
+
+      // Exactly one issue (the first) is let through as the half-open probe;
+      // the rest are skipped outright.
+      const skipped = results.filter((r) => r.outcome === "circuit-breaker-open");
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0].issue).toBe("MOV-b");
+      expect(ctx.worktreeManager.createCalls).toHaveLength(1);
+      expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+      expect(ctx.linearClient.calls.some((c) => c.issueId === "id-b")).toBe(false);
+    });
+
+    it("closes the breaker once the half-open probe attempt succeeds", async () => {
+      const circuitBreaker = fakeCircuitBreaker({ initiallyOpen: true });
+      const ctx = baseCtx({ circuitBreaker });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("in-review");
+      expect(circuitBreaker.calls.clear).toEqual([NESTED_SANDBOX_CRASH]);
+      expect(circuitBreaker.isOpen(NESTED_SANDBOX_CRASH)).toBe(false);
+    });
+
+    it("re-trips (stays open) when the half-open probe hits the signature again", async () => {
+      const circuitBreaker = fakeCircuitBreaker({ initiallyOpen: true });
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      writeCrashLog(logDir);
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        circuitBreaker,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 71, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("nested-sandbox-crash");
+      expect(circuitBreaker.isOpen(NESTED_SANDBOX_CRASH)).toBe(true);
+    });
+
+    it("is a no-op (defaults to permanently closed) when no circuitBreaker is provided — existing callers unaffected", async () => {
+      const ctx = baseCtx();
+      expect(ctx.circuitBreaker).toBeUndefined();
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("in-review");
     });
   });
 });
