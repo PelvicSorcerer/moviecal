@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { publishWorkerResult, pullRequestBody } from "../src/worker-publish.mjs";
+import { publishRepairResult, publishWorkerResult, pullRequestBody } from "../src/worker-publish.mjs";
 
 const ISSUE = { identifier: "MOV-42", title: "Fix the thing" };
 
@@ -97,5 +97,63 @@ describe("trusted worker publication", () => {
     expect(body).toContain("## Test Impact");
     expect(body).toContain("Linear: MOV-42");
     expect(body).toContain("Fixes MOV-42");
+  });
+});
+
+describe("publishRepairResult", () => {
+  function repairRunner({ head = "abc123", pr = { number: 42, url: "https://github.test/pr/42" } } = {}) {
+    const calls = [];
+    const runner = (command, args) => {
+      calls.push([command, args]);
+      const joined = args.join(" ");
+      if (joined === "branch --show-current") return "agent/MOV-149-repair-ci\n";
+      if (joined === "rev-parse HEAD") return `${head}\n`;
+      if (joined === "status --porcelain=v1") return calls.filter(([, a]) => a[0] === "commit").length ? "" : " M src/app/page.tsx\n";
+      if (joined === "diff --cached --name-only") return "src/app/page.tsx\n";
+      if (command === "gh" && args[0] === "pr" && args[1] === "list") return JSON.stringify(pr ? [pr] : []);
+      return "";
+    };
+    return { runner, calls };
+  }
+
+  it("commits and non-force pushes a repair to the original PR", () => {
+    const { runner, calls } = repairRunner();
+    const result = publishRepairResult({
+      worktreePath: "/tmp/repair",
+      branch: "agent/MOV-149-repair-ci",
+      repo: "owner/repo",
+      issue: { identifier: "MOV-149" },
+      expectedHeadSha: "abc123",
+      runner,
+    });
+    expect(result.number).toBe(42);
+    expect(calls).toContainEqual(["git", ["push", "origin", "HEAD:refs/heads/agent/MOV-149-repair-ci"]]);
+    expect(calls.some(([command, args]) => command === "gh" && args.includes("create"))).toBe(false);
+    expect(calls.flatMap(([, args]) => args).some((arg) => String(arg).includes("force"))).toBe(false);
+  });
+
+  it("fails closed before staging when the observed SHA is stale", () => {
+    const { runner, calls } = repairRunner({ head: "changed" });
+    expect(() => publishRepairResult({
+      worktreePath: "/tmp/repair",
+      branch: "agent/MOV-149-repair-ci",
+      repo: "owner/repo",
+      issue: { identifier: "MOV-149" },
+      expectedHeadSha: "abc123",
+      runner,
+    })).toThrow(/target moved/);
+    expect(calls.some(([, args]) => args[0] === "add")).toBe(false);
+  });
+
+  it("refuses to repair a branch without an existing PR", () => {
+    const { runner } = repairRunner({ pr: null });
+    expect(() => publishRepairResult({
+      worktreePath: "/tmp/repair",
+      branch: "agent/MOV-149-repair-ci",
+      repo: "owner/repo",
+      issue: { identifier: "MOV-149" },
+      expectedHeadSha: "abc123",
+      runner,
+    })).toThrow(/no existing PR/);
   });
 });
