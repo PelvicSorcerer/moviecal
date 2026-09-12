@@ -80,3 +80,46 @@ export function publishWorkerResult({ worktreePath, branch, repo, issue, runner 
   if (!pr) throw new Error(`GitHub did not return a PR for ${branch} after creation`);
   return pr;
 }
+
+/**
+ * Publish an audited repair onto an existing dispatcher-owned PR.
+ *
+ * Unlike the implementation publisher this never creates a branch or PR. The
+ * observed head SHA is an optimistic-concurrency boundary: if GitHub (or a
+ * human) advanced the checkout after the repair decision, publication stops
+ * before staging anything. The ordinary non-force push provides the matching
+ * remote-side check if the branch advances after this local comparison.
+ */
+export function publishRepairResult({ worktreePath, branch, repo, issue, expectedHeadSha, runner = defaultRunner } = {}) {
+  if (!branch?.startsWith(`agent/${issue?.identifier}-`)) {
+    throw new Error("assigned branch does not match the dispatcher issue namespace");
+  }
+  if (!expectedHeadSha) throw new Error("repair publication requires the observed head SHA");
+
+  const actualBranch = String(runner("git", ["branch", "--show-current"], { cwd: worktreePath })).trim();
+  if (actualBranch !== branch) throw new Error(`refusing to publish ${actualBranch || "detached HEAD"}; expected ${branch}`);
+  const actualHeadSha = String(runner("git", ["rev-parse", "HEAD"], { cwd: worktreePath })).trim();
+  if (actualHeadSha !== expectedHeadSha) {
+    throw new Error(`repair target moved from observed SHA ${expectedHeadSha} to ${actualHeadSha}`);
+  }
+
+  const existingPr = findPrForBranch(branch, repo, runner);
+  if (!existingPr) throw new Error(`repair target has no existing PR for ${branch}`);
+
+  const dirty = String(runner("git", ["status", "--porcelain=v1"], { cwd: worktreePath })).trim();
+  if (!dirty) throw new Error("repair worker produced no audited filesystem changes");
+  runner("git", ["add", "--all"], { cwd: worktreePath });
+  const staged = String(runner("git", ["diff", "--cached", "--name-only"], { cwd: worktreePath })).trim();
+  if (!staged) throw new Error("repair changes produced an empty Git index");
+  runner("git", ["commit", "-m", `fix: repair ${issue.identifier} CI failure`], { cwd: worktreePath });
+
+  const afterCommit = String(runner("git", ["status", "--porcelain=v1"], { cwd: worktreePath })).trim();
+  if (afterCommit) throw new Error("dispatcher repair commit did not leave a clean worktree");
+  runner("git", ["push", "origin", `HEAD:refs/heads/${branch}`], { cwd: worktreePath });
+
+  const updatedPr = findPrForBranch(branch, repo, runner);
+  if (!updatedPr || updatedPr.number !== existingPr.number) {
+    throw new Error(`GitHub did not return the original PR for ${branch} after repair publication`);
+  }
+  return updatedPr;
+}
