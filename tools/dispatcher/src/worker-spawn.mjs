@@ -25,7 +25,19 @@ export function redactWorkerOutput(text, { env = process.env } = {}) {
   return redacted
     .replace(/\b(?:gh[opsu]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|lin_api_[A-Za-z0-9_-]{20,})\b/g, "[REDACTED]")
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED]")
-    .replace(/((?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|ACCESS_KEY)\s*[=:]\s*)[^\s\"']+/gi, "$1[REDACTED]");
+    // A `\b` alone is not enough here: `-` and `_` aren't word characters
+    // to `\b` either way, but `_` *is* a `\w` character, so `\b` still fails
+    // to separate "TOKEN" from a preceding "_" in "GH_TOKEN" while `-` (as
+    // in a hyphenated identifier like "needs-secret") sits on a boundary
+    // regardless. Anchor the label's start with a negative lookbehind that
+    // excludes any preceding word character *or* hyphen, so a label fused
+    // into a larger compound identifier (kebab- or snake-case) is never
+    // treated as a standalone credential label. Also exclude a backslash
+    // from the captured value: this text is still JSON-encoded at this
+    // point (one log line == one JSON event), so a value ending in `\`
+    // immediately before an escaped quote would otherwise consume that
+    // escape and corrupt the line's JSON structure (MOV-182).
+    .replace(/(?<![-\w])((?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|ACCESS_KEY)\b\s*[=:]\s*)[^\s\"'\\]+/gi, "$1[REDACTED]");
 }
 
 function redactionStream(env) {

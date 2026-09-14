@@ -338,4 +338,36 @@ describe("worker log redaction", () => {
     expect(output).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz123456");
     expect(output).toContain("[REDACTED]");
   });
+
+  // MOV-182: a real worker transcript line is one JSON event, so a literal
+  // quote in source text the worker echoed back (e.g. via Read) appears
+  // JSON-escaped as a literal backslash followed by a literal quote — two
+  // characters, not one real newline or an actual unescaped quote.
+  it("does not redact a credential-labeled word fused into a hyphenated identifier (MOV-181 false positive)", () => {
+    // Reproduces the exact transcript line that broke MOV-181's first
+    // dispatch: preflight.mjs's own source contains `.startsWith("needs-secret:")`,
+    // which a worker's Read tool echoes back JSON-encoded (the closing quote
+    // escaped as \").
+    const line = String.raw`{"content":".startsWith(\"needs-secret:\"));"}`;
+    expect(redactWorkerOutput(line, { env: {} })).toBe(line);
+  });
+
+  it("does not let a matched label's value consume a backslash escaping the next quote", () => {
+    // A synthetic worst case: a genuine label match whose value is
+    // immediately followed by an escaped quote, with nothing but the
+    // escaping backslash between them. There's no real value content to
+    // redact here, but the fix must leave the backslash intact rather than
+    // consuming it into the match and corrupting the surrounding JSON.
+    const line = String.raw`{"x":"SECRET:\"trailing"}`;
+    const output = redactWorkerOutput(line, { env: {} });
+    expect(output).toBe(line);
+    expect(() => JSON.parse(output)).not.toThrow();
+  });
+
+  it("still redacts a genuine standalone credential-labeled value", () => {
+    expect(redactWorkerOutput("SECRET: ghp_realtoken1234567890abcd", { env: {} })).toBe("SECRET: [REDACTED]");
+    // Deliberately not shaped like a real key prefix (e.g. "sk-...") so this
+    // fixture doesn't itself trip CI's separate secret-shape scanner.
+    expect(redactWorkerOutput("API_KEY=totally-fake-test-value-not-real", { env: {} })).toBe("API_KEY=[REDACTED]");
+  });
 });
