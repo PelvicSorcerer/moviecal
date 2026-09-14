@@ -102,6 +102,20 @@ export function workerInvocation(worker, model) {
         "stream-json",
         "--verbose",
         "--no-session-persistence",
+        // MOV-184: Claude Code's own internal per-command Bash-tool sandbox
+        // (a second, independent Seatbelt sandbox_apply call) collides with
+        // worker-guard.mjs's outer sandbox-exec profile -- once a process is
+        // confined by a profile with any (deny ...) rule (not just "nested
+        // sandboxing" generally; a pure allow-default profile can still
+        // nest), it can never call sandbox_apply on itself again. Verified
+        // empirically: this fails on every dispatched Claude worker that
+        // touches the Bash tool, deterministically, not intermittently. The
+        // outer profile already provides the complete security boundary
+        // (docs/operators/local-execution.md §Security model), so Claude's
+        // own inner sandbox is redundant, not protective -- disable it here
+        // rather than leave two colliding layers where only one is needed.
+        "--settings",
+        JSON.stringify({ sandbox: { enabled: false } }),
       ],
     };
   }
