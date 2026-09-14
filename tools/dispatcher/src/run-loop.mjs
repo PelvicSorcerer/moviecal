@@ -199,7 +199,13 @@ async function processIssue(issue, ctx) {
     activeWorktreeCount: worktreeManager.activeCount(),
     concurrencyLimit,
     secretPresent,
-    worktreePathFree: (p) => worktreeManager.isPathFree(p),
+    // MOV-181: reclaims a retained worktree from this same issue's own
+    // prior terminal (failed/abandoned/merged) attempt, so a requeued issue
+    // isn't blocked by its own retention window. See
+    // WorktreeManager.isPathFreeForIssue for why this must not be used in
+    // the dry-run preview (dispatcher.mjs deliberately keeps plain
+    // isPathFree there instead).
+    worktreePathFree: (p) => worktreeManager.isPathFreeForIssue(p, issue.identifier),
     candidateWorktreePath: candidatePath,
   });
 

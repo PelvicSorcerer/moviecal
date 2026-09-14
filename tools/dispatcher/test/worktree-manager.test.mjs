@@ -140,6 +140,70 @@ describe("WorktreeManager", () => {
     expect(() => manager.create({ id: "MOV-2", name: "dup", branch: "agent/dup-2" })).toThrow(/already exists/);
   });
 
+  describe("isPathFreeForIssue (MOV-181)", () => {
+    it("a path with nothing on disk is free, same as isPathFree", () => {
+      const p = path.join(worktreeRoot, "never-existed");
+      expect(manager.isPathFreeForIssue(p, "MOV-1")).toBe(true);
+    });
+
+    it("reclaims the path when it's occupied by this same issue's own terminal (failed) attempt", () => {
+      const entry = manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+      manager.markStatus("MOV-1", "failed");
+      expect(fs.existsSync(entry.path)).toBe(true); // retained, not auto-removed on failure
+
+      expect(manager.isPathFreeForIssue(entry.path, "MOV-1")).toBe(true);
+
+      expect(fs.existsSync(entry.path)).toBe(false); // reclaimed
+      expect(manager.loadState()["MOV-1"]).toBeUndefined(); // record dropped
+      expect(calls.some((c) => c.command === "git" && c.args.join(" ") === "branch -D agent/MOV-1-fix")).toBe(true);
+    });
+
+    it("reclaims for abandoned and merged statuses too, not only failed", () => {
+      for (const status of ["abandoned", "merged"]) {
+        const entry = manager.create({ id: "MOV-1", name: `MOV-1-${status}`, branch: `agent/MOV-1-${status}` });
+        manager.markStatus("MOV-1", status);
+        expect(manager.isPathFreeForIssue(entry.path, "MOV-1")).toBe(true);
+        expect(fs.existsSync(entry.path)).toBe(false);
+      }
+    });
+
+    it("never deletes the remote branch while reclaiming (a draft PR may still point at it)", () => {
+      const entry = manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+      manager.markStatus("MOV-1", "failed");
+      manager.isPathFreeForIssue(entry.path, "MOV-1");
+      expect(calls.some((c) => c.args?.[0] === "push" && c.args?.includes("--delete"))).toBe(false);
+    });
+
+    it("still blocks when the occupying entry is an active worker for the same issue -- not a stale retry", () => {
+      const entry = manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+      // status defaults to "active" from create()
+      expect(manager.isPathFreeForIssue(entry.path, "MOV-1")).toBe(false);
+      expect(fs.existsSync(entry.path)).toBe(true); // untouched
+    });
+
+    it("still blocks when the occupying entry is a review-status worker for the same issue", () => {
+      const entry = manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+      manager.markStatus("MOV-1", "review", { prNumber: 1 });
+      expect(manager.isPathFreeForIssue(entry.path, "MOV-1")).toBe(false);
+      expect(fs.existsSync(entry.path)).toBe(true);
+    });
+
+    it("still blocks a terminal entry belonging to a DIFFERENT issue at that path", () => {
+      const entry = manager.create({ id: "MOV-1", name: "shared-name", branch: "agent/MOV-1" });
+      manager.markStatus("MOV-1", "failed");
+      // MOV-2 is not the occupying entry's id, even though the path exists.
+      expect(manager.isPathFreeForIssue(entry.path, "MOV-2")).toBe(false);
+      expect(fs.existsSync(entry.path)).toBe(true);
+    });
+
+    it("still blocks a path that exists on disk but has no matching state entry at all (untracked)", () => {
+      const untracked = path.join(worktreeRoot, "untracked-dir");
+      fs.mkdirSync(untracked, { recursive: true });
+      expect(manager.isPathFreeForIssue(untracked, "MOV-1")).toBe(false);
+      expect(fs.existsSync(untracked)).toBe(true);
+    });
+  });
+
   it("symlinks the shared env.local into the new worktree when a source is given", () => {
     const envSource = path.join(tmpRoot, "env.local");
     fs.writeFileSync(envSource, "NEXT_PUBLIC_SUPABASE_URL=http://example.test\n");
