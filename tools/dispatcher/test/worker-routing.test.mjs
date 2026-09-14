@@ -91,7 +91,31 @@ describe("workerInvocation", () => {
       "stream-json",
       "--verbose",
       "--no-session-persistence",
+      "--settings",
+      JSON.stringify({ sandbox: { enabled: false } }),
     ]);
+  });
+
+  it("disables Claude Code's own internal sandbox for every model tier (MOV-184)", () => {
+    // A second, independent Seatbelt sandbox_apply call inside
+    // worker-guard.mjs's already-confined outer profile deterministically
+    // fails (verified: any profile with a (deny ...) rule -- which the
+    // outer profile always has -- cannot re-apply a sandbox to itself).
+    // The outer profile is the sole, sufficient security boundary; asserting
+    // the JSON shape here (not a substring match) so a future formatting
+    // change can't silently stop actually disabling it.
+    for (const tier of ["cheap", "default", "strong"]) {
+      const invocation = workerInvocation("claude", tier);
+      const settingsIndex = invocation.args.indexOf("--settings");
+      expect(settingsIndex).toBeGreaterThan(-1);
+      const parsed = JSON.parse(invocation.args[settingsIndex + 1]);
+      expect(parsed).toEqual({ sandbox: { enabled: false } });
+    }
+  });
+
+  it("does not add the sandbox-disabling settings override to codex, which is unaffected (MOV-184)", () => {
+    const invocation = workerInvocation("codex", "default");
+    expect(invocation.args).not.toContain("--settings");
   });
 
   it("scopes the claude invocation to a non-hanging, non-bypassing permission mode", () => {
