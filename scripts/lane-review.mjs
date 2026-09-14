@@ -204,7 +204,35 @@ export function runHeuristics(files, diffText, ack = { acknowledged: false, prob
 //                  downgradeable by lane-review-ai-ack — this is lost scrutiny.
 //   "ai-model"   — a judgement the model made about the diff. Advisory: a
 //                  `block` still fails, but lane-review-ai-ack can downgrade it.
-async function runAiReview(diffText, prTitle, prBody) {
+// MOV-183: the findings report is requested via a forced tool call, not
+// prose. The Anthropic API guarantees a tool_use block's `input` is a
+// schema-shaped object, so there is no free-text JSON to regex-extract or
+// JSON.parse — that whole failure class (a model's own prose echoing a
+// diff snippet with an unescaped quote, breaking naive brace-matching) is
+// structurally impossible with this approach, not just less likely.
+const FINDINGS_TOOL = {
+  name: "report_findings",
+  description: "Report the review findings for this PR diff.",
+  input_schema: {
+    type: "object",
+    properties: {
+      findings: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            severity: { type: "string", enum: ["block", "warn"] },
+            summary: { type: "string" },
+          },
+          required: ["severity", "summary"],
+        },
+      },
+    },
+    required: ["findings"],
+  },
+};
+
+export async function runAiReview(diffText, prTitle, prBody, { fetchFn = fetch } = {}) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return {
@@ -223,9 +251,7 @@ async function runAiReview(diffText, prTitle, prBody) {
   const truncated = diffText.length > AI_DIFF_CHAR_BUDGET;
   const diffForModel = truncated ? diffText.slice(0, AI_DIFF_CHAR_BUDGET) : diffText;
 
-  const systemPrompt = `You are an independent, strict second-pass reviewer for pull requests in the moviecal repository. You did not write this diff. Your only job is to catch what automated tests (lint/typecheck/build/unit/integration/browser) would not: security issues, obvious correctness bugs, scope creep, and governance-relevant changes. Be conservative — only mark something "block" if a competent human reviewer would clearly stop the PR over it. Style preferences, minor nits, and speculative concerns are "warn" at most, not "block". Respond with ONLY a JSON object, no prose, matching exactly:
-{"findings": [{"severity": "block" | "warn", "summary": "one sentence"}]}
-An empty findings array means the diff looks clean.`;
+  const systemPrompt = `You are an independent, strict second-pass reviewer for pull requests in the moviecal repository. You did not write this diff. Your only job is to catch what automated tests (lint/typecheck/build/unit/integration/browser) would not: security issues, obvious correctness bugs, scope creep, and governance-relevant changes. Be conservative — only mark something "block" if a competent human reviewer would clearly stop the PR over it. Style preferences, minor nits, and speculative concerns are "warn" at most, not "block". Report your findings using the report_findings tool. An empty findings array means the diff looks clean.`;
 
   const userPrompt = `PR title: ${prTitle || "(none)"}
 PR description:
@@ -234,7 +260,7 @@ ${truncated ? "\n[diff truncated to first " + AI_DIFF_CHAR_BUDGET + " characters
 Diff:
 ${diffForModel}`;
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetchFn("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -246,6 +272,8 @@ ${diffForModel}`;
       max_tokens: 1024,
       system: systemPrompt,
       messages: [{ role: "user", content: userPrompt }],
+      tools: [FINDINGS_TOOL],
+      tool_choice: { type: "tool", name: FINDINGS_TOOL.name },
     }),
   });
 
@@ -265,9 +293,10 @@ ${diffForModel}`;
   }
 
   const data = await res.json();
-  const text = data?.content?.[0]?.text ?? "";
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) {
+  const toolUse = (Array.isArray(data?.content) ? data.content : []).find(
+    (block) => block?.type === "tool_use" && block?.name === FINDINGS_TOOL.name,
+  );
+  if (!toolUse || typeof toolUse.input !== "object" || toolUse.input === null) {
     return {
       ran: true,
       configured: true,
@@ -275,35 +304,20 @@ ${diffForModel}`;
         {
           severity: "block",
           kind: "ai-infra",
-          summary: "AI review pass returned an unparseable response — cannot confirm the diff was reviewed; re-run",
+          summary: "AI review pass did not return a structured findings report via tool use — cannot confirm the diff was reviewed; re-run",
         },
       ],
     };
   }
 
-  try {
-    const parsed = JSON.parse(match[0]);
-    const findings = Array.isArray(parsed.findings) ? parsed.findings : [];
-    return {
-      ran: true,
-      configured: true,
-      findings: findings
-        .filter((f) => f && typeof f.summary === "string" && (f.severity === "block" || f.severity === "warn"))
-        .map((f) => ({ severity: f.severity, kind: "ai-model", summary: f.summary })),
-    };
-  } catch {
-    return {
-      ran: true,
-      configured: true,
-      findings: [
-        {
-          severity: "block",
-          kind: "ai-infra",
-          summary: "AI review pass returned invalid JSON — cannot confirm the diff was reviewed; re-run",
-        },
-      ],
-    };
-  }
+  const findings = Array.isArray(toolUse.input.findings) ? toolUse.input.findings : [];
+  return {
+    ran: true,
+    configured: true,
+    findings: findings
+      .filter((f) => f && typeof f.summary === "string" && (f.severity === "block" || f.severity === "warn"))
+      .map((f) => ({ severity: f.severity, kind: "ai-model", summary: f.summary })),
+  };
 }
 
 /**

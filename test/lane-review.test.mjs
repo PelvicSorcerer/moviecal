@@ -1,9 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   resolveSensitivePathAck,
   resolveAiAck,
   runHeuristics,
   applyAiAck,
+  runAiReview,
 } from "../scripts/lane-review.mjs";
 
 describe("resolveSensitivePathAck", () => {
@@ -174,5 +175,144 @@ describe("applyAiAck", () => {
     const snapshot = JSON.parse(JSON.stringify(input));
     applyAiAck(input, ACK);
     expect(input).toEqual(snapshot);
+  });
+});
+
+describe("runAiReview", () => {
+  const originalKey = process.env.ANTHROPIC_API_KEY;
+
+  beforeEach(() => {
+    process.env.ANTHROPIC_API_KEY = "test-key-not-real";
+  });
+
+  afterEach(() => {
+    if (originalKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = originalKey;
+  });
+
+  function fakeFetch(status, body) {
+    return async () => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    });
+  }
+
+  // MOV-183: the fix under test is switching from free-text "respond with
+  // only JSON" + regex-extraction to a forced tool call. These fixtures
+  // simulate the Anthropic API's tool_use response shape directly — no real
+  // network call, no ANTHROPIC_API_KEY required to run this suite.
+
+  it("ANTHROPIC_API_KEY absent -> ai-skipped warn, unaffected by this fix", async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    const result = await runAiReview("diff", "title", "body", { fetchFn: fakeFetch(200, {}) });
+    expect(result).toEqual({
+      ran: false,
+      configured: false,
+      findings: [
+        {
+          severity: "warn",
+          kind: "ai-skipped",
+          summary: "ANTHROPIC_API_KEY not set — AI review pass skipped; heuristic checks only",
+        },
+      ],
+    });
+  });
+
+  it("HTTP failure -> non-downgradeable ai-infra block, unaffected by this fix", async () => {
+    const result = await runAiReview("diff", "title", "body", {
+      fetchFn: fakeFetch(500, { error: "internal error" }),
+    });
+    expect(result.ran).toBe(false);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].kind).toBe("ai-infra");
+    expect(result.findings[0].severity).toBe("block");
+    expect(result.findings[0].summary).toMatch(/HTTP 500/);
+  });
+
+  it("well-formed tool_use response with block + warn findings parses both correctly", async () => {
+    const apiResponse = {
+      content: [
+        {
+          type: "tool_use",
+          name: "report_findings",
+          input: {
+            findings: [
+              { severity: "block", summary: "hardcoded credential in config" },
+              { severity: "warn", summary: "minor naming nit" },
+            ],
+          },
+        },
+      ],
+    };
+    const result = await runAiReview("diff", "title", "body", { fetchFn: fakeFetch(200, apiResponse) });
+    expect(result.ran).toBe(true);
+    expect(result.configured).toBe(true);
+    expect(result.findings).toEqual([
+      { severity: "block", kind: "ai-model", summary: "hardcoded credential in config" },
+      { severity: "warn", kind: "ai-model", summary: "minor naming nit" },
+    ]);
+  });
+
+  it("empty findings array (clean diff) parses to no findings", async () => {
+    const apiResponse = {
+      content: [{ type: "tool_use", name: "report_findings", input: { findings: [] } }],
+    };
+    const result = await runAiReview("diff", "title", "body", { fetchFn: fakeFetch(200, apiResponse) });
+    expect(result.ran).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  it("no tool_use content block at all -> non-downgradeable ai-infra block, not a crash", async () => {
+    const apiResponse = { content: [{ type: "text", text: "I refuse to use the tool." }] };
+    const result = await runAiReview("diff", "title", "body", { fetchFn: fakeFetch(200, apiResponse) });
+    expect(result.ran).toBe(true);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].kind).toBe("ai-infra");
+    expect(result.findings[0].severity).toBe("block");
+    expect(result.findings[0].summary).toMatch(/did not return a structured findings report/);
+  });
+
+  it("empty content array -> non-downgradeable ai-infra block, not a crash", async () => {
+    const result = await runAiReview("diff", "title", "body", { fetchFn: fakeFetch(200, { content: [] }) });
+    expect(result.findings[0].kind).toBe("ai-infra");
+    expect(result.findings[0].severity).toBe("block");
+  });
+
+  it("a malformed finding entry (missing summary, or a bad severity) is filtered out, not passed through", async () => {
+    const apiResponse = {
+      content: [
+        {
+          type: "tool_use",
+          name: "report_findings",
+          input: {
+            findings: [
+              { severity: "block", summary: "real finding" },
+              { severity: "critical", summary: "not a valid severity" },
+              { severity: "warn" },
+            ],
+          },
+        },
+      ],
+    };
+    const result = await runAiReview("diff", "title", "body", { fetchFn: fakeFetch(200, apiResponse) });
+    expect(result.findings).toEqual([{ severity: "block", kind: "ai-model", summary: "real finding" }]);
+  });
+
+  it("sends tool_choice forcing the report_findings tool, not free-text prompting", async () => {
+    let capturedBody = null;
+    const fetchFn = async (_url, opts) => {
+      capturedBody = JSON.parse(opts.body);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ content: [{ type: "tool_use", name: "report_findings", input: { findings: [] } }] }),
+      };
+    };
+    await runAiReview("diff", "title", "body", { fetchFn });
+    expect(capturedBody.tool_choice).toEqual({ type: "tool", name: "report_findings" });
+    expect(capturedBody.tools).toHaveLength(1);
+    expect(capturedBody.tools[0].name).toBe("report_findings");
   });
 });
