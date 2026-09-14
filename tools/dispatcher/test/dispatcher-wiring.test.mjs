@@ -113,6 +113,7 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
     const configText = readFileSync(fileURLToPath(new URL("../src/config.mjs", import.meta.url)), "utf8");
     const secretPathHelpers = [...configText.matchAll(/^export function (\w*(?:EnvPath|Path))\(/gm)].map((m) => m[1]);
     expect(secretPathHelpers.sort()).toEqual([
+      "circuitBreakerStatePath",
       "dispatcherLockPath",
       "envLocalPath",
       "linearAppEnvPath",
