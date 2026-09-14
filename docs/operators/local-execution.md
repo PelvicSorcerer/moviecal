@@ -392,14 +392,40 @@ Template: `tools/dispatcher/launchd/com.moviecal.dispatcher.plist`. The filled-i
 
 **This worktree is not auto-updated.** Nothing currently pulls new commits into it on its own — if `tools/dispatcher/` changes on `master` after the service is running, the daemon keeps executing the orchestration code it started with indefinitely, without erroring (worker-spawned worktrees still branch from current `origin/master`, since `WorktreeManager.create()` fetches at creation time — only the dispatcher's own top-level logic goes stale). Whenever `tools/dispatcher/` changes: `cd` into `/Users/adammoore/code/worktrees/moviecal/dispatcher-daemon`, `git pull`, then restart the service (`launchctl kickstart -k gui/$(id -u)/com.moviecal.dispatcher`). A self-updating daemon was deliberately not built here — that's its own supervision-model question, not something to fold in as a side effect of getting the base service running.
 
-**Commands** (see the template's own header comment for the full list):
+**Commands** (see the template's own header comment for the full list; MOV-146):
 
-```
-launchctl load ~/Library/LaunchAgents/com.moviecal.dispatcher.plist     # start
-launchctl unload ~/Library/LaunchAgents/com.moviecal.dispatcher.plist   # stop
-launchctl list | grep com.moviecal.dispatcher                          # status
-launchctl kickstart -k gui/$(id -u)/com.moviecal.dispatcher             # restart (e.g. after a git pull)
-```
+* **Start**
+  ```
+  launchctl load ~/Library/LaunchAgents/com.moviecal.dispatcher.plist
+  ```
+* **Stop.** Safe to run at any time — no live worktree, worker, or Linear/GitHub mutation is left in an inconsistent state by simply stopping the daemon between poll cycles (verified: no Linear activity occurs during a stop window; the next `dispatcher run` picks up exactly where the registry left off).
+  ```
+  launchctl unload ~/Library/LaunchAgents/com.moviecal.dispatcher.plist
+  ```
+* **Status**
+  ```
+  launchctl list | grep com.moviecal.dispatcher
+  ```
+* **Restart** (after a `git pull` in the daemon worktree — see above — or to clear a wedged process):
+  ```
+  launchctl kickstart -k gui/$(id -u)/com.moviecal.dispatcher
+  ```
+  `KeepAlive.SuccessfulExit: false` (below) already restarts the process on a crash; this is for a *deliberate* restart. For the one known case where `kickstart -k` is insufficient (a stuck nested-sandbox condition), see the full `bootout`/`bootstrap` cycle documented above — though as of MOV-184 that condition should no longer occur in normal operation.
+* **Upgrade** (deploy new `tools/dispatcher/` code to the running service):
+  ```
+  cd ~/code/worktrees/moviecal/dispatcher-daemon
+  git pull
+  launchctl kickstart -k gui/$(id -u)/com.moviecal.dispatcher
+  ```
+  Confirm with `dispatcher doctor` and by tailing `dispatcher.stdout.log` for a completed poll cycle afterward — `doctor` from an interactive shell does not prove the daemon's own environment is healthy (see PATH note below).
+* **Rollback** (the new code misbehaves — return the daemon worktree to a known-good commit):
+  ```
+  cd ~/code/worktrees/moviecal/dispatcher-daemon
+  git log --oneline -5             # find the last known-good SHA
+  git checkout <known-good-sha>    # detached HEAD is fine here -- this worktree is never committed to directly
+  launchctl kickstart -k gui/$(id -u)/com.moviecal.dispatcher
+  ```
+  This worktree only ever runs code checked out into it — it has no build step and no dependencies to reinstall (see above), so a rollback is exactly this checkout-and-restart, nothing more. To return to tracking `master` again later, `git checkout master` (or the branch name) once the fix lands.
 
 The plist's own `StandardOutPath`/`StandardErrorPath` (`~/Library/Logs/moviecal-dispatcher/dispatcher.std{out,err}.log`) capture only the dispatcher process's own top-level output — per-worker logs are still under `~/Library/Logs/moviecal-dispatcher/<LINEAR-ID>-<slug>/` as described above. `KeepAlive.SuccessfulExit: false` restarts the process on a crash or nonzero exit but not on a clean exit; `ThrottleInterval: 30` caps restart frequency if it's crash-looping.
 
