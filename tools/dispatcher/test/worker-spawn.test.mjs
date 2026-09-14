@@ -366,6 +366,8 @@ describe("worker log redaction", () => {
 
   it("still redacts a genuine standalone credential-labeled value", () => {
     expect(redactWorkerOutput("SECRET: ghp_realtoken1234567890abcd", { env: {} })).toBe("SECRET: [REDACTED]");
-    expect(redactWorkerOutput("API_KEY=sk-abcdefghijklmnopqrstuvwx", { env: {} })).toBe("API_KEY=[REDACTED]");
+    // Deliberately not shaped like a real key prefix (e.g. "sk-...") so this
+    // fixture doesn't itself trip CI's separate secret-shape scanner.
+    expect(redactWorkerOutput("API_KEY=totally-fake-test-value-not-real", { env: {} })).toBe("API_KEY=[REDACTED]");
   });
 });
