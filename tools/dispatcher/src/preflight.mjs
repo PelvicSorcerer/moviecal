@@ -74,7 +74,10 @@ export function resolveWorkflowEditAuthorization(issue) {
  * @param {number} context.activeWorktreeCount
  * @param {number} context.concurrencyLimit
  * @param {(secretName: string) => boolean} context.secretPresent
- * @param {(path: string) => boolean} context.worktreePathFree
+ * @param {(path: string) => boolean|string} context.worktreePathFree - true
+ *   when free; false for a plain (generic-message) block; a string for a
+ *   block with a specific reason to surface instead (MOV-185, e.g. a
+ *   same-issue terminal worktree that was not reclaimed because it is dirty)
  * @param {string} context.candidateWorktreePath
  * @returns {{ ok: boolean, reason: string|null }}
  */
@@ -127,10 +130,13 @@ export function evaluatePreflight(issue, context) {
     };
   }
 
-  if (!context.worktreePathFree(context.candidateWorktreePath)) {
+  const pathFree = context.worktreePathFree(context.candidateWorktreePath);
+  if (pathFree !== true) {
     return {
       ok: false,
-      reason: `worktree path already in use: ${context.candidateWorktreePath}`,
+      reason: typeof pathFree === "string"
+        ? pathFree
+        : `worktree path already in use: ${context.candidateWorktreePath}`,
     };
   }
 

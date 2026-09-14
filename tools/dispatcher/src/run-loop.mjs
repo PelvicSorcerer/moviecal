@@ -205,7 +205,19 @@ async function processIssue(issue, ctx) {
     // WorktreeManager.isPathFreeForIssue for why this must not be used in
     // the dry-run preview (dispatcher.mjs deliberately keeps plain
     // isPathFree there instead).
-    worktreePathFree: (p) => worktreeManager.isPathFreeForIssue(p, issue.identifier),
+    //
+    // MOV-185: when the reclaim was refused because the worktree is dirty,
+    // surface WorktreeManager's specific reason instead of the generic
+    // "already in use" message, so the resulting Blocked comment names the
+    // dirty path instead of looking like an ordinary collision. Guarded with
+    // a feature check so a test double that doesn't implement
+    // reclaimBlockedReason (most of run-loop.test.mjs's fakes) still gets
+    // the plain boolean it always has.
+    worktreePathFree: (p) => {
+      const free = worktreeManager.isPathFreeForIssue(p, issue.identifier);
+      if (free || typeof worktreeManager.reclaimBlockedReason !== "function") return free;
+      return worktreeManager.reclaimBlockedReason(p, issue.identifier) ?? false;
+    },
     candidateWorktreePath: candidatePath,
   });
 

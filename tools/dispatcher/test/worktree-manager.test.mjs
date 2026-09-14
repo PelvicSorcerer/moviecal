@@ -204,6 +204,147 @@ describe("WorktreeManager", () => {
     });
   });
 
+  describe("isPathFreeForIssue dirty-worktree guard (MOV-185)", () => {
+    // Like fakeRunner, but with controllable `git status --porcelain`,
+    // `git rev-parse --verify` (remote-tracking ref presence), and
+    // `git rev-list --count` output -- the three commands the MOV-185 dirty
+    // check reads.
+    function fakeDirtyRunner(calls, { porcelain = "", hasRemoteBranch = true, revListCount = "0" } = {}) {
+      return (command, args, opts) => {
+        calls.push({ command, args, opts });
+        if (command === "git" && args[0] === "worktree" && args[1] === "add") {
+          fs.mkdirSync(args[2], { recursive: true });
+          return "";
+        }
+        if (command === "git" && args[0] === "worktree" && args[1] === "remove") {
+          fs.rmSync(args[args.length - 1], { recursive: true, force: true });
+          return "";
+        }
+        if (command === "git" && args[0] === "worktree" && args[1] === "list" && args[2] === "--porcelain") {
+          return `worktree /fake/main/checkout\nHEAD 0000000000000000000000000000000000000000\nbranch refs/heads/master\n\n`;
+        }
+        if (command === "git" && args[0] === "status" && args[1] === "--porcelain") {
+          return porcelain;
+        }
+        if (command === "git" && args[0] === "rev-parse" && args[1] === "--verify") {
+          if (!hasRemoteBranch) throw new Error("fatal: needed a single revision");
+          return "deadbeefcafe\n";
+        }
+        if (command === "git" && args[0] === "rev-list" && args[1] === "--count") {
+          return revListCount;
+        }
+        return "";
+      };
+    }
+
+    it("does not reclaim a terminal-status worktree with uncommitted changes; files remain on disk", () => {
+      const dirtyCalls = [];
+      const dirtyManager = new WorktreeManager({
+        repoRoot: tmpRoot,
+        worktreeRoot,
+        statePath,
+        runner: fakeDirtyRunner(dirtyCalls, { porcelain: " M src/index.js\n?? src/new-file.js\n" }),
+      });
+      const entry = dirtyManager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+      dirtyManager.markStatus("MOV-1", "failed");
+
+      expect(dirtyManager.isPathFreeForIssue(entry.path, "MOV-1")).toBe(false);
+
+      expect(fs.existsSync(entry.path)).toBe(true); // untouched
+      expect(dirtyManager.loadState()["MOV-1"]).toBeDefined(); // record kept
+      expect(dirtyCalls.some((c) => c.args.join(" ") === "worktree remove --force " + entry.path)).toBe(false);
+    });
+
+    it("does not reclaim a terminal-status worktree with a clean tree but a commit not on its remote-tracking branch", () => {
+      const dirtyCalls = [];
+      const dirtyManager = new WorktreeManager({
+        repoRoot: tmpRoot,
+        worktreeRoot,
+        statePath,
+        runner: fakeDirtyRunner(dirtyCalls, { porcelain: "", hasRemoteBranch: true, revListCount: "1\n" }),
+      });
+      const entry = dirtyManager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+      dirtyManager.markStatus("MOV-1", "failed");
+
+      expect(dirtyManager.isPathFreeForIssue(entry.path, "MOV-1")).toBe(false);
+      expect(fs.existsSync(entry.path)).toBe(true);
+    });
+
+    it("does not reclaim a clean tree with local commits never pushed anywhere (no origin/<branch> ref at all)", () => {
+      const dirtyCalls = [];
+      const dirtyManager = new WorktreeManager({
+        repoRoot: tmpRoot,
+        worktreeRoot,
+        statePath,
+        runner: fakeDirtyRunner(dirtyCalls, { porcelain: "", hasRemoteBranch: false, revListCount: "2\n" }),
+      });
+      const entry = dirtyManager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+      dirtyManager.markStatus("MOV-1", "failed");
+
+      expect(dirtyManager.isPathFreeForIssue(entry.path, "MOV-1")).toBe(false);
+      expect(fs.existsSync(entry.path)).toBe(true);
+    });
+
+    it("reclaimBlockedReason names the path and cause when uncommitted changes block a reclaim", () => {
+      const dirtyManager = new WorktreeManager({
+        repoRoot: tmpRoot,
+        worktreeRoot,
+        statePath,
+        runner: fakeDirtyRunner([], { porcelain: " M src/index.js\n" }),
+      });
+      const entry = dirtyManager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+      dirtyManager.markStatus("MOV-1", "failed");
+
+      const reason = dirtyManager.reclaimBlockedReason(entry.path, "MOV-1");
+      expect(reason).toContain(entry.path);
+      expect(reason).toMatch(/uncommitted/);
+    });
+
+    it("reclaimBlockedReason names the path and cause when unpushed commits block a reclaim", () => {
+      const dirtyManager = new WorktreeManager({
+        repoRoot: tmpRoot,
+        worktreeRoot,
+        statePath,
+        runner: fakeDirtyRunner([], { porcelain: "", revListCount: "1\n" }),
+      });
+      const entry = dirtyManager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+      dirtyManager.markStatus("MOV-1", "failed");
+
+      const reason = dirtyManager.reclaimBlockedReason(entry.path, "MOV-1");
+      expect(reason).toContain(entry.path);
+      expect(reason).toMatch(/not present on its remote-tracking branch/);
+    });
+
+    it("reclaimBlockedReason returns null for a clean reclaimable worktree and for unrelated blocked cases", () => {
+      const dirtyManager = new WorktreeManager({
+        repoRoot: tmpRoot,
+        worktreeRoot,
+        statePath,
+        runner: fakeDirtyRunner([]),
+      });
+      const entry = dirtyManager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+      dirtyManager.markStatus("MOV-1", "failed");
+      expect(dirtyManager.reclaimBlockedReason(entry.path, "MOV-1")).toBeNull();
+
+      const activeEntry = dirtyManager.create({ id: "MOV-2", name: "MOV-2-fix", branch: "agent/MOV-2-fix" });
+      expect(dirtyManager.reclaimBlockedReason(activeEntry.path, "MOV-2")).toBeNull();
+    });
+
+    it("a clean terminal-status worktree is still reclaimed exactly as before (regression guard)", () => {
+      const dirtyManager = new WorktreeManager({
+        repoRoot: tmpRoot,
+        worktreeRoot,
+        statePath,
+        runner: fakeDirtyRunner([]),
+      });
+      const entry = dirtyManager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+      dirtyManager.markStatus("MOV-1", "failed");
+
+      expect(dirtyManager.isPathFreeForIssue(entry.path, "MOV-1")).toBe(true);
+      expect(fs.existsSync(entry.path)).toBe(false);
+    });
+  });
+
   it("symlinks the shared env.local into the new worktree when a source is given", () => {
     const envSource = path.join(tmpRoot, "env.local");
     fs.writeFileSync(envSource, "NEXT_PUBLIC_SUPABASE_URL=http://example.test\n");
