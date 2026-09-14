@@ -200,6 +200,143 @@ describe("LinearClient", () => {
       const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl: mockFetch({ issue: null }) });
       expect(await client.issueSnapshot("id-gone")).toBeNull();
     });
+
+    it("normalizes child sub-issues for the parent-completion guard (MOV-172)", async () => {
+      const fetchImpl = mockFetch({
+        issue: {
+          id: "id-1",
+          identifier: "MOV-1",
+          title: "Parent",
+          url: "https://linear.app/moviecal/issue/MOV-1",
+          project: null,
+          delegate: null,
+          state: { name: "In Review" },
+          labels: { nodes: [] },
+          relations: { nodes: [] },
+          children: {
+            nodes: [
+              { id: "id-2", identifier: "MOV-2", state: { name: "Done", type: "completed" } },
+              { id: "id-3", identifier: "MOV-3", state: { name: "Agent Working", type: "started" } },
+            ],
+          },
+        },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const snapshot = await client.issueSnapshot("id-1");
+
+      expect(snapshot.children).toEqual([
+        { id: "id-2", identifier: "MOV-2", stateName: "Done", stateType: "completed" },
+        { id: "id-3", identifier: "MOV-3", stateName: "Agent Working", stateType: "started" },
+      ]);
+      const { query } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+      expect(query).toMatch(/children\s*\{\s*nodes\s*\{\s*id\s+identifier\s+state\s*\{\s*name\s+type\s*\}/);
+    });
+
+    it("normalizes a childless issue's children to an empty array", async () => {
+      const fetchImpl = mockFetch({
+        issue: {
+          id: "id-1",
+          identifier: "MOV-1",
+          title: "T",
+          url: "https://linear.app/moviecal/issue/MOV-1",
+          project: null,
+          delegate: null,
+          state: { name: "In Review" },
+          labels: { nodes: [] },
+          relations: { nodes: [] },
+        },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const snapshot = await client.issueSnapshot("id-1");
+
+      expect(snapshot.children).toEqual([]);
+    });
+  });
+
+  describe("issuesWithChildren (MOV-172)", () => {
+    it("fetches every team issue with its child sub-issues, across every workflow state", async () => {
+      const fetchImpl = mockFetch({
+        issues: {
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [
+            {
+              id: "id-366",
+              identifier: "MOV-366",
+              state: { name: "In Review", type: "started" },
+              children: {
+                nodes: [
+                  { id: "id-373", identifier: "MOV-373", state: { name: "Done", type: "completed" } },
+                  { id: "id-374", identifier: "MOV-374", state: { name: "Done", type: "completed" } },
+                ],
+              },
+            },
+            {
+              id: "id-1",
+              identifier: "MOV-1",
+              state: { name: "Backlog", type: "unstarted" },
+              children: { nodes: [] },
+            },
+          ],
+        },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const issues = await client.issuesWithChildren({ teamKey: "MOV" });
+
+      expect(issues).toEqual([
+        {
+          id: "id-366",
+          identifier: "MOV-366",
+          stateName: "In Review",
+          stateType: "started",
+          children: [
+            { id: "id-373", identifier: "MOV-373", stateName: "Done", stateType: "completed" },
+            { id: "id-374", identifier: "MOV-374", stateName: "Done", stateType: "completed" },
+          ],
+        },
+        { id: "id-1", identifier: "MOV-1", stateName: "Backlog", stateType: "unstarted", children: [] },
+      ]);
+      const { query, variables } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+      expect(query).toMatch(/team:\s*\{\s*key:\s*\{\s*eq:\s*\$teamKey\s*\}\s*\}/);
+      expect(query).not.toMatch(/state:\s*\{/);
+      expect(variables).toEqual({ teamKey: "MOV", after: null });
+    });
+
+    it("paginates through every page", async () => {
+      const fetchImpl = vi.fn().mockImplementation(async (_url, init) => {
+        const { variables } = JSON.parse(init.body);
+        if (!variables.after) {
+          return {
+            json: async () => ({
+              data: {
+                issues: {
+                  pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+                  nodes: [{ id: "id-1", identifier: "MOV-1", state: { name: "Backlog", type: "unstarted" }, children: { nodes: [] } }],
+                },
+              },
+            }),
+          };
+        }
+        return {
+          json: async () => ({
+            data: {
+              issues: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{ id: "id-2", identifier: "MOV-2", state: { name: "Backlog", type: "unstarted" }, children: { nodes: [] } }],
+              },
+            },
+          }),
+        };
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const issues = await client.issuesWithChildren({ teamKey: "MOV" });
+
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(issues.map((x) => x.identifier)).toEqual(["MOV-1", "MOV-2"]);
+    });
   });
 
   it("issuesForPromotion adds stateName + recentComments and filters by a state list (MOV-129)", async () => {

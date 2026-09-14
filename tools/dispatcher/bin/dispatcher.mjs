@@ -17,6 +17,12 @@
 //                                     (MOV-129); the run loop does this each cycle
 //   dispatcher priorities [--dry-run] [--once] - dependency-aware priority
 //                                     propagation across incomplete issues
+//   dispatcher reconcile-parents [--dry-run] [--once] - complete a parent
+//                                     issue once every child sub-issue is
+//                                     complete, and reopen one that was
+//                                     completed while a child was still open
+//                                     (MOV-172); the run loop does this each
+//                                     cycle
 //   dispatcher run --once          - process every currently-eligible Ready-for-Agent
 //                                     issue exactly once, then exit (real side effects:
 //                                     creates worktrees, spawns workers, opens PRs)
@@ -67,6 +73,7 @@ import { runOnce } from "../src/run-loop.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
 import { propagatePriorities, TERMINAL_PRIORITY_STATE_TYPES } from "../src/priority-propagation.mjs";
+import { reconcileParentCompletion, PARENT_REOPEN_STATE_NAME } from "../src/parent-completion-guard.mjs";
 import { spawnWorker } from "../src/worker-spawn.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "../src/worker-guard.mjs";
 import { publishWorkerResult } from "../src/worker-publish.mjs";
@@ -726,6 +733,66 @@ async function cmdPriorities({ dryRun = false } = {}) {
   }
 }
 
+/**
+ * Standalone/poll-cycle parent-completion reconciliation (MOV-172): complete
+ * a parent once every child sub-issue is complete, and reopen a parent that
+ * was completed while a child was still open. See
+ * `src/parent-completion-guard.mjs` for the two symmetric checks.
+ */
+async function cmdReconcileParentsOnce({ dryRun = false } = {}) {
+  const built = buildLinearClient();
+  if (!built) return 1;
+  const { client: linearClient, teamKey } = built;
+
+  const states = await linearClient.workflowStates(teamKey);
+  const doneState = states.find((s) => s.name === RUN_STATE_NAMES.done);
+  const reopenState = states.find((s) => s.name === PARENT_REOPEN_STATE_NAME);
+  if (!doneState || !reopenState) {
+    console.error(
+      `workflow state not found (need "${RUN_STATE_NAMES.done}" and "${PARENT_REOPEN_STATE_NAME}"; has the workspace been provisioned? see tools/dispatcher/scripts/provision-linear-workspace.mjs)`,
+    );
+    return 1;
+  }
+
+  const parents = await linearClient.issuesWithChildren({ teamKey });
+  const results = await reconcileParentCompletion(parents, {
+    linearClient,
+    doneStateId: doneState.id,
+    reopenStateId: reopenState.id,
+    dryRun,
+    logger: console,
+  });
+
+  for (const result of results) {
+    if (result.action === "completed") {
+      console.log(`${result.identifier}: ${dryRun ? "would complete" : "completed"} — all children complete (${result.children.join(", ")})`);
+    } else if (result.action === "reopened") {
+      console.log(`${result.identifier}: ${dryRun ? "would reopen" : "reopened"} — non-terminal child sub-issue(s) ${result.offendingChildren.join(", ")}`);
+    } else {
+      console.log(`${result.identifier}: error — ${result.error}`);
+    }
+  }
+  const applied = results.filter((result) => result.action === "completed" || result.action === "reopened");
+  console.log(
+    dryRun
+      ? `Dry run — ${applied.length} parent(s) would change, no Linear state changed.`
+      : `Applied ${applied.length} parent-completion reconciliation change(s).`,
+  );
+  return 0;
+}
+
+async function cmdReconcileParents({ dryRun = false } = {}) {
+  if (dryRun) return cmdReconcileParentsOnce({ dryRun: true });
+  const lock = new DispatcherLock(dispatcherLockPath());
+  try { lock.acquire(); } catch (err) { console.error(err.message); return 2; }
+  process.once("exit", () => lock.release());
+  try {
+    return await cmdReconcileParentsOnce({ dryRun: false });
+  } finally {
+    lock.release();
+  }
+}
+
 /** Run a promote pass inside the poll loop; never let it abort dispatch. */
 async function promotePass() {
   try {
@@ -744,6 +811,15 @@ async function propagatePass() {
   }
 }
 
+/** Run a parent-completion reconciliation pass inside the poll loop; never abort dispatch (MOV-172). */
+async function reconcileParentsPass() {
+  try {
+    await cmdReconcileParentsOnce({ dryRun: false });
+  } catch (err) {
+    console.error("Parent-completion reconciliation pass failed (continuing to dispatch):", err.message);
+  }
+}
+
 async function cmdRunOnce() {
   // buildLinearClient() must run first: reconcileWorktrees() below takes its
   // result (a possibly-undefined client/teamKey) as arguments, and degrades
@@ -758,6 +834,10 @@ async function cmdRunOnce() {
   // promotePass() and reportReviewCi() run below, so reconciliation never
   // races the promote/dispatch pass. It is the only call to that function.
   await reconcileWorktrees(linearClient, teamKey);
+  // MOV-172: corrects parent/child completion state before priority
+  // propagation and promotion read it, so both passes see a parent's real
+  // (not premature/missed) status.
+  await reconcileParentsPass();
   await propagatePass();
   await promotePass();
 
@@ -845,6 +925,11 @@ async function main() {
       process.exitCode = await cmdPriorities({ dryRun });
       break;
     }
+    case "reconcile-parents": {
+      const dryRun = rest.includes("--dry-run");
+      process.exitCode = await cmdReconcileParents({ dryRun });
+      break;
+    }
     case "run": {
       const once = rest.includes("--once");
       const intervalFlagIdx = rest.indexOf("--interval");
@@ -854,7 +939,7 @@ async function main() {
     }
     default:
       console.error(
-        "Usage: dispatcher <doctor|dry-run|shadow|agent-signal|gc|promote|priorities|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
+        "Usage: dispatcher <doctor|dry-run|shadow|agent-signal|gc|promote|priorities|reconcile-parents|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
       );
       process.exitCode = 1;
   }

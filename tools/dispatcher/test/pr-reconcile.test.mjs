@@ -411,6 +411,66 @@ describe("reconcileReviewWorktrees", () => {
       expect(linearClient.calls).toHaveLength(2); // unchanged -- no new Linear writes
     });
 
+    describe("parent-completion guard (MOV-172)", () => {
+      it("refuses to complete a parent with a non-terminal child sub-issue, and retries next pass", async () => {
+        const manager = fakeManager({
+          "MOV-1": { id: "MOV-1", status: "review", prNumber: 42, linearIssueId: "issue-uuid-1" },
+        });
+        const checkPrStateFn = () => ({ state: "MERGED", mergedAt: "2026-09-08T00:00:00Z" });
+        const linearClient = fakeLinearClient({
+          snapshots: {
+            "issue-uuid-1": {
+              stateName: "In Review",
+              children: [{ id: "child-1", identifier: "MOV-2", stateName: "Agent Working" }],
+            },
+          },
+        });
+
+        const changes = await reconcileReviewWorktrees(manager, {
+          ghRepo: "owner/repo",
+          checkPrStateFn,
+          linearClient,
+          doneStateId: "state-done",
+        });
+
+        // The worktree-bookkeeping half still records the real merge...
+        expect(changes).toEqual([{ id: "MOV-1", prNumber: 42, from: "review", to: "merged" }]);
+        // ...but the Linear side is refused, not completed, and left pending
+        // so a later pass (once MOV-2 is done) can retry successfully.
+        expect(linearClient.calls).toEqual([]);
+        expect(manager._finalState()["MOV-1"].linearSynced).toBeUndefined();
+      });
+
+      it("completes normally once every child sub-issue is terminal", async () => {
+        const manager = fakeManager({
+          "MOV-1": { id: "MOV-1", status: "review", prNumber: 42, linearIssueId: "issue-uuid-1" },
+        });
+        const checkPrStateFn = () => ({ state: "MERGED", mergedAt: "2026-09-08T00:00:00Z" });
+        const linearClient = fakeLinearClient({
+          snapshots: {
+            "issue-uuid-1": {
+              stateName: "In Review",
+              children: [{ id: "child-1", identifier: "MOV-2", stateName: "Done" }],
+            },
+          },
+        });
+
+        const changes = await reconcileReviewWorktrees(manager, {
+          ghRepo: "owner/repo",
+          checkPrStateFn,
+          linearClient,
+          doneStateId: "state-done",
+        });
+
+        expect(changes).toEqual([{ id: "MOV-1", prNumber: 42, from: "review", to: "merged" }]);
+        expect(linearClient.calls).toEqual([
+          { type: "moveToState", issueId: "issue-uuid-1", stateId: "state-done" },
+          { type: "addComment", issueId: "issue-uuid-1", body: expect.stringContaining("merged") },
+        ]);
+        expect(manager._finalState()["MOV-1"].linearSynced).toBe(true);
+      });
+    });
+
     it("does not touch Linear at all when no linearClient is configured", async () => {
       const manager = fakeManager({
         "MOV-1": { id: "MOV-1", status: "review", prNumber: 42, linearIssueId: "issue-uuid-1" },

@@ -137,12 +137,14 @@ export class LinearClient {
   }
 
   /**
-   * Re-read a single issue by id, with its current workflow state (MOV-143).
-   * Used immediately before the dispatcher commits to an issue, so a route or
-   * delegation change made after the poll snapshot is seen and honoured rather
-   * than raced past. Returns `null` when the issue is gone or not visible to
-   * this credential — which the caller treats as "do not claim", never as
-   * "unchanged".
+   * Re-read a single issue by id, with its current workflow state (MOV-143)
+   * and child sub-issues (MOV-172, `id identifier state{name}` each — enough
+   * for `parent-completion-guard.mjs`'s `assertParentCompletable` without a
+   * second query). Used immediately before the dispatcher commits to an
+   * issue, so a route or delegation change made after the poll snapshot is
+   * seen and honoured rather than raced past. Returns `null` when the issue
+   * is gone or not visible to this credential — which the caller treats as
+   * "do not claim", never as "unchanged".
    */
   async issueSnapshot(issueId) {
     const query = `
@@ -150,13 +152,68 @@ export class LinearClient {
         issue(id: $id) {
           ${ISSUE_FIELDS}
           state { name }
+          children { nodes { id identifier state { name type } } }
         }
       }
     `;
     const data = await this.request(query, { id: issueId });
     const node = data && data.issue;
     if (!node) return null;
-    return { ...normalizeIssue(node), stateName: node.state ? node.state.name : null };
+    return {
+      ...normalizeIssue(node),
+      stateName: node.state ? node.state.name : null,
+      children: normalizeChildren(node.children),
+    };
+  }
+
+  /**
+   * Every issue for a team with its direct child sub-issues (MOV-172), across
+   * every workflow state — a parent that should complete or a parent that
+   * was wrongly completed can each be in any state, so this deliberately
+   * does not filter server-side by state the way `issuesForPriorityPropagation`
+   * does. Callers (`parent-completion-guard.mjs`'s `reconcileParentCompletion`)
+   * skip any issue with no children, so fetching the whole team and filtering
+   * client-side is the safe default until a "has children" server-side filter
+   * is confirmed against a live workspace.
+   */
+  async issuesWithChildren({ teamKey }) {
+    const query = `
+      query($teamKey: String!, $after: String) {
+        issues(filter: {
+          team: { key: { eq: $teamKey } }
+        }, first: 100, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id
+            identifier
+            state { name type }
+            children { nodes { id identifier state { name type } } }
+          }
+        }
+      }
+    `;
+    const out = [];
+    let after = null;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const data = await this.request(query, { teamKey, after });
+      const issues = data.issues || {};
+      const nodes = issues.nodes || [];
+      out.push(
+        ...nodes.map((node) => ({
+          id: node.id,
+          identifier: node.identifier,
+          stateName: node.state ? node.state.name : null,
+          stateType: node.state ? node.state.type : null,
+          children: normalizeChildren(node.children),
+        })),
+      );
+      const pageInfo = issues.pageInfo || {};
+      if (!pageInfo.hasNextPage) break;
+      after = pageInfo.endCursor;
+      if (!after) break;
+    }
+    return out;
   }
 
   /**
@@ -424,6 +481,17 @@ export class LinearClient {
     const data = await this.request(query, { teamKey });
     return data.workflowStates.nodes;
   }
+}
+
+/** Shared normalization for `children { nodes { id identifier state { name type } } }`
+ * selections (MOV-172), so `issueSnapshot` and `issuesWithChildren` never drift. */
+function normalizeChildren(children) {
+  return (children ? children.nodes : []).map((child) => ({
+    id: child.id,
+    identifier: child.identifier,
+    stateName: child.state ? child.state.name : null,
+    stateType: child.state ? child.state.type : null,
+  }));
 }
 
 function normalizeIssue(node) {

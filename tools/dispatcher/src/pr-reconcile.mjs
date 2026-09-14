@@ -20,6 +20,7 @@
 
 import { execFileSync } from "node:child_process";
 import { COMPLETED_BLOCKER_STATE_NAMES } from "./dependency-gate.mjs";
+import { assertParentCompletable } from "./parent-completion-guard.mjs";
 
 export function defaultRunner(command, args, opts = {}) {
   return execFileSync(command, args, { encoding: "utf8", ...opts });
@@ -181,6 +182,13 @@ export function checkPrState(prNumber, repo, runner = defaultRunner) {
  * issue's live state first so a sync that already happened (or a manual
  * close) is never double-written or double-commented.
  *
+ * MOV-172: this is the dispatcher's one code path that completes an issue
+ * from a PR-merge observation, so it is exactly the site MOV-172's guard
+ * exists for -- `assertParentCompletable` refuses the completion (and the
+ * caller retries next pass) if the issue has any non-terminal child
+ * sub-issue, rather than completing a parent because a merged PR mentioned
+ * it while sibling work is still outstanding.
+ *
  * @returns {Promise<{synced: boolean, alreadyDone?: boolean, reason?: string}>}
  */
 async function ensureLinearMergeSynced(entry, ctx) {
@@ -194,6 +202,7 @@ async function ensureLinearMergeSynced(entry, ctx) {
     return { synced: true, alreadyDone: true };
   }
   if (!doneStateId) return { synced: false, reason: "no doneStateId configured" };
+  assertParentCompletable(snapshot, snapshot.children);
   await linearClient.moveToState(entry.linearIssueId, doneStateId);
   await linearClient.addComment(
     entry.linearIssueId,

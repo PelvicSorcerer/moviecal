@@ -31,20 +31,24 @@ function bodyOf(fnName) {
 }
 
 describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
-  it("cmdRunOnce awaits reconcile -> propagate -> promote before reading Ready for Agent", () => {
+  it("cmdRunOnce awaits reconcile -> reconcileParents -> propagate -> promote before reading Ready for Agent", () => {
     const body = bodyOf("cmdRunOnce");
     const reconcileAt = body.indexOf("await reconcileWorktrees(");
+    const reconcileParentsAt = body.indexOf("await reconcileParentsPass(");
     const propagateAt = body.indexOf("await propagatePass(");
     const promoteAt = body.indexOf("await promotePass(");
     const dispatchReadAt = body.indexOf("issuesInState(");
     expect(reconcileAt, "reconcileWorktrees() not called in cmdRunOnce").toBeGreaterThan(-1);
+    expect(reconcileParentsAt, "reconcileParentsPass() not called in cmdRunOnce").toBeGreaterThan(-1);
     expect(propagateAt, "propagatePass() not called in cmdRunOnce").toBeGreaterThan(-1);
     expect(promoteAt, "promotePass() not called in cmdRunOnce").toBeGreaterThan(-1);
     expect(dispatchReadAt, "issuesInState() not called in cmdRunOnce").toBeGreaterThan(-1);
-    expect(reconcileAt).toBeLessThan(propagateAt);
+    expect(reconcileAt).toBeLessThan(reconcileParentsAt);
+    expect(reconcileParentsAt).toBeLessThan(propagateAt);
     expect(propagateAt).toBeLessThan(promoteAt);
     expect(promoteAt).toBeLessThan(dispatchReadAt);
     expect(body).toMatch(/await\s+reconcileWorktrees\(/);
+    expect(body).toMatch(/await\s+reconcileParentsPass\(\)/);
     expect(body).toMatch(/await\s+propagatePass\(\)/);
     expect(body).toMatch(/await\s+promotePass\(\)/);
   });
@@ -63,6 +67,13 @@ describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
     expect(body).toMatch(/cmdPrioritiesOnce/);
   });
 
+  it("reconcileParentsPass swallows errors so a reconciliation failure cannot abort dispatch (MOV-172)", () => {
+    const body = bodyOf("reconcileParentsPass");
+    expect(body).toMatch(/try\s*\{/);
+    expect(body).toMatch(/catch/);
+    expect(body).toMatch(/cmdReconcileParentsOnce/);
+  });
+
   it("standalone priorities command acquires the dispatcher lock for mutating runs", () => {
     const body = bodyOf("cmdPriorities");
     expect(body).toMatch(/if\s*\(dryRun\)\s*return\s+cmdPrioritiesOnce/);
@@ -70,6 +81,20 @@ describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
     expect(body).toMatch(/lock\.acquire\(\)/);
     expect(body).toMatch(/cmdPrioritiesOnce\(\{\s*dryRun:\s*false\s*\}\)/);
     expect(body).toMatch(/finally\s*\{\s*lock\.release\(\)/);
+  });
+
+  it("standalone reconcile-parents command acquires the dispatcher lock for mutating runs (MOV-172)", () => {
+    const body = bodyOf("cmdReconcileParents");
+    expect(body).toMatch(/if\s*\(dryRun\)\s*return\s+cmdReconcileParentsOnce/);
+    expect(body).toMatch(/new DispatcherLock\(dispatcherLockPath\(\)\)/);
+    expect(body).toMatch(/lock\.acquire\(\)/);
+    expect(body).toMatch(/cmdReconcileParentsOnce\(\{\s*dryRun:\s*false\s*\}\)/);
+    expect(body).toMatch(/finally\s*\{\s*lock\.release\(\)/);
+  });
+
+  it("registers reconcile-parents as a CLI subcommand", () => {
+    expect(source).toMatch(/case "reconcile-parents":/);
+    expect(source).toMatch(/dispatcher <doctor\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|reconcile-parents\|run>/);
   });
 });
 
