@@ -56,8 +56,14 @@ function fakeWorktreeManager({ activeCount = 0, pathFree = true } = {}) {
  * and un-takes it, mirroring WorktreeManager.isPathFreeForIssue's real
  * reclaim behavior. Defaults to empty, so every existing test using this
  * fake without the option keeps today's plain-collision behavior.
+ *
+ * `dirtyReasons` (MOV-185) simulates a path occupied by this same issue's
+ * own terminal-status worktree that is NOT reclaimed because it is dirty:
+ * isPathFreeForIssue still blocks (returns false, path stays taken), and
+ * reclaimBlockedReason returns the configured string, mirroring the real
+ * WorktreeManager's distinguishing-reason pair of methods.
  */
-function statefulWorktreeManager({ reclaimablePaths = new Set() } = {}) {
+function statefulWorktreeManager({ reclaimablePaths = new Set(), dirtyReasons = new Map() } = {}) {
   const taken = new Set();
   const reclaimed = [];
   return {
@@ -69,6 +75,7 @@ function statefulWorktreeManager({ reclaimablePaths = new Set() } = {}) {
     // real worktree path is derived inside run-loop.mjs and isn't known
     // ahead of time.
     reclaimablePaths,
+    dirtyReasons,
     activeCount: () => taken.size,
     isPathFree: (p) => !taken.has(p),
     isPathFreeForIssue(p, issueId) {
@@ -79,6 +86,9 @@ function statefulWorktreeManager({ reclaimablePaths = new Set() } = {}) {
         return true;
       }
       return false;
+    },
+    reclaimBlockedReason(p, issueId) {
+      return dirtyReasons.get(p) ?? null;
     },
     create(args) {
       const path = `/fake/worktrees/${args.name}`;
@@ -687,6 +697,30 @@ describe("runOnce", () => {
         expect(worktreeManager.reclaimed).toEqual([{ path: failedPath, issueId: ISSUE.identifier }]);
         expect(worktreeManager.createCalls).toHaveLength(2); // dispatched again, a fresh worktree was actually created
         expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(2);
+      });
+
+      it("MOV-185: a requeue against its own dirty retained worktree stays blocked with a specific reason, not the generic message", async () => {
+        const worktreeManager = statefulWorktreeManager();
+        const ctx = baseCtx({ worktreeManager });
+
+        const [first] = await runOnce([ISSUE], ctx);
+        expect(first.outcome).toBe("in-review");
+        const failedPath = worktreeManager.createCalls[0] && `/fake/worktrees/${worktreeManager.createCalls[0].name}`;
+        worktreeManager.markStatus(ISSUE.identifier, "failed");
+        worktreeManager.dirtyReasons.set(
+          failedPath,
+          `worktree at ${failedPath} for ${ISSUE.identifier} has uncommitted changes and was not reclaimed`,
+        );
+
+        const [second] = await runOnce([ISSUE], ctx);
+
+        expect(second.outcome).toBe("blocked");
+        expect(second.reason).toBe(
+          `worktree at ${failedPath} for ${ISSUE.identifier} has uncommitted changes and was not reclaimed`,
+        );
+        expect(second.reason).not.toMatch(/already in use/);
+        expect(worktreeManager.reclaimed).toEqual([]); // not reclaimed
+        expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1); // no second dispatch
       });
 
       it("stays a no-op across repeated cycles for an ineligible issue — no comment spam", async () => {

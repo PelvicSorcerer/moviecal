@@ -96,6 +96,16 @@ describe("evaluatePreflight", () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toMatch(/already in use/);
   });
+
+  it("uses a specific reason instead of the generic message when worktreePathFree returns a string (MOV-185)", () => {
+    const context = baseContext({
+      worktreePathFree: () => "worktree at /tmp/worktree for MOV-1 has uncommitted changes and was not reclaimed",
+    });
+    const result = evaluatePreflight({ labels: [], blockedByIds: [] }, context);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("worktree at /tmp/worktree for MOV-1 has uncommitted changes and was not reclaimed");
+    expect(result.reason).not.toMatch(/already in use/);
+  });
 });
 
 describe("slugify / worktreeName / branchName", () => {

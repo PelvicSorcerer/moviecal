@@ -125,9 +125,18 @@ export class WorktreeManager {
    * Reclaims (removes the local git worktree and its local `agent/*`
    * branch only -- never the remote branch, in case a draft PR still
    * points at it) and returns true when the occupying entry is this same
-   * issue and its status is terminal. Any other case (a different issue's
-   * worktree, an `active`/`review` entry, or a path with no matching state
-   * entry at all) is unchanged from `isPathFree`: still blocked.
+   * issue, its status is terminal, and it is clean (MOV-185): no
+   * uncommitted/untracked changes (`uncommittedChanges()`) and no local
+   * commits missing from its remote-tracking branch. A dirty terminal
+   * worktree may hold real, unrecovered work -- see the MOV-172 near-miss
+   * in docs/operators/local-execution.md §Worktree lifecycle -- so it is
+   * left untouched and still blocks, exactly like any other occupied path.
+   * `reclaimBlockedReason()` below reports why, for a caller that wants a
+   * more specific message than "worktree path already in use".
+   *
+   * Any other case (a different issue's worktree, an `active`/`review`
+   * entry, or a path with no matching state entry at all) is unchanged
+   * from `isPathFree`: still blocked.
    *
    * This performs a real side effect (an actual `git worktree remove`) and
    * must only be wired into the live dispatch path, never into a `--dry-run`
@@ -141,14 +150,77 @@ export class WorktreeManager {
    * `git worktree remove`, which only touches the worktree's own files.
    */
   isPathFreeForIssue(worktreePath, issueId) {
-    if (!fs.existsSync(worktreePath)) return true;
-    const entry = this.loadState()[issueId];
-    const isTerminal = entry && ["failed", "abandoned", "merged"].includes(entry.status);
-    if (entry && entry.path === worktreePath && isTerminal) {
+    const evaluation = this._evaluateReclaim(worktreePath, issueId);
+    if (evaluation.status === "free") return true;
+    if (evaluation.status === "reclaimable") {
       this.cleanup(issueId, { deleteRemoteBranch: false });
       return true;
     }
     return false;
+  }
+
+  /**
+   * When `isPathFreeForIssue()` refuses to reclaim an otherwise-eligible
+   * terminal-status worktree specifically because it is dirty (MOV-185),
+   * returns a human-readable reason naming the worktree path and what kind
+   * of unsaved work was found. Returns `null` for every other blocked case
+   * (a different issue's worktree, an active/review entry, or an untracked
+   * path) so the caller falls back to its own generic message -- those
+   * cases were never at risk of the silent-data-loss this method exists to
+   * name.
+   */
+  reclaimBlockedReason(worktreePath, issueId) {
+    const evaluation = this._evaluateReclaim(worktreePath, issueId);
+    return evaluation.status === "dirty" ? evaluation.reason : null;
+  }
+
+  /** Shared decision logic behind `isPathFreeForIssue()`/`reclaimBlockedReason()`. */
+  _evaluateReclaim(worktreePath, issueId) {
+    if (!fs.existsSync(worktreePath)) return { status: "free" };
+    const entry = this.loadState()[issueId];
+    const isTerminal = entry && ["failed", "abandoned", "merged"].includes(entry.status);
+    if (!entry || entry.path !== worktreePath || !isTerminal) return { status: "blocked" };
+
+    const uncommitted = this.uncommittedChanges(worktreePath);
+    if (uncommitted.length > 0) {
+      return {
+        status: "dirty",
+        reason: `worktree at ${worktreePath} for ${issueId} has uncommitted changes (${uncommitted.join(", ")}) and was not reclaimed -- see docs/operators/local-execution.md §Worktree lifecycle`,
+      };
+    }
+    if (this.hasUnpushedCommits(worktreePath, entry.branch)) {
+      return {
+        status: "dirty",
+        reason: `worktree at ${worktreePath} for ${issueId} has commits on ${entry.branch} not present on its remote-tracking branch and was not reclaimed -- see docs/operators/local-execution.md §Worktree lifecycle`,
+      };
+    }
+    return { status: "reclaimable" };
+  }
+
+  /**
+   * True if `branch`'s tip in `worktreePath` holds local commits missing
+   * from its remote-tracking branch (MOV-185). Compares against
+   * `origin/<branch>` when that ref exists locally; falls back to
+   * `origin/master` -- the branch's own creation base, see `create()` --
+   * when it doesn't, since a branch that was never pushed at all can still
+   * hold real local commits that would otherwise be silently discarded.
+   * Like `uncommittedChanges()`, this never fetches: it only compares
+   * against whatever remote-tracking refs are already known locally.
+   */
+  hasUnpushedCommits(worktreePath, branch) {
+    let baseRef = `origin/${branch}`;
+    try {
+      this.runner("git", ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`], { cwd: worktreePath });
+    } catch {
+      baseRef = "origin/master";
+    }
+    let out;
+    try {
+      out = this.runner("git", ["rev-list", "--count", `${baseRef}..HEAD`], { cwd: worktreePath });
+    } catch {
+      return true; // can't prove it's clean -- fail closed, don't reclaim
+    }
+    return Number(String(out).trim()) > 0;
   }
 
   /**
