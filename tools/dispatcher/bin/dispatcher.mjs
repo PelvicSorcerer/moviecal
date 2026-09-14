@@ -301,6 +301,10 @@ async function cmdDryRun({ fixturePath } = {}) {
       activeWorktreeCount: activeWorktreeCount.ok ? activeWorktreeCount.value : 0,
       concurrencyLimit: DEFAULT_CONCURRENCY,
       secretPresent: () => fs.existsSync(envLocalPath()),
+      // dry-run: deliberately plain isPathFree, not isPathFreeForIssue
+      // (MOV-181) -- the latter performs a real `git worktree remove` when
+      // it reclaims, which would violate this command's "no worktree,
+      // branch, or Linear state was changed" guarantee.
       worktreePathFree: (p) => manager.isPathFree(p),
       candidateWorktreePath: path.join(worktreeRoot(), name),
     };

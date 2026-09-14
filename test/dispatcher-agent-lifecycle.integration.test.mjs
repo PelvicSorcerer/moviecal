@@ -123,6 +123,17 @@ function registryWorktreeManager() {
     state,
     activeCount: () => [...state.values()].filter((e) => e.status === "active").length,
     isPathFree: (p) => ![...state.values()].some((e) => e.path === p),
+    // MOV-181: mirrors WorktreeManager.isPathFreeForIssue's real semantics
+    // against this fake's own in-memory registry, since run-loop.mjs now
+    // calls this (not isPathFree) when building the preflight context.
+    isPathFreeForIssue(p, issueId) {
+      const entry = state.get(issueId);
+      if (entry && entry.path === p && ["failed", "abandoned", "merged"].includes(entry.status)) {
+        state.delete(issueId);
+        return true;
+      }
+      return ![...state.values()].some((e) => e.path === p);
+    },
     create(args) {
       const entry = { ...args, path: `/tmp/worktrees/${args.name}`, status: "active" };
       state.set(args.id, entry);

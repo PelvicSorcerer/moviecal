@@ -33,6 +33,10 @@ function fakeWorktreeManager({ activeCount = 0, pathFree = true } = {}) {
     statusCalls: [],
     activeCount: () => activeCount,
     isPathFree: () => pathFree,
+    // MOV-181: real run-loop.mjs now calls this, not isPathFree, when
+    // building the preflight context -- default to the same behavior so
+    // every existing test using this fake is unaffected.
+    isPathFreeForIssue: () => pathFree,
     create(args) {
       this.createCalls.push(args);
       return { path: `/fake/worktrees/${args.name}`, ...args };
@@ -46,14 +50,36 @@ function fakeWorktreeManager({ activeCount = 0, pathFree = true } = {}) {
 /**
  * A worktree manager that actually tracks taken paths, so a second pass over
  * the same issue collides the way the real one does (MOV-143 idempotency).
+ *
+ * `reclaimablePaths` (MOV-181) simulates a path occupied by this same
+ * issue's own retained terminal-status worktree: isPathFreeForIssue frees
+ * and un-takes it, mirroring WorktreeManager.isPathFreeForIssue's real
+ * reclaim behavior. Defaults to empty, so every existing test using this
+ * fake without the option keeps today's plain-collision behavior.
  */
-function statefulWorktreeManager() {
+function statefulWorktreeManager({ reclaimablePaths = new Set() } = {}) {
   const taken = new Set();
+  const reclaimed = [];
   return {
     createCalls: [],
     statusCalls: [],
+    reclaimed,
+    // Exposed (not just closed over) so a test can mark a path reclaimable
+    // after discovering it from a prior runOnce()'s createCalls, since the
+    // real worktree path is derived inside run-loop.mjs and isn't known
+    // ahead of time.
+    reclaimablePaths,
     activeCount: () => taken.size,
     isPathFree: (p) => !taken.has(p),
+    isPathFreeForIssue(p, issueId) {
+      if (!taken.has(p)) return true;
+      if (reclaimablePaths.has(p)) {
+        taken.delete(p);
+        reclaimed.push({ path: p, issueId });
+        return true;
+      }
+      return false;
+    },
     create(args) {
       const path = `/fake/worktrees/${args.name}`;
       taken.add(path);
@@ -643,6 +669,24 @@ describe("runOnce", () => {
         expect(second.reason).toMatch(/worktree path already in use/);
         expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
         expect(ctx.worktreeManager.createCalls).toHaveLength(1);
+      });
+
+      it("MOV-181: a requeue is NOT blocked by its own retained failed worktree -- it's reclaimed and dispatch proceeds", async () => {
+        const worktreeManager = statefulWorktreeManager();
+        const ctx = baseCtx({ worktreeManager });
+
+        const [first] = await runOnce([ISSUE], ctx);
+        expect(first.outcome).toBe("in-review");
+        const failedPath = worktreeManager.createCalls[0] && `/fake/worktrees/${worktreeManager.createCalls[0].name}`;
+        worktreeManager.markStatus(ISSUE.identifier, "failed");
+        worktreeManager.reclaimablePaths.add(failedPath);
+
+        const [second] = await runOnce([ISSUE], ctx);
+
+        expect(second.outcome).toBe("in-review"); // not "blocked" -- the stale path was reclaimed, not a hard collision
+        expect(worktreeManager.reclaimed).toEqual([{ path: failedPath, issueId: ISSUE.identifier }]);
+        expect(worktreeManager.createCalls).toHaveLength(2); // dispatched again, a fresh worktree was actually created
+        expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(2);
       });
 
       it("stays a no-op across repeated cycles for an ineligible issue — no comment spam", async () => {

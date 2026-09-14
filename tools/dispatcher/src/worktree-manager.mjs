@@ -112,6 +112,46 @@ export class WorktreeManager {
   }
 
   /**
+   * Like `isPathFree`, but for the one case that isn't a real concurrency
+   * conflict at all (MOV-181): the path is occupied by *this same issue's*
+   * own retained worktree from a prior attempt that already reached a
+   * terminal status. The 7-day failed-worktree retention policy
+   * (docs/operators/local-execution.md §Worktree lifecycle) exists so a
+   * human can inspect a failure -- but once that same issue has been put
+   * back in `Ready for Agent`, the dispatcher has no way to know retention
+   * is even still wanted, and the plain path-existence check in
+   * `isPathFree` blocks the very retry that was just asked for.
+   *
+   * Reclaims (removes the local git worktree and its local `agent/*`
+   * branch only -- never the remote branch, in case a draft PR still
+   * points at it) and returns true when the occupying entry is this same
+   * issue and its status is terminal. Any other case (a different issue's
+   * worktree, an `active`/`review` entry, or a path with no matching state
+   * entry at all) is unchanged from `isPathFree`: still blocked.
+   *
+   * This performs a real side effect (an actual `git worktree remove`) and
+   * must only be wired into the live dispatch path, never into a `--dry-run`
+   * preview -- see run-loop.mjs's use of this vs. dispatcher.mjs's dry-run
+   * command, which deliberately keeps using plain `isPathFree` so its
+   * "no worktree, branch, or Linear state was changed" guarantee holds.
+   *
+   * Never touches `~/Library/Logs/moviecal-dispatcher/<id>/` -- that
+   * directory holds the actual forensic record (stdout.log, stderr.log,
+   * security-audit.json, manifest.json) and is unaffected by
+   * `git worktree remove`, which only touches the worktree's own files.
+   */
+  isPathFreeForIssue(worktreePath, issueId) {
+    if (!fs.existsSync(worktreePath)) return true;
+    const entry = this.loadState()[issueId];
+    const isTerminal = entry && ["failed", "abandoned", "merged"].includes(entry.status);
+    if (entry && entry.path === worktreePath && isTerminal) {
+      this.cleanup(issueId, { deleteRemoteBranch: false });
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * The repository's main (original) checkout path, as opposed to any linked
    * worktree. Discovered via `git worktree list --porcelain`, whose first
    * `worktree <path>` line is always the main checkout. Needed because
