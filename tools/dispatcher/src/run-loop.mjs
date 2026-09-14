@@ -14,6 +14,7 @@ import { confirmStillClaimable, evaluateLocalDispatch } from "./dispatch-eligibi
 import { generateBrief } from "./brief.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "./worker-guard.mjs";
+import { classifyWorkerFailure, NESTED_SANDBOX_CRASH } from "./failure-classification.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
 import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-signals.mjs";
@@ -22,7 +23,7 @@ import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-si
  * @param {object[]} issues - from LinearClient.issuesInState()
  * @param {object} ctx
  * @param {object} ctx.linearClient - LinearClient instance (or a fake with the same shape)
- * @param {Record<string,string>} ctx.stateIds - {blocked, agentWorking, needsHumanDecision, inReview}, from LinearClient.workflowStates()
+ * @param {Record<string,string>} ctx.stateIds - {blocked, agentWorking, needsHumanDecision, inReview, readyForAgent}, from LinearClient.workflowStates()
  * @param {object} ctx.worktreeManager - WorktreeManager instance (or a fake)
  * @param {number} ctx.concurrencyLimit
  * @param {boolean} ctx.iosRunnerOnline
@@ -47,10 +48,26 @@ import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-si
  * @param {(issueIdentifier: string) => object|null} [ctx.readAgentSessionFn] - MOV-158: the prior attempt's persisted session record, used to decide attach-vs-new-linked-session; defaults to "no prior session"
  * @param {(issueIdentifier: string, snapshot: object) => void} [ctx.persistAgentSessionFn] - MOV-158: persist this attempt's session record for the next one; defaults to a no-op
  * @param {number} [ctx.stopPollIntervalMs] - MOV-158: how often to re-read the issue while a worker runs, so a de-delegation/cancellation is honoured at the next safe boundary instead of after a 45-minute worker; 0 (the default) disables the watcher entirely
+ * @param {{isOpen: (name: string) => boolean, trip: (name: string, reason: string) => void, clear: (name: string) => void}} [ctx.circuitBreaker] - MOV-180: host-wide failure-signature breaker (circuit-breaker.mjs). While open, `runOnce` lets exactly one issue per batch through as a half-open probe and skips the rest with outcome "circuit-breaker-open"; defaults to a permanently-closed no-op so existing callers are unaffected
  * @returns {Promise<Array<{issue: string, outcome: string, [key: string]: unknown}>>}
  */
 export async function runOnce(issues, ctx) {
-  const { concurrencyLimit, worktreeManager } = ctx;
+  const {
+    concurrencyLimit,
+    worktreeManager,
+    circuitBreaker = { isOpen: () => false, trip: () => {}, clear: () => {} },
+  } = ctx;
+
+  // MOV-180: once tripped, let exactly one issue in this batch through as a
+  // probe of whether the host-wide condition has cleared — a standard
+  // half-open circuit-breaker state — and skip everything else without
+  // touching the worktree manager or Linear at all. Gating per-batch here
+  // (rather than per-issue inside processIssue) is what makes "closes once a
+  // subsequent run succeeds" possible: a check inside processIssue would also
+  // block the very probe attempt that could clear it, since the breaker is
+  // only cleared *after* that attempt's worker finishes.
+  const breakerOpenAtStart = circuitBreaker.isOpen(NESTED_SANDBOX_CRASH);
+  let probeClaimed = false;
 
   // MOV-138: bound how many `processIssue` calls run concurrently within this
   // batch to the slots this cycle can actually use — the concurrency limit
@@ -82,6 +99,16 @@ export async function runOnce(issues, ctx) {
   const results = new Array(issues.length);
   await Promise.all(
     issues.map(async (issue, index) => {
+      if (breakerOpenAtStart) {
+        // Synchronous check-and-set, no `await` in between: only the first
+        // entrant to reach this point claims the probe slot, regardless of
+        // how many issues are in the batch.
+        if (probeClaimed) {
+          results[index] = { issue: issue.identifier, outcome: "circuit-breaker-open", reason: NESTED_SANDBOX_CRASH };
+          return;
+        }
+        probeClaimed = true;
+      }
       await acquire();
       try {
         results[index] = await processIssue(issue, ctx);
@@ -133,6 +160,7 @@ async function processIssue(issue, ctx) {
     readAgentSessionFn = () => null,
     persistAgentSessionFn = () => {},
     stopPollIntervalMs = 0,
+    circuitBreaker = { isOpen: () => false, trip: () => {}, clear: () => {} },
     logger = console,
   } = ctx;
 
@@ -278,6 +306,7 @@ async function processIssue(issue, ctx) {
         dispatcherDelegate,
         refreshIssueFn,
         stopPollIntervalMs,
+        circuitBreaker,
         logger,
       },
     });
@@ -362,6 +391,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     dispatcherDelegate,
     refreshIssueFn,
     stopPollIntervalMs,
+    circuitBreaker,
     logger,
   } = ctx;
 
@@ -540,15 +570,50 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
   }
 
   if (spawnResult.exitCode !== 0) {
+    const tail = tailLogs(logDir, 50);
+    const classification = classifyWorkerFailure({ exitCode: spawnResult.exitCode, logTail: tail });
+
+    if (classification?.category === NESTED_SANDBOX_CRASH) {
+      // MOV-180: this is an environment-wide fault, not a task failure —
+      // every worker on this Mac hits it identically while it holds. Requeue
+      // the issue for a later retry instead of leaving it looking like a real
+      // per-issue failure in Needs Human Decision, and stop dispatching
+      // anything else until the condition is confirmed cleared.
+      circuitBreaker.trip(NESTED_SANDBOX_CRASH, `worker exited ${spawnResult.exitCode} with the nested-sandbox-crash signature`);
+      worktreeManager.markStatus(issue.identifier, "failed");
+      await publisher.publish("error", {
+        stateId: stateIds.readyForAgent,
+        summary: "Worker hit a host-wide nested-sandbox crash, not a task failure. Requeued to Ready for Agent; dispatch is paused until the Mac is fixed.",
+        headline: "**Environment failure, not a task failure: nested macOS sandbox crash (MOV-180).**",
+        sections: [
+          "This run failed before it could do any real work: the harness's own tool sandbox could not apply a second Seatbelt profile inside the one `worker-guard.mjs` already applies to the worker process (`sandbox_apply: Operation not permitted`, exit 71). Every worker on this Mac fails identically while this condition holds — it is not specific to this issue, and re-running it here will not help.",
+          "",
+          "This issue has been moved back to `Ready for Agent` rather than `Needs Human Decision`, and the dispatcher has stopped starting any further issue until the condition is confirmed cleared. See docs/operators/local-execution.md §Security model for the manual recovery procedure: a clean `launchctl bootout` + `launchctl bootstrap` of `com.moviecal.dispatcher` (`launchctl kickstart -k` is not sufficient).",
+          "",
+          "```",
+          tail,
+          "```",
+          "",
+          `Full run log: \`${logDir}\``,
+        ],
+      });
+      return { issue: issue.identifier, outcome: "nested-sandbox-crash", exitCode: spawnResult.exitCode };
+    }
+
     worktreeManager.markStatus(issue.identifier, "failed");
     await publisher.publish("error", {
       stateId: stateIds.needsHumanDecision,
       summary: `Worker exited with code ${spawnResult.exitCode}.`,
       headline: `**Worker exited with code ${spawnResult.exitCode}.**`,
-      sections: ["```", tailLogs(logDir, 50), "```", "", `Full run log: \`${logDir}\``],
+      sections: ["```", tail, "```", "", `Full run log: \`${logDir}\``],
     });
     return { issue: issue.identifier, outcome: "worker-failed", exitCode: spawnResult.exitCode };
   }
+
+  // MOV-180: a worker reaching this point ran to completion under the real
+  // sandbox without hitting the nested-sandbox-crash signature — the signal
+  // this breaker uses to close again, mirroring the shape named in the issue.
+  circuitBreaker.clear(NESTED_SANDBOX_CRASH);
 
   const workflowAuth = resolveWorkflowEditAuthorization(issue);
   if (workflowAuth.authorized && workerMode !== "repair") {

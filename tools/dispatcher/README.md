@@ -56,6 +56,8 @@ tools/dispatcher/
     worker-guard.mjs         shared sandbox, credential stripping, transcript/diff audit, repair admission
     worker-publish.mjs       trusted non-force push and draft-PR creation after a clean audit
     worktree-manager.mjs     git worktree lifecycle + JSON state bookkeeping
+    failure-classification.mjs  recognizes host-wide failure signatures (e.g. nested-sandbox crash) distinct from an ordinary task failure (MOV-180)
+    circuit-breaker.mjs      persisted host-wide failure-signature breaker: trip/clear/isOpen (MOV-180)
     claude-trust.mjs         pre-trusts a worktree in Claude Code's global config (~/.claude.json)
     brief.mjs                worker brief generation (pure)
     worker-spawn.mjs         spawns a worker process, captures logs to a manifest
@@ -84,6 +86,7 @@ All runtime configuration lives outside the repository under `~/.config/moviecal
 | `~/.config/moviecal/linear.env` | `LINEAR_API_KEY=...` (and optionally `LINEAR_TEAM_KEY=...`, default `MOV`) |
 | `~/.config/moviecal/env.local` | disposable/dev Supabase + TMDb credentials, symlinked into every worker worktree as `.env.local` |
 | `~/.config/moviecal/worktrees.json` | dispatcher's own bookkeeping of active/merged/failed worktrees (atomic writes with `.bak` recovery) |
+| `~/.config/moviecal/circuit-breakers.json` | host-wide failure-signature circuit breakers (MOV-180), keyed by reason; atomic writes with `.bak` recovery |
 | `~/.config/moviecal/dispatcher.lock` | singleton lock; a second mutating dispatcher exits read-only |
 
 Override the worktree root or log directory for local testing with `MOVIECAL_WORKTREE_ROOT` / `MOVIECAL_LOG_ROOT`.
