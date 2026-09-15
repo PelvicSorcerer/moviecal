@@ -20,6 +20,7 @@
 
 import { execFileSync } from "node:child_process";
 import { COMPLETED_BLOCKER_STATE_NAMES } from "./dependency-gate.mjs";
+import { assertParentCompletable } from "./parent-completion-guard.mjs";
 
 export function defaultRunner(command, args, opts = {}) {
   return execFileSync(command, args, { encoding: "utf8", ...opts });
@@ -202,6 +203,17 @@ async function ensureLinearMergeSynced(entry, ctx) {
     return { synced: true, alreadyDone: true };
   }
   if (!doneStateId) return { synced: false, reason: "no doneStateId configured" };
+  try {
+    assertParentCompletable(snapshot, snapshot.children);
+  } catch (err) {
+    await linearClient.addComment(
+      entry.linearIssueId,
+      `**Dispatcher backstop:** GitHub reports PR #${entry.prNumber}${entry.prUrl ? ` (${entry.prUrl})` : ""} merged, but this parent issue still has an open child sub-issue. It was not moved to Done: ${err.message}`,
+    );
+    // The parent reconciliation pass completes it once the remaining child
+    // finishes. Mark this PR outcome handled to avoid repeating the comment.
+    return { synced: true, deferredToChildren: true };
+  }
   await linearClient.moveToState(entry.linearIssueId, doneStateId);
   await linearClient.addComment(
     entry.linearIssueId,
