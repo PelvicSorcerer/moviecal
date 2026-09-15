@@ -343,22 +343,6 @@ export class WorktreeManager {
       fs.symlinkSync(envLocalSource, envLocalDest);
     }
 
-    // Stamp ownership into the worktree's own private Git directory, not the
-    // tracked working tree, so reconcileStartup()'s orphan sweep can prove
-    // this dispatcher created it even if the worktrees.json entry below is
-    // later lost -- and, symmetrically, never mistake a worktree it did not
-    // create for one of its own (MOV-199).
-    try {
-      const gitDir = this._worktreeGitDir(worktreePath);
-      fs.mkdirSync(gitDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(gitDir, OWNERSHIP_MARKER_FILENAME),
-        JSON.stringify({ id, createdAt: new Date().toISOString() }, null, 2) + "\n",
-      );
-    } catch (err) {
-      console.error(`Warning: could not stamp ownership marker for ${worktreePath}: ${err.message}`);
-    }
-
     // Pre-trust both the new worktree path and the repo's main checkout path
     // in Claude Code's global config, so a headless `claude -p` worker
     // doesn't hang on the interactive workspace-trust dialog. The main
@@ -406,6 +390,26 @@ export class WorktreeManager {
     const state = this.loadState();
     state[id] = entry;
     this.saveState(state);
+
+    // Stamp ownership into the worktree's own private Git directory, not the
+    // tracked working tree, so reconcileStartup()'s orphan sweep can prove
+    // this dispatcher created it even if the worktrees.json entry above is
+    // later lost -- and, symmetrically, never mistake a worktree it did not
+    // create for one of its own (MOV-199). Deliberately last: every step
+    // above either already succeeded or this function would have thrown
+    // before reaching here, so there is no window where a marker exists for
+    // a worktree whose creation did not fully complete.
+    try {
+      const gitDir = this._worktreeGitDir(worktreePath);
+      fs.mkdirSync(gitDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(gitDir, OWNERSHIP_MARKER_FILENAME),
+        JSON.stringify({ id, createdAt: new Date().toISOString() }, null, 2) + "\n",
+      );
+    } catch (err) {
+      console.error(`Warning: could not stamp ownership marker for ${worktreePath}: ${err.message}`);
+    }
+
     return entry;
   }
 
