@@ -345,7 +345,29 @@ function isDescendantPath(candidate, ancestor) {
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
-function safeRepositoryEntryRules(repositoryPath, fsImpl) {
+const DOCUMENTED_ENV_LOCAL_NAME = ".env.local";
+
+/**
+ * True only for the one symlink layout `docs/operators/local-execution.md`
+ * requires every checkout to have: a repository-root `.env.local` pointing at
+ * exactly `<home>/.config/moviecal/env.local` (MOV-204). Anything else --
+ * wrong target, relative link that resolves elsewhere, unreadable link -- is
+ * not this case and falls through to the ordinary fail-closed symlink
+ * rejection below. `readlinkSync` (not `realpathSync`) so this never depends
+ * on the target actually existing.
+ */
+function isDocumentedEnvLocalSymlink(linkPath, home, fsImpl) {
+  let rawTarget;
+  try {
+    rawTarget = fsImpl.readlinkSync(linkPath);
+  } catch {
+    return false;
+  }
+  const resolved = path.resolve(path.dirname(linkPath), rawTarget);
+  return resolved === path.join(home, ".config", "moviecal", "env.local");
+}
+
+function safeRepositoryEntryRules(repositoryPath, fsImpl, home) {
   let entries;
   try {
     entries = fsImpl.readdirSync(repositoryPath, { withFileTypes: true });
@@ -362,6 +384,19 @@ function safeRepositoryEntryRules(repositoryPath, fsImpl) {
       throw new Error(`protected checkout ${repositoryPath} contains an unsafe entry name`);
     }
     if (entry.isSymbolicLink?.()) {
+      const linkPath = path.join(repositoryPath, name);
+      // MOV-204: the documented `.env.local` symlink is the one entry every
+      // checkout is required to carry, so it can never be treated as an
+      // unexpected/unsafe entry. Deny read of this exact path (the sibling's
+      // own copy) rather than rejecting the whole checkout outright -- this
+      // worktree's *own* `.env.local` (not part of this sibling scan at all)
+      // is a separate literal path and keeps whatever access `mode` already
+      // grants it. Every other symlink, and a `.env.local` pointing anywhere
+      // else, still fails closed exactly as before.
+      if (name === DOCUMENTED_ENV_LOCAL_NAME && isDocumentedEnvLocalSymlink(linkPath, home, fsImpl)) {
+        rules.push(["literal", linkPath]);
+        continue;
+      }
       throw new Error(`protected checkout ${repositoryPath} contains a symbolic link (${name})`);
     }
     rules.push([entry.isDirectory?.() ? "subpath" : "literal", path.join(repositoryPath, name)]);
@@ -370,7 +405,7 @@ function safeRepositoryEntryRules(repositoryPath, fsImpl) {
 }
 
 /** Resolve every sibling checkout and backing Git directory before entering the sandbox. */
-export function repositoryGuardPaths(worktreePath, runner = defaultRunner, fsImpl = fs) {
+export function repositoryGuardPaths(worktreePath, runner = defaultRunner, fsImpl = fs, home = os.homedir()) {
   const worktrees = String(runner("git", ["worktree", "list", "--porcelain"], { cwd: worktreePath }))
     .split("\n")
     .filter((line) => line.startsWith("worktree "))
@@ -391,7 +426,7 @@ export function repositoryGuardPaths(worktreePath, runner = defaultRunner, fsImp
     if (gitCommonDir === repositoryPath) {
       throw new Error(`shared Git metadata cannot be the protected checkout root: ${repositoryPath}`);
     }
-    return safeRepositoryEntryRules(repositoryPath, fsImpl);
+    return safeRepositoryEntryRules(repositoryPath, fsImpl, home);
   });
   return {
     protectedRepositoryPaths,

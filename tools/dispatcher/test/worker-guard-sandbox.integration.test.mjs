@@ -28,6 +28,9 @@ describe.skipIf(!sandboxAvailable)("worker-guard sandbox-exec integration (MOV-1
   let ownDir;
   let siblingDir;
   let profilePath;
+  let repairProfilePath;
+  let homeDir;
+  let envLocalTarget;
 
   beforeAll(() => {
     // Seatbelt matches resolved paths; os.tmpdir() on macOS is a symlink
@@ -53,11 +56,23 @@ describe.skipIf(!sandboxAvailable)("worker-guard sandbox-exec integration (MOV-1
     fs.writeFileSync(path.join(ownDir, "own-secret.txt"), "own content\n");
     fs.writeFileSync(path.join(siblingDir, "sibling-secret.txt"), "sibling content\n");
 
+    // MOV-204: every real checkout -- the main checkout included -- carries
+    // the documented `.env.local -> <home>/.config/moviecal/env.local`
+    // symlink. `WorktreeManager.create()` symlinks the same target into
+    // every dispatcher-created worktree too, so the worker's own worktree
+    // gets one exactly like this.
+    homeDir = path.join(tmpDir, "home");
+    fs.mkdirSync(path.join(homeDir, ".config", "moviecal"), { recursive: true });
+    envLocalTarget = path.join(homeDir, ".config", "moviecal", "env.local");
+    fs.writeFileSync(envLocalTarget, "DISPOSABLE_DEV_SECRET=not-a-real-credential\n");
+    fs.symlinkSync(envLocalTarget, path.join(mainDir, ".env.local"));
+    fs.symlinkSync(envLocalTarget, path.join(ownDir, ".env.local"));
+
     const { protectedRepositoryPaths, protectedRepositoryReadRules, gitMetadataPaths } =
-      repositoryGuardPaths(ownDir);
+      repositoryGuardPaths(ownDir, undefined, undefined, homeDir);
     const profile = buildWorkerSandboxProfile({
       worktreePath: ownDir,
-      home: path.join(tmpDir, "home"),
+      home: homeDir,
       mode: "implementation",
       protectedRepositoryPaths,
       protectedRepositoryReadRules,
@@ -65,16 +80,55 @@ describe.skipIf(!sandboxAvailable)("worker-guard sandbox-exec integration (MOV-1
     });
     profilePath = path.join(tmpDir, "worker-sandbox.sb");
     fs.writeFileSync(profilePath, profile);
+
+    const repairProfile = buildWorkerSandboxProfile({
+      worktreePath: ownDir,
+      home: homeDir,
+      mode: "repair",
+      protectedRepositoryPaths,
+      protectedRepositoryReadRules,
+      gitMetadataPaths,
+    });
+    repairProfilePath = path.join(tmpDir, "worker-sandbox-repair.sb");
+    fs.writeFileSync(repairProfilePath, repairProfile);
   });
 
   afterAll(() => {
     if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  function run(command, args) {
-    const invocation = guardedInvocation({ command, args }, { profilePath });
+  function run(command, args, profile = profilePath) {
+    const invocation = guardedInvocation({ command, args }, { profilePath: profile });
     return spawnSync(invocation.command, invocation.args, { encoding: "utf8" });
   }
+
+  it("builds a profile at all without throwing when the main checkout carries the documented .env.local symlink (MOV-204)", () => {
+    // The whole point of this fixture: beforeAll() above calls
+    // repositoryGuardPaths(ownDir) with a main checkout that has a
+    // `.env.local` symlink in it, exactly like every real checkout on this
+    // machine. Before MOV-204 that threw ("contains a symbolic link
+    // (.env.local)") before a worker could ever start -- reaching this test
+    // at all is the regression check.
+    expect(fs.readFileSync(profilePath, "utf8")).toContain("(version 1)");
+  });
+
+  it("denies reading the main checkout's .env.local symlink and its resolved target (MOV-204)", () => {
+    const viaSymlink = run("/bin/cat", [path.join(mainDir, ".env.local")]);
+    expect(viaSymlink.status).not.toBe(0);
+    expect(`${viaSymlink.stdout}${viaSymlink.stderr}`).toMatch(/operation not permitted|permission denied/i);
+  });
+
+  it("still allows reading the worker's own worktree's .env.local in implementation mode (unchanged, disposable dev credentials)", () => {
+    const result = run("/bin/cat", [path.join(ownDir, ".env.local")]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("DISPOSABLE_DEV_SECRET");
+  });
+
+  it("denies reading the worker's own worktree's .env.local in repair mode (pre-existing, unaffected by MOV-204)", () => {
+    const result = run("/bin/cat", [path.join(ownDir, ".env.local")], repairProfilePath);
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toMatch(/operation not permitted|permission denied/i);
+  });
 
   it("allows reading a file inside the worker's own assigned worktree", () => {
     const result = run("/bin/cat", [path.join(ownDir, "own-secret.txt")]);
