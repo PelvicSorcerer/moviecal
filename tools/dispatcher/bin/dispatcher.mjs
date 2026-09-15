@@ -69,6 +69,7 @@ import {
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
 import { propagatePriorities, TERMINAL_PRIORITY_STATE_TYPES } from "../src/priority-propagation.mjs";
+import { reconcileParents } from "../src/parent-completion-guard.mjs";
 import { defaultRunner as ghRunner } from "../src/pr-check.mjs";
 import { checkPrState, checkPrObservation, isCheckPrObservation, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
 import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
@@ -633,6 +634,49 @@ async function propagatePass() {
   }
 }
 
+async function cmdReconcileParentsOnce({ dryRun = false } = {}) {
+  const built = buildLinearClient();
+  if (!built) return 1;
+  const { client: linearClient, teamKey } = built;
+  const states = await linearClient.workflowStates(teamKey);
+  const doneState = states.find((state) => state.name === RUN_STATE_NAMES.done);
+  const needsHumanDecisionState = states.find((state) => state.name === RUN_STATE_NAMES.needsHumanDecision);
+  if (!doneState || !needsHumanDecisionState) {
+    console.error(`workflow state not found (need "${RUN_STATE_NAMES.done}" and "${RUN_STATE_NAMES.needsHumanDecision}")`);
+    return 1;
+  }
+  const results = await reconcileParents(await linearClient.issuesForParentReconciliation({ teamKey }), {
+    linearClient,
+    doneStateId: doneState.id,
+    needsHumanDecisionStateId: needsHumanDecisionState.id,
+    dryRun,
+  });
+  for (const result of results) {
+    if (result.action !== "none") console.log(`${result.issue}: ${dryRun ? "would " : ""}${result.action} — ${result.reason}`);
+  }
+  return 0;
+}
+
+async function cmdReconcileParents({ dryRun = false } = {}) {
+  if (dryRun) return cmdReconcileParentsOnce({ dryRun: true });
+  const lock = new DispatcherLock(dispatcherLockPath());
+  try { lock.acquire(); } catch (err) { console.error(err.message); return 2; }
+  process.once("exit", () => lock.release());
+  try {
+    return await cmdReconcileParentsOnce({ dryRun: false });
+  } finally {
+    lock.release();
+  }
+}
+
+async function reconcileParentsPass() {
+  try {
+    await cmdReconcileParentsOnce({ dryRun: false });
+  } catch (err) {
+    console.error("Parent-completion reconciliation pass failed (continuing to dispatch):", err.message);
+  }
+}
+
 async function cmdRunOnce() {
   // buildLinearClient() must run first: reconcileWorktrees() below takes its
   // result (a possibly-undefined client/teamKey) as arguments, and degrades
@@ -647,6 +691,7 @@ async function cmdRunOnce() {
   // promotePass() and reportReviewCi() run below, so reconciliation never
   // races the promote/dispatch pass. It is the only call to that function.
   await reconcileWorktrees(linearClient, teamKey);
+  await reconcileParentsPass();
   await propagatePass();
   await promotePass();
 
@@ -734,6 +779,10 @@ async function main() {
       process.exitCode = await cmdPriorities({ dryRun });
       break;
     }
+    case "reconcile-parents": {
+      process.exitCode = await cmdReconcileParents({ dryRun: rest.includes("--dry-run") });
+      break;
+    }
     case "run": {
       const once = rest.includes("--once");
       const intervalFlagIdx = rest.indexOf("--interval");
@@ -743,7 +792,7 @@ async function main() {
     }
     default:
       console.error(
-        "Usage: dispatcher <doctor|dry-run|shadow|agent-signal|gc|promote|priorities|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
+        "Usage: dispatcher <doctor|dry-run|shadow|agent-signal|gc|promote|priorities|reconcile-parents|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
       );
       process.exitCode = 1;
   }

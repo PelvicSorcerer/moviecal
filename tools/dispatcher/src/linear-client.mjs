@@ -150,13 +150,22 @@ export class LinearClient {
         issue(id: $id) {
           ${ISSUE_FIELDS}
           state { name }
+          children { nodes { id identifier state { name } } }
         }
       }
     `;
     const data = await this.request(query, { id: issueId });
     const node = data && data.issue;
     if (!node) return null;
-    return { ...normalizeIssue(node), stateName: node.state ? node.state.name : null };
+    return {
+      ...normalizeIssue(node),
+      stateName: node.state ? node.state.name : null,
+      children: (node.children?.nodes || []).map((child) => ({
+        id: child.id,
+        identifier: child.identifier,
+        stateName: child.state ? child.state.name : null,
+      })),
+    };
   }
 
   /**
@@ -224,6 +233,53 @@ export class LinearClient {
       if (!pageInfo.hasNextPage) break;
       after = pageInfo.endCursor;
       if (!after) break;
+    }
+    return out;
+  }
+
+  /**
+   * Read every parent that has Linear sub-issues, including each child's
+   * workflow state. This deliberately has no state filter: completed parents
+   * must also be examined for a premature completion (MOV-172).
+   */
+  async issuesForParentReconciliation({ teamKey }) {
+    const query = `
+      query($teamKey: String!, $after: String) {
+        issues(filter: { team: { key: { eq: $teamKey } } }, first: 100, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id
+            identifier
+            url
+            state { name }
+            children { nodes { id identifier state { name } } }
+          }
+        }
+      }
+    `;
+    const out = [];
+    let after = null;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const data = await this.request(query, { teamKey, after });
+      const issues = data.issues || {};
+      out.push(
+        ...(issues.nodes || [])
+          .filter((node) => (node.children?.nodes || []).length > 0)
+          .map((node) => ({
+            id: node.id,
+            identifier: node.identifier,
+            url: node.url,
+            stateName: node.state ? node.state.name : null,
+            children: (node.children.nodes || []).map((child) => ({
+              id: child.id,
+              identifier: child.identifier,
+              stateName: child.state ? child.state.name : null,
+            })),
+          })),
+      );
+      if (!issues.pageInfo?.hasNextPage || !issues.pageInfo.endCursor) break;
+      after = issues.pageInfo.endCursor;
     }
     return out;
   }

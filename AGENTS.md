@@ -14,6 +14,7 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 - Do not start feature work from detached `HEAD`; branch from `master`.
 - Branch prefix conventions live in `docs/operators/branch-prefixes.json`, enforced against CI `branches:` filters by `npm run check:branch-ci`. Use `agent/**` for implementation work, `docs/**` or `chore/**` for governance/maintenance work not tied to a specific issue.
 - Keep PR scope to one Linear issue unless it explicitly says otherwise. If a change alters operator behavior, update the governance docs it affects in the same PR.
+- If an implementation issue must be split across PRs, create one real Linear sub-issue per PR before opening them. Source each PR's `Linear: MOV-NNN` reference from that issue object, never another PR body, a GitHub issue number, or a text pattern. Do not complete the parent while a sub-issue is non-terminal; parent completion is derived from child state by the dispatcher reconciliation pass.
 
 ## Required preflight
 

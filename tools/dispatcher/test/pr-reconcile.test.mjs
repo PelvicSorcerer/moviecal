@@ -389,6 +389,27 @@ describe("reconcileReviewWorktrees", () => {
       expect(manager._finalState()["MOV-1"].linearSynced).toBe(true);
     });
 
+    it("does not let a merged PR backstop complete a parent with an open child", async () => {
+      const manager = fakeManager({
+        "MOV-1": { id: "MOV-1", status: "review", prNumber: 42, linearIssueId: "issue-uuid-1" },
+      });
+      const linearClient = fakeLinearClient({
+        snapshots: { "issue-uuid-1": { identifier: "MOV-1", stateName: "In Review", children: [{ identifier: "MOV-2", stateName: "Agent Working" }] } },
+      });
+
+      await reconcileReviewWorktrees(manager, {
+        ghRepo: "owner/repo",
+        checkPrStateFn: () => ({ state: "MERGED", mergedAt: "2026-09-08T00:00:00Z" }),
+        linearClient,
+        doneStateId: "state-done",
+      });
+
+      expect(linearClient.calls).toEqual([
+        { type: "addComment", issueId: "issue-uuid-1", body: expect.stringContaining("MOV-2") },
+      ]);
+      expect(manager._finalState()["MOV-1"].linearSynced).toBe(true);
+    });
+
     it("already-terminal issue: a closed-unmerged PR whose issue is already Canceled only gets an evidence comment, no escalation", async () => {
       const manager = fakeManager({
         "MOV-1": { id: "MOV-1", status: "review", prNumber: 7, linearIssueId: "issue-uuid-1" },
