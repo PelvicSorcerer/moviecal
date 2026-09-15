@@ -142,6 +142,13 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
     expect(bodyOf("buildRunContext")).toMatch(/capability:\s*agentSessionCapability/);
   });
 
+  it("wires the durable provider-usage-limit store into every real run context", () => {
+    const body = bodyOf("buildRunContext");
+    expect(source).toMatch(/import \{ UsageLimitStore \} from "\.\.\/src\/usage-limit\.mjs"/);
+    expect(source).toMatch(/usageLimitStatePath/);
+    expect(body).toMatch(/usageLimitStore:\s*new UsageLimitStore\(usageLimitStatePath\(\)\)/);
+  });
+
   it("registers agent-signal as a read-only command that mutates nothing", () => {
     expect(source).toMatch(/case "agent-signal":/);
     expect(source).toMatch(/dispatcher <doctor\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|run>/);
