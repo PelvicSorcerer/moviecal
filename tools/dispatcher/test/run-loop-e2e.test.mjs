@@ -36,7 +36,7 @@ import path from "node:path";
 import { runOnce } from "../src/run-loop.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTION_COMMENT } from "../src/promoter.mjs";
-import { worktreeName } from "../src/preflight.mjs";
+import { branchName, worktreeName } from "../src/preflight.mjs";
 import { admitRepair } from "../src/repair-policy.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
 import { UsageLimitStore } from "../src/usage-limit.mjs";
@@ -68,6 +68,14 @@ vi.mock("../src/config.mjs", async (importOriginal) => {
     envLocalPath: () => `${TMP_ROOT}/env.local`,
     logRoot: () => `${TMP_ROOT}/logs`,
     linearAppEnvPath: () => `${TMP_ROOT}/linear-app.env`,
+    // `resolveDispatcherDelegate()` resolves its default path argument from
+    // config.mjs's own module-scope `linearAppEnvPath`, which the override
+    // above cannot intercept -- so without this it reads this machine's real
+    // `~/.config/moviecal/linear-app.env` and fails wherever that file is
+    // present but unreadable (e.g. under the worker sandbox, which denies
+    // credential stores by design). Re-anchor it on the same temp directory
+    // as every other path here; the real function still runs.
+    resolveDispatcherDelegate: () => actual.resolveDispatcherDelegate({ linearAppPath: `${TMP_ROOT}/linear-app.env` }),
   };
 });
 
@@ -136,6 +144,68 @@ function fakeWorktreeManager() {
     },
     markStatus(id, status, extra = {}) {
       this.statusCalls.push({ id, status, ...extra });
+    },
+  };
+}
+
+/**
+ * A fuller in-memory stand-in for WorktreeManager: it keeps a real registry
+ * across poll cycles and implements the ownership/integrity/resume surface
+ * MOV-205's re-admission reads. Still no real git — the point is to prove the
+ * *lifecycle transition* (retained -> deferred -> resumed in place) is driven
+ * by the real UsageLimitStore buildRunContext wires, not to re-test
+ * WorktreeManager's own shell-outs, which worktree-manager.test.mjs covers.
+ */
+function statefulWorktreeRegistry({ owned = true, integrityBranch = null } = {}) {
+  const state = {};
+  return {
+    createCalls: [],
+    statusCalls: [],
+    resumeCalls: [],
+    reclaimChecks: [],
+    state,
+    activeCount: () => Object.values(state).filter((e) => e.status === "active").length,
+    isPathFree: (p) => !Object.values(state).some((e) => e.path === p),
+    isPathFreeForIssue(p, id) {
+      this.reclaimChecks.push({ path: p, issue: id });
+      return !Object.values(state).some((e) => e.path === p);
+    },
+    loadState: () => state,
+    isDispatcherOwnedWorktree: () => owned,
+    worktreeIntegrity(p, branch) {
+      const entry = Object.values(state).find((e) => e.path === p);
+      const actual = integrityBranch ?? entry?.branch ?? null;
+      if (!entry) return { intact: false, branch: null, reason: `no worktree at ${p}` };
+      if (branch && actual !== branch) return { intact: false, branch: actual, reason: `worktree at ${p} is on ${actual}, not ${branch}` };
+      return { intact: true, branch: actual, reason: null };
+    },
+    create(args) {
+      this.createCalls.push(args);
+      const entry = {
+        ...args,
+        // Deliberately the same `worktreeRoot()/<name>` the real
+        // WorktreeManager.create() uses and that run-loop.mjs independently
+        // recomputes as the dispatch target -- MOV-205's re-admission requires
+        // the registry entry and that computed path to agree.
+        path: path.join(`${TMP_ROOT}/worktrees`, args.name),
+        status: "active",
+        provenance: { executor: "moviecal-dispatcher", repository: args.repository || null },
+      };
+      state[args.id] = entry;
+      return entry;
+    },
+    markStatus(id, status, extra = {}) {
+      this.statusCalls.push({ id, status, ...extra });
+      state[id] = { ...state[id], status, endedAt: "stamped", ...extra };
+      return state[id];
+    },
+    resumeEntry(id, opts) {
+      this.resumeCalls.push({ id, ...opts });
+      const entry = { ...state[id], status: "active", resumeCount: (state[id].resumeCount || 0) + 1 };
+      delete entry.usageLimitResumeAt;
+      delete entry.retainedForResume;
+      state[id] = entry;
+      return entry;
     },
   };
 }
@@ -293,6 +363,92 @@ describe("dependency-gating -> promotion -> dispatch, one continuous run (MOV-19
     // re-dispatching immediately.
     const deferral = ctx.usageLimitStore.deferral("MOV-USAGE");
     expect(deferral.deferred).toBe(true);
+  });
+
+  // MOV-205. The lifecycle MOV-192 could not reach: the provider limit landed
+  // *after* the worker produced unpublished changes, so the deferred attempt
+  // has to resume the retained worktree rather than be handed to a human.
+  //
+  // Run as one continuous sequence of three real poll cycles against the same
+  // ctx -- deferral, hold, resume -- because the property worth proving is the
+  // transition between them, and specifically that the third cycle produces
+  // NO reclaim and NO new worktree. Three isolated unit tests could each pass
+  // while the handoff between them lost the plan.
+  it("retains, holds, then resumes the same worktree in place across three real poll cycles (MOV-205)", async () => {
+    const issue = {
+      id: "id-resume", identifier: "MOV-RESUME", title: "Hits a usage limit mid-implementation",
+      description: READY_SECTIONS, url: "https://linear.app/moviecal/issue/MOV-RESUME",
+      project: null, labels: ["execution:mac"], delegate: DELEGATE, blockedByIds: [],
+    };
+    const linearClient = fakeLinearClient({ "id-resume": issue });
+    const unpublished = ["src/app/page.tsx"];
+    const ctx = {
+      ...(await buildRunContext(linearClient, TEAM_KEY, [issue])),
+      ...fakeLeaves({
+        worktreeManager: statefulWorktreeRegistry(),
+        uncommittedChangesFn: vi.fn(() => unpublished),
+      }),
+    };
+    const manager = ctx.worktreeManager;
+
+    // tailLogs() reads from disk at a path run-loop.mjs computes itself.
+    const name = worktreeName(issue.identifier, issue.title);
+    const logDir = path.join(ctx.logRoot, name);
+    fs.mkdirSync(logDir, { recursive: true });
+    const resetEpochSeconds = Math.floor((Date.now() + 3600_000) / 1000);
+    fs.writeFileSync(path.join(logDir, "stdout.log"), `Claude usage limit reached · reset|${resetEpochSeconds}\n`);
+    ctx.spawnWorkerFn = vi.fn(async () => ({ exitCode: 1, logDir }));
+
+    // Cycle 1 -- the limit lands on a dirty worktree. Pre-MOV-205 this was
+    // "worker-failed" into Needs Human Decision.
+    const [deferred] = await runOnce([issue], ctx);
+    expect(deferred.outcome).toBe("usage-limit-resume-deferred");
+    expect(deferred.uncommittedPaths).toEqual(unpublished);
+    expect(linearClient.calls.filter((c) => c.type === "moveToState").at(-1).stateId).toBe("state-ready");
+    expect(manager.state["MOV-RESUME"]).toMatchObject({ status: "failed", retainedForResume: true });
+    // Both durable halves agree -- this is what re-admission cross-checks.
+    const plan = ctx.usageLimitStore.get("MOV-RESUME").resume;
+    expect(plan.worktreePath).toBe(manager.state["MOV-RESUME"].path);
+    expect(plan.retryAt).toBe(manager.state["MOV-RESUME"].usageLimitResumeAt);
+
+    // Cycle 2 -- before the reset. Silent, and claims nothing.
+    const callsBeforeHold = linearClient.calls.length;
+    const [held] = await runOnce([issue], ctx);
+    expect(held.outcome).toBe("deferred-usage-limit");
+    expect(linearClient.calls.length).toBe(callsBeforeHold);
+    expect(manager.createCalls).toHaveLength(1); // still just cycle 1's
+    expect(manager.resumeCalls).toHaveLength(0);
+
+    // The record survives a dispatcher restart: a brand-new store over the
+    // same on-disk path is still holding this issue back.
+    expect(new UsageLimitStore(`${TMP_ROOT}/usage-limit.json`).deferral("MOV-RESUME").deferred).toBe(true);
+
+    // Cycle 3 -- the provider reset has passed. The worker gets a session and
+    // finishes the work it had already started.
+    ctx.now = () => new Date(Date.now() + 2 * 3600_000);
+    ctx.spawnWorkerFn = vi.fn(async () => ({ exitCode: 0, logDir }));
+    // Cycle 1's own fresh dispatch legitimately consulted the reclaim check on
+    // an empty path; what must not happen is a *new* one now, on a path that
+    // is occupied by real unpublished work.
+    const reclaimChecksBeforeResume = manager.reclaimChecks.length;
+
+    const [resumed] = await runOnce([issue], ctx);
+
+    expect(resumed.reason ?? null).toBeNull();
+    expect(resumed.outcome).toBe("in-review");
+    // The whole point: same worktree, same branch, resumed rather than rebuilt.
+    expect(manager.resumeCalls).toEqual([
+      { id: "MOV-RESUME", worktreePath: manager.state["MOV-RESUME"].path, branch: branchName(issue.identifier, issue.title) },
+    ]);
+    expect(manager.createCalls).toHaveLength(1); // no second worktree, ever
+    expect(manager.reclaimChecks).toHaveLength(reclaimChecksBeforeResume); // the reclaim path is never consulted
+    expect(ctx.spawnWorkerFn.mock.calls[0][0].cwd).toBe(manager.state["MOV-RESUME"].path);
+    expect(ctx.spawnWorkerFn.mock.calls[0][0].brief).toContain("You are resuming an interrupted attempt");
+
+    // The plan is spent and the clean publication forgot the history, so a
+    // fourth cycle would be an ordinary dispatch again.
+    expect(ctx.usageLimitStore.resumption("MOV-RESUME", ctx.now())).toBeNull();
+    expect(ctx.usageLimitStore.get("MOV-RESUME")).toBeNull();
   });
 });
 

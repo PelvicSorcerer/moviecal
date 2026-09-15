@@ -526,6 +526,158 @@ describe("WorktreeManager", () => {
     expect(manager.isDispatcherOwnedWorktree(foreign)).toBe(false);
   });
 
+  describe("retained-worktree resume (MOV-205)", () => {
+    /** fakeRunner plus a controllable `git rev-parse --abbrev-ref HEAD`. */
+    function fakeResumeRunner(calls, { headRef = null, headThrows = false } = {}) {
+      const base = fakeRunner(calls);
+      return (command, args, opts) => {
+        if (command === "git" && args[0] === "rev-parse" && args[1] === "--abbrev-ref") {
+          calls.push({ command, args, opts });
+          if (headThrows) throw new Error("fatal: not a git repository");
+          return `${headRef ?? "HEAD"}\n`;
+        }
+        return base(command, args, opts);
+      };
+    }
+
+    function managerWith(runnerOptions) {
+      return new WorktreeManager({
+        repoRoot: tmpRoot,
+        worktreeRoot,
+        statePath,
+        runner: fakeResumeRunner([], runnerOptions),
+        trustWorkspaceFn: () => ({ ok: true }),
+      });
+    }
+
+    describe("worktreeIntegrity", () => {
+      it("confirms an existing worktree checked out on the expected branch", () => {
+        const m = managerWith({ headRef: "agent/MOV-1-fix" });
+        const entry = m.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+
+        expect(m.worktreeIntegrity(entry.path, "agent/MOV-1-fix")).toEqual({
+          intact: true,
+          branch: "agent/MOV-1-fix",
+          reason: null,
+        });
+      });
+
+      it("refuses a path that no longer exists", () => {
+        const m = managerWith({ headRef: "agent/MOV-1-fix" });
+        const missing = path.join(worktreeRoot, "MOV-1-gone");
+
+        const result = m.worktreeIntegrity(missing, "agent/MOV-1-fix");
+        expect(result.intact).toBe(false);
+        expect(result.reason).toContain(missing);
+      });
+
+      it("refuses a path Git can no longer read as a worktree", () => {
+        const m = managerWith({ headThrows: true });
+        const stranded = path.join(worktreeRoot, "MOV-1-stranded");
+        fs.mkdirSync(stranded, { recursive: true });
+
+        const result = m.worktreeIntegrity(stranded, "agent/MOV-1-fix");
+        expect(result.intact).toBe(false);
+        expect(result.reason).toMatch(/no longer a readable Git worktree/);
+      });
+
+      it("refuses a detached HEAD, which is never a branch this dispatcher checked out", () => {
+        const m = managerWith({ headRef: "HEAD" });
+        const entry = m.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+
+        expect(m.worktreeIntegrity(entry.path, "agent/MOV-1-fix")).toMatchObject({
+          intact: false,
+          reason: expect.stringMatching(/detached HEAD/),
+        });
+      });
+
+      // The case that matters most: somebody checked the retained worktree out
+      // onto something else between the deferral and the reset.
+      it("refuses a worktree that has moved to a different branch, and names the branch it found", () => {
+        const m = managerWith({ headRef: "master" });
+        const entry = m.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+
+        expect(m.worktreeIntegrity(entry.path, "agent/MOV-1-fix")).toEqual({
+          intact: false,
+          branch: "master",
+          reason: expect.stringContaining("is on master, not agent/MOV-1-fix"),
+        });
+      });
+    });
+
+    describe("resumeEntry", () => {
+      function retained(m) {
+        const entry = m.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+        m.markStatus("MOV-1", "failed", { usageLimitResumeAt: "2026-09-15T17:00:00.000Z", retainedForResume: true });
+        return entry;
+      }
+
+      // Acceptance criterion: "no reclaim, new worktree, or branch deletion
+      // occurs."
+      it("re-opens the retained worktree in place without touching Git at all", () => {
+        const calls = [];
+        const m = new WorktreeManager({
+          repoRoot: tmpRoot,
+          worktreeRoot,
+          statePath,
+          runner: fakeResumeRunner(calls, { headRef: "agent/MOV-1-fix" }),
+          trustWorkspaceFn: () => ({ ok: true }),
+        });
+        const entry = retained(m);
+        const callsBefore = calls.length;
+
+        const resumed = m.resumeEntry("MOV-1", { worktreePath: entry.path, branch: "agent/MOV-1-fix" });
+
+        expect(resumed).toMatchObject({ status: "active", path: entry.path, branch: "agent/MOV-1-fix", resumeCount: 1 });
+        expect(resumed.workerPid).toBeNull();
+        expect(fs.existsSync(entry.path)).toBe(true);
+        expect(calls.length).toBe(callsBefore); // no add, no remove, no branch -D, no fetch
+        expect(m.loadState()["MOV-1"].status).toBe("active");
+      });
+
+      it("spends the scheduled-resume stamps so a later pass cannot read the entry as still awaiting one", () => {
+        const m = managerWith({ headRef: "agent/MOV-1-fix" });
+        const entry = retained(m);
+
+        m.resumeEntry("MOV-1", { worktreePath: entry.path, branch: "agent/MOV-1-fix" });
+
+        const stored = m.loadState()["MOV-1"];
+        expect(stored.usageLimitResumeAt).toBeUndefined();
+        expect(stored.retainedForResume).toBeUndefined();
+        expect(stored.endedAt).toBeUndefined();
+        expect(stored.resumedAt).toEqual(expect.any(String));
+      });
+
+      it("counts repeated resumes, so the registry shows how many an entry has had", () => {
+        const m = managerWith({ headRef: "agent/MOV-1-fix" });
+        const entry = retained(m);
+
+        m.resumeEntry("MOV-1", { worktreePath: entry.path });
+        m.markStatus("MOV-1", "failed");
+        expect(m.resumeEntry("MOV-1", { worktreePath: entry.path }).resumeCount).toBe(2);
+      });
+
+      it.each([
+        ["there is no record for the issue", "MOV-404", {}, /no worktree record for MOV-404/],
+        ["the path does not match the record", "MOV-1", { worktreePath: "/somewhere/else" }, /points at .*, not \/somewhere\/else/],
+        ["the branch does not match the record", "MOV-1", { branch: "agent/MOV-1-other" }, /is on agent\/MOV-1-fix, not agent\/MOV-1-other/],
+      ])("refuses when %s", (_label, id, args, expected) => {
+        const m = managerWith({ headRef: "agent/MOV-1-fix" });
+        retained(m);
+        expect(() => m.resumeEntry(id, args)).toThrow(expected);
+      });
+
+      it("refuses when the recorded worktree has vanished from disk", () => {
+        const m = managerWith({ headRef: "agent/MOV-1-fix" });
+        const entry = retained(m);
+        fs.rmSync(entry.path, { recursive: true, force: true });
+
+        expect(() => m.resumeEntry("MOV-1", { worktreePath: entry.path })).toThrow(/no longer exists/);
+        expect(m.loadState()["MOV-1"].status).toBe("failed"); // registry untouched
+      });
+    });
+  });
+
   describe("reconcileStartup orphan-worktree sweep (MOV-199)", () => {
     // A registry entry lost after `git worktree add` succeeded (dispatcher
     // crash, or a corrupt-state recovery that fell back to an older backup)

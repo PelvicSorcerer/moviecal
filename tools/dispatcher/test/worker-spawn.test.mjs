@@ -123,6 +123,17 @@ describe("spawnWorker", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
     const originalToken = process.env.GH_TOKEN;
     const originalAnthropicKey = process.env.ANTHROPIC_API_KEY;
+    // `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` is not credential-shaped, so
+    // sanitizedWorkerEnvironment() copies it straight through from the parent
+    // and only *adds* it for `claude`. The Codex assertion below therefore
+    // depends on it being absent from this process -- which it is not when the
+    // suite itself runs inside a dispatcher-spawned Claude worker, since
+    // worker-guard.mjs sets exactly this variable (see
+    // docs/operators/local-execution.md §Security model). Control it here the
+    // same way the two credentials above are controlled, so the assertion
+    // tests sanitizedWorkerEnvironment rather than the ambient environment.
+    const originalScrub = process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB;
+    delete process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB;
     process.env.GH_TOKEN = "ghp_this_must_not_reach_the_worker";
     process.env.ANTHROPIC_API_KEY = "anthropic_parent_only";
     const calls = [];
@@ -148,6 +159,8 @@ describe("spawnWorker", () => {
       else process.env.GH_TOKEN = originalToken;
       if (originalAnthropicKey == null) delete process.env.ANTHROPIC_API_KEY;
       else process.env.ANTHROPIC_API_KEY = originalAnthropicKey;
+      if (originalScrub == null) delete process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB;
+      else process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = originalScrub;
     }
     for (const [index, command] of ["claude", "codex"].entries()) {
       expect(calls[index].command).toBe("/usr/bin/sandbox-exec");
