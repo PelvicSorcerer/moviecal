@@ -38,6 +38,7 @@ import {
   worktreesStatePath,
   priorityPropagationStatePath,
   circuitBreakerStatePath,
+  usageLimitStatePath,
   loadLinearConfig,
   loadLinearAppConfig,
   resolveLinearAuth,
@@ -63,6 +64,7 @@ import {
 } from "../src/dispatch-eligibility.mjs";
 import { DispatcherLock, WorktreeManager } from "../src/worktree-manager.mjs";
 import { CircuitBreakerStore } from "../src/circuit-breaker.mjs";
+import { UsageLimitStore } from "../src/usage-limit.mjs";
 import { runOnce } from "../src/run-loop.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
@@ -457,6 +459,9 @@ async function buildRunContext(linearClient, teamKey, issues) {
     // MOV-180: host-wide nested-sandbox-crash breaker, persisted outside the
     // repo so it survives a dispatcher restart (see circuit-breaker.mjs).
     circuitBreaker: new CircuitBreakerStore(circuitBreakerStatePath()),
+    // MOV-192: this durable store turns a sole, reset-bearing provider refusal
+    // into one deferred retry instead of the no-op fallback's escalation.
+    usageLimitStore: new UsageLimitStore(usageLimitStatePath()),
     // MOV-144: a config value above the single-flight resource policy is not
     // honored until a nonblocking supervisor exists.
     concurrencyLimit: Math.min(Number(process.env.MOVIECAL_CONCURRENCY || DEFAULT_CONCURRENCY), DEFAULT_CONCURRENCY),
