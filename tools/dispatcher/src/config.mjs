@@ -45,6 +45,11 @@ export function circuitBreakerStatePath() {
   return path.join(configDir(), "circuit-breakers.json");
 }
 
+/** MOV-151: persisted per-issue record of dispatch-time provider usage-limit failures (usage-limit.mjs). */
+export function usageLimitStatePath() {
+  return path.join(configDir(), "usage-limits.json");
+}
+
 export function dispatcherLockPath() {
   return path.join(configDir(), "dispatcher.lock");
 }
