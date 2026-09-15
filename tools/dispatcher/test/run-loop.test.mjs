@@ -1317,4 +1317,204 @@ describe("runOnce", () => {
       expect(result.outcome).toBe("in-review");
     });
   });
+
+  describe("dispatch-time provider usage limit (MOV-151)", () => {
+    const NOW = new Date("2026-09-14T12:00:00.000Z");
+    const USAGE_LIMIT_LOG = "Claude AI usage limit reached · resets 2026-09-14T17:00:00Z\n";
+
+    /** A minimal in-memory UsageLimitStore with the same surface run-loop uses. */
+    function fakeUsageLimitStore(initial = {}) {
+      const state = { ...initial };
+      return {
+        state,
+        cleared: [],
+        get: (id) => state[id] || null,
+        record(id, { retryAt, evidence, consecutive }) {
+          state[id] = { issue: id, retryAt, evidence, consecutive };
+          return state[id];
+        },
+        clear(id) {
+          this.cleared.push(id);
+          delete state[id];
+        },
+        deferral(id, now) {
+          const record = state[id];
+          if (!record?.retryAt || now >= new Date(record.retryAt)) return { deferred: false, until: record?.retryAt ?? null, reason: null };
+          return { deferred: true, until: record.retryAt, reason: `awaiting the provider usage-limit reset at ${record.retryAt}` };
+        },
+      };
+    }
+
+    let tmpLogRoot;
+    beforeEach(() => {
+      tmpLogRoot = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-usage-limit-run-"));
+    });
+    afterEach(() => {
+      fs.rmSync(tmpLogRoot, { recursive: true, force: true });
+    });
+
+    function withLog(contents) {
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      fs.mkdirSync(logDir, { recursive: true });
+      fs.writeFileSync(path.join(logDir, "stdout.log"), contents);
+      return logDir;
+    }
+
+    // Acceptance criterion: "A worker that exits non-zero solely because of a
+    // provider usage/rate limit is retried once at the parsed reset time
+    // instead of being permanently escalated."
+    it("requeues to Ready for Agent and schedules one retry at the parsed reset time", async () => {
+      const usageLimitStore = fakeUsageLimitStore();
+      const logDir = withLog(USAGE_LIMIT_LOG);
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        usageLimitStore,
+        now: () => NOW,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result).toMatchObject({ outcome: "usage-limit-deferred", retryAt: "2026-09-14T17:00:00.000Z" });
+      expect(usageLimitStore.state["MOV-1"]).toMatchObject({ consecutive: 1, retryAt: "2026-09-14T17:00:00.000Z" });
+
+      const lastMove = ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1);
+      expect(lastMove.stateId).toBe("state-ready-for-agent");
+      const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
+      expect(lastComment.body).toContain("Provider usage limit, not a task failure");
+      expect(lastComment.body).toContain("2026-09-14T17:00:00.000Z");
+    });
+
+    it("retains and escalates when a rate-limit message followed unpublished worker changes", async () => {
+      const usageLimitStore = fakeUsageLimitStore({
+        "MOV-1": { issue: "MOV-1", consecutive: 1, retryAt: "2026-09-14T11:00:00.000Z" },
+      });
+      const logDir = withLog(USAGE_LIMIT_LOG);
+      const uncommittedChangesFn = vi.fn(() => ["tools/dispatcher/src/repair-loop.mjs"]);
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        usageLimitStore,
+        uncommittedChangesFn,
+        now: () => NOW,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result).toMatchObject({
+        outcome: "worker-failed",
+        uncommittedPaths: ["tools/dispatcher/src/repair-loop.mjs"],
+      });
+      expect(result.usageLimit).toMatch(/not the sole failure/);
+      expect(usageLimitStore.state["MOV-1"]).toBeUndefined();
+      expect(ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1).stateId).toBe("state-needs-human");
+      expect(ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1).body).toContain("unpublished changes");
+    });
+
+    it("holds the issue back, silently, until the reset time passes", async () => {
+      const usageLimitStore = fakeUsageLimitStore({
+        "MOV-1": { issue: "MOV-1", consecutive: 1, retryAt: "2026-09-14T17:00:00.000Z" },
+      });
+      const ctx = baseCtx({ usageLimitStore, now: () => NOW });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result).toMatchObject({ outcome: "deferred-usage-limit", retryAt: "2026-09-14T17:00:00.000Z" });
+      // Nothing claimed, nothing spawned, and — crucially for a 30s poll
+      // loop — nothing written to Linear.
+      expect(ctx.worktreeManager.createCalls).toEqual([]);
+      expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+      expect(ctx.linearClient.calls).toEqual([]);
+    });
+
+    it("dispatches again once the reset time has passed", async () => {
+      const usageLimitStore = fakeUsageLimitStore({
+        "MOV-1": { issue: "MOV-1", consecutive: 1, retryAt: "2026-09-14T17:00:00.000Z" },
+      });
+      const ctx = baseCtx({ usageLimitStore, now: () => new Date("2026-09-14T17:00:01Z") });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("in-review");
+      // A session that ran to a clean exit means the history is no longer consecutive.
+      expect(usageLimitStore.cleared).toContain("MOV-1");
+    });
+
+    // Acceptance criterion: "a second consecutive usage-limit failure on the
+    // same issue escalates."
+    it("escalates the second consecutive usage-limit failure", async () => {
+      const usageLimitStore = fakeUsageLimitStore({
+        "MOV-1": { issue: "MOV-1", consecutive: 1, retryAt: "2026-09-14T11:00:00.000Z" },
+      });
+      const logDir = withLog(USAGE_LIMIT_LOG);
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        usageLimitStore,
+        now: () => NOW,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("worker-failed");
+      expect(result.usageLimit).toMatch(/second consecutive/);
+      expect(usageLimitStore.state["MOV-1"].consecutive).toBe(2);
+      const lastMove = ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1);
+      expect(lastMove.stateId).toBe("state-needs-human");
+    });
+
+    it("escalates a usage-limit message whose reset time cannot be parsed", async () => {
+      const usageLimitStore = fakeUsageLimitStore();
+      const logDir = withLog("session limit reached, resetting at some point\n");
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        usageLimitStore,
+        now: () => NOW,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("worker-failed");
+      expect(result.usageLimit).toMatch(/no reset time could be parsed/);
+      expect(ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1).stateId).toBe("state-needs-human");
+    });
+
+    // Acceptance criterion: "Any other non-zero worker exit is not treated as
+    // the usage-limit class and still escalates immediately as today."
+    it("leaves an ordinary worker failure on the existing escalation path and forgets any usage history", async () => {
+      const usageLimitStore = fakeUsageLimitStore({
+        "MOV-1": { issue: "MOV-1", consecutive: 1, retryAt: "2026-09-14T11:00:00.000Z" },
+      });
+      const logDir = withLog("FAIL test/widget.test.ts — expected 1 to be 2\n");
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        usageLimitStore,
+        now: () => NOW,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("worker-failed");
+      expect(result.usageLimit).toBeUndefined();
+      expect(usageLimitStore.cleared).toContain("MOV-1");
+      expect(ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1).stateId).toBe("state-needs-human");
+    });
+
+    // Without a durable store the "exactly one retry" bound cannot be
+    // enforced — a requeue would simply loop — so the retry is refused and
+    // the issue escalates exactly as it did before MOV-151.
+    it("refuses to requeue when no usageLimitStore is provided — existing callers unaffected", async () => {
+      const logDir = withLog(USAGE_LIMIT_LOG);
+      const ctx = baseCtx({ logRoot: tmpLogRoot, spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })) });
+      expect(ctx.usageLimitStore).toBeUndefined();
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("worker-failed");
+      expect(result.usageLimit).toMatch(/could not be recorded durably/);
+      expect(ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1).stateId).toBe("state-needs-human");
+    });
+  });
 });

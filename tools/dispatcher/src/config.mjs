@@ -45,6 +45,16 @@ export function circuitBreakerStatePath() {
   return path.join(configDir(), "circuit-breakers.json");
 }
 
+/** MOV-151: persisted per-PR record of automatic repair attempts (repair-ledger.mjs). */
+export function repairLedgerStatePath() {
+  return path.join(configDir(), "repair-ledger.json");
+}
+
+/** MOV-151: persisted per-issue record of dispatch-time provider usage-limit failures (usage-limit.mjs). */
+export function usageLimitStatePath() {
+  return path.join(configDir(), "usage-limits.json");
+}
+
 export function dispatcherLockPath() {
   return path.join(configDir(), "dispatcher.lock");
 }
@@ -73,6 +83,38 @@ export const DEFAULT_WORKER_TIMEOUT_MS = 2_700_000;
 // the Mac adapter runs one worker at a time. Set MOVIECAL_STOP_POLL_MS=0 to
 // disable the watcher; the boundary checks around it still run.
 export const DEFAULT_STOP_POLL_INTERVAL_MS = 60_000;
+
+/**
+ * Is bounded automatic repair switched on? (MOV-151.)
+ *
+ * Off unless `MOVIECAL_AUTO_REPAIR` is explicitly truthy. Observation
+ * (MOV-148), the security boundary (MOV-145/149), and manually triggered
+ * repair all work with it off, and off keeps every CI/review outcome exactly
+ * where it is today: reported to Linear, acted on by a human. Turning it on
+ * is a deliberate operator action, per the supervised-first-run rule in
+ * docs/operators/local-execution.md.
+ */
+export function automaticRepairEnabled(env = process.env) {
+  return ["1", "true", "yes", "on"].includes(String(env.MOVIECAL_AUTO_REPAIR ?? "").trim().toLowerCase());
+}
+
+/**
+ * GitHub logins whose `REQUEST_CHANGES` review may trigger an automatic
+ * repair (MOV-151). Everything else — an untrusted or unknown reviewer, a
+ * bot, an ordinary advisory comment — escalates or is ignored instead.
+ *
+ * Defaults to the repository owner, who is the only human reviewing this
+ * repo today; `MOVIECAL_TRUSTED_REVIEWERS` is a comma-separated override.
+ */
+export const DEFAULT_TRUSTED_REVIEWERS = Object.freeze(["PelvicSorcerer"]);
+
+export function trustedReviewers(env = process.env) {
+  const configured = String(env.MOVIECAL_TRUSTED_REVIEWERS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return configured.length ? configured : [...DEFAULT_TRUSTED_REVIEWERS];
+}
 
 /** Parse a simple KEY=VALUE dotenv-style file. Returns {} if the file is missing. */
 export function parseEnvFile(filePath) {

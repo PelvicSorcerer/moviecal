@@ -81,6 +81,12 @@ export function aggregateCheckResults({ headSha, checks = [], requiredChecks = [
     sha: checkSha(check),
     logAvailable: check.logAvailable !== false && check.logsAvailable !== false,
     detailsUrl: check.detailsUrl || check.details_url || check.url || null,
+    // GitHub supplies this only for status contexts (`description`), not for
+    // check runs — but where it exists it is the only failure text the
+    // rollup carries, and MOV-151's classifier is the difference between
+    // "repair this" and "escalate, cause unknown". Dropping it here made
+    // every failure look identical downstream.
+    summary: check.description || check.summary || check.title || null,
   }));
   const requiredResults = results.filter((check) => check.required);
   const missing = [...required].filter((key) => !results.some((check) => check.required && checkKey(check) === key));

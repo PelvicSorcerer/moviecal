@@ -112,6 +112,11 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
     // or the environment.
     const configText = readFileSync(fileURLToPath(new URL("../src/config.mjs", import.meta.url)), "utf8");
     const secretPathHelpers = [...configText.matchAll(/^export function (\w*(?:EnvPath|Path))\(/gm)].map((m) => m[1]);
+    // MOV-151 adds two *state* paths (the repair ledger and the usage-limit
+    // record). That is the allowed kind of growth: dispatcher-owned
+    // bookkeeping under ~/.config/moviecal, never a credential. The list is
+    // enumerated rather than pattern-matched precisely so adding one is a
+    // deliberate edit here.
     expect(secretPathHelpers.sort()).toEqual([
       "circuitBreakerStatePath",
       "dispatcherLockPath",
@@ -119,6 +124,8 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       "linearAppEnvPath",
       "linearEnvPath",
       "priorityPropagationStatePath",
+      "repairLedgerStatePath",
+      "usageLimitStatePath",
       "worktreesStatePath",
     ]);
     for (const [name, text] of dispatcherSources) {
@@ -140,7 +147,7 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
 
   it("registers agent-signal as a read-only command that mutates nothing", () => {
     expect(source).toMatch(/case "agent-signal":/);
-    expect(source).toMatch(/dispatcher <doctor\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|run>/);
+    expect(source).toMatch(/dispatcher <doctor\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|repair\|run>/);
     const body = source.slice(source.indexOf("function cmdAgentSignal("));
     const end = body.indexOf("\n}\n");
     const fn = body.slice(0, end);

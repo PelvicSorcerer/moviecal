@@ -93,7 +93,14 @@ export function sanitizedWorkerEnvironment(source = process.env, { worker } = {}
     const isClaudeProviderCredential = worker === "claude" && CLAUDE_PARENT_CREDENTIALS.has(key);
     if (isClaudeProviderCredential || ENV_ALLOWLIST.has(key) || !CREDENTIAL_ENV_RE.test(key)) env[key] = value;
   }
+  // Set for Claude, and explicitly *removed* for anything else. This is an
+  // ambient-environment hazard rather than a theoretical one: the dispatcher
+  // may itself be running inside a Claude worker (its own test suite does,
+  // when a dispatched worker runs `npm run verify`), in which case the
+  // variable is already present in `source` and would otherwise be copied
+  // straight through to a Codex worker that has no business seeing it.
   if (worker === "claude") env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = "1";
+  else delete env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB;
   env.GIT_TERMINAL_PROMPT = "0";
   env.GIT_ASKPASS = "/usr/bin/false";
   env.GIT_CONFIG_GLOBAL = "/dev/null";

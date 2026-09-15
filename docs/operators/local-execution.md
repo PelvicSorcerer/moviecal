@@ -323,6 +323,37 @@ that PR's dispatcher-owned branch without force. It never creates a replacement
 branch or PR; a stale checkout, missing PR, or changed PR identity fails closed
 for human reconciliation.
 
+### Bounded automatic CI and review repair (MOV-151)
+
+Automatic repair is **off by default**. Before enabling it, an operator runs
+`dispatcher repair --dry-run` to see the admission decision and budgets for
+every retained review worktree; that command is read-only. To enable the live
+pass in the normal locked `dispatcher run` cycle, set
+`MOVIECAL_AUTO_REPAIR=1` in the dispatcher's managed environment. The first
+live run must be supervised. `MOVIECAL_TRUSTED_REVIEWERS` may contain a
+comma-separated allowlist of GitHub logins whose outstanding
+`REQUEST_CHANGES` reviews may trigger a repair; if unset, the repository owner
+is the only trusted reviewer.
+
+The dispatcher acts only on a current PR head, required checks, and trusted
+blocking review signals. Per PR chain it allows at most two code-repair worker
+attempts, one infrastructure-only rerun, and three attempts total. A repair
+uses the existing dispatcher-owned worktree and PR branch; it cannot create a
+replacement branch or PR. Optional checks, stale SHAs, advisory comments,
+unknown failures, untrusted reviews, governance/security findings, exhausted
+budgets, or ambiguous provenance stop at `Needs Human Decision`, with the
+stopping reason recorded in Linear and the repair ledger at
+`~/.config/moviecal/repair-ledger.json`.
+
+A dispatch-time provider usage/session-limit exit is different from CI repair:
+when it is the **sole** outcome and supplies a reset time within 24 hours, the
+dispatcher records it in `~/.config/moviecal/usage-limits.json`, returns the
+issue to `Ready for Agent`, waits until that exact reset, and retries once. A
+second consecutive limit, an unparseable/implausible reset, or any other
+non-zero exit goes to `Needs Human Decision`. If the worker left uncommitted
+files before the rate-limit message, the worktree is retained and escalated;
+the dispatcher never requeues or reclaims that work automatically.
+
 **`lane-review` (added 2026-09-08, required status check since 2026-09-08 — MOV-119):** `scripts/lane-review.mjs`, run by `.github/workflows/review-verify.yml` on every PR. Two layers with deliberately different trust properties (MOV-150):
 
 - **Deterministic heuristics** — sensitive paths (`.github/workflows/**`, `AGENTS.md`, `.claude/settings*.json`, `docs/product/**`, ruleset-shaped filenames), secret-shaped strings, diff-size threshold. Always run, need no credential, and are **fail-closed**: a heuristic `block` fails the check. The only downgrade is the sensitive-path acknowledgement below; secret and diff-size blocks are never downgradeable.

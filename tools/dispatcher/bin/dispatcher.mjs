@@ -17,6 +17,10 @@
 //                                     (MOV-129); the run loop does this each cycle
 //   dispatcher priorities [--dry-run] [--once] - dependency-aware priority
 //                                     propagation across incomplete issues
+//   dispatcher repair --dry-run    - print the bounded automatic-repair admission
+//                                     decision for every PR under observation and
+//                                     change nothing (MOV-151). The mutating path
+//                                     lives inside `run`, under the dispatcher lock
 //   dispatcher run --once          - process every currently-eligible Ready-for-Agent
 //                                     issue exactly once, then exit (real side effects:
 //                                     creates worktrees, spawns workers, opens PRs)
@@ -38,6 +42,10 @@ import {
   worktreesStatePath,
   priorityPropagationStatePath,
   circuitBreakerStatePath,
+  repairLedgerStatePath,
+  usageLimitStatePath,
+  automaticRepairEnabled,
+  trustedReviewers,
   loadLinearConfig,
   loadLinearAppConfig,
   resolveLinearAuth,
@@ -63,16 +71,20 @@ import {
 } from "../src/dispatch-eligibility.mjs";
 import { DispatcherLock, WorktreeManager } from "../src/worktree-manager.mjs";
 import { CircuitBreakerStore } from "../src/circuit-breaker.mjs";
+import { UsageLimitStore } from "../src/usage-limit.mjs";
+import { RepairLedger } from "../src/repair-ledger.mjs";
+import { admitRepair } from "../src/repair-policy.mjs";
+import { repairPass } from "../src/repair-loop.mjs";
 import { runOnce } from "../src/run-loop.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
 import { propagatePriorities, TERMINAL_PRIORITY_STATE_TYPES } from "../src/priority-propagation.mjs";
 import { spawnWorker } from "../src/worker-spawn.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "../src/worker-guard.mjs";
-import { publishWorkerResult } from "../src/worker-publish.mjs";
+import { publishRepairResult, publishWorkerResult, rerunFailedChecks } from "../src/worker-publish.mjs";
 import { defaultRunner as ghRunner } from "../src/pr-check.mjs";
 import { checkPrState, checkPrObservation, isCheckPrObservation, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
-import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
+import { DEFAULT_REPAIR_BUDGETS, decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
 import { applyStagedWorkflowEdit } from "../src/workflow-edit-apply.mjs";
 import { AgentSessionBridge, createAgentSessionCapability } from "../src/agent-session.mjs";
 import { SignalLedger, StopController, handleAgentSignal } from "../src/agent-signals.mjs";
@@ -197,6 +209,17 @@ async function cmdDoctor() {
     detail: agentSessionsEnabled()
       ? "enabled (MOVIECAL_AGENT_SESSIONS) — activities are attempted once per attempt and fall back to app-actor comments if the app is not entitled"
       : "off (default) — lifecycle publishes as app-actor comments + state transitions, which is the complete surface; see docs/governance/mov-141-linear-capability-findings.md",
+  });
+
+  // Bounded automatic repair (MOV-151). Informational, never a gate: it
+  // reports which switch position the daemon would run in, not whether any
+  // particular PR is repairable — that is `dispatcher repair --dry-run`.
+  checks.push({
+    name: "automatic CI repair",
+    ok: true,
+    detail: automaticRepairEnabled()
+      ? `enabled (MOVIECAL_AUTO_REPAIR) — up to ${DEFAULT_REPAIR_BUDGETS.codeRepair} code repairs + ${DEFAULT_REPAIR_BUDGETS.infrastructureRerun} rerun per PR; trusted reviewers: ${trustedReviewers().join(", ")}`
+      : "off (default) — CI and review outcomes are observed and reported to Linear, and a human dispatches any repair",
   });
 
   // claude / codex on PATH
@@ -457,6 +480,10 @@ async function buildRunContext(linearClient, teamKey, issues) {
     // MOV-180: host-wide nested-sandbox-crash breaker, persisted outside the
     // repo so it survives a dispatcher restart (see circuit-breaker.mjs).
     circuitBreaker: new CircuitBreakerStore(circuitBreakerStatePath()),
+    // MOV-151: the dispatch-time provider usage-limit record. Persisted for
+    // the same reason as the breaker — the wait it schedules is longer than
+    // the daemon's own uptime guarantees.
+    usageLimitStore: new UsageLimitStore(usageLimitStatePath()),
     // MOV-144: a config value above the single-flight resource policy is not
     // honored until a nonblocking supervisor exists.
     concurrencyLimit: Math.min(Number(process.env.MOVIECAL_CONCURRENCY || DEFAULT_CONCURRENCY), DEFAULT_CONCURRENCY),
@@ -637,6 +664,153 @@ async function reportReviewCi(linearClient, teamKey) {
   return results;
 }
 
+/** The live Linear issues this dispatcher is still watching a PR for, keyed by identifier. */
+async function reviewIssueIndex(linearClient, teamKey) {
+  const issues = await linearClient.issuesInState({ teamKey, stateName: RUN_STATE_NAMES.inReview });
+  return new Map(issues.map((issue) => [issue.identifier, issue]));
+}
+
+/** HEAD of a dispatcher-owned checkout; null when it cannot be read. */
+function resolveHeadSha(worktreePath) {
+  try {
+    return String(ghRunner("git", ["rev-parse", "HEAD"], { cwd: worktreePath })).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Untrusted diagnostic material for a repair brief (MOV-149's
+ * `generateRepairEvidence` contract). Read-only `gh` calls, every failure
+ * swallowed: a repair brief with thin evidence is worse than one with rich
+ * evidence, but a repair pass that dies because a log fetch 404'd is worse
+ * than both.
+ */
+function repairEvidence(entry, admission) {
+  const read = (args) => {
+    try {
+      return ghRunner("gh", args);
+    } catch (error) {
+      return `(unavailable: ${error.message})`;
+    }
+  };
+  return {
+    ciLogs: (admission.decision?.failures || [])
+      .map((failure) => `${failure.check}: ${failure.reason}${failure.message ? ` — ${failure.message}` : ""}`)
+      .join("\n"),
+    prBody: read(["pr", "view", String(entry.prNumber), "--repo", GITHUB_REPO, "--json", "body", "--jq", ".body"]),
+    diff: read(["pr", "diff", String(entry.prNumber), "--repo", GITHUB_REPO]).slice(0, 60_000),
+    reviewComments: read([
+      "pr",
+      "view",
+      String(entry.prNumber),
+      "--repo",
+      GITHUB_REPO,
+      "--json",
+      "reviews,comments",
+    ]),
+  };
+}
+
+/**
+ * Bounded automatic repair (MOV-151). Runs every poll cycle after
+ * reconciliation and CI observation, over every worktree still in `review`.
+ *
+ * With `MOVIECAL_AUTO_REPAIR` unset this is a no-op that still reports its
+ * refusals — `admitRepair` returns `ignore` for every PR and nothing is
+ * started. That is the supported default; turning it on is a deliberate
+ * operator action (docs/operators/local-execution.md §Automatic repair).
+ */
+async function repairReviewPrs(linearClient, teamKey) {
+  const worktreeManager = new WorktreeManager({
+    repoRoot: REPO_ROOT,
+    worktreeRoot: worktreeRoot(),
+    statePath: worktreesStatePath(),
+  });
+  const states = await linearClient.workflowStates(teamKey);
+  const needsHumanDecision = states.find((state) => state.name === RUN_STATE_NAMES.needsHumanDecision)?.id;
+
+  const results = await repairPass({
+    linearClient,
+    stateIds: { needsHumanDecision },
+    worktreeManager,
+    ledger: new RepairLedger(repairLedgerStatePath()),
+    issuesByIdentifier: await reviewIssueIndex(linearClient, teamKey),
+    ghRepo: GITHUB_REPO,
+    logRoot: logRoot(),
+    workerTimeoutMs: Number(process.env.MOVIECAL_WORKER_TIMEOUT_MS || DEFAULT_WORKER_TIMEOUT_MS),
+    observePrFn: (prNumber, repo) => checkPrObservation(prNumber, repo, ghRunner),
+    resolveHeadShaFn: resolveHeadSha,
+    spawnWorkerFn: spawnWorker,
+    publishRepairResultFn: (args) => publishRepairResult({ ...args, runner: ghRunner }),
+    rerunFailedChecksFn: (args) => rerunFailedChecks({ ...args, runner: ghRunner }),
+    repairEvidenceFn: repairEvidence,
+    agentSessionBridgeFn: () =>
+      new AgentSessionBridge({ linearClient, enabled: agentSessionsEnabled(), capability: agentSessionCapability }),
+    enabled: automaticRepairEnabled(),
+    trustedReviewers: trustedReviewers(),
+  });
+  for (const result of results) {
+    if (result.outcome === "repair-skipped") continue;
+    console.log(`${result.issue}: ${result.outcome}${result.reason ? ` — ${result.reason}` : ""}`);
+  }
+  return results;
+}
+
+/**
+ * `dispatcher repair --dry-run`: print the admission decision for every PR
+ * under observation and change nothing. This is the command an operator runs
+ * before switching `MOVIECAL_AUTO_REPAIR` on, and the one that answers "why
+ * did automation not touch this?" afterwards.
+ */
+async function cmdRepairDryRun() {
+  const built = buildLinearClient();
+  if (!built) return 1;
+  const { client: linearClient, teamKey } = built;
+  const worktreeManager = new WorktreeManager({
+    repoRoot: REPO_ROOT,
+    worktreeRoot: worktreeRoot(),
+    statePath: worktreesStatePath(),
+  });
+  const ledger = new RepairLedger(repairLedgerStatePath());
+  const issuesByIdentifier = await reviewIssueIndex(linearClient, teamKey);
+
+  const entries = Object.values(worktreeManager.loadState()).filter(
+    (entry) => entry.status === "review" && entry.prNumber,
+  );
+  console.log(`Automatic repair is ${automaticRepairEnabled() ? "ENABLED" : "off"} (MOVIECAL_AUTO_REPAIR).`);
+  console.log(`Trusted reviewers: ${trustedReviewers().join(", ")}`);
+  console.log(`${entries.length} PR(s) under observation:\n`);
+  for (const entry of entries) {
+    const observation = checkPrObservation(entry.prNumber, GITHUB_REPO, ghRunner);
+    const admission = admitRepair({
+      entry,
+      observation,
+      repository: GITHUB_REPO,
+      localHeadSha: resolveHeadSha(entry.path),
+      previousAttempts: ledger.previousAttempts(entry.id, entry.prNumber),
+      reservedKeys: ledger.attempts(entry.id).map((attempt) => attempt.key),
+      unfinishedAttempt: ledger.unfinished(entry.id, entry.prNumber),
+      trustedReviewers: trustedReviewers(),
+      // Report what the switch-on state *would* decide, so the preview is
+      // useful before the switch is flipped rather than only after.
+      enabled: true,
+    });
+    console.log(`- ${entry.id}: PR #${entry.prNumber} (head ${admission.headSha || observation.headSha || "unknown"})`);
+    console.log(`  issue in review: ${issuesByIdentifier.has(entry.id) ? "yes" : "no (repair would skip)"}`);
+    console.log(`  decision: ${admission.action.toUpperCase()} — ${admission.reason}`);
+    if (admission.decision) {
+      const { codeRepair, infrastructureRerun, total } = admission.decision.attempts;
+      console.log(
+        `  budget: code repair ${codeRepair.used}/${codeRepair.limit}, infrastructure rerun ${infrastructureRerun.used}/${infrastructureRerun.limit}, total ${total.used}/${total.limit}`,
+      );
+    }
+    console.log("");
+  }
+  console.log("Dry run only — no worker, CI rerun, push, or Linear state change.");
+  return 0;
+}
+
 /**
  * Automated backlog promoter (MOV-129): move issues in Backlog/Blocked that
  * meet the readiness contract into "Ready for Agent". Returns 0/1 for the
@@ -769,6 +943,18 @@ async function cmdRunOnce() {
     console.error("CI observation reporting failed (continuing to dispatch):", err.message);
   }
 
+  // MOV-151: act on those observations, within the budget. Deliberately after
+  // reconciliation (so a merged or closed PR is already out of `review` and
+  // never repaired) and after the observation record (so the read-only status
+  // a human reads is written even if the repair pass itself fails). Swallows
+  // its own errors for the same reason the promote pass does: a repair
+  // problem on one PR must not stop new issues being dispatched.
+  try {
+    await repairReviewPrs(linearClient, teamKey);
+  } catch (err) {
+    console.error("Automatic repair pass failed (continuing to dispatch):", err.message);
+  }
+
   const issues = await linearClient.issuesInState({
     teamKey,
     stateName: RUN_STATE_NAMES.readyForAgent,
@@ -845,6 +1031,18 @@ async function main() {
       process.exitCode = await cmdPriorities({ dryRun });
       break;
     }
+    case "repair": {
+      // Read-only by design. The mutating path is the `run` loop's own repair
+      // pass, under the dispatcher lock — there is deliberately no way to
+      // start a repair worker from a second process.
+      if (!rest.includes("--dry-run")) {
+        console.error("repair is a read-only preview; pass --dry-run. Automatic repair runs inside `dispatcher run` when MOVIECAL_AUTO_REPAIR is set.");
+        process.exitCode = 1;
+        break;
+      }
+      process.exitCode = await cmdRepairDryRun();
+      break;
+    }
     case "run": {
       const once = rest.includes("--once");
       const intervalFlagIdx = rest.indexOf("--interval");
@@ -854,7 +1052,7 @@ async function main() {
     }
     default:
       console.error(
-        "Usage: dispatcher <doctor|dry-run|shadow|agent-signal|gc|promote|priorities|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
+        "Usage: dispatcher <doctor|dry-run|shadow|agent-signal|gc|promote|priorities|repair|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
       );
       process.exitCode = 1;
   }

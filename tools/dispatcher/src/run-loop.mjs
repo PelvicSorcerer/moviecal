@@ -16,6 +16,7 @@ import { collectRepositoryContext } from "./repository-context.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "./worker-guard.mjs";
 import { classifyWorkerFailure, NESTED_SANDBOX_CRASH } from "./failure-classification.mjs";
+import { classifyUsageLimitFailure, decideUsageLimitOutcome } from "./usage-limit.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
 import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-signals.mjs";
@@ -51,6 +52,7 @@ import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-si
  * @param {(issueIdentifier: string, snapshot: object) => void} [ctx.persistAgentSessionFn] - MOV-158: persist this attempt's session record for the next one; defaults to a no-op
  * @param {number} [ctx.stopPollIntervalMs] - MOV-158: how often to re-read the issue while a worker runs, so a de-delegation/cancellation is honoured at the next safe boundary instead of after a 45-minute worker; 0 (the default) disables the watcher entirely
  * @param {{isOpen: (name: string) => boolean, trip: (name: string, reason: string) => void, clear: (name: string) => void}} [ctx.circuitBreaker] - MOV-180: host-wide failure-signature breaker (circuit-breaker.mjs). While open, `runOnce` lets exactly one issue per batch through as a half-open probe and skips the rest with outcome "circuit-breaker-open"; defaults to a permanently-closed no-op so existing callers are unaffected
+ * @param {{get: Function, record: Function, clear: Function, deferral: Function}} [ctx.usageLimitStore] - MOV-151: per-issue dispatch-time provider usage-limit record (usage-limit.mjs). Defaults to a no-op store, so a caller that does not wire it keeps today's "every non-zero exit escalates" behaviour exactly
  * @returns {Promise<Array<{issue: string, outcome: string, [key: string]: unknown}>>}
  */
 export async function runOnce(issues, ctx) {
@@ -122,6 +124,18 @@ export async function runOnce(issues, ctx) {
   return results;
 }
 
+/**
+ * MOV-151: the default when a caller wires no usage-limit store. Every
+ * method is inert and `deferral` never defers, so an unwired caller keeps
+ * today's behaviour — every non-zero worker exit escalates immediately.
+ */
+const NO_USAGE_LIMIT_STORE = Object.freeze({
+  get: () => null,
+  record: () => null,
+  clear: () => {},
+  deferral: () => ({ deferred: false, until: null, reason: null }),
+});
+
 const WORKER_TIMEOUT = Symbol("worker-timeout");
 /** MOV-158: a stop was observed while the worker ran, and the worker's process group was killed. */
 const WORKER_STOPPED = Symbol("worker-stopped");
@@ -164,6 +178,8 @@ async function processIssue(issue, ctx) {
     persistAgentSessionFn = () => {},
     stopPollIntervalMs = 0,
     circuitBreaker = { isOpen: () => false, trip: () => {}, clear: () => {} },
+    usageLimitStore = NO_USAGE_LIMIT_STORE,
+    now = () => new Date(),
     logger = console,
   } = ctx;
 
@@ -190,6 +206,18 @@ async function processIssue(issue, ctx) {
       return { issue: issue.identifier, outcome: "needs-human", reason: eligibility.reason };
     }
     return { issue: issue.identifier, outcome: "not-eligible", reason: eligibility.reason };
+  }
+
+  // MOV-151: this issue's previous attempt died at dispatch time because the
+  // provider refused the session, and a retry is already scheduled for the
+  // reset time it named. Hold off until then — and silently: the reason was
+  // published to Linear once when the retry was scheduled, and repeating it
+  // every 30-second poll would bury it. Checked here, before preflight, so a
+  // parked issue neither claims a concurrency slot nor writes a `Blocked`
+  // comment on its way past one.
+  const deferral = usageLimitStore.deferral(issue.identifier, now());
+  if (deferral.deferred) {
+    return { issue: issue.identifier, outcome: "deferred-usage-limit", reason: deferral.reason, retryAt: deferral.until };
   }
 
   const name = worktreeName(issue.identifier, issue.title);
@@ -329,6 +357,8 @@ async function processIssue(issue, ctx) {
         refreshIssueFn,
         stopPollIntervalMs,
         circuitBreaker,
+        usageLimitStore,
+        now,
         logger,
       },
     });
@@ -415,6 +445,8 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     refreshIssueFn,
     stopPollIntervalMs,
     circuitBreaker,
+    usageLimitStore,
+    now,
     logger,
   } = ctx;
 
@@ -537,6 +569,9 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     // in worker-spawn.mjs, triggered by the abort signal) and hand off to a
     // human rather than let a hang (MOV-106) freeze the rest of the batch.
     abortController.abort();
+    // A worker that ran long enough to time out was granted a provider
+    // session, so any earlier usage-limit history is not consecutive (MOV-151).
+    usageLimitStore.clear(issue.identifier);
     worktreeManager.markStatus(issue.identifier, "failed");
     await publisher.publish("error", {
       stateId: stateIds.needsHumanDecision,
@@ -640,20 +675,158 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
       return { issue: issue.identifier, outcome: "nested-sandbox-crash", exitCode: spawnResult.exitCode };
     }
 
+    // MOV-151: a dispatch-time provider usage/rate limit. The worker never got
+    // a session, so nothing was implemented, nothing was pushed, and no PR
+    // exists — the failure says something about the provider's quota clock and
+    // nothing about this issue. Retry once at the reset time the provider
+    // itself named; escalate on the second consecutive occurrence, on an
+    // unparseable reset, and (via the null classification below) on every
+    // other non-zero exit exactly as before.
+    const usageLimit = classifyUsageLimitFailure({ exitCode: spawnResult.exitCode, logTail: tail, now: now() });
+
+    // A provider-limit retry is safe only when the provider refusal is the
+    // whole outcome. A worker can print a rate-limit message after it has
+    // already changed files (or alongside another failure); requeueing that
+    // issue would collide with the dirty retained worktree and conceal work a
+    // human needs to inspect. Preserve it and escalate instead. This is also
+    // why MOV-151's original retained worktree was recovered manually rather
+    // than blindly requeued.
+    const unpublishedPaths = usageLimit ? uncommittedChangesFn(entry.path) : [];
+    if (usageLimit && unpublishedPaths.length > 0) {
+      usageLimitStore.clear(issue.identifier);
+      worktreeManager.markStatus(issue.identifier, "failed");
+      await publisher.publish("error", {
+        stateId: stateIds.needsHumanDecision,
+        summary: "Worker reported a provider usage limit after producing unpublished changes; retained work requires human review.",
+        headline: "**Provider usage limit followed unpublished work; human review required.**",
+        sections: [
+          "A provider usage/session-limit message was present, but it was not the sole worker outcome because the worktree contains unpublished changes. The dispatcher will not requeue or reclaim this worktree automatically.",
+          "",
+          "Unpublished paths:",
+          "```",
+          ...unpublishedPaths,
+          "```",
+          "",
+          `Full run log: \`${logDir}\``,
+        ],
+      });
+      return {
+        issue: issue.identifier,
+        outcome: "worker-failed",
+        exitCode: spawnResult.exitCode,
+        usageLimit: "provider usage limit was not the sole failure; unpublished worktree changes were retained for human review",
+        uncommittedPaths: unpublishedPaths,
+      };
+    }
+
+    let usageVerdict = decideUsageLimitOutcome({
+      classification: usageLimit,
+      previous: usageLimitStore.get(issue.identifier),
+      now: now(),
+    });
+
+    // Requeueing to `Ready for Agent` is only bounded if the deferral and the
+    // consecutive counter actually persist — without them the next poll cycle
+    // immediately re-dispatches, hits the same limit, and requeues again,
+    // forever. So the retry is conditional on the store proving it kept the
+    // record, which also covers an unwired caller (the no-op default store)
+    // and a write that silently failed. When it cannot be proved, this falls
+    // through to the escalation below, which is today's behaviour.
+    if (usageVerdict.action === "retry-at-reset") {
+      const recorded = usageLimitStore.record(issue.identifier, {
+        retryAt: usageVerdict.retryAt,
+        evidence: usageLimit.evidence,
+        consecutive: usageVerdict.consecutive,
+        now: now(),
+      });
+      if (recorded?.retryAt !== usageVerdict.retryAt) {
+        usageVerdict = {
+          ...usageVerdict,
+          action: "escalate",
+          reason: `worker reported a provider usage limit resetting at ${usageVerdict.retryAt}, but the retry could not be recorded durably, so a single bounded retry cannot be guaranteed`,
+          retryAt: null,
+        };
+      }
+    }
+
+    if (usageVerdict.action === "retry-at-reset") {
+      worktreeManager.markStatus(issue.identifier, "failed", { usageLimitRetryAt: usageVerdict.retryAt });
+      await publisher.publish("progress", {
+        stateId: stateIds.readyForAgent,
+        action: "Deferred until the provider usage limit resets",
+        summary: `Provider usage limit reached before any work was published. Requeued to Ready for Agent; dispatch of this issue is held until ${usageVerdict.retryAt}.`,
+        headline: "**Provider usage limit, not a task failure (MOV-151).**",
+        sections: [
+          `The ${routing.worker} worker exited ${spawnResult.exitCode} without starting work, reporting a provider usage/session limit. No branch was published and no PR exists, so nothing about this issue is known to be wrong.`,
+          "",
+          `Reported limit: \`${usageLimit.evidence}\``,
+          `Scheduled retry: **${usageVerdict.retryAt}** (parsed from the provider's own message, precision \`${usageLimit.precision}\`).`,
+          "",
+          "This issue was moved back to `Ready for Agent` rather than `Needs Human Decision`, and the dispatcher will not claim it again until that time. Exactly one retry is scheduled: a second consecutive usage-limit failure escalates to `Needs Human Decision` instead.",
+          "",
+          "```",
+          tail,
+          "```",
+          "",
+          `Full run log: \`${logDir}\``,
+        ],
+      });
+      return {
+        issue: issue.identifier,
+        outcome: "usage-limit-deferred",
+        exitCode: spawnResult.exitCode,
+        retryAt: usageVerdict.retryAt,
+      };
+    }
+
+    // Everything below escalates. Record a repeated usage-limit failure so the
+    // count stays truthful; clear the record for any other kind of failure,
+    // since the escalation rule is about *consecutive* usage-limit failures.
+    if (usageLimit) {
+      usageLimitStore.record(issue.identifier, {
+        retryAt: null,
+        evidence: usageLimit.evidence,
+        consecutive: usageVerdict.consecutive,
+        now: now(),
+      });
+    } else {
+      usageLimitStore.clear(issue.identifier);
+    }
+
     worktreeManager.markStatus(issue.identifier, "failed");
     await publisher.publish("error", {
       stateId: stateIds.needsHumanDecision,
-      summary: `Worker exited with code ${spawnResult.exitCode}.`,
-      headline: `**Worker exited with code ${spawnResult.exitCode}.**`,
-      sections: ["```", tail, "```", "", `Full run log: \`${logDir}\``],
+      summary: usageLimit
+        ? `Worker exited with code ${spawnResult.exitCode} on a provider usage limit that cannot be retried automatically: ${usageVerdict.reason}`
+        : `Worker exited with code ${spawnResult.exitCode}.`,
+      headline: usageLimit
+        ? `**Worker exited with code ${spawnResult.exitCode} on a provider usage limit that cannot be retried automatically.**`
+        : `**Worker exited with code ${spawnResult.exitCode}.**`,
+      sections: [
+        ...(usageLimit ? [`Reason: ${usageVerdict.reason}`, ""] : []),
+        "```",
+        tail,
+        "```",
+        "",
+        `Full run log: \`${logDir}\``,
+      ],
     });
-    return { issue: issue.identifier, outcome: "worker-failed", exitCode: spawnResult.exitCode };
+    return {
+      issue: issue.identifier,
+      outcome: "worker-failed",
+      exitCode: spawnResult.exitCode,
+      ...(usageLimit ? { usageLimit: usageVerdict.reason } : {}),
+    };
   }
 
   // MOV-180: a worker reaching this point ran to completion under the real
   // sandbox without hitting the nested-sandbox-crash signature — the signal
   // this breaker uses to close again, mirroring the shape named in the issue.
   circuitBreaker.clear(NESTED_SANDBOX_CRASH);
+  // MOV-151: and the provider granted this issue a session that ran to a
+  // clean exit, so whatever usage-limit history it had is no longer
+  // "consecutive". Nothing to forget in the overwhelmingly common case.
+  usageLimitStore.clear(issue.identifier);
 
   const workflowAuth = resolveWorkflowEditAuthorization(issue);
   if (workflowAuth.authorized && workerMode !== "repair") {

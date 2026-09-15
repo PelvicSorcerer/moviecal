@@ -82,6 +82,40 @@ export function publishWorkerResult({ worktreePath, branch, repo, issue, runner 
 }
 
 /**
+ * Re-run the failed jobs of every workflow run attached to one head SHA
+ * (MOV-151).
+ *
+ * This is the whole of the "recognized infrastructure failure" response, and
+ * the point is what it does *not* do: no worker starts, no file is touched,
+ * no commit is made. A flaky runner, a 503 from a registry, or a cancelled
+ * job is not evidence that the code is wrong, and the one thing automation
+ * must never do with a transient failure is invent a code change to explain
+ * it.
+ *
+ * Scoped to the head SHA so an older run from a superseded push is never
+ * restarted, and `rerun-failed-jobs` (rather than a whole-run rerun) so
+ * already-green jobs are not re-spent.
+ */
+export function rerunFailedChecks({ repo, headSha, runner = defaultRunner } = {}) {
+  if (!repo || !headSha) throw new Error("rerunFailedChecks requires repo and headSha");
+  const payload = JSON.parse(
+    runner("gh", ["api", `repos/${repo}/actions/runs?head_sha=${encodeURIComponent(headSha)}&per_page=100`]),
+  );
+  const failed = (payload.workflow_runs || []).filter((run) =>
+    ["failure", "cancelled", "canceled", "timed_out", "startup_failure"].includes(
+      String(run.conclusion || "").toLowerCase(),
+    ),
+  );
+  if (!failed.length) throw new Error(`no failed workflow run is attached to ${headSha}`);
+  const reran = [];
+  for (const run of failed) {
+    runner("gh", ["api", "-X", "POST", `repos/${repo}/actions/runs/${run.id}/rerun-failed-jobs`]);
+    reran.push({ id: run.id, name: run.name || run.display_title || null });
+  }
+  return { headSha, reran };
+}
+
+/**
  * Publish an audited repair onto an existing dispatcher-owned PR.
  *
  * Unlike the implementation publisher this never creates a branch or PR. The
