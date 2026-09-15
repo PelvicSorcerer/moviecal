@@ -43,7 +43,13 @@ Two initiatives group the five projects below:
 
 ## Project milestones
 
-Used only where real sequencing exists. Initial milestones live under **iOS Companion App**: `Skeleton` → `Auth + API client` → `Navigation shell`, matching the dependency chain that was GitHub issues #237 → #238/#239 → #240. Other projects get milestones only when a real release boundary exists — do not add milestones for their own sake.
+Used only where real sequencing exists. A milestone is a finite phase with a recognizable completion condition; it is not a topic tag, and it does not require a target date when dependency order rather than calendar time is the useful boundary. Parent issues decompose one body of work, while labels carry reusable classifications across projects.
+
+**iOS Companion App** uses `Skeleton` → `Auth + API client` → `Navigation shell`, matching the dependency chain that was GitHub issues #237 → #238/#239 → #240.
+
+**Developer Governance & Agent Infrastructure** uses these finite phases: `Linear actor authorization`, `Hybrid workflow architecture & feasibility`, `Routing & local foundations`, `CI & review reaction`, `Cloud execution pilot`, `Controlled autonomy`, and `Agent Session integration`. The former `Linear Loops & agent experience` milestone mixed the Agent Session implementation with plan-gated Loop intake work; it was narrowed to `Agent Session integration`. Loop intake and handoff work remains organized by its parent issue until that work is approved as a concrete pilot.
+
+Projects in this workspace are durable workstreams replacing the former GitHub `Track` field. A project at 100% means that every currently assigned issue is terminal; it does not mean the workstream can never receive new work. For example, **Platform & Infrastructure** remains an open, dormant track after its initial deployment and smoke-monitoring work completed.
 
 ## Workflow states
 
@@ -83,7 +89,7 @@ No separate `migration` label: the historical-import marker is Linear's own auto
 
 ## Estimates
 
-Replace GitHub `Target PR Size` (XS/S/M/L) with Linear's native Estimate field (1/2/3/5). Rough mapping: XS→1, S→2, M→3, L→5.
+Issue estimates are deliberately not used. Agent routing and decomposition are governed by explicit acceptance criteria, Testing Expectations, risk, model tier, execution route, and dependency relations. An issue that is too broad should be split into parent/sub-issues rather than assigned an otherwise unused point value.
 
 ## Relations
 
@@ -147,7 +153,7 @@ No agent conversation is ever a source of truth. Every decision an agent makes t
 | `Priority` | Native Priority |
 | `Risk` | Label `risk:*` |
 | `Execution Mode` | Label `human-only` (absence = agent-eligible) |
-| `Target PR Size` | Estimate |
+| `Target PR Size` | Retired — use acceptance criteria and parent/sub-issue decomposition |
 | `Area` | Label `area:*` |
 | `Needs Infra/Secrets` | Label `needs-secrets` |
 
