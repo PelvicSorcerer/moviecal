@@ -37,8 +37,6 @@ import {
   logRoot,
   worktreesStatePath,
   priorityPropagationStatePath,
-  circuitBreakerStatePath,
-  usageLimitStatePath,
   loadLinearConfig,
   loadLinearAppConfig,
   resolveLinearAuth,
@@ -46,8 +44,6 @@ import {
   agentSessionsEnabled,
   checkSecretFileMode,
   DEFAULT_CONCURRENCY,
-  DEFAULT_WORKER_TIMEOUT_MS,
-  DEFAULT_STOP_POLL_INTERVAL_MS,
   RUN_LOG_RETENTION_DAYS,
   REPO_ROOT,
   dispatcherLockPath,
@@ -63,31 +59,20 @@ import {
   selectCloudCandidates,
 } from "../src/dispatch-eligibility.mjs";
 import { DispatcherLock, WorktreeManager } from "../src/worktree-manager.mjs";
-import { CircuitBreakerStore } from "../src/circuit-breaker.mjs";
-import { UsageLimitStore } from "../src/usage-limit.mjs";
 import { runOnce } from "../src/run-loop.mjs";
+import {
+  buildRunContext,
+  RUN_STATE_NAMES,
+  GITHUB_REPO,
+  IOS_RUNNER_NAME,
+} from "../src/run-context.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
 import { propagatePriorities, TERMINAL_PRIORITY_STATE_TYPES } from "../src/priority-propagation.mjs";
-import { spawnWorker } from "../src/worker-spawn.mjs";
-import { auditWorkerResult, writeWorkerAudit } from "../src/worker-guard.mjs";
-import { publishWorkerResult } from "../src/worker-publish.mjs";
 import { defaultRunner as ghRunner } from "../src/pr-check.mjs";
 import { checkPrState, checkPrObservation, isCheckPrObservation, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
 import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
-import { applyStagedWorkflowEdit } from "../src/workflow-edit-apply.mjs";
-import { AgentSessionBridge, createAgentSessionCapability } from "../src/agent-session.mjs";
 import { SignalLedger, StopController, handleAgentSignal } from "../src/agent-signals.mjs";
-
-const IOS_RUNNER_NAME = "moviecal-ios-runner";
-const GITHUB_REPO = "PelvicSorcerer/moviecal";
-
-/**
- * One entitlement latch for the whole process (MOV-158). The first `agent
- * sessions disabled` rejection turns the enrichment layer off for the life of
- * the daemon instead of costing one doomed mutation per issue per poll cycle.
- */
-const agentSessionCapability = createAgentSessionCapability();
 
 /**
  * Build the LinearClient the real run/dry-run path authenticates with:
@@ -406,114 +391,6 @@ function cmdShadow({ prNumber, fixturePath } = {}) {
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
-const RUN_STATE_NAMES = {
-  readyForAgent: "Ready for Agent",
-  blocked: "Blocked",
-  agentWorking: "Agent Working",
-  needsHumanDecision: "Needs Human Decision",
-  inReview: "In Review",
-  done: "Done",
-};
-
-async function checkIosRunnerOnline() {
-  try {
-    const out = execFileSync("gh", ["api", `repos/${GITHUB_REPO}/actions/runners`], { encoding: "utf8" });
-    const runner = (JSON.parse(out).runners || []).find((r) => r.name === IOS_RUNNER_NAME);
-    return Boolean(runner && runner.status === "online");
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Build the real (non-fake) context runOnce needs, wiring actual Linear/gh/git/process
- * dependencies. `issues` is the same "Ready for Agent" batch runOnce will process --
- * each issue's `inverseRelations` (from LinearClient.issuesInState()) already carries
- * its blockers' workflow states, so isIssueSatisfied is resolved from that batch with
- * no extra Linear call.
- */
-async function buildRunContext(linearClient, teamKey, issues) {
-  const states = await linearClient.workflowStates(teamKey);
-  const stateId = (name) => {
-    const s = states.find((st) => st.name === name);
-    if (!s) throw new Error(`workflow state not found: ${name} (has the workspace been provisioned? see tools/dispatcher/scripts/provision-linear-workspace.mjs)`);
-    return s.id;
-  };
-
-  const worktreeManager = new WorktreeManager({
-    repoRoot: REPO_ROOT,
-    worktreeRoot: worktreeRoot(),
-    statePath: worktreesStatePath(),
-  });
-
-  return {
-    linearClient,
-    stateIds: {
-      blocked: stateId(RUN_STATE_NAMES.blocked),
-      agentWorking: stateId(RUN_STATE_NAMES.agentWorking),
-      needsHumanDecision: stateId(RUN_STATE_NAMES.needsHumanDecision),
-      inReview: stateId(RUN_STATE_NAMES.inReview),
-      readyForAgent: stateId(RUN_STATE_NAMES.readyForAgent),
-    },
-    worktreeManager,
-    // MOV-180: host-wide nested-sandbox-crash breaker, persisted outside the
-    // repo so it survives a dispatcher restart (see circuit-breaker.mjs).
-    circuitBreaker: new CircuitBreakerStore(circuitBreakerStatePath()),
-    // MOV-192: this durable store turns a sole, reset-bearing provider refusal
-    // into one deferred retry instead of the no-op fallback's escalation.
-    usageLimitStore: new UsageLimitStore(usageLimitStatePath()),
-    // MOV-144: a config value above the single-flight resource policy is not
-    // honored until a nonblocking supervisor exists.
-    concurrencyLimit: Math.min(Number(process.env.MOVIECAL_CONCURRENCY || DEFAULT_CONCURRENCY), DEFAULT_CONCURRENCY),
-    workerTimeoutMs: Number(process.env.MOVIECAL_WORKER_TIMEOUT_MS || DEFAULT_WORKER_TIMEOUT_MS),
-    iosRunnerOnline: await checkIosRunnerOnline(),
-    isIssueSatisfied: buildIsIssueSatisfied(issues),
-    secretPresent: () => fs.existsSync(envLocalPath()),
-    worktreeRoot: worktreeRoot(),
-    envLocalSource: fs.existsSync(envLocalPath()) ? envLocalPath() : undefined,
-    ghRepo: GITHUB_REPO,
-    logRoot: logRoot(),
-    spawnWorkerFn: spawnWorker,
-    auditWorkerResultFn: auditWorkerResult,
-    writeWorkerAuditFn: writeWorkerAudit,
-    publishWorkerResultFn: (args) => publishWorkerResult({ ...args, runner: ghRunner }),
-    uncommittedChangesFn: (worktreePath) => worktreeManager.uncommittedChanges(worktreePath),
-    applyStagedWorkflowEditFn: (worktreePath, authorizedPath) => applyStagedWorkflowEdit(worktreePath, authorizedPath),
-    // MOV-143: the route + delegate gate, and the live re-read that makes a
-    // mid-flight routing/delegation change a no-op instead of a lost race.
-    dispatcherDelegate: resolveDispatcherDelegate(),
-    refreshIssueFn: (issue) => linearClient.issueSnapshot(issue.id),
-    // MOV-158: the optional Agent Session enrichment layer, and the polling
-    // stop control that works without it. The bridge is built per attempt but
-    // shares one process-wide entitlement latch; with sessions off (the
-    // default, and the only working configuration today) every lifecycle event
-    // publishes as the app-actor comment it always did.
-    agentSessionBridgeFn: () =>
-      new AgentSessionBridge({
-        linearClient,
-        enabled: agentSessionsEnabled(),
-        capability: agentSessionCapability,
-      }),
-    readAgentSessionFn: (issueIdentifier) => {
-      try {
-        return worktreeManager.loadState()[issueIdentifier]?.agentSession || null;
-      } catch {
-        return null;
-      }
-    },
-    persistAgentSessionFn: (issueIdentifier, snapshot) => {
-      // Best-effort bookkeeping: the registry entry may already be gone (a
-      // concurrent gc), and losing it only costs the next attempt its
-      // attach-vs-new-session hint, never correctness.
-      try {
-        worktreeManager.updateEntry(issueIdentifier, { agentSession: snapshot });
-      } catch {
-        /* no record to annotate */
-      }
-    },
-    stopPollIntervalMs: Number(process.env.MOVIECAL_STOP_POLL_MS ?? DEFAULT_STOP_POLL_INTERVAL_MS),
-  };
-}
 
 /**
  * Replay one Agent Session webhook payload from a file, with no listener and
