@@ -8,7 +8,38 @@
 
 import { resolveWorkflowEditAuthorization } from "./preflight.mjs";
 
-export function generateBrief(issue, { branch, worktreePath, worker, model, upgradeConditions = [] } = {}) {
+function repositoryContextLines(context) {
+  if (!context) return [];
+  const unavailable = (value) => value || "_(unavailable)_";
+  return [
+    "## Repository context (trusted dispatcher snapshot)",
+    "",
+    "This is read-only context captured before this worker started. Do **not** invoke Git to re-check it; Git remains dispatcher-only.",
+    "",
+    `- Branch: \`${unavailable(context.branch)}\``,
+    `- HEAD: \`${unavailable(context.headSha)}\``,
+    `- Base: \`${unavailable(context.baseRef)}\` at \`${unavailable(context.baseSha)}\``,
+    `- Worktree at dispatch: ${context.clean ? "clean" : "dirty"}`,
+    "",
+    "Uncommitted paths at dispatch:",
+    "```text",
+    ...(context.statusLines?.length ? context.statusLines : ["_(none)_"]),
+    "```",
+    "",
+    "Recent commits:",
+    "```text",
+    ...(context.recentCommits?.length ? context.recentCommits : ["_(unavailable)_"]),
+    "```",
+    "",
+    "Initial changed paths versus base:",
+    "```text",
+    ...(context.changedPaths?.length ? context.changedPaths : ["_(none)_"]),
+    "```",
+    "",
+  ];
+}
+
+export function generateBrief(issue, { branch, worktreePath, worker, model, upgradeConditions = [], repositoryContext = null } = {}) {
   const lines = [];
   lines.push(`# ${issue.identifier}: ${issue.title}`);
   lines.push("");
@@ -19,6 +50,7 @@ export function generateBrief(issue, { branch, worktreePath, worker, model, upgr
     lines.push(`Upgrade condition(s) cited: ${upgradeConditions.join(", ")}`);
   }
   lines.push("");
+  lines.push(...repositoryContextLines(repositoryContext));
   lines.push("## Instructions");
   lines.push("");
   lines.push(

@@ -12,6 +12,7 @@ import { evaluatePreflight, worktreeName, branchName, resolveWorkflowEditAuthori
 import { resolveRouting, workerInvocation } from "./worker-routing.mjs";
 import { confirmStillClaimable, evaluateLocalDispatch } from "./dispatch-eligibility.mjs";
 import { generateBrief } from "./brief.mjs";
+import { collectRepositoryContext } from "./repository-context.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "./worker-guard.mjs";
 import { classifyWorkerFailure, NESTED_SANDBOX_CRASH } from "./failure-classification.mjs";
@@ -40,6 +41,7 @@ import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-si
  * @param {(worktreePath: string, authorizedPath: string) => {applied: boolean, path?: string, reason?: string}} [ctx.applyStagedWorkflowEditFn] - MOV-121; defaults to a no-op if not provided (tests that don't care about this can omit it)
  * @param {'implementation'|'repair'} [ctx.workerMode] - MOV-145; repair mode has stricter protected paths and never applies staged workflow proposals
  * @param {(args: object) => object} [ctx.auditWorkerResultFn] - MOV-145; validates structured tool calls and the resulting diff before publication
+ * @param {(args: {worktreePath: string, branch: string}) => object} [ctx.repositoryContextFn] - MOV-178; trusted, bounded read-only repository facts injected into the worker brief before the worker starts
  * @param {(logDir: string, report: object) => object} [ctx.writeWorkerAuditFn] - MOV-145; persists an audit record outside the worktree
  * @param {(args: object) => object} ctx.publishWorkerResultFn - MOV-145; required trusted dispatcher-side non-force push and draft PR creation
  * @param {{id?: string|null, name?: string|null}} [ctx.dispatcherDelegate] - MOV-143: the delegate an issue must name for this dispatcher to claim it; defaults to matching `moviecal-dispatcher` by name
@@ -152,6 +154,7 @@ async function processIssue(issue, ctx) {
     applyStagedWorkflowEditFn = () => ({ applied: false, reason: "not configured" }),
     workerMode = "implementation",
     auditWorkerResultFn = auditWorkerResult,
+    repositoryContextFn = collectRepositoryContext,
     writeWorkerAuditFn = writeWorkerAudit,
     publishWorkerResultFn,
     dispatcherDelegate = {},
@@ -319,6 +322,7 @@ async function processIssue(issue, ctx) {
         applyStagedWorkflowEditFn,
         workerMode,
         auditWorkerResultFn,
+        repositoryContextFn,
         writeWorkerAuditFn,
         publishWorkerResultFn,
         dispatcherDelegate,
@@ -404,6 +408,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     applyStagedWorkflowEditFn,
     workerMode,
     auditWorkerResultFn,
+    repositoryContextFn,
     writeWorkerAuditFn,
     publishWorkerResultFn,
     dispatcherDelegate,
@@ -440,12 +445,14 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     return detectStopFromSnapshot(snapshot, { expectedDelegate: dispatcherDelegate });
   };
 
+  const repositoryContext = repositoryContextFn({ worktreePath: entry.path, branch });
   const brief = generateBrief(issue, {
     branch,
     worktreePath: entry.path,
     worker: routing.worker,
     model: routing.model,
     upgradeConditions: routing.upgradeConditions,
+    repositoryContext,
   });
   const invocation = workerInvocation(routing.worker, routing.model);
   const logDir = path.join(logRoot, entry.name);
@@ -585,6 +592,21 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
       ],
     });
     return { issue: issue.identifier, outcome: "security-blocked", violations: securityReport.violations };
+  }
+
+  // A native harness can prove that a scope-only command never reached the
+  // shell. Keep that fact visible, but do not let it conceal the worker's
+  // actual exit condition (notably MOV-151's provider-rate-limit retry).
+  if (securityReport.warnings?.length) {
+    await publisher.publish("progress", {
+      summary: "Worker attempted a scope-only command that the safety harness denied; continuing with the actual worker outcome.",
+      headline: "**Worker scope warning; no command executed.**",
+      sections: [
+        ...securityReport.warnings.map((warning) => `- ${warning.reason}: \`${String(warning.action).slice(0, 500)}\``),
+        "",
+        "The native worker harness denied these commands before execution. They remain in the checksummed audit record, but did not grant the worker Git, GitHub, credential, or remote authority.",
+      ],
+    });
   }
 
   if (spawnResult.exitCode !== 0) {

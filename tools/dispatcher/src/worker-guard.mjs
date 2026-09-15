@@ -213,10 +213,26 @@ export function guardedInvocation(invocation, { profilePath } = {}) {
   };
 }
 
-function visitToolEvents(value, found) {
+function resultOutcome(value) {
+  const text = typeof value.content === "string" ? value.content : JSON.stringify(value.content || "");
+  if (/\b(?:permission (?:to .+ )?denied|operation not permitted|not permitted)\b/i.test(text)) return "denied";
+  if (String(value.status || "").toLowerCase() === "denied") return "denied";
+  // A result, including a shell error, proves the command was handed to the
+  // harness. Only a specific denial proves it never executed.
+  return "executed";
+}
+
+function commandOutcome(value, eventType) {
+  const status = String(value.status || value.outcome || "").toLowerCase();
+  if (status === "denied" || status === "blocked") return "denied";
+  if (Object.hasOwn(value, "exit_code") || Object.hasOwn(value, "exitCode") || eventType === "item.completed") return "executed";
+  return "unknown";
+}
+
+function visitToolEvents(value, found, results, eventType) {
   if (!value || typeof value !== "object") return;
   if (Array.isArray(value)) {
-    for (const item of value) visitToolEvents(item, found);
+    for (const item of value) visitToolEvents(item, found, results, eventType);
     return;
   }
 
@@ -224,46 +240,59 @@ function visitToolEvents(value, found) {
   if (value.type === "tool_use" && typeof value.name === "string") {
     const input = value.input || {};
     if (value.name === "Bash" && typeof input.command === "string") {
-      found.push({ kind: "command", value: input.command });
+      found.push({ id: value.id || null, kind: "command", value: input.command, outcome: "unknown" });
     }
     if (["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(value.name)) {
       for (const key of ["file_path", "path", "notebook_path"]) {
-        if (typeof input[key] === "string") found.push({ kind: "path", value: input[key] });
+        if (typeof input[key] === "string") found.push({ id: value.id || null, kind: "path", value: input[key], outcome: "unknown" });
       }
     }
   }
 
+  // Claude emits tool results as a later JSON event, keyed to the original
+  // tool_use id. This lets the post-exit audit distinguish a refused command
+  // from one that actually reached a shell.
+  if (value.type === "tool_result" && typeof value.tool_use_id === "string") {
+    results.set(value.tool_use_id, resultOutcome(value));
+  }
+
   // Codex --json command_execution/file_change items.
   if (value.type === "command_execution" && typeof value.command === "string") {
-    found.push({ kind: "command", value: value.command });
+    found.push({ id: value.id || null, kind: "command", value: value.command, outcome: commandOutcome(value, eventType) });
   }
   if (value.type === "file_change") {
     for (const change of value.changes || []) {
-      if (typeof change?.path === "string") found.push({ kind: "path", value: change.path });
+      if (typeof change?.path === "string") found.push({ id: value.id || null, kind: "path", value: change.path, outcome: "executed" });
     }
   }
 
-  for (const child of Object.values(value)) visitToolEvents(child, found);
+  for (const child of Object.values(value)) visitToolEvents(child, found, results, eventType);
 }
 
 export function extractToolActions(jsonl) {
   const found = [];
+  const results = new Map();
   for (const line of String(jsonl || "").split("\n")) {
     if (!line.trim()) continue;
     try {
-      visitToolEvents(JSON.parse(line), found);
+      const event = JSON.parse(line);
+      visitToolEvents(event, found, results, event.type);
     } catch {
       // Non-JSON diagnostics are not treated as tool calls. The adapters are
       // launched in structured-output mode; malformed output is recorded by
       // the audit as a separate fail-closed condition below.
     }
   }
-  return found;
+  return found.map(({ id, ...action }) => ({
+    ...action,
+    outcome: id && results.has(id) ? results.get(id) : action.outcome,
+  }));
 }
 
 export function auditWorkerTranscript(jsonl, { mode = "implementation" } = {}) {
   const actions = extractToolActions(jsonl);
   const violations = [];
+  const warnings = [];
   const lines = String(jsonl || "").split("\n").filter((line) => line.trim());
   if (lines.length === 0) {
     violations.push({ action: "stdout.log", reason: "structured worker transcript is empty" });
@@ -277,17 +306,19 @@ export function auditWorkerTranscript(jsonl, { mode = "implementation" } = {}) {
   });
   for (const action of actions) {
     if (action.kind === "path" && isProtected(action.value, mode)) {
-      violations.push({ action: action.value, reason: `attempted to modify protected ${mode} path` });
+      violations.push({ action: action.value, reason: `attempted to modify protected ${mode} path`, category: "safety", outcome: action.outcome });
       continue;
     }
     if (action.kind === "command") {
       const classified = classifyAction(action.value, { workerMode: mode });
       if (classified.verdict !== "allow") {
-        violations.push({ action: action.value, reason: classified.reason });
+        const finding = { action: action.value, reason: classified.reason, category: classified.category, outcome: action.outcome };
+        if (classified.category === "scope" && action.outcome === "denied") warnings.push(finding);
+        else violations.push(finding);
       }
     }
   }
-  return { ok: violations.length === 0, actions, violations };
+  return { ok: violations.length === 0, actions, warnings, violations };
 }
 
 export function auditChangedPaths(paths, { mode = "implementation" } = {}) {

@@ -63,6 +63,28 @@ describe("generateBrief", () => {
     expect(brief).toMatch(/trusted dispatcher/i);
   });
 
+  it("provides a bounded trusted repository snapshot instead of asking the worker to run Git", () => {
+    const brief = generateBrief(issue, {
+      branch: "agent/MOV-42-fix-the-thing",
+      worktreePath: "/tmp/wt",
+      worker: "claude",
+      model: "default",
+      repositoryContext: {
+        branch: "agent/MOV-42-fix-the-thing",
+        headSha: "head-sha",
+        baseRef: "origin/master",
+        baseSha: "base-sha",
+        clean: true,
+        recentCommits: ["abc latest change"],
+        changedPaths: ["src/app/page.tsx"],
+      },
+    });
+    expect(brief).toContain("Repository context (trusted dispatcher snapshot)");
+    expect(brief).toContain("head-sha");
+    expect(brief).toContain("abc latest change");
+    expect(brief).toContain("Do **not** invoke Git to re-check it");
+  });
+
   it("instructs the worker to run verification synchronously rather than background a build and exit (MOV-137)", () => {
     const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
     expect(brief).toMatch(/synchronously/i);

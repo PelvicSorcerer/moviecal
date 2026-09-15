@@ -1,9 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { classifyAction } from "../src/security-policy.mjs";
+import { COMMAND_RULES, PATH_RULES, classifyAction } from "../src/security-policy.mjs";
 
 describe("classifyAction", () => {
   it("allows an ordinary command", () => {
-    expect(classifyAction("npm run verify")).toEqual({ verdict: "allow", reason: null });
+    expect(classifyAction("npm run verify")).toEqual({ verdict: "allow", reason: null, category: null });
+  });
+
+  it("requires an explicit scope or safety category on every policy rule", () => {
+    expect([...COMMAND_RULES, ...PATH_RULES].every((rule) => ["scope", "safety"].includes(rule.category))).toBe(true);
+    expect(classifyAction("git status").category).toBe("scope");
+    expect(classifyAction("gh pr view 42 --json title").category).toBe("scope");
+    expect(classifyAction("gh secret set FOO --body bar").category).toBe("safety");
+    expect(classifyAction("security dump-keychain").category).toBe("safety");
   });
 
   it("hard-denies a force-push", () => {
