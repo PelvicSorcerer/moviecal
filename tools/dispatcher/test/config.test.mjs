@@ -2,7 +2,16 @@ import { describe, it, expect, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { parseEnvFile, checkSecretFileMode, loadLinearAppConfig, resolveLinearAuth } from "../src/config.mjs";
+import {
+  parseEnvFile,
+  checkSecretFileMode,
+  loadLinearAppConfig,
+  resolveLinearAuth,
+  autoRepairEnabled,
+  resolveTrustedReviewers,
+  resolveRepairBudgets,
+} from "../src/config.mjs";
+import { DEFAULT_REPAIR_BUDGETS } from "../src/ci-outcomes.mjs";
 
 describe("parseEnvFile", () => {
   let tmpFile;
@@ -155,5 +164,53 @@ describe("resolveLinearAuth", () => {
   it("reports mode 'none' when neither credential is configured", () => {
     const auth = resolveLinearAuth({ linearPath: "/nonexistent/linear.env", linearAppPath: "/nonexistent/linear-app.env" });
     expect(auth).toEqual({ mode: "none", teamKey: "MOV" });
+  });
+});
+
+// MOV-188: automatic repair is the one dispatcher behaviour that starts a
+// worker and pushes to a live PR unattended, so "unset means off" is a
+// correctness property, not a preference.
+describe("automatic repair configuration (MOV-188)", () => {
+  it("is off when the switch is unset, empty, or anything but an explicit yes", () => {
+    for (const value of [undefined, "", "  ", "0", "false", "no", "off", "maybe"]) {
+      expect(autoRepairEnabled({ MOVIECAL_AUTO_REPAIR: value })).toBe(false);
+    }
+  });
+
+  it("is on only for an explicit truthy value", () => {
+    for (const value of ["1", "true", "TRUE", "yes", "on"]) {
+      expect(autoRepairEnabled({ MOVIECAL_AUTO_REPAIR: value })).toBe(true);
+    }
+  });
+
+  it("trusts no reviewer by default, so an unconfigured REQUEST_CHANGES escalates", () => {
+    expect(resolveTrustedReviewers({})).toEqual([]);
+    expect(resolveTrustedReviewers({ MOVIECAL_TRUSTED_REVIEWERS: "" })).toEqual([]);
+  });
+
+  it("reads a comma-separated trusted-reviewer list, trimming and dropping blanks", () => {
+    expect(resolveTrustedReviewers({ MOVIECAL_TRUSTED_REVIEWERS: " PelvicSorcerer , ,someone-else " })).toEqual([
+      "PelvicSorcerer",
+      "someone-else",
+    ]);
+  });
+
+  it("defaults the budget to the shared bound and allows tightening it per field", () => {
+    expect(resolveRepairBudgets({})).toEqual({ ...DEFAULT_REPAIR_BUDGETS });
+    expect(resolveRepairBudgets({ MOVIECAL_REPAIR_BUDGET_CODE: "1", MOVIECAL_REPAIR_BUDGET_TOTAL: "0" })).toEqual({
+      codeRepair: 1,
+      infrastructureRerun: DEFAULT_REPAIR_BUDGETS.infrastructureRerun,
+      total: 0,
+    });
+  });
+
+  it("ignores a junk override rather than silently widening the bound it exists to enforce", () => {
+    expect(
+      resolveRepairBudgets({
+        MOVIECAL_REPAIR_BUDGET_CODE: "lots",
+        MOVIECAL_REPAIR_BUDGET_INFRA: "-3",
+        MOVIECAL_REPAIR_BUDGET_TOTAL: "2.5",
+      }),
+    ).toEqual({ ...DEFAULT_REPAIR_BUDGETS });
   });
 });

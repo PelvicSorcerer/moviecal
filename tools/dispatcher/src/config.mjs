@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { LOCAL_DISPATCHER_DELEGATE } from "./dispatch-eligibility.mjs";
+import { DEFAULT_REPAIR_BUDGETS } from "./ci-outcomes.mjs";
 
 export const REPO_ROOT = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),
@@ -48,6 +49,16 @@ export function circuitBreakerStatePath() {
 /** MOV-151: persisted per-issue record of dispatch-time provider usage-limit failures (usage-limit.mjs). */
 export function usageLimitStatePath() {
   return path.join(configDir(), "usage-limits.json");
+}
+
+/**
+ * MOV-188: the durable record of what automatic repair has already tried
+ * (repair-ledger.mjs). Not a credential — but it *is* what makes the repair
+ * budget bounded across a dispatcher restart, so it lives with the rest of the
+ * runtime state outside the repository.
+ */
+export function repairLedgerStatePath() {
+  return path.join(configDir(), "repair-ledger.json");
 }
 
 export function dispatcherLockPath() {
@@ -165,7 +176,57 @@ export function resolveDispatcherDelegate({ linearAppPath = linearAppEnvPath() }
  * failed mutation, latches the answer, and keeps using comments.
  */
 export function agentSessionsEnabled(env = process.env) {
-  return ["1", "true", "yes", "on"].includes(String(env.MOVIECAL_AGENT_SESSIONS ?? "").trim().toLowerCase());
+  return truthy(env.MOVIECAL_AGENT_SESSIONS);
+}
+
+function truthy(value) {
+  return ["1", "true", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+/**
+ * Is bounded automatic CI/review repair switched on? (MOV-188.)
+ *
+ * Off unless `MOVIECAL_AUTO_REPAIR` is explicitly truthy, and off is the
+ * shipped default: repair is the one dispatcher behaviour that starts a worker
+ * and pushes to an existing PR with nobody watching, so it is opt-in and its
+ * first live cycle is supervised by hand (docs/operators/local-execution.md
+ * §Automatic CI and review repair). `admitRepair()` refuses everything while
+ * this is false, so an unset variable can only ever mean "observe, never act".
+ */
+export function autoRepairEnabled(env = process.env) {
+  return truthy(env.MOVIECAL_AUTO_REPAIR);
+}
+
+/**
+ * The GitHub logins whose `REQUEST_CHANGES` review may start a repair
+ * (MOV-188). Empty by default and deliberately so: a `REQUEST_CHANGES` is an
+ * instruction to change code, which is exactly what prompt injection would
+ * most like to reach, so it is honoured only from a login an operator named
+ * here. With none configured, every `REQUEST_CHANGES` escalates instead.
+ */
+export function resolveTrustedReviewers(env = process.env) {
+  return String(env.MOVIECAL_TRUSTED_REVIEWERS ?? "")
+    .split(",")
+    .map((login) => login.trim())
+    .filter(Boolean);
+}
+
+/**
+ * The per-PR repair attempt budget (MOV-188), overridable per-field so an
+ * operator can tighten it for a supervised cycle without editing code. A
+ * non-numeric or negative override is ignored rather than silently widening
+ * the budget it was meant to bound.
+ */
+export function resolveRepairBudgets(env = process.env) {
+  const bounded = (value, fallback) => {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+  };
+  return {
+    codeRepair: bounded(env.MOVIECAL_REPAIR_BUDGET_CODE, DEFAULT_REPAIR_BUDGETS.codeRepair),
+    infrastructureRerun: bounded(env.MOVIECAL_REPAIR_BUDGET_INFRA, DEFAULT_REPAIR_BUDGETS.infrastructureRerun),
+    total: bounded(env.MOVIECAL_REPAIR_BUDGET_TOTAL, DEFAULT_REPAIR_BUDGETS.total),
+  };
 }
 
 /**
