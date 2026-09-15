@@ -34,6 +34,19 @@
 // from immediately re-spending the attempt. That record is persisted outside
 // the repo, so a dispatcher restart inside the wait window resumes the wait
 // rather than losing it.
+//
+// **MOV-205 extends the same bounded mechanism to the retained-worktree
+// case.** MOV-151/192 deliberately handled only a *clean* worktree: when the
+// worker had already produced unpublished changes, requeueing would have
+// collided with (or, worse, reclaimed) a worktree holding real work, so the
+// issue went straight to `Needs Human Decision`. Preserving the work was
+// right; needing a human to resume it was not. The deferral can now carry a
+// **resume plan** — the retained worktree path and branch — and the retry
+// resumes *in place* rather than asking for a new worktree. Everything that
+// bounded the clean-worktree retry still bounds this one: exactly one
+// attempt, a parseable in-window reset, a durable record, and (in
+// `usage-limit-resume.mjs`) a full re-admission check before the resumed
+// worker starts.
 
 import { JsonStateStore } from "./state-store.mjs";
 
@@ -203,13 +216,19 @@ export function classifyUsageLimitFailure({ exitCode, logTail, now = new Date() 
  * @param {object|null} [args.previous] - this issue's stored record, if any
  * @param {Date} [args.now]
  * @param {number} [args.maxDeferralMs]
- * @returns {{action: "retry-at-reset"|"escalate"|"not-applicable", reason: string|null, retryAt: string|null, consecutive: number}}
+ * @param {boolean} [args.retainedWorktree] - MOV-205: the worker left unpublished
+ *   changes behind, so the deferred attempt must resume *in* that retained
+ *   worktree instead of asking for a fresh one. Only the successful action name
+ *   and its reason differ; every refusal below is deliberately identical,
+ *   because a retained worktree makes a limit no less bounded.
+ * @returns {{action: "retry-at-reset"|"resume-at-reset"|"escalate"|"not-applicable", reason: string|null, retryAt: string|null, consecutive: number}}
  */
 export function decideUsageLimitOutcome({
   classification,
   previous = null,
   now = new Date(),
   maxDeferralMs = MAX_USAGE_LIMIT_DEFERRAL_MS,
+  retainedWorktree = false,
 } = {}) {
   if (!classification || classification.category !== PROVIDER_USAGE_LIMIT) {
     return { action: "not-applicable", reason: null, retryAt: null, consecutive: 0 };
@@ -255,6 +274,14 @@ export function decideUsageLimitOutcome({
   // A reset already in the past means the window lifted between the worker's
   // message and this decision; retry on the next poll rather than waiting.
   const retryAt = new Date(Math.max(resetAt.getTime(), now.getTime()));
+  if (retainedWorktree) {
+    return {
+      action: "resume-at-reset",
+      reason: `provider usage limit reached after the worker produced unpublished changes; resuming that same retained worktree once at the reported reset (${retryAt.toISOString()})`,
+      retryAt: retryAt.toISOString(),
+      consecutive,
+    };
+  }
   return {
     action: "retry-at-reset",
     reason: `provider usage limit reached before any work was published; retrying once at the reported reset (${retryAt.toISOString()})`,
@@ -267,11 +294,12 @@ export function decideUsageLimitOutcome({
  * Per-issue record of dispatch-time usage-limit failures.
  *
  * Keyed by Linear identifier, persisted at
- * `~/.config/moviecal/usage-limits.json`. Two things live here and both have
+ * `~/.config/moviecal/usage-limits.json`. Three things live here and all have
  * to survive a restart: the scheduled retry time (so the next poll cycle
- * waits instead of immediately re-spending the attempt) and the consecutive
+ * waits instead of immediately re-spending the attempt), the consecutive
  * counter (so the second occurrence escalates rather than scheduling a second
- * "single" retry).
+ * "single" retry), and — for MOV-205 — the **resume plan** naming the
+ * retained worktree the deferred attempt must resume in rather than replace.
  */
 export class UsageLimitStore extends JsonStateStore {
   get label() {
@@ -282,8 +310,18 @@ export class UsageLimitStore extends JsonStateStore {
     return this.load()[issueId] || null;
   }
 
-  /** Record one usage-limit failure and its scheduled retry, incrementing the consecutive counter. */
-  record(issueId, { retryAt = null, evidence = null, consecutive, now = new Date() } = {}) {
+  /**
+   * Record one usage-limit failure and its scheduled retry, incrementing the
+   * consecutive counter.
+   *
+   * `resume` (MOV-205) is the retained-worktree plan: `{ worktreePath, branch,
+   * repository, unpublishedPaths }`. It is written as part of the same
+   * transaction as `retryAt`, so a caller can prove both landed durably before
+   * it promises a bounded resume. Omitting it (the clean-worktree path, and
+   * every escalation) stores `resume: null`, which is also what clears a
+   * previously-scheduled plan.
+   */
+  record(issueId, { retryAt = null, evidence = null, consecutive, resume = null, now = new Date() } = {}) {
     return this.update((state) => {
       const previous = state[issueId];
       const record = {
@@ -291,9 +329,49 @@ export class UsageLimitStore extends JsonStateStore {
         consecutive: consecutive ?? (previous?.consecutive || 0) + 1,
         retryAt,
         evidence,
+        resume: resume ? { ...resume, scheduledAt: now.toISOString(), consumedAt: null } : null,
         observedAt: now.toISOString(),
       };
       state[issueId] = record;
+      return record;
+    });
+  }
+
+  /**
+   * The retained-worktree resume this issue is due for right now, or null
+   * (MOV-205).
+   *
+   * Due means all of: a resume plan was recorded, it has not already been
+   * spent, and the provider's own reset time has arrived. Before the reset
+   * `deferral()` is what holds the issue back — this method is the *positive*
+   * signal the run loop acts on afterwards, and is deliberately separate so
+   * "wait" and "resume in place" can never be confused for each other.
+   */
+  resumption(issueId, now = new Date()) {
+    const record = this.get(issueId);
+    const plan = record?.resume;
+    if (!plan || plan.consumedAt || !record.retryAt) return null;
+    const due = new Date(record.retryAt);
+    if (Number.isNaN(due.getTime()) || now.getTime() < due.getTime()) return null;
+    return { ...plan, issue: issueId, retryAt: record.retryAt, consecutive: record.consecutive || 0 };
+  }
+
+  /**
+   * Spend the scheduled resume, so it can fire exactly once (MOV-205).
+   *
+   * Stamps `consumedAt` and drops `retryAt` while **keeping** `consecutive`:
+   * the attempt bound is about consecutive provider limits, and a resumed
+   * worker that hits the limit again must still escalate rather than schedule
+   * a second "single" resume. Returns the updated record, or null when there
+   * was no plan to spend — which a caller must treat as "cannot guarantee this
+   * fires once" rather than as success.
+   */
+  consumeResume(issueId, { now = new Date() } = {}) {
+    return this.update((state) => {
+      const record = state[issueId];
+      if (!record?.resume || record.resume.consumedAt) return null;
+      record.resume = { ...record.resume, consumedAt: now.toISOString() };
+      record.retryAt = null;
       return record;
     });
   }
@@ -316,6 +394,10 @@ export class UsageLimitStore extends JsonStateStore {
    * Deliberately silent: the poll loop asks this every cycle, and the reason
    * for the wait was already published to Linear once, when the retry was
    * scheduled. Commenting again every 30 seconds would bury it.
+   *
+   * Identical for a clean retry and a MOV-205 retained-worktree resume — both
+   * are "do not dispatch this issue before `retryAt`". What happens once the
+   * wait lapses is `resumption()`'s question, not this one's.
    */
   deferral(issueId, now = new Date()) {
     const record = this.get(issueId);

@@ -39,7 +39,36 @@ function repositoryContextLines(context) {
   ];
 }
 
-export function generateBrief(issue, { branch, worktreePath, worker, model, upgradeConditions = [], repositoryContext = null } = {}) {
+/**
+ * The section a resumed worker needs and a fresh one must never see (MOV-205).
+ *
+ * A worker resuming a retained worktree after a provider usage-limit reset
+ * starts with a dirty tree it did not create. Without being told why, the
+ * reasonable-looking move is to treat those edits as debris and revert them —
+ * which would destroy the exact work the resume exists to preserve.
+ */
+function resumeLines(resume) {
+  if (!resume) return [];
+  return [
+    "## You are resuming an interrupted attempt",
+    "",
+    "A previous worker on this same issue was cut off mid-task by a provider usage limit, **not** by anything wrong with its work. Its partial implementation is still in this worktree, uncommitted, and this worktree and branch are the same ones it was using — nothing was reclaimed, reset, or recreated.",
+    "",
+    `The provider limit reset at ${resume.retryAt}, which is why you are running now.`,
+    "",
+    "Uncommitted paths carried over from that attempt:",
+    "```text",
+    ...(resume.unpublishedPaths?.length ? resume.unpublishedPaths : ["_(none recorded)_"]),
+    "```",
+    "",
+    "**Continue that work; do not discard it.** Review what is already there, finish the issue from that state, and re-run the full verification lanes yourself — the interrupted attempt's verification (if it ran at all) no longer proves anything about the final state. If what you find is genuinely wrong or incomplete, fix it; just never assume an uncommitted change here is stray debris to be reverted.",
+    "",
+    "This is the single bounded resume for this issue. If you hit the provider limit again, say so and stop — a second limit escalates to a human by design.",
+    "",
+  ];
+}
+
+export function generateBrief(issue, { branch, worktreePath, worker, model, upgradeConditions = [], repositoryContext = null, resume = null } = {}) {
   const lines = [];
   lines.push(`# ${issue.identifier}: ${issue.title}`);
   lines.push("");
@@ -50,6 +79,7 @@ export function generateBrief(issue, { branch, worktreePath, worker, model, upgr
     lines.push(`Upgrade condition(s) cited: ${upgradeConditions.join(", ")}`);
   }
   lines.push("");
+  lines.push(...resumeLines(resume));
   lines.push(...repositoryContextLines(repositoryContext));
   lines.push("## Instructions");
   lines.push("");

@@ -289,6 +289,85 @@ export class WorktreeManager {
   }
 
   /**
+   * Is `worktreePath` still a real, readable Git worktree checked out on
+   * `branch` (MOV-205)?
+   *
+   * Asked hours after a provider usage limit retained it, immediately before
+   * a resumed worker is spawned into it. `isDispatcherOwnedWorktree()` proves
+   * *whose* it is; this proves it is still a worktree at all and still on the
+   * branch the resume was scheduled for — a directory that was emptied, had
+   * its Git metadata unlinked, or was checked out onto something else between
+   * the deferral and the reset must never receive a worker.
+   *
+   * Fails closed in every direction: anything that cannot be read is reported
+   * as not intact, with the reason, rather than assumed healthy.
+   */
+  worktreeIntegrity(worktreePath, branch = null) {
+    if (!fs.existsSync(worktreePath)) {
+      return { intact: false, branch: null, reason: `retained worktree ${worktreePath} no longer exists` };
+    }
+    let checkedOut;
+    try {
+      checkedOut = String(this.runner("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: worktreePath })).trim();
+    } catch (error) {
+      return { intact: false, branch: null, reason: `retained worktree ${worktreePath} is no longer a readable Git worktree: ${error.message}` };
+    }
+    // `--abbrev-ref HEAD` reports the literal string "HEAD" for a detached
+    // checkout, which is never a branch this dispatcher put there.
+    if (!checkedOut || checkedOut === "HEAD") {
+      return { intact: false, branch: null, reason: `retained worktree ${worktreePath} is on a detached HEAD, not ${branch || "a branch"}` };
+    }
+    if (branch && checkedOut !== branch) {
+      return { intact: false, branch: checkedOut, reason: `retained worktree ${worktreePath} is on ${checkedOut}, not ${branch}` };
+    }
+    return { intact: true, branch: checkedOut, reason: null };
+  }
+
+  /**
+   * Re-open this issue's own retained worktree for one more worker attempt,
+   * in place (MOV-205).
+   *
+   * The counterpart of `create()` for the one case where creating anything
+   * would be the bug: a provider usage limit interrupted a worker that had
+   * already produced unpublished changes, so the *existing* worktree and
+   * branch are the dispatch target. Nothing here removes, recreates, fetches,
+   * checks out, or otherwise touches the worktree's contents — the worker's
+   * partial implementation is exactly what the resumed attempt is meant to
+   * continue from. It only flips the registry entry back to `active` so the
+   * normal lifecycle (concurrency accounting, crash recovery, `markStatus`)
+   * applies to the resumed attempt as it would to any other.
+   *
+   * Admission is `admitUsageLimitResume()`'s job, not this method's; the
+   * identity assertions below are a last structural backstop against being
+   * called with a path or branch the caller did not actually admit.
+   */
+  resumeEntry(id, { worktreePath, branch } = {}) {
+    const state = this.loadState();
+    const entry = state[id];
+    if (!entry) throw new Error(`no worktree record for ${id}`);
+    if (worktreePath && entry.path !== worktreePath) {
+      throw new Error(`worktree record for ${id} points at ${entry.path}, not ${worktreePath}`);
+    }
+    if (branch && entry.branch !== branch) {
+      throw new Error(`worktree record for ${id} is on ${entry.branch}, not ${branch}`);
+    }
+    if (!fs.existsSync(entry.path)) throw new Error(`retained worktree for ${id} no longer exists at ${entry.path}`);
+
+    entry.status = "active";
+    entry.pid = process.pid;
+    entry.workerPid = null;
+    entry.resumedAt = new Date().toISOString();
+    entry.resumeCount = (entry.resumeCount || 0) + 1;
+    // The scheduled resume is being spent right now; leaving these behind
+    // would let a later pass read this entry as still awaiting one.
+    delete entry.endedAt;
+    delete entry.usageLimitResumeAt;
+    delete entry.retainedForResume;
+    this.saveState(state);
+    return entry;
+  }
+
+  /**
    * The repository's main (original) checkout path, as opposed to any linked
    * worktree. Discovered via `git worktree list --porcelain`, whose first
    * `worktree <path>` line is always the main checkout. Needed because

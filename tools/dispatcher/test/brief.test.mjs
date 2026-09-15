@@ -85,6 +85,38 @@ describe("generateBrief", () => {
     expect(brief).toContain("Do **not** invoke Git to re-check it");
   });
 
+  // MOV-205: a resumed worker opens onto a dirty tree it did not create. The
+  // brief has to say why, or reverting that work is the reasonable-looking move.
+  describe("resuming a retained worktree (MOV-205)", () => {
+    const resume = {
+      retryAt: "2026-09-15T17:00:00.000Z",
+      unpublishedPaths: ["src/app/page.tsx", "tools/dispatcher/src/usage-limit.mjs"],
+      consecutive: 1,
+    };
+
+    it("says the worktree is a retained attempt, names the carried-over paths, and forbids discarding them", () => {
+      const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default", resume });
+
+      expect(brief).toContain("You are resuming an interrupted attempt");
+      expect(brief).toContain("2026-09-15T17:00:00.000Z");
+      expect(brief).toContain("src/app/page.tsx");
+      expect(brief).toContain("tools/dispatcher/src/usage-limit.mjs");
+      expect(brief).toMatch(/do not discard it/i);
+      expect(brief).toMatch(/single bounded resume/i);
+    });
+
+    it("still tells the resumed worker to re-run verification itself", () => {
+      const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default", resume });
+      expect(brief).toMatch(/re-run the full verification lanes yourself/i);
+      expect(brief).toMatch(/synchronously/i);
+    });
+
+    it("says nothing about resuming for an ordinary fresh dispatch", () => {
+      const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
+      expect(brief).not.toContain("You are resuming an interrupted attempt");
+    });
+  });
+
   it("instructs the worker to run verification synchronously rather than background a build and exit (MOV-137)", () => {
     const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
     expect(brief).toMatch(/synchronously/i);
