@@ -16,16 +16,16 @@
 // but it does real subprocess/filesystem work, so it belongs in this lane
 // per docs/planning/testing-lanes.md, not lane:unit.
 //
-// Both `it.fails(...)` cases below are genuine, empirically-confirmed gaps
-// in the current implementation, not aspirational specs. They are written
-// as the property the code *should* have; today's implementation does not
-// have it, so the test body's own assertion fails, and `it.fails` reports
-// that failure as this test passing. If the underlying gap is ever fixed,
-// the assertion will start succeeding, `it.fails` will report that as an
-// unexpected pass, and CI will fail here as the signal to convert this back
-// into an ordinary `it`. See docs/operators/local-execution.md §Worktree
-// lifecycle and the MOV-198 follow-up issues for the actual fixes (out of
-// scope for this test-authoring issue).
+// The remaining `it.fails(...)` case below is a genuine, empirically-confirmed
+// gap, not an aspirational spec. It is written as the property the code
+// should have; today's implementation does not have it, so the test body's
+// own assertion fails, and `it.fails` reports that failure as this test
+// passing. If the underlying gap is ever fixed, the assertion will start
+// succeeding, `it.fails` will report that as an unexpected pass, and CI will
+// fail here as the signal to convert this back into an ordinary `it`. See
+// docs/operators/local-execution.md §Worktree lifecycle and the MOV-198
+// follow-up issues for the actual fixes (out of scope for this test-authoring
+// issue).
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "node:fs";
@@ -86,8 +86,8 @@ describe("worktree reclaim under real concurrent access (MOV-198)", () => {
     if (tmpRoot) fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  it.fails(
-    "does not silently destroy a real concurrent process's in-progress write when reclaiming a terminal-status worktree (KNOWN GAP)",
+  it(
+    "refuses reclaim rather than silently destroying a real concurrent process's in-progress write",
     () => {
       const worktreePath = path.join(worktreeRoot, "race-worktree");
       git(mainDir, ["worktree", "add", "-q", worktreePath, "-b", "agent/MOV-TEST-race", "origin/master"]);
@@ -125,13 +125,10 @@ describe("worktree reclaim under real concurrent access (MOV-198)", () => {
       const manager = new WorktreeManager({ repoRoot: mainDir, worktreeRoot, statePath, runner: racingRunner });
 
       const reclaimed = manager.isPathFreeForIssue(worktreePath, ISSUE_ID);
-      expect(reclaimed).toBe(true); // the reclaim proceeds, believing the worktree was clean
+      expect(reclaimed).toBe(false);
 
-      // Desired property: a real process's in-progress write survives a
-      // concurrent reclaim. Today it does not -- `git worktree remove
-      // --force` deletes the whole directory regardless of what appeared in
-      // it after the dirty-check ran, so this assertion fails, which is
-      // exactly what makes this a documented KNOWN GAP via `it.fails`.
+      // cleanup() repeats the clean check at its destructive boundary, so
+      // the concurrent file is noticed and the reclaim refuses it.
       expect(fs.existsSync(concurrentFile)).toBe(true);
     },
   );

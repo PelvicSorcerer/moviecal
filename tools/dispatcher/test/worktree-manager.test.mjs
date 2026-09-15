@@ -354,6 +354,31 @@ describe("WorktreeManager", () => {
       expect(dirtyManager.isPathFreeForIssue(entry.path, "MOV-1")).toBe(true);
       expect(fs.existsSync(entry.path)).toBe(false);
     });
+
+    it("rechecks cleanliness at removal time and refuses a worktree dirtied after the initial reclaim check (MOV-201)", () => {
+      let statusChecks = 0;
+      const racingCalls = [];
+      const racingManager = new WorktreeManager({
+        repoRoot: tmpRoot,
+        worktreeRoot,
+        statePath,
+        runner: (command, args, opts) => {
+          if (command === "git" && args[0] === "status" && args[1] === "--porcelain") {
+            statusChecks += 1;
+            return statusChecks === 1 ? "" : "?? concurrent-write.txt\n";
+          }
+          return fakeDirtyRunner(racingCalls)(command, args, opts);
+        },
+      });
+      const entry = racingManager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+      racingManager.markStatus("MOV-1", "failed");
+
+      expect(racingManager.isPathFreeForIssue(entry.path, "MOV-1")).toBe(false);
+      expect(fs.existsSync(entry.path)).toBe(true);
+      expect(racingManager.loadState()["MOV-1"]).toBeDefined();
+      expect(racingManager.reclaimBlockedReason(entry.path, "MOV-1")).toMatch(/uncommitted changes/);
+      expect(racingCalls.some((c) => c.args.join(" ") === "worktree remove --force " + entry.path)).toBe(false);
+    });
   });
 
   it("symlinks the shared env.local into the new worktree when a source is given", () => {

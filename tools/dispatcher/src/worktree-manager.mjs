@@ -215,8 +215,11 @@ export class WorktreeManager {
     const evaluation = this._evaluateReclaim(worktreePath, issueId);
     if (evaluation.status === "free") return true;
     if (evaluation.status === "reclaimable") {
-      this.cleanup(issueId, { deleteRemoteBranch: false });
-      return true;
+      // cleanup() repeats the dirty checks immediately before its destructive
+      // worktree removal (MOV-201). A writer may have changed the worktree
+      // after _evaluateReclaim() returned above, so its return value is the
+      // authoritative reclaim result.
+      return this.cleanup(issueId, { deleteRemoteBranch: false });
     }
     return false;
   }
@@ -533,13 +536,25 @@ export class WorktreeManager {
     return changes;
   }
 
-  /** Remove the worktree directory, delete the local+remote branch, and drop the record. */
+  /**
+   * Remove the worktree directory, delete the local+remote branch, and drop
+   * the record. Returns false without changing anything when the worktree is
+   * no longer clean at the final pre-removal check.
+   */
   cleanup(id, { deleteRemoteBranch = true } = {}) {
     const state = this.loadState();
     const entry = state[id];
     if (!entry) throw new Error(`no worktree record for ${id}`);
 
     if (fs.existsSync(entry.path)) {
+      // Do not rely on a clean check made by a caller before it invoked
+      // cleanup(): a concurrent worker/editor can write between that check
+      // and `git worktree remove --force`. Check again at the destructive
+      // boundary and leave both the worktree and registry record intact if
+      // either form of recoverable work appeared (MOV-201).
+      if (this.uncommittedChanges(entry.path).length > 0 || this.hasUnpushedCommits(entry.path, entry.branch)) {
+        return false;
+      }
       this.runner("git", ["worktree", "remove", "--force", entry.path], { cwd: this.repoRoot });
     }
     try {
@@ -557,6 +572,7 @@ export class WorktreeManager {
 
     delete state[id];
     this.saveState(state);
+    return true;
   }
 
   /**
@@ -569,16 +585,14 @@ export class WorktreeManager {
     const removed = [];
     for (const [id, entry] of Object.entries(state)) {
       if (entry.status === "merged") {
-        this.cleanup(id);
-        removed.push(id);
+        if (this.cleanup(id)) removed.push(id);
         continue;
       }
       if (entry.status === "failed" || entry.status === "abandoned") {
         const ended = entry.endedAt ? new Date(entry.endedAt).getTime() : now;
         const ageDays = (now - ended) / (1000 * 60 * 60 * 24);
         if (ageDays >= retentionDays) {
-          this.cleanup(id);
-          removed.push(id);
+          if (this.cleanup(id)) removed.push(id);
         }
       }
     }
