@@ -332,6 +332,11 @@ function defaultRunner(command, args, opts = {}) {
   return execFileSync(command, args, { encoding: "utf8", ...opts });
 }
 
+function isDescendantPath(candidate, ancestor) {
+  const relative = path.relative(ancestor, candidate);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
 /** Resolve every sibling checkout and backing Git directory before entering the sandbox. */
 export function repositoryGuardPaths(worktreePath, runner = defaultRunner) {
   const worktrees = String(runner("git", ["worktree", "list", "--porcelain"], { cwd: worktreePath }))
@@ -339,10 +344,15 @@ export function repositoryGuardPaths(worktreePath, runner = defaultRunner) {
     .filter((line) => line.startsWith("worktree "))
     .map((line) => path.resolve(line.slice("worktree ".length)));
   const current = path.resolve(worktreePath);
-  const gitMetadataPaths = [
-    String(runner("git", ["rev-parse", "--path-format=absolute", "--git-dir"], { cwd: worktreePath })).trim(),
-    String(runner("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: worktreePath })).trim(),
-  ].filter(Boolean).map((value) => path.resolve(value));
+  const gitDirOutput = String(runner("git", ["rev-parse", "--path-format=absolute", "--git-dir"], { cwd: worktreePath })).trim();
+  const gitCommonDirOutput = String(runner("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: worktreePath })).trim();
+  if (!gitDirOutput || !gitCommonDirOutput) throw new Error("linked worktree Git metadata paths are empty");
+  const gitDir = path.resolve(gitDirOutput);
+  const gitCommonDir = path.resolve(gitCommonDirOutput);
+  if (!isDescendantPath(gitDir, gitCommonDir)) {
+    throw new Error(`linked worktree Git directory escapes its common Git directory: ${gitDir}`);
+  }
+  const gitMetadataPaths = [gitDir, gitCommonDir].filter(Boolean);
   return {
     protectedRepositoryPaths: [...new Set(worktrees.filter((value) => value !== current))],
     gitMetadataPaths: [...new Set(gitMetadataPaths)],

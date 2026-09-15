@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import { redactWorkerOutput, spawnWorker, tailLogs } from "../src/worker-spawn.mjs";
+import { redactWorkerOutput, spawnWorker, tailLogs, withCodexGitMetadataDirectories } from "../src/worker-spawn.mjs";
 
 function fakeChildProcess({ exitCode = 0, stdoutText = "", stderrText = "" } = {}) {
   const child = new EventEmitter();
@@ -161,6 +161,47 @@ describe("spawnWorker", () => {
     });
     expect(calls[1].opts.env).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(calls[1].opts.env).not.toHaveProperty("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB");
+  });
+
+  it("lets Codex resolve linked-worktree metadata while the outer sandbox keeps it read-only", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
+    const calls = [];
+    const gitMetadataPaths = ["/repo/.git/worktrees/issue", "/repo/.git"];
+    await spawnWorker({
+      invocation: { command: "codex", args: ["--sandbox", "workspace-write", "exec", "--json"] },
+      cwd: "/repo/worktree",
+      brief: "brief",
+      logDir: path.join(tmpDir, "run"),
+      spawnImpl: (command, args, opts) => {
+        calls.push({ command, args, opts });
+        return fakeChildProcess({ exitCode: 0 });
+      },
+      securityContext: { mode: "implementation" },
+      platform: "darwin",
+      repositoryGuardPathsFn: () => ({ protectedRepositoryPaths: [], gitMetadataPaths }),
+    });
+
+    expect(calls[0].args).toEqual([
+      "-f", path.join(tmpDir, "run", "worker-sandbox.sb"), "codex",
+      "--sandbox", "workspace-write",
+      "--add-dir", "/repo/.git/worktrees/issue",
+      "--add-dir", "/repo/.git",
+      "exec", "--json",
+    ]);
+    const profile = fs.readFileSync(path.join(tmpDir, "run", "worker-sandbox.sb"), "utf8");
+    for (const metadataPath of gitMetadataPaths) {
+      expect(profile).toContain(`(deny file-write* (subpath \"${metadataPath}\"))`);
+    }
+  });
+
+  it("adds metadata directories only to a valid Codex invocation", () => {
+    const invocation = { command: "codex", args: ["--sandbox", "workspace-write", "exec"] };
+    expect(withCodexGitMetadataDirectories(invocation, ["/repo/.git"])).toEqual({
+      command: "codex",
+      args: ["--sandbox", "workspace-write", "--add-dir", "/repo/.git", "exec"],
+    });
+    expect(withCodexGitMetadataDirectories({ command: "claude", args: ["-p"] }, ["/repo/.git"])).toEqual({ command: "claude", args: ["-p"] });
+    expect(() => withCodexGitMetadataDirectories({ command: "codex", args: [] }, ["/repo/.git"])).toThrow(/include exec/);
   });
 
   it("fails closed rather than spawning without the Mac safety boundary", async () => {

@@ -16,6 +16,23 @@ import {
 
 const SECRET_KEY_RE = /(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|ACCESS_KEY|SESSION)/i;
 
+/**
+ * Codex's workspace-write sandbox treats linked-worktree Git metadata as
+ * outside its workspace. Give it that metadata as an additional directory so
+ * it can resolve the worktree's `.git` file. worker-guard.mjs still denies
+ * every write to these paths in the inherited Seatbelt profile.
+ */
+export function withCodexGitMetadataDirectories(invocation, gitMetadataPaths = []) {
+  if (path.basename(invocation.command) !== "codex" || gitMetadataPaths.length === 0) return invocation;
+  const execIndex = invocation.args.indexOf("exec");
+  if (execIndex === -1) throw new Error("Codex worker invocation must include exec before adding Git metadata directories");
+  const metadataArgs = gitMetadataPaths.flatMap((metadataPath) => ["--add-dir", metadataPath]);
+  return {
+    ...invocation,
+    args: [...invocation.args.slice(0, execIndex), ...metadataArgs, ...invocation.args.slice(execIndex)],
+  };
+}
+
 export function redactWorkerOutput(text, { env = process.env } = {}) {
   let redacted = String(text || "");
   for (const [key, value] of Object.entries(env)) {
@@ -147,7 +164,10 @@ export function spawnWorker({
         ...repositoryPaths,
       });
       fs.writeFileSync(profilePath, profile, { mode: 0o600 });
-      effectiveInvocation = guardedInvocation(invocation, { profilePath });
+      effectiveInvocation = guardedInvocation(
+        withCodexGitMetadataDirectories(invocation, repositoryPaths.gitMetadataPaths),
+        { profilePath },
+      );
       workerEnv = sanitizedWorkerEnvironment(process.env, {
         worker: path.basename(invocation.command),
       });
