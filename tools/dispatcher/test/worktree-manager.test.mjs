@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DispatcherLock, WorktreeManager } from "../src/worktree-manager.mjs";
 
-function fakeRunner(calls, { mainWorktreePath = "/fake/main/checkout" } = {}) {
+function fakeRunner(calls, { mainWorktreePath = "/fake/main/checkout", extraWorktrees = [] } = {}) {
   return (command, args, opts) => {
     calls.push({ command, args, opts });
     if (command === "git" && args[0] === "worktree" && args[1] === "add") {
@@ -15,7 +15,18 @@ function fakeRunner(calls, { mainWorktreePath = "/fake/main/checkout" } = {}) {
       fs.rmSync(target, { recursive: true, force: true });
     }
     if (command === "git" && args[0] === "worktree" && args[1] === "list" && args[2] === "--porcelain") {
-      return `worktree ${mainWorktreePath}\nHEAD 0000000000000000000000000000000000000000\nbranch refs/heads/master\n\n`;
+      const blocks = [`worktree ${mainWorktreePath}\nHEAD 0000000000000000000000000000000000000000\nbranch refs/heads/master\n`];
+      for (const wt of extraWorktrees) {
+        blocks.push(`worktree ${wt.path}\nHEAD 0000000000000000000000000000000000000000\n${wt.branch ? `branch refs/heads/${wt.branch}\n` : "detached\n"}`);
+      }
+      return blocks.join("\n") + "\n";
+    }
+    // Every worktree's "own Git directory" is deterministically a
+    // subdirectory of itself here -- fake, but stable across repeated calls
+    // with the same cwd, which is all isDispatcherOwnedWorktree()/create()
+    // need: a marker written at this path is found again at the same path.
+    if (command === "git" && args[0] === "rev-parse" && args.includes("--git-dir")) {
+      return path.join(opts.cwd, ".fake-git-dir");
     }
     return "";
   };
@@ -477,6 +488,115 @@ describe("WorktreeManager", () => {
     const changes = manager.reconcileStartup({ isPidAlive: () => false });
     expect(changes[0]).toMatchObject({ id: "MOV-1", from: "active", to: "abandoned" });
     expect(manager.loadState()["MOV-1"].recoveryReason).toMatch(/worker stopped/);
+  });
+
+  it("create() stamps an ownership marker in the worktree's own Git directory", () => {
+    const entry = manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+    expect(manager.isDispatcherOwnedWorktree(entry.path)).toBe(true);
+  });
+
+  it("isDispatcherOwnedWorktree is false for a plain directory this dispatcher never created", () => {
+    const foreign = path.join(worktreeRoot, "foreign-worktree");
+    fs.mkdirSync(foreign, { recursive: true });
+    expect(manager.isDispatcherOwnedWorktree(foreign)).toBe(false);
+  });
+
+  describe("reconcileStartup orphan-worktree sweep (MOV-199)", () => {
+    // A registry entry lost after `git worktree add` succeeded (dispatcher
+    // crash, or a corrupt-state recovery that fell back to an older backup)
+    // is the one case this sweep should still reclaim -- simulated here by
+    // creating for real (so the ownership marker is stamped exactly as
+    // production `create()` leaves it) and then deleting the registry entry
+    // out from under the worktree that's still on disk.
+    function dropRegistryEntry(id) {
+      const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+      delete state[id];
+      fs.writeFileSync(statePath, JSON.stringify(state));
+    }
+
+    it("removes a dispatcher-owned orphan with no matching registry entry, when clean", () => {
+      const entry = manager.create({ id: "MOV-9", name: "MOV-9-fix", branch: "agent/MOV-9-fix" });
+      dropRegistryEntry("MOV-9");
+
+      const orphanManager = new WorktreeManager({
+        repoRoot: tmpRoot,
+        worktreeRoot,
+        statePath,
+        runner: fakeRunner(calls, { extraWorktrees: [{ path: entry.path, branch: "agent/MOV-9-fix" }] }),
+      });
+      const changes = orphanManager.reconcileStartup();
+
+      expect(changes).toContainEqual(
+        expect.objectContaining({ path: entry.path, branch: "agent/MOV-9-fix", from: "orphaned", to: "removed" }),
+      );
+      expect(fs.existsSync(entry.path)).toBe(false);
+    });
+
+    it("leaves a dispatcher-owned orphan in place when it has uncommitted changes -- never force-removed", () => {
+      const entry = manager.create({ id: "MOV-9", name: "MOV-9-fix", branch: "agent/MOV-9-fix" });
+      dropRegistryEntry("MOV-9");
+      fs.writeFileSync(path.join(entry.path, "in-progress.txt"), "not yet committed\n");
+
+      const dirtyRunner = (command, args, opts) => {
+        if (command === "git" && args[0] === "status" && args[1] === "--porcelain") return " M in-progress.txt\n";
+        return fakeRunner(calls, { extraWorktrees: [{ path: entry.path, branch: "agent/MOV-9-fix" }] })(command, args, opts);
+      };
+      const orphanManager = new WorktreeManager({ repoRoot: tmpRoot, worktreeRoot, statePath, runner: dirtyRunner });
+      const changes = orphanManager.reconcileStartup();
+
+      expect(changes).toContainEqual(
+        expect.objectContaining({
+          path: entry.path,
+          branch: "agent/MOV-9-fix",
+          from: "orphaned",
+          to: "left in place",
+          reason: expect.stringMatching(/uncommitted changes/),
+        }),
+      );
+      expect(fs.existsSync(entry.path)).toBe(true);
+      expect(fs.existsSync(path.join(entry.path, "in-progress.txt"))).toBe(true);
+    });
+
+    it("leaves a dispatcher-owned orphan in place when it has commits not on its remote-tracking branch", () => {
+      const entry = manager.create({ id: "MOV-9", name: "MOV-9-fix", branch: "agent/MOV-9-fix" });
+      dropRegistryEntry("MOV-9");
+
+      const unpushedRunner = (command, args, opts) => {
+        if (command === "git" && args[0] === "status" && args[1] === "--porcelain") return "";
+        if (command === "git" && args[0] === "rev-parse" && args[1] === "--verify") return "deadbeef\n";
+        if (command === "git" && args[0] === "rev-list" && args[1] === "--count") return "3\n";
+        return fakeRunner(calls, { extraWorktrees: [{ path: entry.path, branch: "agent/MOV-9-fix" }] })(command, args, opts);
+      };
+      const orphanManager = new WorktreeManager({ repoRoot: tmpRoot, worktreeRoot, statePath, runner: unpushedRunner });
+      const changes = orphanManager.reconcileStartup();
+
+      expect(changes).toContainEqual(
+        expect.objectContaining({ path: entry.path, from: "orphaned", to: "left in place", reason: expect.stringMatching(/not present on its remote-tracking branch/) }),
+      );
+      expect(fs.existsSync(entry.path)).toBe(true);
+    });
+
+    it("never touches a worktree this dispatcher did not create, even if unregistered (the interactive-session collision)", () => {
+      // No manager.create() call at all -- this is exactly the shape of an
+      // interactive/human session's own `git worktree add` landing directly
+      // under the shared worktreeRoot, which is what force-deleted live
+      // session work every ~30s before this fix.
+      const foreign = path.join(worktreeRoot, "someone-elses-session");
+      fs.mkdirSync(foreign, { recursive: true });
+      fs.writeFileSync(path.join(foreign, "real-work.txt"), "important\n");
+
+      const orphanManager = new WorktreeManager({
+        repoRoot: tmpRoot,
+        worktreeRoot,
+        statePath,
+        runner: fakeRunner(calls, { extraWorktrees: [{ path: foreign, branch: "agent/some-other-session" }] }),
+      });
+      const changes = orphanManager.reconcileStartup();
+
+      expect(changes.some((c) => c.path === foreign)).toBe(false);
+      expect(fs.existsSync(foreign)).toBe(true);
+      expect(fs.existsSync(path.join(foreign, "real-work.txt"))).toBe(true);
+    });
   });
 
   it("allows only one live dispatcher lock", () => {

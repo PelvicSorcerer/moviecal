@@ -71,6 +71,17 @@ describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
     expect(body).toMatch(/cmdPrioritiesOnce\(\{\s*dryRun:\s*false\s*\}\)/);
     expect(body).toMatch(/finally\s*\{\s*lock\.release\(\)/);
   });
+
+  it("logs a real path/branch for a reconcileStartup() orphan-sweep change, not a bare c.id (MOV-199)", () => {
+    // reconcileStartup() returns two change shapes: a state-entry recovery
+    // ({id, from, to, reason}) and an orphan-sweep outcome ({path, branch,
+    // from, to, reason}) -- the latter has no `id` at all. Logging `${c.id}`
+    // unconditionally silently printed "undefined" for every orphan-sweep
+    // event ever logged. This guards the fallback that fixed it.
+    const body = bodyOf("reconcileWorktrees");
+    expect(body).not.toMatch(/console\.log\(`\$\{c\.id\}: startup recovery/);
+    expect(body).toMatch(/c\.id\s*\?\?\s*`\$\{c\.path\}/);
+  });
 });
 
 // MOV-158's hardest boundary is a negative one: the Agent Session integration

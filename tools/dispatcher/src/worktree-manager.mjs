@@ -57,6 +57,28 @@ export function defaultRunner(command, args, opts = {}) {
   return execFileSync(command, args, { encoding: "utf8", ...opts });
 }
 
+const OWNERSHIP_MARKER_FILENAME = "moviecal-dispatcher-owned.json";
+
+/**
+ * Parse `git worktree list --porcelain` into `[{ path, branch }]`. `branch`
+ * is `null` for a detached-HEAD worktree.
+ */
+function parseWorktreeList(porcelain) {
+  const entries = [];
+  let current = null;
+  for (const line of String(porcelain || "").split("\n")) {
+    if (line.startsWith("worktree ")) {
+      current = { path: line.slice("worktree ".length), branch: null };
+      entries.push(current);
+    } else if (current && line.startsWith("branch refs/heads/")) {
+      current.branch = line.slice("branch refs/heads/".length);
+    } else if (line === "") {
+      current = null;
+    }
+  }
+  return entries;
+}
+
 export class WorktreeManager {
   constructor({ repoRoot, worktreeRoot, statePath, runner = defaultRunner, trustWorkspaceFn = defaultTrustWorkspace } = {}) {
     if (!repoRoot) throw new Error("repoRoot is required");
@@ -109,6 +131,46 @@ export class WorktreeManager {
 
   isPathFree(worktreePath) {
     return !fs.existsSync(worktreePath);
+  }
+
+  /**
+   * Absolute path to `worktreePath`'s own per-worktree Git directory (e.g.
+   * `<main>/.git/worktrees/<name>`), where `create()` stamps the ownership
+   * marker `isDispatcherOwnedWorktree()` checks for. This directory is Git's
+   * own private worktree metadata store -- never part of the tracked
+   * working tree, so a marker written here can never show up in `git
+   * status`, be committed, or collide with anything a human or another tool
+   * puts inside the worktree itself.
+   */
+  _worktreeGitDir(worktreePath) {
+    return String(
+      this.runner("git", ["rev-parse", "--path-format=absolute", "--git-dir"], { cwd: worktreePath }),
+    ).trim();
+  }
+
+  /**
+   * True only if `create()` itself created `worktreePath` (MOV-199).
+   * Ownership is proven exclusively by the marker file `create()` stamps
+   * into the worktree's own private Git directory -- never inferred from
+   * the worktree's path, branch name, or presence/absence of a
+   * `worktrees.json` entry. A lost or never-written registry entry (the
+   * dispatcher crashing between `git worktree add` and `saveState()`) is
+   * exactly the recoverable-orphan case `reconcileStartup()` exists to
+   * clean up, and by definition looks identical to "not ours" from the
+   * state file alone -- interactive/human sessions in this repo create
+   * their own worktrees the same way, on the same `agent/**` branch
+   * convention, directly under the same shared worktree root
+   * (`docs/operators/local-execution.md` §Worktree lifecycle). Fails
+   * closed: any error resolving the marker (including "this isn't a Git
+   * worktree at all") means "not provably ours," never "assume ours."
+   */
+  isDispatcherOwnedWorktree(worktreePath) {
+    try {
+      const gitDir = this._worktreeGitDir(worktreePath);
+      return fs.existsSync(path.join(gitDir, OWNERSHIP_MARKER_FILENAME));
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -328,6 +390,26 @@ export class WorktreeManager {
     const state = this.loadState();
     state[id] = entry;
     this.saveState(state);
+
+    // Stamp ownership into the worktree's own private Git directory, not the
+    // tracked working tree, so reconcileStartup()'s orphan sweep can prove
+    // this dispatcher created it even if the worktrees.json entry above is
+    // later lost -- and, symmetrically, never mistake a worktree it did not
+    // create for one of its own (MOV-199). Deliberately last: every step
+    // above either already succeeded or this function would have thrown
+    // before reaching here, so there is no window where a marker exists for
+    // a worktree whose creation did not fully complete.
+    try {
+      const gitDir = this._worktreeGitDir(worktreePath);
+      fs.mkdirSync(gitDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(gitDir, OWNERSHIP_MARKER_FILENAME),
+        JSON.stringify({ id, createdAt: new Date().toISOString() }, null, 2) + "\n",
+      );
+    } catch (err) {
+      console.error(`Warning: could not stamp ownership marker for ${worktreePath}: ${err.message}`);
+    }
+
     return entry;
   }
 
@@ -403,21 +485,49 @@ export class WorktreeManager {
     }
     const knownPaths = new Set(Object.values(state).map((entry) => path.resolve(entry.path)));
     const porcelain = this.runner("git", ["worktree", "list", "--porcelain"], { cwd: this.repoRoot });
-    let orphanPath = null;
-    let orphanBranch = null;
-    for (const line of porcelain.split("\n")) {
-      if (line.startsWith("worktree ")) orphanPath = line.slice("worktree ".length);
-      if (line.startsWith("branch refs/heads/")) orphanBranch = line.slice("branch refs/heads/".length);
-      if (!line && orphanPath && path.resolve(orphanPath) !== path.resolve(this.repoRoot)
-        && path.relative(this.worktreeRoot, orphanPath) && !path.relative(this.worktreeRoot, orphanPath).startsWith("..")
-        && !knownPaths.has(path.resolve(orphanPath))) {
-        try { this.runner("git", ["worktree", "remove", "--force", orphanPath], { cwd: this.repoRoot }); } catch {}
-        if (orphanBranch?.startsWith("agent/")) {
-          try { this.runner("git", ["branch", "-D", orphanBranch], { cwd: this.repoRoot }); } catch {}
-        }
-        changes.push({ path: orphanPath, branch: orphanBranch, from: "orphaned", to: "removed" });
+    const candidates = parseWorktreeList(porcelain).filter((entry) => {
+      const resolved = path.resolve(entry.path);
+      if (resolved === path.resolve(this.repoRoot)) return false;
+      const relative = path.relative(this.worktreeRoot, entry.path);
+      if (!relative || relative.startsWith("..")) return false; // not under our configured worktree root
+      return !knownPaths.has(resolved);
+    });
+    for (const { path: candidatePath, branch: candidateBranch } of candidates) {
+      // Never a candidate at all unless this dispatcher provably created it
+      // (MOV-199) -- see isDispatcherOwnedWorktree() for why that can't be
+      // inferred from the path, branch, or the missing registry entry alone.
+      if (!this.isDispatcherOwnedWorktree(candidatePath)) continue;
+
+      const uncommitted = this.uncommittedChanges(candidatePath);
+      const unpushed = candidateBranch ? this.hasUnpushedCommits(candidatePath, candidateBranch) : false;
+      if (uncommitted.length > 0 || unpushed) {
+        // Dirty, unregistered, but genuinely ours: same "never silently
+        // discard real work" guarantee MOV-185 gave the same-issue reclaim
+        // path. Left in place for a human to triage.
+        const reason = uncommitted.length > 0
+          ? `has uncommitted changes (${uncommitted.join(", ")})`
+          : `has commits on ${candidateBranch} not present on its remote-tracking branch`;
+        changes.push({
+          path: candidatePath,
+          branch: candidateBranch,
+          from: "orphaned",
+          to: "left in place",
+          reason: `${reason} -- see docs/operators/local-execution.md §Worktree lifecycle`,
+        });
+        continue;
       }
-      if (!line) { orphanPath = null; orphanBranch = null; }
+
+      try { this.runner("git", ["worktree", "remove", "--force", candidatePath], { cwd: this.repoRoot }); } catch {}
+      if (candidateBranch?.startsWith("agent/")) {
+        try { this.runner("git", ["branch", "-D", candidateBranch], { cwd: this.repoRoot }); } catch {}
+      }
+      changes.push({
+        path: candidatePath,
+        branch: candidateBranch,
+        from: "orphaned",
+        to: "removed",
+        reason: "dispatcher-owned worktree with no matching worktrees.json entry, and clean",
+      });
     }
     if (changes.length) this.saveState(state);
     return changes;

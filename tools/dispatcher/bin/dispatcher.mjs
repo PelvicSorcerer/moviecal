@@ -585,7 +585,14 @@ async function reconcileWorktrees(linearClient, teamKey) {
     statePath: worktreesStatePath(),
   });
   for (const c of worktreeManager.reconcileStartup()) {
-    console.log(`${c.id}: startup recovery marked ${c.from} worktree ${c.to} — ${c.reason}`);
+    // Two change shapes share this array: a state-entry recovery ({id, from,
+    // to, reason}) and an orphan-sweep outcome ({path, branch, from, to,
+    // reason}, MOV-199) -- neither has the other's identifying field, so
+    // `c.id` alone silently printed "undefined" for every orphan-sweep
+    // event, forever. Fall back to the path (plus branch, when known) so the
+    // log always names what was actually acted on.
+    const label = c.id ?? `${c.path}${c.branch ? ` (${c.branch})` : ""}`;
+    console.log(`${label}: startup recovery marked ${c.from} worktree ${c.to} — ${c.reason}`);
   }
 
   let doneStateId;
