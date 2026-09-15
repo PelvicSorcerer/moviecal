@@ -119,6 +119,7 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       "linearAppEnvPath",
       "linearEnvPath",
       "priorityPropagationStatePath",
+      "usageLimitStatePath",
       "worktreesStatePath",
     ]);
     for (const [name, text] of dispatcherSources) {
