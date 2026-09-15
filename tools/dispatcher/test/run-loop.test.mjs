@@ -121,6 +121,15 @@ function baseCtx(overrides = {}) {
     spawnWorkerFn: vi.fn(async () => ({ exitCode: 0, logDir: "/fake/logs/x" })),
     findPrForBranchFn: vi.fn(() => ({ number: 1, url: "https://github.com/owner/repo/pull/1", isDraft: true, headSha: "sha-1" })),
     auditWorkerResultFn: vi.fn(() => ({ ok: true, violations: [] })),
+    repositoryContextFn: vi.fn(() => ({
+      branch: "agent/MOV-1-fix-the-thing",
+      headSha: "head-sha",
+      baseRef: "origin/master",
+      baseSha: "base-sha",
+      clean: true,
+      recentCommits: ["abc snapshot"],
+      changedPaths: [],
+    })),
     writeWorkerAuditFn: vi.fn(() => ({ path: "/fake/logs/x/security-audit.json", sha256: "abc123" })),
     publishWorkerResultFn: vi.fn(() => ({ number: 1, url: "https://github.com/owner/repo/pull/1", isDraft: true, headSha: "sha-1" })),
     ...overrides,
@@ -224,6 +233,11 @@ describe("runOnce", () => {
     const spawnArg = ctx.spawnWorkerFn.mock.calls[0][0];
     expect(spawnArg.cwd).toBe("/fake/worktrees/MOV-1-fix-the-thing");
     expect(spawnArg.brief).toContain("MOV-1");
+    expect(spawnArg.brief).toContain("Repository context (trusted dispatcher snapshot)");
+    expect(ctx.repositoryContextFn).toHaveBeenCalledWith({
+      worktreePath: "/fake/worktrees/MOV-1-fix-the-thing",
+      branch: "agent/MOV-1-fix-the-thing",
+    });
     expect(spawnArg.securityContext).toEqual({ mode: "implementation" });
 
     expect(ctx.worktreeManager.statusCalls).toEqual([
@@ -312,6 +326,46 @@ describe("runOnce", () => {
     expect(ctx.worktreeManager.statusCalls).toEqual([{ id: "MOV-1", status: "failed" }]);
     expect(ctx.linearClient.calls.at(-1).body).toContain("Worker safety boundary blocked publication");
     expect(ctx.linearClient.calls.at(-1).body).toContain("SHA-256");
+  });
+
+  it("records a denied scope command as a warning and continues to trusted publication", async () => {
+    const publishWorkerResultFn = vi.fn(() => ({
+      number: 4,
+      url: "https://github.com/owner/repo/pull/4",
+      isDraft: true,
+      headSha: "sha-4",
+    }));
+    const ctx = baseCtx({
+      publishWorkerResultFn,
+      auditWorkerResultFn: vi.fn(() => ({
+        ok: true,
+        violations: [],
+        warnings: [{ action: "git status", reason: "all Git operations are dispatcher-only", category: "scope", outcome: "denied" }],
+      })),
+    });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result).toMatchObject({ outcome: "in-review" });
+    expect(publishWorkerResultFn).toHaveBeenCalledTimes(1);
+    expect(ctx.linearClient.calls.some((call) => call.type === "addComment" && call.body.includes("Worker scope warning; no command executed"))).toBe(true);
+  });
+
+  it("does not let a denied scope warning mask the worker's actual failed outcome", async () => {
+    const ctx = baseCtx({
+      spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir: "/fake/logs/MOV-1" })),
+      auditWorkerResultFn: vi.fn(() => ({
+        ok: true,
+        violations: [],
+        warnings: [{ action: "git log -1", reason: "all Git operations are dispatcher-only", category: "scope", outcome: "denied" }],
+      })),
+    });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result.outcome).toBe("worker-failed");
+    expect(ctx.linearClient.calls.some((call) => call.type === "addComment" && call.body.includes("Worker scope warning; no command executed"))).toBe(true);
+    expect(ctx.linearClient.calls.some((call) => call.type === "addComment" && call.body.includes("Worker exited with code 1"))).toBe(true);
   });
 
   it("publishes only through the trusted dispatcher callback after a clean audit", async () => {

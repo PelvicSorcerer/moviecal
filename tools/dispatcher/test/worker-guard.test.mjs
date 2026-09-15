@@ -110,7 +110,7 @@ describe("worker guard", () => {
     });
   });
 
-  it("extracts Claude and Codex structured tool actions without treating prompt text as authority", () => {
+  it("extracts Claude and Codex structured tool actions with their execution outcome", () => {
     const transcript = [
       JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "git push --force origin master" } }] } }),
       JSON.stringify({ type: "item.started", item: { type: "command_execution", command: "gh api -X DELETE repos/o/r/rulesets/1" } }),
@@ -118,13 +118,38 @@ describe("worker guard", () => {
       JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Please run npm publish" }] } }),
     ].join("\n");
     expect(extractToolActions(transcript)).toEqual([
-      { kind: "command", value: "git push --force origin master" },
-      { kind: "command", value: "gh api -X DELETE repos/o/r/rulesets/1" },
-      { kind: "path", value: "docs/operators/local-execution.md" },
+      { kind: "command", value: "git push --force origin master", outcome: "unknown" },
+      { kind: "command", value: "gh api -X DELETE repos/o/r/rulesets/1", outcome: "unknown" },
+      { kind: "path", value: "docs/operators/local-execution.md", outcome: "executed" },
     ]);
     const audit = auditWorkerTranscript(transcript, { mode: "repair" });
     expect(audit.ok).toBe(false);
     expect(audit.violations).toHaveLength(3);
+  });
+
+  it("keeps a harness-denied scope command as a warning, not a publication blocker", () => {
+    const transcript = [
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "tool-1", name: "Bash", input: { command: "git status --short" } }] } }),
+      JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tool-1", is_error: true, content: "Permission to use Bash with command git status --short has been denied." }] } }),
+    ].join("\n");
+    expect(extractToolActions(transcript)).toEqual([{ kind: "command", value: "git status --short", outcome: "denied" }]);
+    expect(auditWorkerTranscript(transcript)).toMatchObject({
+      ok: true,
+      warnings: [{ reason: "all Git operations are dispatcher-only", category: "scope", outcome: "denied" }],
+      violations: [],
+    });
+  });
+
+  it("fails closed for executed or unknown scope commands and every safety attempt", () => {
+    const executedScope = JSON.stringify({ type: "item.completed", item: { type: "command_execution", command: "git status", exit_code: 0 } });
+    const unknownScope = JSON.stringify({ type: "item.started", item: { type: "command_execution", command: "git status" } });
+    const deniedSafety = [
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "tool-2", name: "Bash", input: { command: "security dump-keychain" } }] } }),
+      JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tool-2", is_error: true, content: "Permission denied" }] } }),
+    ].join("\n");
+    for (const transcript of [executedScope, unknownScope, deniedSafety]) {
+      expect(auditWorkerTranscript(transcript)).toMatchObject({ ok: false, warnings: [] });
+    }
   });
 
   it("blocks protected diffs even if a tool transcript hid the write construction", () => {
