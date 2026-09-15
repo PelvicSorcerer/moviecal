@@ -1,8 +1,9 @@
 // Guards and reconciles Linear parent/child (sub-issue) completion (MOV-172).
 // Completion is derived solely from child workflow state, never PR text.
-import { COMPLETED_BLOCKER_STATE_NAMES } from "./dependency-gate.mjs";
-
-export const TERMINAL_CHILD_STATE_NAMES = COMPLETED_BLOCKER_STATE_NAMES;
+// This is deliberately independent from dependency-gate.mjs: a child
+// completion policy is its own invariant and must not silently change if
+// dependency satisfaction gains another terminal state.
+export const TERMINAL_CHILD_STATE_NAMES = new Set(["Done", "Released", "Canceled", "Duplicate"]);
 export const COMPLETION_DRIVING_STATE_NAMES = new Set(["Done", "Released"]);
 
 function isBlockingChild(child) {
