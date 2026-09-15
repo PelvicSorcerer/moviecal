@@ -66,6 +66,25 @@ describe("aggregateCheckResults", () => {
     });
     expect(timedOut).toMatchObject({ pending: false, timedOut: true, terminal: true, actionable: false });
   });
+
+  it("preserves check evidence needed by repair admission policy", () => {
+    const result = aggregateCheckResults({
+      headSha: "sha",
+      requiredChecks: ["lane-review"],
+      checks: [{
+        name: "lane-review",
+        sha: "sha",
+        conclusion: "FAILURE",
+        description: "sensitive-path change requires sign-off",
+        summary: "governance block",
+      }],
+    });
+
+    expect(result.required[0]).toMatchObject({
+      description: "sensitive-path change requires sign-off",
+      summary: "governance block",
+    });
+  });
 });
 
 describe("observePullRequest", () => {
