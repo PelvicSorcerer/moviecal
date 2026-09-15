@@ -232,29 +232,42 @@ async function main() {
   await ensureProject("Shared Watchlists", webAppInit);
   await ensureProject("Calendar Feed", webAppInit);
   await ensureProject("Platform & Infrastructure", webAppInit);
-  await ensureProject("Developer Governance & Agent Infrastructure", webAppInit);
+  const governanceProject = await ensureProject("Developer Governance & Agent Infrastructure", webAppInit);
   const iosProject = await ensureProject("iOS Companion App", iosInit);
 
-  // --- Project milestones (iOS Companion App only) ---
-  const milestonesData = await gql(
-    `query($projId: String!) { project(id: $projId) { projectMilestones { nodes { id name } } } }`,
-    { projId: iosProject.id },
-  );
-  const existingMilestones = new Set(milestonesData.project.projectMilestones.nodes.map((m) => m.name));
+  // --- Project milestones ---
+  async function ensureMilestones(project, names) {
+    const milestonesData = await gql(
+      `query($projId: String!) { project(id: $projId) { projectMilestones { nodes { id name } } } }`,
+      { projId: project.id },
+    );
+    const existingMilestones = new Set(milestonesData.project.projectMilestones.nodes.map((m) => m.name));
 
-  let sortOrder = 0;
-  for (const name of ["Skeleton", "Auth + API client", "Navigation shell"]) {
-    if (existingMilestones.has(name)) {
-      log(`  [exists] milestone '${name}'`);
-    } else {
-      await gql(
-        `mutation($input: ProjectMilestoneCreateInput!) { projectMilestoneCreate(input: $input) { success } }`,
-        { input: { name, projectId: iosProject.id, sortOrder } },
-      );
-      log(`  created milestone '${name}'`);
+    let sortOrder = 0;
+    for (const name of names) {
+      if (existingMilestones.has(name)) {
+        log(`  [exists] milestone '${name}'`);
+      } else {
+        await gql(
+          `mutation($input: ProjectMilestoneCreateInput!) { projectMilestoneCreate(input: $input) { success } }`,
+          { input: { name, projectId: project.id, sortOrder } },
+        );
+        log(`  created milestone '${name}'`);
+      }
+      sortOrder += 10;
     }
-    sortOrder += 10;
   }
+
+  await ensureMilestones(iosProject, ["Skeleton", "Auth + API client", "Navigation shell"]);
+  await ensureMilestones(governanceProject, [
+    "Linear actor authorization",
+    "Hybrid workflow architecture & feasibility",
+    "Routing & local foundations",
+    "CI & review reaction",
+    "Cloud execution pilot",
+    "Controlled autonomy",
+    "Agent Session integration",
+  ]);
 
   log("\nDone. Re-run this script any time — it's idempotent.");
 }
