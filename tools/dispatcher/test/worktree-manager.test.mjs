@@ -9,6 +9,7 @@ function fakeRunner(calls, { mainWorktreePath = "/fake/main/checkout", extraWork
     calls.push({ command, args, opts });
     if (command === "git" && args[0] === "worktree" && args[1] === "add") {
       fs.mkdirSync(args[2], { recursive: true });
+      fs.writeFileSync(path.join(args[2], ".git"), "gitdir: .fake-git-dir\n");
     }
     if (command === "git" && args[0] === "worktree" && args[1] === "remove") {
       const target = args[args.length - 1];
@@ -513,6 +514,28 @@ describe("WorktreeManager", () => {
     const changes = manager.reconcileStartup({ isPidAlive: () => false });
     expect(changes[0]).toMatchObject({ id: "MOV-1", from: "active", to: "abandoned" });
     expect(manager.loadState()["MOV-1"].recoveryReason).toMatch(/worker stopped/);
+  });
+
+  it("recovers an active assignment whose existing path no longer resolves as a linked Git worktree (MOV-202)", () => {
+    const entry = manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+    manager.setWorkerPid("MOV-1", 1234);
+    const probeFailingRunner = (command, args, opts) => {
+      if (command === "git" && args[0] === "rev-parse" && args.includes("--git-dir") && opts?.cwd === entry.path) {
+        throw new Error("not a git repository");
+      }
+      return fakeRunner(calls)(command, args, opts);
+    };
+    const probeFailingManager = new WorktreeManager({
+      repoRoot: tmpRoot,
+      worktreeRoot,
+      statePath,
+      runner: probeFailingRunner,
+    });
+
+    const changes = probeFailingManager.reconcileStartup({ isPidAlive: () => true });
+
+    expect(changes).toEqual([expect.objectContaining({ id: "MOV-1", to: "abandoned" })]);
+    expect(probeFailingManager.loadState()["MOV-1"].recoveryReason).toMatch(/no longer an intact linked Git worktree/);
   });
 
   it("create() stamps an ownership marker in the worktree's own Git directory", () => {

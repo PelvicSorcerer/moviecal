@@ -174,6 +174,29 @@ export class WorktreeManager {
   }
 
   /**
+   * True only when a recorded path is still a linked Git worktree. A path
+   * existing on disk is not enough: an interrupted or external removal can
+   * leave an empty directory behind while the state registry and worker PID
+   * still say it is active (MOV-202).
+   *
+   * Linked worktrees use a `.git` *file*, rather than a directory, which
+   * points at their private Git directory. Requiring that shape before asking
+   * Git to resolve it keeps an unrelated regular checkout from being accepted
+   * as the dispatcher's recorded linked worktree. `rev-parse` then validates
+   * that the file still resolves to usable Git metadata. Fail closed: a
+   * missing, malformed, or inaccessible `.git` means the path is not intact.
+   */
+  isIntactLinkedWorktree(worktreePath) {
+    try {
+      if (!fs.lstatSync(path.join(worktreePath, ".git")).isFile()) return false;
+      this._worktreeGitDir(worktreePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Like `isPathFree`, but for the one case that isn't a real concurrency
    * conflict at all (MOV-181): the path is occupied by *this same issue's*
    * own retained worktree from a prior attempt that already reached a
@@ -469,10 +492,12 @@ export class WorktreeManager {
     const changes = [];
     for (const [id, entry] of Object.entries(state)) {
       if (!["active", "review"].includes(entry.status)) continue;
-      if (!fs.existsSync(entry.path)) {
+      if (!fs.existsSync(entry.path) || !this.isIntactLinkedWorktree(entry.path)) {
         state[id].status = "abandoned";
         state[id].endedAt = new Date().toISOString();
-        state[id].recoveryReason = "recorded worktree is missing after dispatcher restart";
+        state[id].recoveryReason = fs.existsSync(entry.path)
+          ? "recorded worktree is no longer an intact linked Git worktree after dispatcher restart"
+          : "recorded worktree is missing after dispatcher restart";
         changes.push({ id, from: entry.status, to: "abandoned", reason: state[id].recoveryReason });
       } else if (entry.status === "review" && !entry.prNumber) {
         state[id].status = "abandoned";
