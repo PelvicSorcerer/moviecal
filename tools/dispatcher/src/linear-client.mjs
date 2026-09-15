@@ -260,7 +260,7 @@ export class LinearClient {
 
   async updateIssuePriority(issueId, priority) {
     const mutation = `
-      mutation($issueId: String!, $priority: Float) {
+      mutation($issueId: String!, $priority: Int) {
         issueUpdate(id: $issueId, input: { priority: $priority }) { success }
       }
     `;

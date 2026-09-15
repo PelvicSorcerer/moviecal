@@ -332,7 +332,14 @@ describe("LinearClient", () => {
     expect(issues.map((x) => x.identifier)).toEqual(["MOV-101", "MOV-102"]);
   });
 
-  it("updateIssuePriority sends an issueUpdate mutation with the priority input", async () => {
+  it("updateIssuePriority sends an issueUpdate mutation declaring $priority as Int, matching Linear's schema (MOV-200)", async () => {
+    // Linear's IssueUpdateInput.priority is Int (the 0-4 scale used
+    // everywhere else in this codebase). Declaring the GraphQL variable as
+    // Float here previously made every real call fail with "Variable
+    // $priority of type Float used in position expecting type Int" -- caught
+    // only by running the dispatcher live, since this fake HTTP layer has no
+    // real Linear schema to validate the query against (same category of gap
+    // as MOV-163).
     const fetchImpl = mockFetch({ issueUpdate: { success: true } });
     const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
 
@@ -340,7 +347,8 @@ describe("LinearClient", () => {
 
     const { query, variables } = JSON.parse(fetchImpl.mock.calls[0][1].body);
     expect(query).toMatch(/issueUpdate/);
-    expect(query).toMatch(/\$priority:\s*Float/);
+    expect(query).toMatch(/\$priority:\s*Int\b/);
+    expect(query).not.toMatch(/\$priority:\s*Float/);
     expect(query).toMatch(/priority:\s*\$priority/);
     expect(variables).toEqual({ issueId: "id-1", priority: 1 });
   });
