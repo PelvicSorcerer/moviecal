@@ -128,3 +128,78 @@ export function generateRepairEvidence({ ciLogs, prBody, diff, reviewComments } 
     ...untrustedBlock("Review comments", reviewComments),
   ].join("\n");
 }
+
+/**
+ * The brief for one bounded repair worker (MOV-188).
+ *
+ * Deliberately *not* `generateBrief()` with an appendix. An implementation
+ * worker is told "implement this issue"; a repair worker is told "make these
+ * named required checks pass on code that already exists, and change nothing
+ * else". Handing a repair worker the implementation brief invites it to
+ * re-litigate the whole issue on a PR that is already in review.
+ *
+ * The narrow scope is also enforced technically rather than by this text:
+ * repair mode's sandbox profile and diff audit make tests, test-runner
+ * configuration, dispatcher code, staged workflow proposals, and governance
+ * documentation read-only (worker-guard.mjs, `REPAIR_PROTECTED`). This section
+ * says so anyway so a worker fails at the intent rather than at the sandbox.
+ */
+export function generateRepairBrief(issue, {
+  branch,
+  worktreePath,
+  worker,
+  model,
+  prNumber,
+  prUrl,
+  headSha,
+  attempt,
+  budget,
+  failures = [],
+  trigger = "ci",
+  reason = "",
+  evidence = null,
+  repositoryContext = null,
+} = {}) {
+  const failureList = failures.length
+    ? failures.map((failure) => `- \`${failure.check || failure.name || "unknown check"}\` — ${failure.outcome || "failure"}: ${failure.reason || "no reason recorded"}`)
+    : ["- _(no individual check recorded; see the evidence below)_"];
+
+  const lines = [
+    `# Repair ${issue.identifier}: ${prUrl || `PR #${prNumber}`}`,
+    "",
+    `Linear issue: ${issue.url}`,
+    `Assigned branch: \`${branch}\` (already checked out at \`${worktreePath}\`, at the exact commit GitHub tested)`,
+    `Pull request: #${prNumber}${prUrl ? ` — ${prUrl}` : ""}`,
+    `Head SHA: \`${headSha}\``,
+    `Worker: ${worker}${model ? ` (model tier: ${model})` : ""}`,
+    `Repair attempt: ${attempt}${budget ? ` of at most ${budget} for this pull request` : ""}`,
+    "",
+    ...repositoryContextLines(repositoryContext),
+    "## What you are being asked to do",
+    "",
+    `This is a **bounded repair**, not an implementation task. An existing dispatcher-owned pull request is failing, and automatic repair was admitted for it: ${reason || "a required check failed on the current head"}.`,
+    "",
+    `Trigger: ${trigger === "review" ? "a blocking review verdict" : "a failing required CI check"}.`,
+    "",
+    "Failing required checks:",
+    ...failureList,
+    "",
+    "Make the smallest change to the repository's own source that makes those checks pass. Then run `npm run verify` and wait for it to finish (see below). Leave the verified filesystem changes in the worktree and exit.",
+    "",
+    "## Hard limits on this repair",
+    "",
+    "- **Do not change tests, test-runner configuration, `package.json`, dispatcher code (`tools/dispatcher/**`), staged workflow proposals, or governance documentation.** These are read-only in repair mode and any attempt fails the audit — a repair that edits the test that caught it has not repaired anything.",
+    "- **Do not widen the scope.** Unrelated refactors, drive-by fixes, and new features are not part of this repair and will be rejected at the diff audit.",
+    "- **Do not run Git, `gh`, or any GitHub API.** After you exit, the trusted dispatcher audits your transcript and diff, commits, and pushes to this same branch at this same pull request. It never creates a replacement branch or PR, and it refuses to push at all if the checkout has moved off the head SHA above.",
+    "- If the correct fix needs a human decision — a governance gate, a credential, a sensitive path, an acknowledgement label, or a change this repair is not allowed to make — **stop and say so instead of improvising around it.** An honest \"this needs a human\" is a successful repair outcome; a workaround is not.",
+    "",
+    "**Run verification synchronously.** You are a one-shot invocation with no resume. Wait for `npm run verify` (and any other build/test command) to finish and act on its actual result before exiting. Anything still running when you exit is killed before the dispatcher audits your changes.",
+    "",
+  ];
+
+  if (issue.description) {
+    lines.push("## Original issue description (context only)", "", issue.description, "");
+  }
+  if (evidence) lines.push(evidence, "");
+  return lines.join("\n");
+}
