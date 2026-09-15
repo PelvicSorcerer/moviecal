@@ -97,7 +97,7 @@ describe("worker guard", () => {
     expect(guardedInvocation({ command: "codex", args: ["exec"] }, { profilePath }).command).toBe("/usr/bin/sandbox-exec");
   });
 
-  it("keeps sibling source denied while exposing a linked worktree's backing Git metadata", () => {
+  it("keeps sibling source denied while exposing a linked worktree's backing Git metadata (MOV-204: real checkouts carry the documented .env.local symlink, not a plain file)", () => {
     const runner = (_command, args) => {
       if (args[0] === "worktree") return "worktree /repo/main\n\nworktree /repo/wt\n\nworktree /repo/other\n";
       if (args.at(-1) === "--git-dir") return "/repo/main/.git/worktrees/wt\n";
@@ -110,11 +110,15 @@ describe("worker guard", () => {
         return [
           { name: ".git", isDirectory: () => true, isSymbolicLink: () => false },
           { name: "src", isDirectory: () => true, isSymbolicLink: () => false },
-          { name: ".env.local", isDirectory: () => false, isSymbolicLink: () => false },
+          { name: ".env.local", isDirectory: () => false, isSymbolicLink: () => true },
         ];
       },
+      readlinkSync: (target) => {
+        expect(target).toBe("/repo/main/.env.local");
+        return "/Users/test/.config/moviecal/env.local";
+      },
     };
-    expect(repositoryGuardPaths("/repo/wt", runner, fsImpl)).toEqual({
+    expect(repositoryGuardPaths("/repo/wt", runner, fsImpl, "/Users/test")).toEqual({
       protectedRepositoryPaths: ["/repo/main", "/repo/other"],
       protectedRepositoryReadRules: [
         ["subpath", "/repo/main/src"],
@@ -125,22 +129,49 @@ describe("worker guard", () => {
     });
   });
 
-  it("fails closed when the checkout containing shared metadata is unreadable or has a symbolic link", () => {
+  describe("MOV-204: the documented .env.local symlink is the one entry a protected checkout is permitted to have", () => {
     const runner = (_command, args) => {
       if (args[0] === "worktree") return "worktree /repo/main\n\nworktree /repo/wt\n";
       if (args.at(-1) === "--git-dir") return "/repo/main/.git/worktrees/wt\n";
       if (args.at(-1) === "--git-common-dir") return "/repo/main/.git\n";
       throw new Error(`unexpected ${args.join(" ")}`);
     };
-    expect(() => repositoryGuardPaths("/repo/wt", runner, {
-      readdirSync: () => { throw new Error("EACCES"); },
-    })).toThrow(/could not inspect protected checkout/);
-    expect(() => repositoryGuardPaths("/repo/wt", runner, {
-      readdirSync: () => [
-        { name: ".git", isDirectory: () => true, isSymbolicLink: () => false },
-        { name: "leak", isDirectory: () => false, isSymbolicLink: () => true },
-      ],
-    })).toThrow(/contains a symbolic link/);
+
+    it("rejects a .env.local that is a symlink to the wrong target", () => {
+      expect(() => repositoryGuardPaths("/repo/wt", runner, {
+        readdirSync: () => [
+          { name: ".git", isDirectory: () => true, isSymbolicLink: () => false },
+          { name: ".env.local", isDirectory: () => false, isSymbolicLink: () => true },
+        ],
+        readlinkSync: () => "/Users/test/.config/moviecal/some-other-file",
+      }, "/Users/test")).toThrow(/contains a symbolic link \(\.env\.local\)/);
+    });
+
+    it("rejects a .env.local symlink whose target cannot be resolved", () => {
+      expect(() => repositoryGuardPaths("/repo/wt", runner, {
+        readdirSync: () => [
+          { name: ".git", isDirectory: () => true, isSymbolicLink: () => false },
+          { name: ".env.local", isDirectory: () => false, isSymbolicLink: () => true },
+        ],
+        readlinkSync: () => { throw new Error("EINVAL"); },
+      }, "/Users/test")).toThrow(/contains a symbolic link \(\.env\.local\)/);
+    });
+
+    it("rejects a differently-named symlink even when it points at the documented env.local target", () => {
+      expect(() => repositoryGuardPaths("/repo/wt", runner, {
+        readdirSync: () => [
+          { name: ".git", isDirectory: () => true, isSymbolicLink: () => false },
+          { name: "leak", isDirectory: () => false, isSymbolicLink: () => true },
+        ],
+        readlinkSync: () => "/Users/test/.config/moviecal/env.local",
+      }, "/Users/test")).toThrow(/contains a symbolic link \(leak\)/);
+    });
+
+    it("still fails closed when the checkout is unreadable, independent of the symlink carve-out", () => {
+      expect(() => repositoryGuardPaths("/repo/wt", runner, {
+        readdirSync: () => { throw new Error("EACCES"); },
+      })).toThrow(/could not inspect protected checkout/);
+    });
   });
 
   it("does not let a broad sibling-read denial override linked Git metadata", () => {
