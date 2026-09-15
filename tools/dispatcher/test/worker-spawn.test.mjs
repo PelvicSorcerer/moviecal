@@ -163,35 +163,47 @@ describe("spawnWorker", () => {
     expect(calls[1].opts.env).not.toHaveProperty("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB");
   });
 
-  it("lets Codex resolve linked-worktree metadata while the outer sandbox keeps it read-only", async () => {
+  it("gives only Codex linked-worktree metadata while both adapters retain sibling-source isolation", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
     const calls = [];
     const gitMetadataPaths = ["/repo/.git/worktrees/issue", "/repo/.git"];
-    await spawnWorker({
-      invocation: { command: "codex", args: ["--sandbox", "workspace-write", "exec", "--json"] },
-      cwd: "/repo/worktree",
-      brief: "brief",
-      logDir: path.join(tmpDir, "run"),
-      spawnImpl: (command, args, opts) => {
-        calls.push({ command, args, opts });
-        return fakeChildProcess({ exitCode: 0 });
-      },
-      securityContext: { mode: "implementation" },
-      platform: "darwin",
-      repositoryGuardPathsFn: () => ({ protectedRepositoryPaths: [], gitMetadataPaths }),
-    });
-
-    expect(calls[0].args).toEqual([
-      "-f", path.join(tmpDir, "run", "worker-sandbox.sb"), "codex",
+    const protectedRepositoryPaths = ["/repo/main"];
+    const protectedRepositoryReadRules = [["subpath", "/repo/main/src"], ["literal", "/repo/main/.env.local"]];
+    for (const [worker, args] of [
+      ["claude", ["-p"]],
+      ["codex", ["--sandbox", "workspace-write", "exec", "--json"]],
+    ]) {
+      await spawnWorker({
+        invocation: { command: worker, args },
+        cwd: "/repo/worktree",
+        brief: "brief",
+        logDir: path.join(tmpDir, worker),
+        spawnImpl: (command, actualArgs, opts) => {
+          calls.push({ worker, command, args: actualArgs, opts });
+          return fakeChildProcess({ exitCode: 0 });
+        },
+        securityContext: { mode: "implementation" },
+        platform: "darwin",
+        repositoryGuardPathsFn: () => ({ protectedRepositoryPaths, protectedRepositoryReadRules, gitMetadataPaths }),
+      });
+      const profile = fs.readFileSync(path.join(tmpDir, worker, "worker-sandbox.sb"), "utf8");
+      expect(profile).toContain('(deny file-read* (subpath "/repo/main/src"))');
+      expect(profile).toContain('(deny file-read* (literal "/repo/main/.env.local"))');
+      expect(profile).not.toContain('(deny file-read* (subpath "/repo/main"))');
+      expect(profile).toContain('(deny file-write* (subpath "/repo/main"))');
+      expect(profile).toContain('(deny process-exec (literal "/usr/bin/git"))');
+      for (const metadataPath of gitMetadataPaths) {
+        expect(profile).toContain(`(deny file-write* (subpath \"${metadataPath}\"))`);
+      }
+    }
+    expect(calls[0].args).not.toContain("--add-dir");
+    expect(calls[1].args).toEqual([
+      "-f", path.join(tmpDir, "codex", "worker-sandbox.sb"), "codex",
       "--sandbox", "workspace-write",
       "--add-dir", "/repo/.git/worktrees/issue",
       "--add-dir", "/repo/.git",
       "exec", "--json",
     ]);
-    const profile = fs.readFileSync(path.join(tmpDir, "run", "worker-sandbox.sb"), "utf8");
-    for (const metadataPath of gitMetadataPaths) {
-      expect(profile).toContain(`(deny file-write* (subpath \"${metadataPath}\"))`);
-    }
   });
 
   it("adds metadata directories only to a valid Codex invocation", () => {
