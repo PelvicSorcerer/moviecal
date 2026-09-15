@@ -97,17 +97,82 @@ describe("worker guard", () => {
     expect(guardedInvocation({ command: "codex", args: ["exec"] }, { profilePath }).command).toBe("/usr/bin/sandbox-exec");
   });
 
-  it("protects sibling checkouts and the linked worktree's backing Git metadata", () => {
+  it("keeps sibling source denied while exposing a linked worktree's backing Git metadata", () => {
     const runner = (_command, args) => {
       if (args[0] === "worktree") return "worktree /repo/main\n\nworktree /repo/wt\n\nworktree /repo/other\n";
       if (args.at(-1) === "--git-dir") return "/repo/main/.git/worktrees/wt\n";
       if (args.at(-1) === "--git-common-dir") return "/repo/main/.git\n";
       throw new Error(`unexpected ${args.join(" ")}`);
     };
-    expect(repositoryGuardPaths("/repo/wt", runner)).toEqual({
+    const fsImpl = {
+      readdirSync: (target) => {
+        expect(target).toBe("/repo/main");
+        return [
+          { name: ".git", isDirectory: () => true, isSymbolicLink: () => false },
+          { name: "src", isDirectory: () => true, isSymbolicLink: () => false },
+          { name: ".env.local", isDirectory: () => false, isSymbolicLink: () => false },
+        ];
+      },
+    };
+    expect(repositoryGuardPaths("/repo/wt", runner, fsImpl)).toEqual({
       protectedRepositoryPaths: ["/repo/main", "/repo/other"],
+      protectedRepositoryReadRules: [
+        ["subpath", "/repo/main/src"],
+        ["literal", "/repo/main/.env.local"],
+        ["subpath", "/repo/other"],
+      ],
       gitMetadataPaths: ["/repo/main/.git/worktrees/wt", "/repo/main/.git"],
     });
+  });
+
+  it("fails closed when the checkout containing shared metadata is unreadable or has a symbolic link", () => {
+    const runner = (_command, args) => {
+      if (args[0] === "worktree") return "worktree /repo/main\n\nworktree /repo/wt\n";
+      if (args.at(-1) === "--git-dir") return "/repo/main/.git/worktrees/wt\n";
+      if (args.at(-1) === "--git-common-dir") return "/repo/main/.git\n";
+      throw new Error(`unexpected ${args.join(" ")}`);
+    };
+    expect(() => repositoryGuardPaths("/repo/wt", runner, {
+      readdirSync: () => { throw new Error("EACCES"); },
+    })).toThrow(/could not inspect protected checkout/);
+    expect(() => repositoryGuardPaths("/repo/wt", runner, {
+      readdirSync: () => [
+        { name: ".git", isDirectory: () => true, isSymbolicLink: () => false },
+        { name: "leak", isDirectory: () => false, isSymbolicLink: () => true },
+      ],
+    })).toThrow(/contains a symbolic link/);
+  });
+
+  it("does not let a broad sibling-read denial override linked Git metadata", () => {
+    const profile = buildWorkerSandboxProfile({
+      worktreePath: "/repo/wt",
+      home: "/Users/test",
+      protectedRepositoryPaths: ["/repo/main", "/repo/other"],
+      protectedRepositoryReadRules: [
+        ["subpath", "/repo/main/src"],
+        ["literal", "/repo/main/.env.local"],
+        ["subpath", "/repo/other"],
+      ],
+      gitMetadataPaths: ["/repo/main/.git/worktrees/wt", "/repo/main/.git"],
+    });
+    expect(profile).not.toContain('(deny file-read* (subpath "/repo/main"))');
+    expect(profile).toContain('(deny file-read* (subpath "/repo/main/src"))');
+    expect(profile).toContain('(deny file-read* (literal "/repo/main/.env.local"))');
+    expect(profile).toContain('(deny file-write* (subpath "/repo/main"))');
+    expect(profile).toContain('(deny file-write* (subpath "/repo/main/.git"))');
+    expect(profile).toContain('(deny process-exec (literal "/usr/bin/git"))');
+  });
+
+  it("does not restore a broad sibling-read denial when a metadata-owning checkout has only .git", () => {
+    const profile = buildWorkerSandboxProfile({
+      worktreePath: "/repo/wt",
+      home: "/Users/test",
+      protectedRepositoryPaths: ["/repo/main"],
+      protectedRepositoryReadRules: [],
+      gitMetadataPaths: ["/repo/main/.git/worktrees/wt", "/repo/main/.git"],
+    });
+    expect(profile).not.toContain('(deny file-read* (subpath "/repo/main"))');
+    expect(profile).toContain('(deny file-write* (subpath "/repo/main"))');
   });
 
   it("fails closed when a linked worktree points its Git directory outside the common Git directory", () => {

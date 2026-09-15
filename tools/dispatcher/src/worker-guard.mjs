@@ -119,6 +119,7 @@ export function buildWorkerSandboxProfile({
   home = os.homedir(),
   logDir,
   protectedRepositoryPaths = [],
+  protectedRepositoryReadRules = null,
   gitMetadataPaths = [],
 } = {}) {
   if (!path.isAbsolute(worktreePath || "")) throw new Error("worker sandbox requires an absolute worktreePath");
@@ -137,7 +138,7 @@ export function buildWorkerSandboxProfile({
     "/usr/local/bin/vercel",
     "/opt/homebrew/bin/vercel",
   ];
-  const deniedReads = [
+  const deniedReadRules = [
     path.join(home, ".config", "gh"),
     path.join(home, ".config", "moviecal", "linear.env"),
     path.join(home, ".config", "moviecal", "linear-app.env"),
@@ -147,10 +148,17 @@ export function buildWorkerSandboxProfile({
     path.join(home, ".git-credentials"),
     path.join(home, ".netrc"),
     path.join(home, ".npmrc"),
-  ];
-  if (mode === "repair") deniedReads.push(path.join(home, ".config", "moviecal", "env.local"));
-  if (logDir) deniedReads.push(logDir);
-  deniedReads.push(...protectedRepositoryPaths);
+  ].map((file) => ["subpath", file]);
+  if (mode === "repair") deniedReadRules.push(["subpath", path.join(home, ".config", "moviecal", "env.local")]);
+  if (logDir) deniedReadRules.push(["subpath", logDir]);
+  // A linked worktree's shared .git directory can sit inside another
+  // checkout. Denying that checkout's whole tree would override every
+  // narrower metadata allowance, so repositoryGuardPaths supplies entry-level
+  // read rules for that one checkout (MOV-194). Keep the legacy full-path
+  // fallback for injected callers that have not provided the richer shape.
+  deniedReadRules.push(...(Array.isArray(protectedRepositoryReadRules)
+    ? protectedRepositoryReadRules
+    : protectedRepositoryPaths.map((file) => ["subpath", file])));
   const writeRules = [
     ["literal", path.join(worktreePath, ".git")],
     ["literal", path.join(worktreePath, "AGENTS.md")],
@@ -198,7 +206,7 @@ export function buildWorkerSandboxProfile({
     "(version 1)",
     "(allow default)",
     ...deniedExecutables.map((file) => `(deny process-exec (literal ${quoteSandboxString(file)}))`),
-    ...deniedReads.map((file) => `(deny file-read* (subpath ${quoteSandboxString(file)}))`),
+    ...deniedReadRules.map(([kind, file]) => `(deny file-read* (${kind} ${quoteSandboxString(file)}))`),
     ...writeRules.map(([kind, file]) => `(deny file-write* (${kind} ${quoteSandboxString(file)}))`),
     "",
   ].join("\n");
@@ -337,8 +345,32 @@ function isDescendantPath(candidate, ancestor) {
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
+function safeRepositoryEntryRules(repositoryPath, fsImpl) {
+  let entries;
+  try {
+    entries = fsImpl.readdirSync(repositoryPath, { withFileTypes: true });
+  } catch (err) {
+    throw new Error(`could not inspect protected checkout ${repositoryPath}: ${err.message}`);
+  }
+  if (!Array.isArray(entries)) throw new Error(`could not inspect protected checkout ${repositoryPath}: invalid directory listing`);
+
+  const rules = [];
+  for (const entry of entries) {
+    const name = entry?.name;
+    if (name === ".git") continue;
+    if (typeof name !== "string" || !name || name === "." || name === ".." || name.includes(path.sep)) {
+      throw new Error(`protected checkout ${repositoryPath} contains an unsafe entry name`);
+    }
+    if (entry.isSymbolicLink?.()) {
+      throw new Error(`protected checkout ${repositoryPath} contains a symbolic link (${name})`);
+    }
+    rules.push([entry.isDirectory?.() ? "subpath" : "literal", path.join(repositoryPath, name)]);
+  }
+  return rules;
+}
+
 /** Resolve every sibling checkout and backing Git directory before entering the sandbox. */
-export function repositoryGuardPaths(worktreePath, runner = defaultRunner) {
+export function repositoryGuardPaths(worktreePath, runner = defaultRunner, fsImpl = fs) {
   const worktrees = String(runner("git", ["worktree", "list", "--porcelain"], { cwd: worktreePath }))
     .split("\n")
     .filter((line) => line.startsWith("worktree "))
@@ -353,8 +385,17 @@ export function repositoryGuardPaths(worktreePath, runner = defaultRunner) {
     throw new Error(`linked worktree Git directory escapes its common Git directory: ${gitDir}`);
   }
   const gitMetadataPaths = [gitDir, gitCommonDir].filter(Boolean);
+  const protectedRepositoryPaths = [...new Set(worktrees.filter((value) => value !== current))];
+  const protectedRepositoryReadRules = protectedRepositoryPaths.flatMap((repositoryPath) => {
+    if (!isDescendantPath(gitCommonDir, repositoryPath)) return [["subpath", repositoryPath]];
+    if (gitCommonDir === repositoryPath) {
+      throw new Error(`shared Git metadata cannot be the protected checkout root: ${repositoryPath}`);
+    }
+    return safeRepositoryEntryRules(repositoryPath, fsImpl);
+  });
   return {
-    protectedRepositoryPaths: [...new Set(worktrees.filter((value) => value !== current))],
+    protectedRepositoryPaths,
+    protectedRepositoryReadRules,
     gitMetadataPaths: [...new Set(gitMetadataPaths)],
   };
 }
