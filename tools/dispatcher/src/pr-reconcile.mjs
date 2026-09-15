@@ -81,6 +81,14 @@ export function aggregateCheckResults({ headSha, checks = [], requiredChecks = [
     sha: checkSha(check),
     logAvailable: check.logAvailable !== false && check.logsAvailable !== false,
     detailsUrl: check.detailsUrl || check.details_url || check.url || null,
+    // Preserve GitHub's human-readable result fields for downstream policy.
+    // Repair admission must distinguish a normal review finding from a
+    // governance/security finding, and dropping this evidence turned both
+    // into the same opaque failing `lane-review` check.
+    summary: check.summary || null,
+    title: check.title || null,
+    message: check.message || null,
+    description: check.description || null,
   }));
   const requiredResults = results.filter((check) => check.required);
   const missing = [...required].filter((key) => !results.some((check) => check.required && checkKey(check) === key));

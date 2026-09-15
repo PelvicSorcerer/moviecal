@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_REPAIR_BUDGETS,
   classifyFailure,
   decideCiOutcome,
   failureFingerprint,
@@ -19,6 +20,39 @@ describe("classifyFailure", () => {
     [{ name: "lane-unit", conclusion: "SUCCESS" }, "non-actionable"],
   ])("classifies %j as %s", (event, expected) => {
     expect(classifyFailure(event).classification).toBe(expected);
+  });
+
+  // MOV-151: `gh pr view --json statusCheckRollup` carries a name and a
+  // conclusion and no log text, so for most required checks the name is the
+  // only evidence there is. Without this, every real CI failure classified
+  // as `unknown` and escalated.
+  it.each(["lane-unit", "lane-baseline", "lane-integration", "lane-browser", "lane-ios"])(
+    "treats a bare %s failure as a code/test failure",
+    (name) => {
+      expect(classifyFailure({ name, conclusion: "failure" }).classification).toBe("code-test");
+    },
+  );
+
+  // MOV-151: `pr-reconcile.mjs` hands over an already-normalized vocabulary
+  // (`timed-out`, `canceled`, `unavailable-log`). Before these aliases
+  // existed those arrived as "non-actionable" — silently dropping the exact
+  // failures the transient-rerun path exists to catch.
+  it.each([
+    ["timed-out", "infrastructure-transient"],
+    ["canceled", "infrastructure-transient"],
+    ["timeout", "infrastructure-transient"],
+    ["unavailable-log", "infrastructure-transient"],
+  ])("understands pr-reconcile's normalized %s outcome", (conclusion, expected) => {
+    expect(classifyFailure({ name: "lane-browser", conclusion }).classification).toBe(expected);
+  });
+
+  it("honours a caller-supplied classification, and only a valid one", () => {
+    const event = { name: "lane-review", conclusion: "failure", classification: "code-test", classificationReason: "blocking review finding" };
+    expect(classifyFailure(event)).toMatchObject({ classification: "code-test", reason: "blocking review finding" });
+    // A bogus or non-actionable override falls back to the ordinary rules
+    // rather than being taken at face value.
+    expect(classifyFailure({ ...event, classification: "harmless" }).classification).toBe("unknown");
+    expect(classifyFailure({ ...event, classification: "non-actionable" }).classification).toBe("unknown");
   });
 });
 
@@ -60,6 +94,26 @@ describe("decideCiOutcome", () => {
     expect(decideCiOutcome({ ...base, events: [infra], previousAttempts: { infrastructureRerun: 2 } }).action).toBe("escalate");
     expect(decideCiOutcome({ ...base, events: [infra], previousAttempts: { total: 2 } }).action).toBe("propose-infrastructure-rerun");
     expect(decideCiOutcome({ ...base, events: [infra], previousAttempts: { total: 3 } }).action).toBe("escalate");
+  });
+
+  // MOV-151 turns these defaults from a shadow-mode placeholder into the real
+  // bound on unattended work: two code repairs, one rerun, three total.
+  it("defaults to two code repairs and refuses the third", () => {
+    const code = { name: "lane-unit", conclusion: "FAILURE", message: "test failed" };
+    const decide = (previousAttempts) => decideCiOutcome({ prNumber: 1, headSha: "sha", events: [code], previousAttempts }).action;
+
+    expect(DEFAULT_REPAIR_BUDGETS).toEqual({ codeRepair: 2, infrastructureRerun: 1, total: 3 });
+    expect(decide({})).toBe("propose-code-repair");
+    expect(decide({ codeRepair: 1, total: 1 })).toBe("propose-code-repair");
+    expect(decide({ codeRepair: 2, total: 2 })).toBe("escalate");
+  });
+
+  it("defaults to a single infrastructure rerun", () => {
+    const infra = { name: "lane-browser", conclusion: "TIMED_OUT" };
+    const decide = (previousAttempts) => decideCiOutcome({ prNumber: 1, headSha: "sha", events: [infra], previousAttempts }).action;
+
+    expect(decide({})).toBe("propose-infrastructure-rerun");
+    expect(decide({ infrastructureRerun: 1, total: 1 })).toBe("escalate");
   });
 });
 

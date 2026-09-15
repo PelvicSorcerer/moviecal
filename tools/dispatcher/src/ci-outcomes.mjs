@@ -4,6 +4,22 @@
 
 import { createHash } from "node:crypto";
 
+/**
+ * The default attempt budget for one PR's whole repair chain (MOV-151) — not
+ * per head SHA, since every published repair produces a new SHA and a
+ * per-SHA count would bound nothing at all.
+ *
+ * Two code/test repair attempts, one infrastructure rerun, three attempts in
+ * total: the third repair attempt on a PR is refused and escalated. Before
+ * MOV-151 these read `{codeRepair: 1, infrastructureRerun: 2}` — a
+ * shadow-mode shape from when nothing acted on the decision.
+ */
+export const DEFAULT_REPAIR_BUDGETS = Object.freeze({
+  codeRepair: 2,
+  infrastructureRerun: 1,
+  total: 3,
+});
+
 export const FAILURE_CLASSES = Object.freeze([
   "code-test",
   "infrastructure-transient",
@@ -14,8 +30,22 @@ export const FAILURE_CLASSES = Object.freeze([
 
 const TERMINAL_FAILURES = new Set(["failure", "error", "canceled", "timed-out", "unavailable-log"]);
 const CODE_RE = /assert|expect|test failed|failed test|vitest|playwright|xcodebuild|typescript|typecheck|compile|syntax|lint|build failed|snapshot/i;
+// GitHub's `statusCheckRollup` carries a name and a conclusion for a check
+// run, and no log text at all — so for most of this repo's required checks
+// the *name* is the only evidence there is (MOV-151). Each of these lanes is
+// definitionally a code/test lane (docs/planning/testing-lanes.md): a
+// terminal failure in one means the repository's own code or tests failed.
+// Without this, every real CI failure classified as `unknown` and escalated,
+// which made automatic repair unreachable in practice.
+const CODE_CHECK_NAME_RE = /^(?:lane-(?:baseline|unit|integration|browser|ios|real-stack|full-stack-runtime)|verify|build|typecheck|lint)\b/i;
 const INFRA_RE = /timeout|timed out|rate limit|too many requests|runner|network|dns|connection|econn|registry|service unavailable|bad gateway|gateway timeout|502|503|504|cancelled by github/i;
-const SENSITIVE_RE = /permission|forbidden|unauthori[sz]ed|\b401\b|\b403\b|credential|secret|token|oauth|access denied|authentication/i;
+// Widened for MOV-151: once a failing check can *start a worker* rather than
+// just be reported, the governance-shaped findings `lane-review` emits have
+// to land in the same "stop, a human decides" bucket as a credential error.
+// A sensitive-path or ruleset finding is precisely the case where the right
+// automatic action is no action.
+const SENSITIVE_RE =
+  /permission|forbidden|unauthori[sz]ed|\b401\b|\b403\b|credential|secret|token|oauth|access denied|authentication|sensitive[ -]path|sign-off|ruleset|branch protection|governance/i;
 
 function text(value) {
   return String(value ?? "").trim();
@@ -29,12 +59,31 @@ function checkName(event) {
   return text(event.name || event.context || event.workflowName || event.check?.name || "unknown-check");
 }
 
+// GitHub's raw conclusions *and* `pr-reconcile.mjs`'s already-normalized
+// vocabulary, mapped onto the one vocabulary TERMINAL_FAILURES speaks. Both
+// halves are needed: `dispatcher shadow` feeds raw payloads in, while the
+// live observation path (`checkPrObservation` -> `aggregateCheckResults`)
+// feeds already-normalized ones. Before MOV-151 only the raw spellings were
+// listed, so a real timed-out or cancelled required check arrived as
+// `timed-out`/`canceled`, matched nothing, and was reported as
+// "non-actionable" — the exact class of failure the transient-rerun path
+// exists to catch.
+const TERMINAL_OUTCOME_ALIASES = Object.freeze({
+  failure: "failure",
+  error: "error",
+  cancelled: "canceled",
+  canceled: "canceled",
+  timed_out: "timed-out",
+  "timed-out": "timed-out",
+  timeout: "timed-out",
+  "unavailable-log": "unavailable-log",
+  unavailable_log: "unavailable-log",
+});
+
 function eventOutcome(event) {
   const conclusion = normalize(event.conclusion || event.result || event.outcome);
   const status = normalize(event.status || event.state);
-  if (["failure", "error", "cancelled", "canceled", "timed_out", "timeout"].includes(conclusion)) {
-    return conclusion === "cancelled" ? "canceled" : conclusion === "timed_out" ? "timed-out" : conclusion;
-  }
+  if (TERMINAL_OUTCOME_ALIASES[conclusion]) return TERMINAL_OUTCOME_ALIASES[conclusion];
   if (["success", "skipped", "neutral", "pending", "queued", "in_progress", "requested", "waiting"].includes(conclusion)) return conclusion;
   if (["pending", "queued", "in_progress", "requested", "waiting"].includes(status)) return "pending";
   if (event.logAvailable === false || event.logsAvailable === false) return "unavailable-log";
@@ -52,15 +101,32 @@ export function classifyFailure(event = {}) {
   if (!TERMINAL_FAILURES.has(outcome)) {
     return { classification: "non-actionable", outcome, reason: "check is not a terminal failure", check: name };
   }
+  // MOV-151: a caller that classified this event from evidence this module
+  // does not model may say so, and is still held to FAILURE_CLASSES. The one
+  // real user is `repair-policy.mjs`, which decides blocking *review*
+  // findings by review rules rather than by the CI-log regexes below —
+  // "lane-review flagged an unused variable" is a code failure that reads
+  // nothing like a stack trace.
+  if (FAILURE_CLASSES.includes(event.classification) && event.classification !== "non-actionable") {
+    return {
+      classification: event.classification,
+      outcome,
+      reason: text(event.classificationReason) || "classified by the caller from non-CI evidence",
+      check: name,
+    };
+  }
   const evidence = `${name} ${message}`;
   if (SENSITIVE_RE.test(evidence)) {
     return { classification: "sensitive-permission", outcome, reason: "credentials or permissions may be involved", check: name };
   }
-  if (INFRA_RE.test(evidence) || outcome === "timed-out" || outcome === "unavailable-log") {
+  if (INFRA_RE.test(evidence) || outcome === "timed-out" || outcome === "canceled" || outcome === "unavailable-log") {
     return { classification: "infrastructure-transient", outcome, reason: "failure resembles a transient or unavailable CI service", check: name };
   }
   if (CODE_RE.test(evidence)) {
     return { classification: "code-test", outcome, reason: "failure points to repository code or test behavior", check: name };
+  }
+  if (CODE_CHECK_NAME_RE.test(name)) {
+    return { classification: "code-test", outcome, reason: `${name} is a code/test lane and reported a terminal failure`, check: name };
   }
   return { classification: "unknown", outcome, reason: "failure did not match a safe automatic category", check: name };
 }
@@ -102,7 +168,7 @@ function budgetResult(counts, previousAttempts, budgets) {
  */
 export function decideCiOutcome({ prNumber, prUrl = null, headSha, events = [], budgets: budgetOverrides = {}, previousAttempts = {} } = {}) {
   if (!prNumber || !headSha) throw new Error("decideCiOutcome requires prNumber and headSha");
-  const budgets = { codeRepair: 1, infrastructureRerun: 2, total: 3, ...budgetOverrides };
+  const budgets = { ...DEFAULT_REPAIR_BUDGETS, ...budgetOverrides };
   const byIdentity = new Map();
   for (const event of events) {
     const classified = classifyFailure(event);
