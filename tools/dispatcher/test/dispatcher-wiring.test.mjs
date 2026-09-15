@@ -13,22 +13,31 @@ const source = readFileSync(
   "utf8",
 );
 
-function bodyOf(fnName) {
-  const start = source.indexOf(`async function ${fnName}(`);
+function bodyOf(fnName, text = source) {
+  const start = text.indexOf(`async function ${fnName}(`);
   expect(start, `${fnName} not found`).toBeGreaterThan(-1);
   // crude brace match from the function body's "{", not any default-object "{"
-  const sigClose = source.indexOf(")", start);
-  const open = source.indexOf("{", sigClose);
+  const sigClose = text.indexOf(")", start);
+  const open = text.indexOf("{", sigClose);
   let depth = 0;
-  for (let i = open; i < source.length; i++) {
-    if (source[i] === "{") depth++;
-    else if (source[i] === "}") {
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}") {
       depth--;
-      if (depth === 0) return source.slice(open, i + 1);
+      if (depth === 0) return text.slice(open, i + 1);
     }
   }
   throw new Error(`could not find end of ${fnName}`);
 }
+
+// buildRunContext, checkIosRunnerOnline, and the Agent Session entitlement
+// latch moved out of bin/dispatcher.mjs into src/run-context.mjs (MOV-197) so
+// they are importable for a dynamic test without triggering bin/dispatcher.mjs's
+// module-load main() call. See run-loop-e2e.test.mjs.
+const runContextSource = readFileSync(
+  fileURLToPath(new URL("../src/run-context.mjs", import.meta.url)),
+  "utf8",
+);
 
 describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
   it("cmdRunOnce awaits reconcile -> propagate -> promote before reading Ready for Agent", () => {
@@ -145,18 +154,18 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
     const configText = readFileSync(fileURLToPath(new URL("../src/config.mjs", import.meta.url)), "utf8");
     expect(configText).toMatch(/MOVIECAL_AGENT_SESSIONS/);
     // An unset variable must read as off, never as on.
-    expect(source).toMatch(/enabled:\s*agentSessionsEnabled\(\)/);
+    expect(runContextSource).toMatch(/enabled:\s*agentSessionsEnabled\(\)/);
   });
 
   it("shares one entitlement latch across the process, so a rejection is not retried per issue", () => {
-    expect(source).toMatch(/const agentSessionCapability = createAgentSessionCapability\(\)/);
-    expect(bodyOf("buildRunContext")).toMatch(/capability:\s*agentSessionCapability/);
+    expect(runContextSource).toMatch(/const agentSessionCapability = createAgentSessionCapability\(\)/);
+    expect(bodyOf("buildRunContext", runContextSource)).toMatch(/capability:\s*agentSessionCapability/);
   });
 
   it("wires the durable provider-usage-limit store into every real run context", () => {
-    const body = bodyOf("buildRunContext");
-    expect(source).toMatch(/import \{ UsageLimitStore \} from "\.\.\/src\/usage-limit\.mjs"/);
-    expect(source).toMatch(/usageLimitStatePath/);
+    const body = bodyOf("buildRunContext", runContextSource);
+    expect(runContextSource).toMatch(/import \{ UsageLimitStore \} from "\.\/usage-limit\.mjs"/);
+    expect(runContextSource).toMatch(/usageLimitStatePath/);
     expect(body).toMatch(/usageLimitStore:\s*new UsageLimitStore\(usageLimitStatePath\(\)\)/);
   });
 
