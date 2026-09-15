@@ -4,6 +4,6 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['test/**/*.integration.test.*'],
+    include: ['test/**/*.integration.test.*', 'tools/dispatcher/test/**/*.integration.test.*'],
   },
 });

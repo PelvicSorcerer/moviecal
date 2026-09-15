@@ -43,7 +43,7 @@ The default fast pull-request gate is `npm run verify`, which runs the **baselin
 
 **Purpose:** Fast deterministic checks of pure logic and small modules.
 
-**Runs:** Vitest against `test/**/*.test.*`, excluding `*.integration.test.*`
+**Runs:** Vitest against `test/**/*.test.*` and `tools/dispatcher/test/**/*.test.*`, excluding `*.integration.test.*`
 
 **Expected to catch:**
 
@@ -52,14 +52,15 @@ The default fast pull-request gate is `npm run verify`, which runs the **baselin
 - TMDb payload normalization errors
 - token, watchlist, and calendar helper regressions
 - component rendering with mocked dependencies
+- dispatcher module-level logic (`tools/dispatcher/src/**`): security policy, worker routing/spawn argument shape, preflight, promotion, and worktree state-file bookkeeping — all against mocked `fs`/`child_process`/Linear/GitHub clients, never a real OS sandbox or a real second process
 
-**Not expected to catch:** full server-route wiring, real database behavior, or multi-module runtime integration.
+**Not expected to catch:** full server-route wiring, real database behavior, multi-module runtime integration, or anything that depends on the real macOS Seatbelt sandbox actually applying a profile (see [dispatcher sandbox-exec coverage](#dispatcher-sandbox-exec-integration-macos-only) under Integration).
 
 ### Integration (`lane:integration`)
 
 **Purpose:** Deterministic application and server-boundary tests that need more realism than unit tests but still run without production secrets or live third-party traffic.
 
-**Runs:** Vitest against `test/**/*.integration.test.*`
+**Runs:** Vitest against `test/**/*.integration.test.*` and `tools/dispatcher/test/**/*.integration.test.*`
 
 **Expected to catch:**
 
@@ -69,6 +70,14 @@ The default fast pull-request gate is `npm run verify`, which runs the **baselin
 - cron or refresh flows with stubbed scheduler and provider calls
 
 **Not expected to catch:** real SQL/RLS behavior, live TMDb responses, or browser-only UI flows.
+
+#### Dispatcher sandbox-exec integration (macOS only)
+
+`tools/dispatcher/test/worker-guard-sandbox.integration.test.mjs` (MOV-196) is the one exception to "no real OS dependency" in this lane, added after `worker-guard.test.mjs`'s pure string assertions on the generated Seatbelt profile missed real allow/deny regressions (MOV-193, MOV-194). It builds a real multi-worktree Git fixture and actually invokes `/usr/bin/sandbox-exec` with the real generated profile, asserting: a worker can read its own worktree and the shared Git metadata it depends on, and cannot read a sibling worktree's or the main checkout's other working files.
+
+**This only runs on macOS.** `verify.yml`'s `lane-integration` job runs on `ubuntu-latest`, which has no Seatbelt — the suite detects this (`process.platform !== "darwin"` or a missing `/usr/bin/sandbox-exec`) and skips itself cleanly rather than failing, so CI's required check passes without ever exercising this coverage. **The only enforcement is local:** run `npm run lane:integration` on a Mac before sending a change to `tools/dispatcher/src/worker-guard.mjs` (or anything that shapes the sandbox profile) for review.
+
+Not expected to catch: the MOV-180/184 nested-`sandbox_apply` collision specifically — reproducing that via two nested `sandbox-exec` CLI invocations did not trigger a crash when this suite was written (see the note at the bottom of the test file), so that hazard is guarded only at the unit level, by `worker-routing.test.mjs` pinning that Claude's invocation always disables its own internal sandbox.
 
 ### Browser (`lane:browser`)
 

@@ -5,6 +5,6 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['test/**/*.test.*', 'tools/dispatcher/test/**/*.test.*'],
-    exclude: ['test/**/*.integration.test.*', 'test/**/*.real-stack.test.*'],
+    exclude: ['test/**/*.integration.test.*', 'test/**/*.real-stack.test.*', 'tools/dispatcher/test/**/*.integration.test.*'],
   },
 });
