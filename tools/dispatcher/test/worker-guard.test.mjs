@@ -110,6 +110,24 @@ describe("worker guard", () => {
     });
   });
 
+  it("fails closed when a linked worktree points its Git directory outside the common Git directory", () => {
+    const runner = (_command, args) => {
+      if (args[0] === "worktree") return "worktree /repo/main\n\nworktree /repo/wt\n";
+      if (args.at(-1) === "--git-dir") return "/outside/.git/worktrees/wt\n";
+      if (args.at(-1) === "--git-common-dir") return "/repo/main/.git\n";
+      throw new Error(`unexpected ${args.join(" ")}`);
+    };
+    expect(() => repositoryGuardPaths("/repo/wt", runner)).toThrow(/escapes its common Git directory/);
+  });
+
+  it("fails closed when Git returns an empty metadata path", () => {
+    const runner = (_command, args) => {
+      if (args[0] === "worktree") return "worktree /repo/wt\n";
+      return "\n";
+    };
+    expect(() => repositoryGuardPaths("/repo/wt", runner)).toThrow(/metadata paths are empty/);
+  });
+
   it("extracts Claude and Codex structured tool actions with their execution outcome", () => {
     const transcript = [
       JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "git push --force origin master" } }] } }),
