@@ -16,16 +16,16 @@
 // but it does real subprocess/filesystem work, so it belongs in this lane
 // per docs/planning/testing-lanes.md, not lane:unit.
 //
-// The remaining `it.fails(...)` case below is a genuine, empirically-confirmed
-// gap, not an aspirational spec. It is written as the property the code
-// should have; today's implementation does not have it, so the test body's
-// own assertion fails, and `it.fails` reports that failure as this test
-// passing. If the underlying gap is ever fixed, the assertion will start
-// succeeding, `it.fails` will report that as an unexpected pass, and CI will
-// fail here as the signal to convert this back into an ordinary `it`. See
-// docs/operators/local-execution.md §Worktree lifecycle and the MOV-198
-// follow-up issues for the actual fixes (out of scope for this test-authoring
-// issue).
+// The first `it.fails(...)` case below remains a genuine,
+// empirically-confirmed gap, not an aspirational spec. It is written as the
+// property the code *should* have; today's implementation does not have it,
+// so the test body's own assertion fails, and `it.fails` reports that failure
+// as this test passing. If the underlying gap is fixed, the assertion will
+// start succeeding, `it.fails` will report that as an unexpected pass, and CI
+// will fail as the signal to convert it back into an ordinary `it`. MOV-202
+// fixes the second case: startup reconciliation now verifies the recorded
+// path is still an intact linked Git worktree. See
+// docs/operators/local-execution.md §Worktree lifecycle.
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "node:fs";
@@ -133,8 +133,8 @@ describe("worktree reclaim under real concurrent access (MOV-198)", () => {
     },
   );
 
-  it.fails(
-    "reconcileStartup surfaces an active-status worktree whose on-disk content was wiped out from under a still-running process (KNOWN GAP)",
+  it(
+    "reconcileStartup surfaces an active-status worktree whose on-disk content was wiped out from under a still-running process",
     () => {
       const worktreePath = path.join(worktreeRoot, "corrupted-worktree");
       git(mainDir, ["worktree", "add", "-q", worktreePath, "-b", "agent/MOV-TEST-corrupt", "origin/master"]);
@@ -156,15 +156,11 @@ describe("worktree reclaim under real concurrent access (MOV-198)", () => {
       const manager = new WorktreeManager({ repoRoot: mainDir, worktreeRoot, statePath, runner: defaultRunner });
       const changes = manager.reconcileStartup({ isPidAlive: () => true });
 
-      // Desired property: reconcile notices the mismatch between the
-      // registry and reality and surfaces it (e.g. marks it abandoned with
-      // a recovery reason) instead of silently doing nothing because the
-      // path technically still exists and the pid is still alive. Today
-      // reconcileStartup() only ever checks `fs.existsSync(entry.path)` and
-      // the worker pid, never whether the directory is still a real,
-      // intact worktree -- so `changes` stays empty for this entry and this
-      // assertion fails.
+      // Reconcile must notice the mismatch between the registry and reality
+      // instead of treating a surviving empty directory plus live PID as an
+      // active worktree.
       expect(changes.some((c) => c.id === ISSUE_ID)).toBe(true);
+      expect(changes.find((c) => c.id === ISSUE_ID)).toMatchObject({ to: "abandoned" });
     },
   );
 });
