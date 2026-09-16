@@ -43,6 +43,7 @@
         "check:surface-drift": "bash scripts/check-surface-drift.sh",
         "dispatcher:doctor": "node tools/dispatcher/bin/dispatcher.mjs doctor",
         "dispatcher:dry-run": "node tools/dispatcher/bin/dispatcher.mjs dry-run",
+        "dispatcher:repair": "node tools/dispatcher/bin/dispatcher.mjs repair --dry-run",
         "dispatcher:gc": "node tools/dispatcher/bin/dispatcher.mjs gc"
     },
     "keywords": [],

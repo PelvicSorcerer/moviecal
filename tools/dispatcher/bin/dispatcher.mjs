@@ -17,6 +17,8 @@
 //                                     (MOV-129); the run loop does this each cycle
 //   dispatcher priorities [--dry-run] [--once] - dependency-aware priority
 //                                     propagation across incomplete issues
+//   dispatcher repair --dry-run    - preview bounded repair admission without
+//                                     reserving, spawning, rerunning, or writing
 //   dispatcher run --once          - process every currently-eligible Ready-for-Agent
 //                                     issue exactly once, then exit (real side effects:
 //                                     creates worktrees, spawns workers, opens PRs)
@@ -77,7 +79,7 @@ import { checkPrState, checkPrObservation, isCheckPrObservation, reconcileReview
 import { reconcileStartupRecoveries } from "../src/startup-recovery.mjs";
 import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
 import { SignalLedger, StopController, handleAgentSignal } from "../src/agent-signals.mjs";
-import { runRepairPass } from "../src/repair-run.mjs";
+import { previewRepairPass, runRepairPass } from "../src/repair-run.mjs";
 
 /**
  * Build the LinearClient the real run/dry-run path authenticates with:
@@ -710,7 +712,7 @@ async function reconcileParentsPass() {
   }
 }
 
-async function cmdRunOnce() {
+async function cmdRunOnce({ repairLockHeld = false } = {}) {
   // buildLinearClient() must run first: reconcileWorktrees() below takes its
   // result (a possibly-undefined client/teamKey) as arguments, and degrades
   // to worktree-only bookkeeping when there's no live Linear credential --
@@ -741,7 +743,7 @@ async function cmdRunOnce() {
     stateName: RUN_STATE_NAMES.readyForAgent,
   });
 
-  const ctx = await buildRunContext(linearClient, teamKey, issues);
+  const ctx = await buildRunContext(linearClient, teamKey, issues, { repairLockHeld });
   // MOV-190: repair targets are retained review worktrees, not new Ready for
   // Agent issues. Run their bounded pass every poll cycle, including when the
   // dispatch queue is empty. It is independently guarded and must never keep
@@ -771,17 +773,31 @@ async function cmdRun({ once, intervalMs }) {
   const lock = new DispatcherLock(dispatcherLockPath());
   try { lock.acquire(); } catch (err) { console.error(err.message); return 2; }
   process.once("exit", () => lock.release());
-  if (once) { try { return await cmdRunOnce(); } finally { lock.release(); } }
+  if (once) { try { return await cmdRunOnce({ repairLockHeld: lock.owned }); } finally { lock.release(); } }
   console.log(`Starting poll loop (interval: ${intervalMs}ms). Press Ctrl+C to stop.`);
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
-      await cmdRunOnce();
+      await cmdRunOnce({ repairLockHeld: lock.owned });
     } catch (err) {
       console.error("Poll iteration failed:", err.message);
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
+}
+
+/** Read-only repair preview. A real repair can only start through `run`. */
+async function cmdRepair({ dryRun = false } = {}) {
+  if (!dryRun) {
+    console.error("repair requires --dry-run; live repair runs only inside `dispatcher run`");
+    return 1;
+  }
+  const built = buildLinearClient();
+  if (!built) return 1;
+  const ctx = await buildRunContext(built.client, built.teamKey, []);
+  const results = await previewRepairPass(ctx);
+  console.log(JSON.stringify({ mode: "repair-preview", readOnly: true, results }, null, 2));
+  return 0;
 }
 
 async function main() {
@@ -829,6 +845,10 @@ async function main() {
       process.exitCode = await cmdReconcileParents({ dryRun: rest.includes("--dry-run") });
       break;
     }
+    case "repair": {
+      process.exitCode = await cmdRepair({ dryRun: rest.includes("--dry-run") });
+      break;
+    }
     case "run": {
       const once = rest.includes("--once");
       const intervalFlagIdx = rest.indexOf("--interval");
@@ -838,7 +858,7 @@ async function main() {
     }
     default:
       console.error(
-        "Usage: dispatcher <doctor|dry-run|shadow|agent-signal|gc|promote|priorities|reconcile-parents|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
+        "Usage: dispatcher <doctor|dry-run|shadow|agent-signal|gc|promote|priorities|reconcile-parents|repair|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
       );
       process.exitCode = 1;
   }

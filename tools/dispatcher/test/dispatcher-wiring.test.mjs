@@ -71,6 +71,20 @@ describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
     expect(emptyQueueAt).toBeLessThan(dispatchAt);
   });
 
+  it("passes the held dispatcher lock into the live repair pass (MOV-191)", () => {
+    const once = bodyOf("cmdRunOnce");
+    const run = bodyOf("cmdRun");
+    expect(once).toMatch(/buildRunContext\(linearClient, teamKey, issues, \{ repairLockHeld \}\)/);
+    expect(run).toMatch(/cmdRunOnce\(\{ repairLockHeld: lock\.owned \}\)/);
+  });
+
+  it("exposes a read-only repair preview but no standalone live repair command (MOV-191)", () => {
+    const repair = bodyOf("cmdRepair");
+    expect(repair).toMatch(/if \(!dryRun\)/);
+    expect(repair).toMatch(/previewRepairPass/);
+    expect(repair).not.toMatch(/runRepairPass/);
+  });
+
   it("promotePass swallows errors so a promote failure cannot abort dispatch", () => {
     const body = bodyOf("promotePass");
     expect(body).toMatch(/try\s*\{/);
@@ -218,7 +232,7 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
 
   it("registers agent-signal as a read-only command that mutates nothing", () => {
     expect(source).toMatch(/case "agent-signal":/);
-    expect(source).toMatch(/dispatcher <doctor\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|reconcile-parents\|run>/);
+    expect(source).toMatch(/dispatcher <doctor\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|reconcile-parents\|repair\|run>/);
     const body = source.slice(source.indexOf("function cmdAgentSignal("));
     const end = body.indexOf("\n}\n");
     const fn = body.slice(0, end);

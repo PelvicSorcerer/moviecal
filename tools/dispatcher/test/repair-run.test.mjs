@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { observePullRequest } from "../src/pr-reconcile.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
-import { runRepairPass } from "../src/repair-run.mjs";
+import { previewRepairPass, runRepairPass } from "../src/repair-run.mjs";
 
 const REPO = "owner/repo";
 const HEAD = "abc123";
@@ -51,6 +51,7 @@ function context({ entry = ENTRY, observed = observation(), dirty = [], enabled 
   };
   return {
     enabled,
+    lockHeldFn: vi.fn(() => true),
     ledger: new RepairLedger(path.join(root, "repair-ledger.json")),
     worktreeManager: manager,
     ghRepo: REPO,
@@ -123,5 +124,28 @@ describe("runRepairPass (MOV-190)", () => {
     const ctx = context({ enabled: false });
     await expect(runRepairPass(ctx)).resolves.toEqual([]);
     expect(ctx.observePrFn).not.toHaveBeenCalled();
+  });
+
+  it("requires the dispatcher singleton lock before any live repair observation", async () => {
+    const ctx = context();
+    ctx.lockHeldFn.mockReturnValue(false);
+
+    await expect(runRepairPass(ctx)).rejects.toThrow(/singleton lock/);
+    expect(ctx.observePrFn).not.toHaveBeenCalled();
+    expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+  });
+
+  it("previews live admission without reserving, spawning, reporting, or publishing", async () => {
+    const ctx = context();
+    ctx.lockHeldFn.mockReturnValue(false);
+
+    const [preview] = await previewRepairPass(ctx);
+
+    expect(preview).toMatchObject({ issue: ENTRY.id, action: "code-repair", headSha: HEAD });
+    expect(ctx.ledger.attempts(ENTRY.id)).toEqual([]);
+    expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+    expect(ctx.publishRepairResultFn).not.toHaveBeenCalled();
+    expect(ctx.commentOnPullRequestFn).not.toHaveBeenCalled();
+    expect(ctx.issueForEntryFn).not.toHaveBeenCalled();
   });
 });

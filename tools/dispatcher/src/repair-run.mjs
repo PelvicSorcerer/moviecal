@@ -37,7 +37,7 @@
 import path from "node:path";
 import { generateRepairBrief, generateRepairEvidence } from "./brief.mjs";
 import { DEFAULT_REPAIR_BUDGETS } from "./ci-outcomes.mjs";
-import { admitRepair } from "./repair-policy.mjs";
+import { admitRepair, guardRepairTarget } from "./repair-policy.mjs";
 import { repairJobKey } from "./repair-ledger.mjs";
 import { workerInvocation } from "./worker-routing.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
@@ -64,6 +64,7 @@ export const DEFAULT_MAX_REPAIR_WORKERS_PER_PASS = 1;
  * a guard or claim to act and not, so this throws rather than degrading.
  */
 const REQUIRED_DEPENDENCIES = Object.freeze([
+  "lockHeldFn",
   "observePrFn",
   "localHeadShaFn",
   "uncommittedChangesFn",
@@ -259,52 +260,6 @@ async function publishStop({ entry, ctx, reporter, key = null, headSha, fingerpr
   reporter.comment(body.join("\n"));
 
   return { issue: entry.id, outcome, reason, key: jobKey };
-}
-
-/**
- * The two refusals only the executor can see, because they are properties of
- * the dispatcher-owned checkout rather than of the PR.
- *
- * A **dirty** worktree is refused because `publishRepairResult()` stages
- * everything: a repair on top of unrelated uncommitted work would commit that
- * work too, under a repair commit message, with nobody having audited it. It
- * is also the state a previously-failed repair leaves behind, which is exactly
- * when a second automatic attempt is least safe.
- *
- * An **unreadable HEAD** is refused because the staleness comparison in
- * `admitRepair()` is what proves the repair would edit the code GitHub tested.
- * With no local SHA there is nothing to compare, and "no evidence of staleness"
- * is not the same as "fresh".
- */
-function guardTarget({ entry, ctx }) {
-  const { uncommittedChangesFn, localHeadShaFn } = ctx;
-
-  const dirtyPaths = uncommittedChangesFn(entry.path) || [];
-  if (dirtyPaths.length) {
-    return {
-      ok: false,
-      fingerprints: ["dirty-worktree"],
-      reason:
-        `the retained worktree at ${entry.path} has ${dirtyPaths.length} uncommitted path(s) ` +
-        `(${dirtyPaths.slice(0, 10).join(", ")}${dirtyPaths.length > 10 ? ", …" : ""}); ` +
-        "automatic repair only ever edits a clean checkout of the exact code GitHub tested",
-      sections: ["", "Uncommitted paths:", "```", dirtyPaths.join("\n"), "```"],
-    };
-  }
-
-  const localHeadSha = localHeadShaFn(entry.path) || null;
-  if (!localHeadSha) {
-    return {
-      ok: false,
-      fingerprints: ["unreadable-local-head"],
-      reason:
-        `the dispatcher-owned checkout at ${entry.path} did not report a HEAD commit, ` +
-        "so automatic repair cannot prove it would edit the code GitHub tested",
-      sections: [],
-    };
-  }
-
-  return { ok: true, localHeadSha };
 }
 
 /**
@@ -729,7 +684,11 @@ async function repairOneTarget(entry, ctx, passBudget) {
 
   const reporter = new RepairReporter(entry, ctx);
   try {
-    const guard = guardTarget({ entry, ctx });
+    const guard = guardRepairTarget({
+      entry,
+      uncommittedChangesFn: ctx.uncommittedChangesFn,
+      localHeadShaFn: ctx.localHeadShaFn,
+    });
     if (!guard.ok) {
       return await publishStop({
         entry,
@@ -853,6 +812,13 @@ export async function runRepairPass(ctx = {}) {
   if (missing.length) {
     throw new Error(`runRepairPass is missing required dependencies: ${missing.join(", ")}`);
   }
+  // A repair can push to an existing PR, so unlike the read-only preview it
+  // must be serialized by the same singleton lock as ordinary dispatch. The
+  // CLI passes this capability only from `dispatcher run`; a direct caller
+  // cannot accidentally start a competing repair worker.
+  if (!ctx.lockHeldFn()) {
+    throw new Error("runRepairPass requires the dispatcher singleton lock");
+  }
 
   const targets = Object.values(worktreeManager.loadState())
     .filter((entry) => entry.status === "review" && entry.prNumber)
@@ -866,6 +832,65 @@ export async function runRepairPass(ctx = {}) {
     } catch (error) {
       logger.error(`${entry.id}: automatic repair failed for this target (retrying next pass): ${error.message}`);
       results.push({ issue: entry.id, outcome: "repair-pass-error", reason: error.message });
+    }
+  }
+  return results;
+}
+
+/**
+ * Read the live repair admission state without reserving, rerunning, spawning,
+ * publishing, or reporting anything. This is deliberately separate from the
+ * live pass: `dispatcher repair --dry-run` is an operator inspection tool and
+ * must be safe while the singleton dispatcher lock is held by the daemon.
+ */
+export async function previewRepairPass(ctx = {}) {
+  const {
+    enabled = false,
+    worktreeManager,
+    ledger,
+    ghRepo,
+    budgets = DEFAULT_REPAIR_BUDGETS,
+    trustedReviewers = [],
+    observePrFn,
+    uncommittedChangesFn,
+    localHeadShaFn,
+  } = ctx;
+  if (!worktreeManager || !ledger) throw new Error("previewRepairPass requires a worktreeManager and a repair ledger");
+  for (const [name, value] of Object.entries({ observePrFn, uncommittedChangesFn, localHeadShaFn })) {
+    if (typeof value !== "function") throw new Error(`previewRepairPass is missing required dependency: ${name}`);
+  }
+
+  const targets = Object.values(worktreeManager.loadState())
+    .filter((entry) => entry.status === "review" && entry.prNumber)
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  const results = [];
+  for (const entry of targets) {
+    try {
+      const observation = await observePrFn(entry.prNumber, ghRepo);
+      if (!observation || observation.observationError || !observation.headSha) {
+        results.push({ issue: entry.id, action: "unobservable", reason: observation?.observationError?.message || "PR observation carried no head SHA" });
+        continue;
+      }
+      const guard = guardRepairTarget({ entry, uncommittedChangesFn, localHeadShaFn });
+      if (!guard.ok) {
+        results.push({ issue: entry.id, action: "escalate", reason: guard.reason, fingerprints: guard.fingerprints, headSha: observation.headSha });
+        continue;
+      }
+      const decision = admitRepair({
+        entry,
+        observation,
+        repository: ghRepo,
+        localHeadSha: guard.localHeadSha,
+        previousAttempts: ledger.previousAttempts(entry.id, entry.prNumber),
+        reservedKeys: ledger.attempts(entry.id).map((attempt) => attempt.key),
+        unfinishedAttempt: ledger.unfinished(entry.id, entry.prNumber),
+        budgets,
+        trustedReviewers,
+        enabled,
+      });
+      results.push({ issue: entry.id, ...decision });
+    } catch (error) {
+      results.push({ issue: entry.id, action: "preview-error", reason: error.message });
     }
   }
   return results;
