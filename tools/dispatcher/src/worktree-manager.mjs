@@ -384,8 +384,11 @@ export class WorktreeManager {
     // The scheduled resume is being spent right now; leaving these behind
     // would let a later pass read this entry as still awaiting one.
     delete entry.endedAt;
-    delete entry.usageLimitResumeAt;
-    delete entry.retainedForResume;
+    // These stamps exist only on the usage-limit path. Keeping the cleanup
+    // conditional makes a direct/manual resume auditable rather than implying
+    // it consumed a scheduled usage-limit resume that was never present.
+    if (Object.hasOwn(entry, "usageLimitResumeAt")) delete entry.usageLimitResumeAt;
+    if (Object.hasOwn(entry, "retainedForResume")) delete entry.retainedForResume;
     this.saveState(state);
     return entry;
   }

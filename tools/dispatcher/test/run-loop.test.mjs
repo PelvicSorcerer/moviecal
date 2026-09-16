@@ -1322,15 +1322,19 @@ describe("runOnce", () => {
     const NOW = new Date("2026-09-14T12:00:00.000Z");
     const USAGE_LIMIT_LOG = "Claude AI usage limit reached · resets 2026-09-14T17:00:00Z\n";
 
-    /** A minimal in-memory UsageLimitStore with the same surface run-loop uses. */
+    /**
+     * A minimal in-memory UsageLimitStore with the same surface run-loop uses,
+     * including MOV-205's resume plan (`record({resume})` / `resumption()` /
+     * `consumeResume()`).
+     */
     function fakeUsageLimitStore(initial = {}) {
       const state = { ...initial };
       return {
         state,
         cleared: [],
         get: (id) => state[id] || null,
-        record(id, { retryAt, evidence, consecutive }) {
-          state[id] = { issue: id, retryAt, evidence, consecutive };
+        record(id, { retryAt, evidence, consecutive, resume = null }) {
+          state[id] = { issue: id, retryAt, evidence, consecutive, resume: resume ? { ...resume, consumedAt: null } : null };
           return state[id];
         },
         clear(id) {
@@ -1341,6 +1345,20 @@ describe("runOnce", () => {
           const record = state[id];
           if (!record?.retryAt || now >= new Date(record.retryAt)) return { deferred: false, until: record?.retryAt ?? null, reason: null };
           return { deferred: true, until: record.retryAt, reason: `awaiting the provider usage-limit reset at ${record.retryAt}` };
+        },
+        resumption(id, now) {
+          const record = state[id];
+          const plan = record?.resume;
+          if (!plan || plan.consumedAt || !record.retryAt) return null;
+          if (now < new Date(record.retryAt)) return null;
+          return { ...plan, issue: id, retryAt: record.retryAt, consecutive: record.consecutive || 0 };
+        },
+        consumeResume(id, { now }) {
+          const record = state[id];
+          if (!record?.resume || record.resume.consumedAt) return null;
+          record.resume = { ...record.resume, consumedAt: now.toISOString() };
+          record.retryAt = null;
+          return record;
         },
       };
     }
@@ -1383,32 +1401,6 @@ describe("runOnce", () => {
       const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
       expect(lastComment.body).toContain("Provider usage limit, not a task failure");
       expect(lastComment.body).toContain("2026-09-14T17:00:00.000Z");
-    });
-
-    it("retains and escalates when a rate-limit message followed unpublished worker changes", async () => {
-      const usageLimitStore = fakeUsageLimitStore({
-        "MOV-1": { issue: "MOV-1", consecutive: 1, retryAt: "2026-09-14T11:00:00.000Z" },
-      });
-      const logDir = withLog(USAGE_LIMIT_LOG);
-      const uncommittedChangesFn = vi.fn(() => ["tools/dispatcher/src/repair-loop.mjs"]);
-      const ctx = baseCtx({
-        logRoot: tmpLogRoot,
-        usageLimitStore,
-        uncommittedChangesFn,
-        now: () => NOW,
-        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
-      });
-
-      const [result] = await runOnce([ISSUE], ctx);
-
-      expect(result).toMatchObject({
-        outcome: "worker-failed",
-        uncommittedPaths: ["tools/dispatcher/src/repair-loop.mjs"],
-      });
-      expect(result.usageLimit).toMatch(/not the sole failure/);
-      expect(usageLimitStore.state["MOV-1"]).toBeUndefined();
-      expect(ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1).stateId).toBe("state-needs-human");
-      expect(ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1).body).toContain("unpublished changes");
     });
 
     it("holds the issue back, silently, until the reset time passes", async () => {
@@ -1515,6 +1507,431 @@ describe("runOnce", () => {
       expect(result.outcome).toBe("worker-failed");
       expect(result.usageLimit).toMatch(/could not be recorded durably/);
       expect(ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1).stateId).toBe("state-needs-human");
+    });
+
+    // MOV-205. Everything above is MOV-151's *clean*-worktree case, which is
+    // deliberately unchanged. This block is the case it refused to handle: the
+    // limit landed after the worker had already produced unpublished changes,
+    // so the retry has to resume the retained worktree in place rather than
+    // ask for a new one.
+    describe("resuming a retained dirty worktree (MOV-205)", () => {
+      const RESUME_PATH = "/fake/worktrees/MOV-1-fix-the-thing";
+      const RESUME_BRANCH = "agent/MOV-1-fix-the-thing";
+      const RESUME_AT = "2026-09-14T17:00:00.000Z";
+      const AFTER_RESET = new Date("2026-09-14T17:00:01Z");
+      const UNPUBLISHED = ["src/partial.ts"];
+
+      function resumePlan(overrides = {}) {
+        return {
+          worktreePath: RESUME_PATH,
+          branch: RESUME_BRANCH,
+          repository: "owner/repo",
+          retryAt: RESUME_AT,
+          unpublishedPaths: UNPUBLISHED,
+          consumedAt: null,
+          ...overrides,
+        };
+      }
+
+      /** A store holding exactly the record a MOV-205 deferral leaves behind. */
+      function storeAwaitingResume(planOverrides = {}) {
+        return fakeUsageLimitStore({
+          "MOV-1": { issue: "MOV-1", consecutive: 1, retryAt: RESUME_AT, resume: resumePlan(planOverrides) },
+        });
+      }
+
+      /**
+       * A worktree manager whose only entry is this issue's retained, dirty
+       * worktree. `isPathFreeForIssue` always refuses (it is dirty, MOV-185),
+       * so any test where the resume path is NOT taken collides at preflight
+       * — which is exactly the pre-MOV-205 behaviour, and makes "the resume
+       * really happened" unambiguous rather than incidental.
+       */
+      function retainedWorktreeManager({ entry = {}, owned = true, integrity } = {}) {
+        const state = {
+          "MOV-1": {
+            id: "MOV-1",
+            name: "MOV-1-fix-the-thing",
+            branch: RESUME_BRANCH,
+            path: RESUME_PATH,
+            status: "failed",
+            usageLimitResumeAt: RESUME_AT,
+            retainedForResume: true,
+            provenance: { executor: "moviecal-dispatcher", repository: "owner/repo" },
+            ...entry,
+          },
+        };
+        return {
+          createCalls: [],
+          statusCalls: [],
+          resumeCalls: [],
+          reclaimChecks: [],
+          state,
+          activeCount: () => 0,
+          isPathFree: () => false,
+          isPathFreeForIssue(p, id) {
+            this.reclaimChecks.push({ path: p, issue: id });
+            return false;
+          },
+          reclaimBlockedReason: () => `worktree at ${RESUME_PATH} for MOV-1 has uncommitted changes`,
+          loadState: () => state,
+          isDispatcherOwnedWorktree: () => owned,
+          worktreeIntegrity: () => integrity ?? { intact: true, branch: RESUME_BRANCH, reason: null },
+          create(args) {
+            this.createCalls.push(args);
+            return { path: `/fake/worktrees/${args.name}`, ...args };
+          },
+          resumeEntry(id, opts) {
+            this.resumeCalls.push({ id, ...opts });
+            state[id] = { ...state[id], status: "active", resumeCount: (state[id].resumeCount || 0) + 1 };
+            return state[id];
+          },
+          markStatus(id, status, extra = {}) {
+            this.statusCalls.push({ id, status, ...extra });
+          },
+        };
+      }
+
+      function resumeCtx(overrides = {}) {
+        return baseCtx({
+          worktreeManager: retainedWorktreeManager(overrides.manager ?? {}),
+          usageLimitStore: overrides.usageLimitStore ?? storeAwaitingResume(),
+          uncommittedChangesFn: vi.fn(() => UNPUBLISHED),
+          logRoot: tmpLogRoot,
+          now: () => AFTER_RESET,
+          ...overrides.ctx,
+        });
+      }
+
+      // Acceptance criterion: "A recognized, reset-bearing provider usage limit
+      // after unpublished changes retains the same dispatcher-owned worktree
+      // and schedules one deferred resume; it does not move directly to Needs
+      // Human Decision."
+      it("schedules one in-place resume instead of escalating, and retains the worktree", async () => {
+        const usageLimitStore = fakeUsageLimitStore();
+        const logDir = withLog(USAGE_LIMIT_LOG);
+        const ctx = baseCtx({
+          logRoot: tmpLogRoot,
+          usageLimitStore,
+          uncommittedChangesFn: vi.fn(() => UNPUBLISHED),
+          now: () => NOW,
+          spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+        });
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result).toMatchObject({
+          outcome: "usage-limit-resume-deferred",
+          retryAt: RESUME_AT,
+          worktreePath: RESUME_PATH,
+          uncommittedPaths: UNPUBLISHED,
+        });
+        expect(ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1).stateId).toBe("state-ready-for-agent");
+
+        // Both halves of the durable record: the store's plan and the
+        // registry's matching stamp, which re-admission cross-checks.
+        expect(usageLimitStore.state["MOV-1"]).toMatchObject({
+          consecutive: 1,
+          retryAt: RESUME_AT,
+          resume: { worktreePath: RESUME_PATH, branch: RESUME_BRANCH, repository: "owner/repo", unpublishedPaths: UNPUBLISHED },
+        });
+        expect(ctx.worktreeManager.statusCalls.at(-1)).toMatchObject({
+          id: "MOV-1",
+          status: "failed",
+          usageLimitResumeAt: RESUME_AT,
+          retainedForResume: true,
+        });
+
+        const body = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1).body;
+        expect(body).toContain("resumed in place");
+        expect(body).toContain("src/partial.ts");
+        expect(body).toMatch(/not.*reclaimed, removed, or replaced/);
+      });
+
+      // Acceptance criterion: "The durable record ... prevents dispatch before
+      // the provider reset."
+      it("holds the issue back silently until the reset, claiming nothing", async () => {
+        const ctx = resumeCtx({ ctx: { now: () => NOW } });
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result).toMatchObject({ outcome: "deferred-usage-limit", retryAt: RESUME_AT });
+        expect(ctx.worktreeManager.createCalls).toEqual([]);
+        expect(ctx.worktreeManager.resumeCalls).toEqual([]);
+        expect(ctx.worktreeManager.reclaimChecks).toEqual([]);
+        expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+        expect(ctx.linearClient.calls).toEqual([]);
+      });
+
+      // Acceptance criterion: "The resumed worker runs only in that retained
+      // worktree and same branch; no reclaim, new worktree, or branch deletion
+      // occurs."
+      it("resumes in the retained worktree once the reset passes, without creating or reclaiming anything", async () => {
+        const usageLimitStore = storeAwaitingResume();
+        const ctx = resumeCtx({ usageLimitStore });
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result.outcome).toBe("in-review");
+        expect(ctx.worktreeManager.resumeCalls).toEqual([
+          { id: "MOV-1", worktreePath: RESUME_PATH, branch: RESUME_BRANCH },
+        ]);
+        expect(ctx.worktreeManager.createCalls).toEqual([]);
+        // The MOV-181/185 reclaim check is never even consulted on this path,
+        // so there is no way for it to remove the retained worktree.
+        expect(ctx.worktreeManager.reclaimChecks).toEqual([]);
+        expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+        expect(ctx.spawnWorkerFn.mock.calls[0][0].cwd).toBe(RESUME_PATH);
+        // Same branch, same worktree, and the PR is published from it.
+        expect(ctx.publishWorkerResultFn.mock.calls[0][0]).toMatchObject({
+          worktreePath: RESUME_PATH,
+          branch: RESUME_BRANCH,
+        });
+      });
+
+      it("tells Linear and the worker that this is a resume of the retained worktree", async () => {
+        const ctx = resumeCtx();
+
+        await runOnce([ISSUE], ctx);
+
+        const acknowledged = ctx.linearClient.calls.filter((c) => c.type === "addComment")[0].body;
+        expect(acknowledged).toContain("resumed the retained worktree");
+        expect(acknowledged).toContain(RESUME_PATH);
+        expect(acknowledged).toContain("src/partial.ts");
+
+        const brief = ctx.spawnWorkerFn.mock.calls[0][0].brief;
+        expect(brief).toContain("You are resuming an interrupted attempt");
+        expect(brief).toContain("Continue that work; do not discard it.");
+        expect(brief).toContain("src/partial.ts");
+      });
+
+      // The plan is spent when the resume *starts*, not when it succeeds — so
+      // an attempt that dies anywhere in between cannot hand the next poll
+      // cycle a second worker against the same worktree.
+      it("spends the plan before the worker starts, so a failed attempt cannot re-fire it", async () => {
+        const usageLimitStore = storeAwaitingResume();
+        const ctx = resumeCtx({
+          usageLimitStore,
+          ctx: {
+            spawnWorkerFn: vi.fn(async () => {
+              throw new Error("sandbox could not be applied");
+            }),
+          },
+        });
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result.outcome).toBe("spawn-error");
+        expect(usageLimitStore.state["MOV-1"].resume.consumedAt).toEqual(expect.any(String));
+        expect(usageLimitStore.resumption("MOV-1", AFTER_RESET)).toBeNull();
+        // ...and the consecutive count is deliberately kept, so a later
+        // provider limit is still counted as the second one.
+        expect(usageLimitStore.state["MOV-1"].consecutive).toBe(1);
+      });
+
+      it("forgets the usage history once the resumed worker runs to a clean publication", async () => {
+        const usageLimitStore = storeAwaitingResume();
+        const ctx = resumeCtx({ usageLimitStore });
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result.outcome).toBe("in-review");
+        expect(usageLimitStore.cleared).toContain("MOV-1");
+        expect(usageLimitStore.state["MOV-1"]).toBeUndefined();
+      });
+
+      // Acceptance criterion: "The attempt is bounded: a second consecutive
+      // provider limit ... moves the issue to Needs Human Decision with an
+      // actionable reason."
+      it("escalates a second consecutive provider limit rather than scheduling another resume", async () => {
+        const usageLimitStore = storeAwaitingResume();
+        const logDir = withLog(USAGE_LIMIT_LOG);
+        const ctx = resumeCtx({
+          usageLimitStore,
+          ctx: { spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })) },
+        });
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result.outcome).toBe("worker-failed");
+        expect(result.usageLimit).toMatch(/second consecutive/);
+        expect(result.uncommittedPaths).toEqual(UNPUBLISHED);
+        expect(usageLimitStore.state["MOV-1"]).toMatchObject({ consecutive: 2, retryAt: null, resume: null });
+        expect(ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1).stateId).toBe("state-needs-human");
+        const body = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1).body;
+        expect(body).toMatch(/will not requeue, reclaim, or remove it automatically/);
+        // Retained, not reclaimed — the second limit must not cost the work either.
+        expect(ctx.worktreeManager.statusCalls.at(-1)).toMatchObject({ id: "MOV-1", status: "failed" });
+        expect(ctx.worktreeManager.statusCalls.at(-1).usageLimitResumeAt).toBeUndefined();
+      });
+
+      it.each([
+        ["the reset time cannot be parsed", "session limit reached, resetting at some point\n", /no reset time could be parsed/],
+        [
+          "the reset is further away than this dispatcher will park an issue",
+          "usage limit reached · resets 2026-09-20T17:00:00Z\n",
+          /more than 24h away/,
+        ],
+      ])("escalates and retains when %s", async (_label, log, expected) => {
+        const usageLimitStore = fakeUsageLimitStore();
+        const logDir = withLog(log);
+        const ctx = baseCtx({
+          logRoot: tmpLogRoot,
+          usageLimitStore,
+          uncommittedChangesFn: vi.fn(() => UNPUBLISHED),
+          now: () => NOW,
+          spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+        });
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result.outcome).toBe("worker-failed");
+        expect(result.usageLimit).toMatch(expected);
+        expect(result.uncommittedPaths).toEqual(UNPUBLISHED);
+        expect(usageLimitStore.state["MOV-1"].resume).toBeNull();
+        expect(ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1).stateId).toBe("state-needs-human");
+      });
+
+      // Without a durable record the "exactly one resume" bound does not
+      // exist, so this degrades to MOV-151's escalation rather than to a loop.
+      it("escalates when the resume cannot be recorded durably", async () => {
+        const logDir = withLog(USAGE_LIMIT_LOG);
+        const ctx = baseCtx({
+          logRoot: tmpLogRoot,
+          uncommittedChangesFn: vi.fn(() => UNPUBLISHED),
+          now: () => NOW,
+          spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+        });
+        expect(ctx.usageLimitStore).toBeUndefined();
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result.outcome).toBe("worker-failed");
+        expect(result.usageLimit).toMatch(/could not be recorded durably/);
+        expect(result.uncommittedPaths).toEqual(UNPUBLISHED);
+        expect(ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1).stateId).toBe("state-needs-human");
+      });
+
+      // Acceptance criterion: "Before resuming, the dispatcher revalidates
+      // dispatcher ownership, worktree integrity, branch/remote identity,
+      // unchanged target provenance ... [and] any failed re-admission ...
+      // moves the issue to Needs Human Decision with an actionable reason."
+      it.each([
+        [
+          "the worktree is not provably dispatcher-owned",
+          { manager: { owned: false } },
+          /not provably dispatcher-owned/,
+        ],
+        [
+          "the worktree is no longer intact",
+          { manager: { integrity: { intact: false, branch: null, reason: "retained worktree is on master, not agent/MOV-1-fix-the-thing" } } },
+          /is on master, not/,
+        ],
+        [
+          "the registry entry lost its approved-executor provenance",
+          { manager: { entry: { provenance: { executor: "someone-else", repository: "owner/repo" } } } },
+          /lacks approved-executor provenance/,
+        ],
+        [
+          "a worker is already active in the entry",
+          { manager: { entry: { status: "active" } } },
+          /not the retained "failed" state/,
+        ],
+        [
+          "the registry's scheduled reset no longer matches the durable record",
+          { manager: { entry: { usageLimitResumeAt: "2026-09-14T21:00:00.000Z" } } },
+          /does not match the durable record/,
+        ],
+        [
+          "the unpublished work the resume existed to carry is gone",
+          { ctx: { uncommittedChangesFn: vi.fn(() => []) } },
+          /no longer holds the unpublished changes/,
+        ],
+      ])("refuses to resume when %s, and leaves the worktree alone", async (_label, overrides, expected) => {
+        const usageLimitStore = storeAwaitingResume();
+        const ctx = resumeCtx({ usageLimitStore, ...overrides });
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result).toMatchObject({ outcome: "needs-human", usageLimitResume: "refused" });
+        expect(result.reason).toMatch(expected);
+        expect(ctx.worktreeManager.resumeCalls).toEqual([]);
+        expect(ctx.worktreeManager.createCalls).toEqual([]);
+        expect(ctx.worktreeManager.reclaimChecks).toEqual([]);
+        expect(ctx.worktreeManager.statusCalls).toEqual([]);
+        expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+        expect(ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1).stateId).toBe("state-needs-human");
+        const body = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1).body;
+        expect(body).toContain("was refused");
+        expect(body).toMatch(/not.*reclaimed, removed, or replaced/);
+        // Spent either way, so the refusal is reported once rather than on
+        // every 30-second poll.
+        expect(usageLimitStore.resumption("MOV-1", AFTER_RESET)).toBeNull();
+      });
+
+      it("reports the specific re-admission reason, not a generic failure", async () => {
+        const ctx = resumeCtx({ manager: { owned: false } });
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result.reason).toMatch(/not provably dispatcher-owned/);
+        expect(ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1).body).toMatch(
+          /not provably dispatcher-owned/,
+        );
+      });
+
+      it("escalates when the retained worktree cannot be re-opened, without removing it", async () => {
+        const ctx = resumeCtx();
+        ctx.worktreeManager.resumeEntry = () => {
+          throw new Error("retained worktree for MOV-1 no longer exists at /fake/worktrees/MOV-1-fix-the-thing");
+        };
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result).toMatchObject({ outcome: "needs-human", usageLimitResume: "refused" });
+        expect(result.reason).toMatch(/could not be re-opened/);
+        expect(ctx.worktreeManager.createCalls).toEqual([]);
+        expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+      });
+
+      // Acceptance criterion: "a non-limit worker failure moves the issue to
+      // Needs Human Decision".
+      it("escalates an ordinary failure in the resumed worker and forgets the usage history", async () => {
+        const usageLimitStore = storeAwaitingResume();
+        const logDir = withLog("FAIL test/widget.test.ts — expected 1 to be 2\n");
+        const ctx = resumeCtx({
+          usageLimitStore,
+          ctx: { spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })) },
+        });
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result.outcome).toBe("worker-failed");
+        expect(result.usageLimit).toBeUndefined();
+        expect(usageLimitStore.cleared).toContain("MOV-1");
+        expect(ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1).stateId).toBe("state-needs-human");
+      });
+
+      // Acceptance criterion: "Existing clean-worktree usage-limit deferral
+      // behavior remains unchanged." A clean deferral must record no resume
+      // plan at all, or the next cycle would try to resume a worktree that was
+      // going to be reclaimed and rebuilt.
+      it("records no resume plan on the clean-worktree path", async () => {
+        const usageLimitStore = fakeUsageLimitStore();
+        const logDir = withLog(USAGE_LIMIT_LOG);
+        const ctx = baseCtx({
+          logRoot: tmpLogRoot,
+          usageLimitStore,
+          now: () => NOW,
+          spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+        });
+
+        const [result] = await runOnce([ISSUE], ctx);
+
+        expect(result.outcome).toBe("usage-limit-deferred");
+        expect(usageLimitStore.state["MOV-1"].resume).toBeNull();
+        expect(usageLimitStore.resumption("MOV-1", new Date("2026-09-14T18:00:00Z"))).toBeNull();
+      });
     });
   });
 });
