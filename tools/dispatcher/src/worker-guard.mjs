@@ -443,14 +443,29 @@ function statusPaths(output) {
     .map((file) => file.includes(" -> ") ? file.split(" -> ").at(-1) : file);
 }
 
-/** Audit the actual branch, transcript, base diff, and dirty paths. */
-export function auditWorkerResult({ worktreePath, branch, logDir, mode = "implementation", runner = defaultRunner, fsImpl = fs } = {}) {
+/**
+ * Audit the actual branch, transcript, base diff, and dirty paths.
+ *
+ * `baseRef` is what "the base diff" is measured against, and it is a different
+ * commit for the two modes (MOV-190). An implementation worker starts from
+ * `origin/master`, so everything on its branch is its own work. A **repair**
+ * worker starts from a commit that is already on a review PR — commits an
+ * implementation worker produced and this guard already audited in
+ * implementation mode. Measuring a repair from `origin/master` would re-judge
+ * that history under repair mode's stricter `REPAIR_PROTECTED` list and fail
+ * every repair of a PR that legitimately touched (say) `tools/dispatcher/**`,
+ * for a change the repair worker did not make. Passing the admitted head SHA
+ * scopes the audit to what this worker actually did: nothing committed (Git is
+ * denied in the sandbox, and a commit that appeared anyway would show up here)
+ * plus its uncommitted edits.
+ */
+export function auditWorkerResult({ worktreePath, branch, logDir, mode = "implementation", baseRef = "origin/master", runner = defaultRunner, fsImpl = fs } = {}) {
   const violations = [];
   const actualBranch = String(runner("git", ["branch", "--show-current"], { cwd: worktreePath })).trim();
   if (actualBranch !== branch) {
     violations.push({ action: actualBranch || "detached HEAD", reason: `worker left assigned branch ${branch}` });
   }
-  const committed = String(runner("git", ["diff", "--name-only", "origin/master...HEAD"], { cwd: worktreePath })).split("\n").filter(Boolean);
+  const committed = String(runner("git", ["diff", "--name-only", `${baseRef}...HEAD`], { cwd: worktreePath })).split("\n").filter(Boolean);
   const dirty = statusPaths(runner("git", ["status", "--porcelain=v1"], { cwd: worktreePath }));
   const changedAudit = auditChangedPaths([...committed, ...dirty], { mode });
   violations.push(...changedAudit.violations);
@@ -462,7 +477,7 @@ export function auditWorkerResult({ worktreePath, branch, logDir, mode = "implem
     const transcript = auditWorkerTranscript(fsImpl.readFileSync(stdoutPath, "utf8"), { mode });
     violations.push(...transcript.violations);
   }
-  return { ok: violations.length === 0, mode, branch, actualBranch, committed, dirty, violations };
+  return { ok: violations.length === 0, mode, baseRef, branch, actualBranch, committed, dirty, violations };
 }
 
 /** Persist an audit record outside the worker-writable worktree. */

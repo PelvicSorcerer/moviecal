@@ -59,6 +59,18 @@ describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
     expect(body).toMatch(/await\s+promotePass\(\)/);
   });
 
+  it("runs the bounded repair pass before returning for an empty dispatch queue (MOV-190)", () => {
+    const body = bodyOf("cmdRunOnce");
+    const repairAt = body.indexOf("await runRepairPass(ctx)");
+    const emptyQueueAt = body.indexOf("if (issues.length === 0)");
+    const dispatchAt = body.indexOf("await runOnce(issues, ctx)");
+    expect(repairAt, "runRepairPass() not called in cmdRunOnce").toBeGreaterThan(-1);
+    expect(emptyQueueAt, "empty queue return not found").toBeGreaterThan(-1);
+    expect(dispatchAt, "runOnce() not called in cmdRunOnce").toBeGreaterThan(-1);
+    expect(repairAt).toBeLessThan(emptyQueueAt);
+    expect(emptyQueueAt).toBeLessThan(dispatchAt);
+  });
+
   it("promotePass swallows errors so a promote failure cannot abort dispatch", () => {
     const body = bodyOf("promotePass");
     expect(body).toMatch(/try\s*\{/);
