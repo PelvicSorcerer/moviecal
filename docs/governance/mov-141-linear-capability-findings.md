@@ -5,6 +5,16 @@
 to use: the cloud lane, Loops, and custom Agent Sessions remain disabled until
 their implementation issues satisfy the prerequisites below.
 
+> **Plan findings superseded 2026-09-16.** The workspace has since been
+> upgraded and Loops are available. Every row below that turns on the **Basic**
+> plan — the Loops rows in particular — records what was true on the validation
+> date and is no longer current; it is kept unedited as the evidence `MOV-159`
+> reasoned from, not as a live statement of entitlement. The Agent Session
+> findings are **not** affected: that blocker is app configuration, not plan,
+> and a re-probe would still return `agent sessions disabled` until the
+> receiver approved in `MOV-159` exists. See
+> `docs/governance/mov-159-agent-session-receiver-decision.md`.
+
 No plan change, AI-credit purchase, Loop run, Coding Session, production
 secret, deployment, or release was used for this validation.
 
@@ -108,8 +118,12 @@ This cannot point directly at the local Mac. If `MOV-158` still justifies Agent
 Sessions, it needs a narrow signed relay or another hosted receiver, with event
 signature validation, idempotency, short retention, and polling recovery. That
 infrastructure is an optional richer interaction layer, not a prerequisite for
-local dispatch. `MOV-159` remains the decision gate for whether its latency and
-operational value justify the added attack surface.
+local dispatch. `MOV-159` was the decision gate for whether its latency and
+operational value justify the added attack surface; it **approved** a signed
+Vercel receiver with outbound SSE delivery to the Mac on 2026-09-16 and
+authorized `MOV-166` to build it. The relay stays non-authoritative and polling
+stays the permanent floor. See
+`docs/governance/mov-159-agent-session-receiver-decision.md`.
 
 ### What MOV-158 did with this finding
 
