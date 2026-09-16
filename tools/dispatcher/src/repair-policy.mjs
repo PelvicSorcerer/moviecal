@@ -7,7 +7,8 @@
 // everything already tried, should the dispatcher start a repair right now,
 // and of what kind?**
 //
-// It is pure — every input is data, every output is a decision. The stopping
+// It is pure — every input is data (or, for `guardRepairTarget`, an injected
+// read-only probe), every output is a decision. The stopping
 // reasons are values rather than early `return`s inside the run loop, because
 // "why did automation decline to act?" is the thing an operator most often
 // needs to read back, and acceptance criterion 7 requires it be visible.
@@ -173,6 +174,78 @@ export function classifyReviewTrigger(observation = {}, { trustedReviewers = [] 
 
 function refuse(reason, extra = {}) {
   return { action: "ignore", reason, key: null, trigger: null, fingerprints: [], decision: null, ...extra };
+}
+
+/**
+ * The refusals that are properties of the *dispatcher-owned checkout* rather
+ * than of the PR, decided from two read-only probes (MOV-190, moved here in
+ * MOV-191 so the live executor and the `dispatcher repair --dry-run` preview
+ * cannot drift apart — a preview that predicted a different refusal than the
+ * pass it previews would be worse than no preview).
+ *
+ * A **dirty** worktree is refused because `publishRepairResult()` stages
+ * everything: a repair on top of unrelated uncommitted work would commit that
+ * work too, under a repair commit message, with nobody having audited it. It
+ * is also the state a previously-failed repair leaves behind, which is exactly
+ * when a second automatic attempt is least safe.
+ *
+ * An **unreadable HEAD** is refused because the staleness comparison in
+ * `admitRepair()` is what proves the repair would edit the code GitHub tested.
+ * With no local SHA there is nothing to compare, and "no evidence of staleness"
+ * is not the same as "fresh". A probe that *throws* is the same answer — the
+ * checkout could not be read — and is reported as its own refusal rather than
+ * thrown on, so the reason reaches the durable at-most-once stop record
+ * instead of being re-derived and re-logged on every 30-second poll.
+ *
+ * @param {object} args
+ * @param {object} args.entry - the worktree registry entry being considered
+ * @param {(worktreePath: string) => string[]} args.uncommittedChangesFn
+ * @param {(worktreePath: string) => string|null} args.localHeadShaFn
+ */
+export function guardRepairTarget({ entry, uncommittedChangesFn, localHeadShaFn } = {}) {
+  let dirtyPaths;
+  try {
+    dirtyPaths = uncommittedChangesFn(entry.path) || [];
+  } catch (error) {
+    return {
+      ok: false,
+      fingerprints: ["unreadable-worktree"],
+      reason:
+        `the retained worktree at ${entry.path} could not be inspected for uncommitted changes ` +
+        `(${error.message}); automatic repair only ever edits a checkout it can prove is clean`,
+      sections: [],
+    };
+  }
+  if (dirtyPaths.length) {
+    return {
+      ok: false,
+      fingerprints: ["dirty-worktree"],
+      reason:
+        `the retained worktree at ${entry.path} has ${dirtyPaths.length} uncommitted path(s) ` +
+        `(${dirtyPaths.slice(0, 10).join(", ")}${dirtyPaths.length > 10 ? ", …" : ""}); ` +
+        "automatic repair only ever edits a clean checkout of the exact code GitHub tested",
+      sections: ["", "Uncommitted paths:", "```", dirtyPaths.join("\n"), "```"],
+    };
+  }
+
+  let localHeadSha = null;
+  try {
+    localHeadSha = localHeadShaFn(entry.path) || null;
+  } catch {
+    localHeadSha = null;
+  }
+  if (!localHeadSha) {
+    return {
+      ok: false,
+      fingerprints: ["unreadable-local-head"],
+      reason:
+        `the dispatcher-owned checkout at ${entry.path} did not report a HEAD commit, ` +
+        "so automatic repair cannot prove it would edit the code GitHub tested",
+      sections: [],
+    };
+  }
+
+  return { ok: true, localHeadSha };
 }
 
 /**

@@ -83,7 +83,7 @@ export async function checkIosRunnerOnline() {
  * its blockers' workflow states, so isIssueSatisfied is resolved from that batch with
  * no extra Linear call.
  */
-export async function buildRunContext(linearClient, teamKey, issues) {
+export async function buildRunContext(linearClient, teamKey, issues, { repairLockHeld = false } = {}) {
   const states = await linearClient.workflowStates(teamKey);
   const stateId = (name) => {
     const s = states.find((st) => st.name === name);
@@ -116,6 +116,10 @@ export async function buildRunContext(linearClient, teamKey, issues) {
     // MOV-190: repair has a separate durable ledger, so a daemon restart
     // cannot turn a bounded repair budget into an unbounded retry loop.
     ledger: new RepairLedger(repairLedgerStatePath()),
+    // Only `dispatcher run` supplies this capability. The repair executor
+    // requires it before any admission side effect, while the separate
+    // `dispatcher repair --dry-run` preview stays read-only without a lock.
+    lockHeldFn: () => repairLockHeld,
     enabled: autoRepairEnabled(),
     budgets: resolveRepairBudgets(),
     trustedReviewers: resolveTrustedReviewers(),
