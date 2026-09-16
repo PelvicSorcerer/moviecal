@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -79,6 +80,15 @@ describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
     expect(body).toMatch(/lock\.acquire\(\)/);
     expect(body).toMatch(/cmdPrioritiesOnce\(\{\s*dryRun:\s*false\s*\}\)/);
     expect(body).toMatch(/finally\s*\{\s*lock\.release\(\)/);
+  });
+
+  // Every other guard in this file is a regex over source text, which a
+  // syntax error sails straight past -- and bin/dispatcher.mjs is the one
+  // dispatcher file nothing can import (it calls main() at module load), so
+  // nothing else would catch one either until the daemon next restarted.
+  it("bin/dispatcher.mjs actually parses", () => {
+    const entry = fileURLToPath(new URL("../bin/dispatcher.mjs", import.meta.url));
+    expect(() => execFileSync(process.execPath, ["--check", entry], { encoding: "utf8" })).not.toThrow();
   });
 
   it("logs a real path/branch for a reconcileStartup() orphan-sweep change, not a bare c.id (MOV-199)", () => {
@@ -167,6 +177,31 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
     expect(runContextSource).toMatch(/import \{ UsageLimitStore \} from "\.\/usage-limit\.mjs"/);
     expect(runContextSource).toMatch(/usageLimitStatePath/);
     expect(body).toMatch(/usageLimitStore:\s*new UsageLimitStore\(usageLimitStatePath\(\)\)/);
+  });
+
+  // MOV-205 gave dry-run a `usage limit:` line so a resume-pending issue is
+  // diagnosable rather than looking like an ordinary worktree collision. That
+  // is a *read*; the command's "no worktree, branch, or Linear state was
+  // changed" promise means it must never touch the reclaiming or resuming
+  // paths, both of which mutate the filesystem and the durable record.
+  it("dry-run reports usage-limit state without reclaiming, resuming, or spending anything", () => {
+    const body = bodyOf("cmdDryRun");
+    expect(body).toMatch(/new UsageLimitStore\(usageLimitStatePath\(\)\)/);
+    expect(body).toMatch(/usageLimits\.deferral\(/);
+    expect(body).toMatch(/usageLimits\.resumption\(/);
+    expect(body).toMatch(/worktreePathFree:\s*\(p\)\s*=>\s*manager\.isPathFree\(p\)/);
+    // Call-shaped, not bare names: the body's own comment explains *why* it
+    // uses plain isPathFree "and not isPathFreeForIssue", and a prose mention
+    // is the opposite of the thing being guarded against.
+    for (const mutating of [
+      /manager\.isPathFreeForIssue\s*\(/,
+      /\.resumeEntry\s*\(/,
+      /\.consumeResume\s*\(/,
+      /\.markStatus\s*\(/,
+      /usageLimits\.record\s*\(/,
+    ]) {
+      expect(mutating.test(body), `cmdDryRun calls ${mutating}`).toBe(false);
+    }
   });
 
   it("registers agent-signal as a read-only command that mutates nothing", () => {

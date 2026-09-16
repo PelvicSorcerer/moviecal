@@ -17,6 +17,7 @@ import { tailLogs } from "./worker-spawn.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "./worker-guard.mjs";
 import { classifyWorkerFailure, NESTED_SANDBOX_CRASH } from "./failure-classification.mjs";
 import { classifyUsageLimitFailure, decideUsageLimitOutcome } from "./usage-limit.mjs";
+import { admitUsageLimitResume } from "./usage-limit-resume.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
 import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-signals.mjs";
@@ -134,7 +135,58 @@ const NO_USAGE_LIMIT_STORE = Object.freeze({
   record: () => null,
   clear: () => {},
   deferral: () => ({ deferred: false, until: null, reason: null }),
+  resumption: () => null,
+  consumeResume: () => null,
 });
+
+/**
+ * Read a live fact off the worktree manager, treating "this manager does not
+ * implement it" and "it threw" identically as *unknown* (MOV-205).
+ *
+ * Every caller below feeds the result into `admitUsageLimitResume()`, whose
+ * refusals are all fail-closed — so an unknown fact refuses the resume rather
+ * than waving it through. That is the correct reading for both cases: a test
+ * double or an older manager that cannot prove ownership has not proven it,
+ * and a `git` invocation that threw has not proven anything either.
+ */
+function probe(fn, fallback) {
+  try {
+    return typeof fn === "function" ? fn() : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Spend this issue's scheduled resume so it can never fire twice (MOV-205).
+ *
+ * Called on **both** outcomes — admitted and refused. An unspent plan whose
+ * reset is already in the past is due on every subsequent poll, which would
+ * either start a second worker against the same worktree or re-escalate the
+ * same refusal into Linear every 30 seconds.
+ *
+ * Returns false when the store cannot prove the plan is spent, which the
+ * caller must treat exactly like a failed re-admission: without that proof the
+ * "exactly one resume" bound does not exist, and an unbounded resume loop is
+ * strictly worse than asking a human. The hard `clear()` below is the
+ * last-resort stop for that case — it costs the consecutive counter, which
+ * only matters on a path that is escalating to a human anyway.
+ */
+function spendScheduledResume(store, issueId, now) {
+  try {
+    const consumed = typeof store.consumeResume === "function" ? store.consumeResume(issueId, { now }) : null;
+    const stillDue = typeof store.resumption === "function" ? store.resumption(issueId, now) : null;
+    if (consumed && !stillDue) return true;
+  } catch {
+    // fall through to the hard clear
+  }
+  try {
+    store.clear(issueId);
+  } catch {
+    // nothing durable to clear; the refusal below is still reported
+  }
+  return false;
+}
 
 const WORKER_TIMEOUT = Symbol("worker-timeout");
 /** MOV-158: a stop was observed while the worker ran, and the worker's process group was killed. */
@@ -224,6 +276,12 @@ async function processIssue(issue, ctx) {
   const branch = branchName(issue.identifier, issue.title);
   const candidatePath = path.join(worktreeRoot, name);
 
+  // MOV-205: the deferral above has lapsed — is this issue due for a *resume*
+  // of its own retained worktree, rather than an ordinary fresh dispatch? Read
+  // once, here, because the answer changes what "preflight" even means for
+  // this pass (see the worktree-path gate below).
+  const resumePlan = probe(() => usageLimitStore.resumption?.(issue.identifier, now()), null);
+
   const preflight = evaluatePreflight(issue, {
     isIssueSatisfied,
     iosRunnerOnline,
@@ -244,11 +302,22 @@ async function processIssue(issue, ctx) {
     // a feature check so a test double that doesn't implement
     // reclaimBlockedReason (most of run-loop.test.mjs's fakes) still gets
     // the plain boolean it always has.
-    worktreePathFree: (p) => {
-      const free = worktreeManager.isPathFreeForIssue(p, issue.identifier);
-      if (free || typeof worktreeManager.reclaimBlockedReason !== "function") return free;
-      return worktreeManager.reclaimBlockedReason(p, issue.identifier) ?? false;
-    },
+    //
+    // MOV-205: for a scheduled resume the retained worktree *is* the dispatch
+    // target, so "the path must be unused" is the wrong question — and asking
+    // the MOV-181 version of it would be actively dangerous, since a reclaim
+    // is a real `git worktree remove`. The gate is not relaxed here, it is
+    // replaced: `admitUsageLimitResume()` below re-proves ownership,
+    // integrity, branch/repository identity, registry provenance, and that
+    // the unpublished work is still present, all of which the plain
+    // collision check never checked at all.
+    worktreePathFree: resumePlan
+      ? () => true
+      : (p) => {
+          const free = worktreeManager.isPathFreeForIssue(p, issue.identifier);
+          if (free || typeof worktreeManager.reclaimBlockedReason !== "function") return free;
+          return worktreeManager.reclaimBlockedReason(p, issue.identifier) ?? false;
+        },
     candidateWorktreePath: candidatePath,
   });
 
@@ -300,17 +369,103 @@ async function processIssue(issue, ctx) {
     return { issue: issue.identifier, outcome: "not-eligible", reason: stopController.stopRequest.reason };
   }
 
-  const entry = worktreeManager.create({
-    id: issue.identifier,
-    name,
-    branch,
-    worker: routing.worker,
-    model: routing.model,
-    linearUrl: issue.url,
-    linearIssueId: issue.id,
-    envLocalSource,
-    repository: ghRepo,
-  });
+  // MOV-205: exactly one of these two ways to obtain a worktree runs. A
+  // scheduled resume re-opens the retained one in place and never calls
+  // `create()`; everything else creates a fresh one and never calls
+  // `resumeEntry()`. Keeping them mutually exclusive here — rather than
+  // branching somewhere deeper — is what makes "no reclaim, no new worktree,
+  // no branch deletion on the resume path" checkable by reading one block.
+  let entry;
+  let resume = null;
+  if (resumePlan) {
+    const admission = admitUsageLimitResume({
+      issueId: issue.identifier,
+      plan: resumePlan,
+      entry: probe(() => worktreeManager.loadState?.()?.[issue.identifier] ?? null, null),
+      repository: ghRepo,
+      branch,
+      worktreePath: candidatePath,
+      dispatcherOwned: probe(() => worktreeManager.isDispatcherOwnedWorktree?.(candidatePath) ?? false, false),
+      integrity: probe(() => worktreeManager.worktreeIntegrity?.(candidatePath, branch) ?? null, null),
+      unpublishedPaths: probe(() => uncommittedChangesFn(candidatePath), []),
+    });
+
+    // Spend the plan on both outcomes, and treat an unprovable spend as a
+    // refusal of its own — see spendScheduledResume().
+    const spent = spendScheduledResume(usageLimitStore, issue.identifier, now());
+    const refusal = !admission.admitted
+      ? admission.reason
+      : !spent
+        ? "the scheduled resume could not be marked spent durably, so it cannot be guaranteed to happen only once"
+        : null;
+
+    if (refusal) {
+      await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
+      await linearClient.addComment(
+        issue.id,
+        [
+          "**Scheduled resume of the retained worktree was refused (MOV-205).**",
+          "",
+          `Reason: ${refusal}`,
+          "",
+          `Retained worktree: \`${candidatePath}\``,
+          `Branch: \`${branch}\``,
+          `Scheduled resume was: **${resumePlan.retryAt}**`,
+          "",
+          "The worktree was **not** reclaimed, removed, or replaced, and no worker ran. Inspect it, recover or discard the unpublished work by hand, and move this issue back to `Ready for Agent` when it is safe to dispatch again.",
+          "",
+          "See docs/operators/local-execution.md §Worktree lifecycle.",
+        ].join("\n"),
+      );
+      return {
+        issue: issue.identifier,
+        outcome: "needs-human",
+        reason: refusal,
+        usageLimitResume: "refused",
+      };
+    }
+
+    try {
+      entry = worktreeManager.resumeEntry(issue.identifier, { worktreePath: candidatePath, branch });
+    } catch (err) {
+      await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
+      await linearClient.addComment(
+        issue.id,
+        [
+          "**Scheduled resume of the retained worktree could not be re-opened (MOV-205).**",
+          "",
+          `Reason: ${err.message}`,
+          "",
+          `Retained worktree: \`${candidatePath}\``,
+          "",
+          "The worktree was left exactly as it was; no worker ran and nothing was removed.",
+        ].join("\n"),
+      );
+      return {
+        issue: issue.identifier,
+        outcome: "needs-human",
+        reason: `retained worktree could not be re-opened for a resume: ${err.message}`,
+        usageLimitResume: "refused",
+      };
+    }
+    resume = {
+      retryAt: resumePlan.retryAt,
+      unpublishedPaths: resumePlan.unpublishedPaths || [],
+      consecutive: resumePlan.consecutive || 1,
+    };
+  } else {
+    entry = worktreeManager.create({
+      id: issue.identifier,
+      name,
+      branch,
+      worker: routing.worker,
+      model: routing.model,
+      linearUrl: issue.url,
+      linearIssueId: issue.id,
+      envLocalSource,
+      repository: ghRepo,
+    });
+  }
 
   // Everything from here on is published through one lifecycle surface
   // (MOV-158): a first-class Agent Activity when sessions are available, and
@@ -339,6 +494,7 @@ async function processIssue(issue, ctx) {
       routing,
       publisher,
       stopController,
+      resume,
       ctx: {
         stateIds,
         worktreeManager,
@@ -425,8 +581,15 @@ async function reportStop(request, { issue, publisher, worktreeManager }) {
 /**
  * The claimed half of an attempt: the worktree exists, so from here every exit
  * has to leave the registry and the Linear issue in a coherent state.
+ *
+ * `resume` (MOV-205) is non-null when this attempt is continuing in a retained
+ * worktree after a provider usage-limit reset rather than starting in a fresh
+ * one. It changes only what is *reported* — the lifecycle evidence and the
+ * worker's brief say so explicitly — never how the attempt is spawned,
+ * audited, or published: a resumed worker goes through the identical safety
+ * boundary as any other implementation worker, deliberately.
  */
-async function runClaimedAttempt({ issue, entry, branch, routing, publisher, stopController, ctx }) {
+async function runClaimedAttempt({ issue, entry, branch, routing, publisher, stopController, resume = null, ctx }) {
   const {
     stateIds,
     worktreeManager,
@@ -452,12 +615,29 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
 
   await publisher.publish("acknowledged", {
     stateId: stateIds.agentWorking,
-    summary: `Dispatcher picked up ${issue.identifier} on the local Mac adapter.`,
-    headline: "**Dispatcher started work.**",
+    summary: resume
+      ? `Dispatcher resumed ${issue.identifier} in its retained worktree after the provider usage limit reset.`
+      : `Dispatcher picked up ${issue.identifier} on the local Mac adapter.`,
+    headline: resume
+      ? "**Dispatcher resumed the retained worktree after a provider usage-limit reset (MOV-205).**"
+      : "**Dispatcher started work.**",
     sections: [
-      `Worktree: \`${entry.path}\``,
+      `Worktree: \`${entry.path}\`${resume ? " — the same worktree the deferred attempt left behind; it was not reclaimed, removed, or recreated" : ""}`,
       `Branch: \`${branch}\``,
       `Worker: ${routing.worker} (model: ${routing.model})`,
+      ...(resume
+        ? [
+            "",
+            `Scheduled resume: **${resume.retryAt}** (this attempt is the single bounded resume; a further provider limit escalates to \`Needs Human Decision\`).`,
+            "",
+            "Unpublished paths carried into this attempt:",
+            "```",
+            ...(resume.unpublishedPaths.length ? resume.unpublishedPaths : ["_(none recorded)_"]),
+            "```",
+            "",
+            "Dispatcher ownership, worktree integrity, branch and repository identity, and registry provenance were all re-validated before this worker started.",
+          ]
+        : []),
     ],
   });
 
@@ -485,6 +665,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     model: routing.model,
     upgradeConditions: routing.upgradeConditions,
     repositoryContext,
+    resume,
   });
   const invocation = workerInvocation(routing.worker, routing.model);
   const logDir = path.join(logRoot, entry.name);
@@ -684,27 +865,130 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     // other non-zero exit exactly as before.
     const usageLimit = classifyUsageLimitFailure({ exitCode: spawnResult.exitCode, logTail: tail, now: now() });
 
-    // A provider-limit retry is safe only when the provider refusal is the
-    // whole outcome. A worker can print a rate-limit message after it has
-    // already changed files (or alongside another failure); requeueing that
-    // issue would collide with the dirty retained worktree and conceal work a
-    // human needs to inspect. Preserve it and escalate instead. This is also
-    // why MOV-151's original retained worktree was recovered manually rather
-    // than blindly requeued.
+    // MOV-151 preserved the worktree here and stopped: a provider limit that
+    // landed on top of unpublished changes went permanently to a human,
+    // because requeueing would have collided with (or reclaimed) a worktree
+    // holding real work. Preserving it was right; needing a human to *resume*
+    // it was not — a usage limit says nothing about this issue, and MOV-190
+    // hit exactly this and spent a human on it.
+    //
+    // MOV-205 adds the one missing move: retain the worktree exactly as
+    // before, and schedule a single bounded resume *in place* at the reset.
+    // Nothing is reclaimed, removed, or recreated on either branch below; the
+    // only difference from MOV-151 is whether a human or the next poll cycle
+    // picks the work back up.
     const unpublishedPaths = usageLimit ? uncommittedChangesFn(entry.path) : [];
     if (usageLimit && unpublishedPaths.length > 0) {
-      usageLimitStore.clear(issue.identifier);
+      let verdict = decideUsageLimitOutcome({
+        classification: usageLimit,
+        previous: usageLimitStore.get(issue.identifier),
+        now: now(),
+        retainedWorktree: true,
+      });
+
+      // Same durability proof the clean-worktree retry makes, and for the same
+      // reason: an unrecorded resume is an unbounded one. The resume plan has
+      // to land in the same transaction as the retry time, or this falls
+      // through to the escalation below — which is exactly MOV-151's
+      // behaviour, so an unwired or failing store degrades to it rather than
+      // to a loop.
+      if (verdict.action === "resume-at-reset") {
+        const recorded = usageLimitStore.record(issue.identifier, {
+          retryAt: verdict.retryAt,
+          evidence: usageLimit.evidence,
+          consecutive: verdict.consecutive,
+          resume: {
+            worktreePath: entry.path,
+            branch,
+            repository: ghRepo,
+            retryAt: verdict.retryAt,
+            unpublishedPaths,
+          },
+          now: now(),
+        });
+        if (recorded?.retryAt !== verdict.retryAt || recorded?.resume?.worktreePath !== entry.path) {
+          verdict = {
+            ...verdict,
+            action: "escalate",
+            reason: `worker reported a provider usage limit resetting at ${verdict.retryAt} after producing unpublished changes, but the resume of the retained worktree could not be recorded durably, so a single bounded resume cannot be guaranteed`,
+            retryAt: null,
+          };
+        }
+      }
+
+      if (verdict.action === "resume-at-reset") {
+        // The registry's own half of the durable record. `usageLimitResumeAt`
+        // is re-checked against the store's plan at re-admission, so the two
+        // records have to agree for the resume to be allowed to start.
+        worktreeManager.markStatus(issue.identifier, "failed", {
+          usageLimitResumeAt: verdict.retryAt,
+          retainedForResume: true,
+        });
+        await publisher.publish("progress", {
+          stateId: stateIds.readyForAgent,
+          action: "Deferred until the provider usage limit resets; the retained worktree will be resumed in place",
+          summary: `Provider usage limit reached after unpublished work was produced. The worktree is retained and will be resumed in place at ${verdict.retryAt}.`,
+          headline: "**Provider usage limit after unpublished work; the retained worktree will be resumed in place (MOV-205).**",
+          sections: [
+            `The ${routing.worker} worker exited ${spawnResult.exitCode} reporting a provider usage/session limit, having already produced unpublished changes. Nothing was published and no PR exists, so nothing about this issue is known to be wrong.`,
+            "",
+            `Reported limit: \`${usageLimit.evidence}\``,
+            `Scheduled resume: **${verdict.retryAt}** (parsed from the provider's own message, precision \`${usageLimit.precision}\`).`,
+            "",
+            `Retained worktree: \`${entry.path}\` on \`${branch}\`. It is **not** reclaimed, removed, or replaced — the resumed worker runs in this same worktree and continues from this same partial implementation.`,
+            "",
+            "Unpublished paths:",
+            "```",
+            ...unpublishedPaths,
+            "```",
+            "",
+            "Before that resumed worker starts, the dispatcher re-validates its own ownership of the worktree, the worktree's integrity and checked-out branch, the branch and repository identity, and the registry provenance — and runs it behind the same safety boundary as any other worker. Exactly one resume is scheduled: a second consecutive provider limit, a failed re-validation, or any non-limit failure escalates to `Needs Human Decision` instead.",
+            "",
+            "```",
+            tail,
+            "```",
+            "",
+            `Full run log: \`${logDir}\``,
+          ],
+        });
+        return {
+          issue: issue.identifier,
+          outcome: "usage-limit-resume-deferred",
+          exitCode: spawnResult.exitCode,
+          retryAt: verdict.retryAt,
+          worktreePath: entry.path,
+          uncommittedPaths: unpublishedPaths,
+        };
+      }
+
+      // Bounded: a second consecutive provider limit, a missing/unparseable or
+      // too-distant reset, or a resume that could not be recorded durably all
+      // land here. The worktree is retained untouched exactly as MOV-151 left
+      // it, and the count stays truthful rather than being cleared, so a human
+      // reading the record can see this was the second limit and not the first.
+      usageLimitStore.record(issue.identifier, {
+        retryAt: null,
+        evidence: usageLimit.evidence,
+        consecutive: verdict.consecutive,
+        now: now(),
+      });
       worktreeManager.markStatus(issue.identifier, "failed");
       await publisher.publish("error", {
         stateId: stateIds.needsHumanDecision,
-        summary: "Worker reported a provider usage limit after producing unpublished changes; retained work requires human review.",
-        headline: "**Provider usage limit followed unpublished work; human review required.**",
+        summary: `Worker reported a provider usage limit after producing unpublished changes, and it cannot be resumed automatically: ${verdict.reason}`,
+        headline: "**Provider usage limit followed unpublished work, and no automatic resume is available; human review required.**",
         sections: [
-          "A provider usage/session-limit message was present, but it was not the sole worker outcome because the worktree contains unpublished changes. The dispatcher will not requeue or reclaim this worktree automatically.",
+          `Reason: ${verdict.reason}`,
+          "",
+          `Retained worktree: \`${entry.path}\` on \`${branch}\`. The dispatcher will not requeue, reclaim, or remove it automatically — recover or discard the unpublished work by hand.`,
           "",
           "Unpublished paths:",
           "```",
           ...unpublishedPaths,
+          "```",
+          "",
+          "```",
+          tail,
           "```",
           "",
           `Full run log: \`${logDir}\``,
@@ -714,7 +998,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
         issue: issue.identifier,
         outcome: "worker-failed",
         exitCode: spawnResult.exitCode,
-        usageLimit: "provider usage limit was not the sole failure; unpublished worktree changes were retained for human review",
+        usageLimit: verdict.reason,
         uncommittedPaths: unpublishedPaths,
       };
     }

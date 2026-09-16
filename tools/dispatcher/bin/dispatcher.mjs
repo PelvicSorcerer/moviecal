@@ -36,6 +36,7 @@ import {
   worktreeRoot,
   logRoot,
   worktreesStatePath,
+  usageLimitStatePath,
   priorityPropagationStatePath,
   loadLinearConfig,
   loadLinearAppConfig,
@@ -59,6 +60,7 @@ import {
   selectCloudCandidates,
 } from "../src/dispatch-eligibility.mjs";
 import { DispatcherLock, WorktreeManager } from "../src/worktree-manager.mjs";
+import { UsageLimitStore } from "../src/usage-limit.mjs";
 import { runOnce } from "../src/run-loop.mjs";
 import {
   buildRunContext,
@@ -273,6 +275,11 @@ async function cmdDryRun({ fixturePath } = {}) {
     statePath: worktreesStatePath(),
   });
   const activeWorktreeCount = tryRun(() => manager.activeCount());
+  // MOV-205: read-only. A deferred or resume-pending issue looks like an
+  // ordinary preflight collision from the plain path check below (this
+  // command deliberately never reclaims), so print the durable record's own
+  // view alongside it rather than leaving the operator to guess.
+  const usageLimits = new UsageLimitStore(usageLimitStatePath());
 
   const dispatcherDelegate = resolveDispatcherDelegate();
 
@@ -308,6 +315,20 @@ async function cmdDryRun({ fixturePath } = {}) {
       `  local dispatch: ${eligibility.eligible ? "ELIGIBLE" : `${eligibility.action.toUpperCase()} — ${eligibility.reason}`}`,
     );
     console.log(`  preflight: ${preflight.ok ? "PASS" : `BLOCKED — ${preflight.reason}`}`);
+    const usage = tryRun(() => ({
+      deferral: usageLimits.deferral(issue.identifier),
+      resumption: usageLimits.resumption(issue.identifier),
+      record: usageLimits.get(issue.identifier),
+    }));
+    if (usage.ok && usage.value.record) {
+      const { deferral, resumption, record } = usage.value;
+      const status = deferral.deferred
+        ? `DEFERRED until ${deferral.until}${record.resume ? " (will resume the retained worktree in place)" : ""}`
+        : resumption
+          ? `RESUME DUE — the retained worktree at ${resumption.worktreePath} will be resumed in place, re-admission permitting`
+          : `no active deferral (${record.consecutive} consecutive provider limit(s) recorded)`;
+      console.log(`  usage limit: ${status}`);
+    }
     console.log("");
   }
 
