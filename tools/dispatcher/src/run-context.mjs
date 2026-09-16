@@ -18,10 +18,14 @@ import {
   worktreesStatePath,
   circuitBreakerStatePath,
   usageLimitStatePath,
+  repairLedgerStatePath,
   envLocalPath,
   logRoot,
   resolveDispatcherDelegate,
   agentSessionsEnabled,
+  autoRepairEnabled,
+  resolveTrustedReviewers,
+  resolveRepairBudgets,
   DEFAULT_CONCURRENCY,
   DEFAULT_WORKER_TIMEOUT_MS,
   DEFAULT_STOP_POLL_INTERVAL_MS,
@@ -30,11 +34,16 @@ import {
 import { WorktreeManager } from "./worktree-manager.mjs";
 import { CircuitBreakerStore } from "./circuit-breaker.mjs";
 import { UsageLimitStore } from "./usage-limit.mjs";
+import { RepairLedger } from "./repair-ledger.mjs";
 import { buildIsIssueSatisfied } from "./dependency-gate.mjs";
 import { spawnWorker } from "./worker-spawn.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "./worker-guard.mjs";
 import { publishWorkerResult } from "./worker-publish.mjs";
+import { publishRepairResult } from "./worker-publish.mjs";
 import { defaultRunner as ghRunner } from "./pr-check.mjs";
+import { checkPrObservation } from "./pr-reconcile.mjs";
+import { rerunFailedJobs, collectRepairEvidence, commentOnPullRequest } from "./repair-github.mjs";
+import { collectRepositoryContext } from "./repository-context.mjs";
 import { applyStagedWorkflowEdit } from "./workflow-edit-apply.mjs";
 import { AgentSessionBridge, createAgentSessionCapability } from "./agent-session.mjs";
 
@@ -104,6 +113,12 @@ export async function buildRunContext(linearClient, teamKey, issues) {
     // MOV-192: this durable store turns a sole, reset-bearing provider refusal
     // into one deferred retry instead of the no-op fallback's escalation.
     usageLimitStore: new UsageLimitStore(usageLimitStatePath()),
+    // MOV-190: repair has a separate durable ledger, so a daemon restart
+    // cannot turn a bounded repair budget into an unbounded retry loop.
+    ledger: new RepairLedger(repairLedgerStatePath()),
+    enabled: autoRepairEnabled(),
+    budgets: resolveRepairBudgets(),
+    trustedReviewers: resolveTrustedReviewers(),
     // MOV-144: a config value above the single-flight resource policy is not
     // honored until a nonblocking supervisor exists.
     concurrencyLimit: Math.min(Number(process.env.MOVIECAL_CONCURRENCY || DEFAULT_CONCURRENCY), DEFAULT_CONCURRENCY),
@@ -119,7 +134,26 @@ export async function buildRunContext(linearClient, teamKey, issues) {
     auditWorkerResultFn: auditWorkerResult,
     writeWorkerAuditFn: writeWorkerAudit,
     publishWorkerResultFn: (args) => publishWorkerResult({ ...args, runner: ghRunner }),
+    publishRepairResultFn: (args) => publishRepairResult({ ...args, runner: ghRunner }),
     uncommittedChangesFn: (worktreePath) => worktreeManager.uncommittedChanges(worktreePath),
+    localHeadShaFn: (worktreePath) => {
+      try {
+        return String(execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktreePath, encoding: "utf8" })).trim();
+      } catch {
+        return null;
+      }
+    },
+    observePrFn: (prNumber, repo) => checkPrObservation(prNumber, repo, ghRunner),
+    rerunFailedJobsFn: (args) => rerunFailedJobs({ ...args, runner: ghRunner }),
+    collectRepairEvidenceFn: (args) => collectRepairEvidence({ ...args, runner: ghRunner }),
+    commentOnPullRequestFn: (args) => commentOnPullRequest({ ...args, runner: ghRunner }),
+    repositoryContextFn: (args) => collectRepositoryContext({ ...args, runner: ghRunner }),
+    // Registry `id` is the human-facing MOV-NNN identifier; the Linear API
+    // requires its UUID, retained as `linearIssueId` when the worktree was
+    // created. Older entries without that provenance safely fail closed in
+    // the repair pass rather than querying an identifier as though it were a
+    // UUID.
+    issueForEntryFn: (entry) => (entry.linearIssueId ? linearClient.issueSnapshot(entry.linearIssueId) : null),
     applyStagedWorkflowEditFn: (worktreePath, authorizedPath) => applyStagedWorkflowEdit(worktreePath, authorizedPath),
     // MOV-143: the route + delegate gate, and the live re-read that makes a
     // mid-flight routing/delegation change a no-op instead of a lost race.

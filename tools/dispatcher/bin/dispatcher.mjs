@@ -77,6 +77,7 @@ import { checkPrState, checkPrObservation, isCheckPrObservation, reconcileReview
 import { reconcileStartupRecoveries } from "../src/startup-recovery.mjs";
 import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
 import { SignalLedger, StopController, handleAgentSignal } from "../src/agent-signals.mjs";
+import { runRepairPass } from "../src/repair-run.mjs";
 
 /**
  * Build the LinearClient the real run/dry-run path authenticates with:
@@ -740,12 +741,25 @@ async function cmdRunOnce() {
     stateName: RUN_STATE_NAMES.readyForAgent,
   });
 
+  const ctx = await buildRunContext(linearClient, teamKey, issues);
+  // MOV-190: repair targets are retained review worktrees, not new Ready for
+  // Agent issues. Run their bounded pass every poll cycle, including when the
+  // dispatch queue is empty. It is independently guarded and must never keep
+  // ordinary issue dispatch from progressing.
+  try {
+    const repairs = await runRepairPass(ctx);
+    for (const repair of repairs) {
+      console.log(`${repair.issue}: ${repair.outcome}${repair.reason ? ` — ${repair.reason}` : ""}${repair.pr ? ` — ${repair.pr}` : ""}`);
+    }
+  } catch (err) {
+    console.error("Automatic repair pass failed (continuing to dispatch):", err.message);
+  }
+
   if (issues.length === 0) {
     console.log(`No issues in "${RUN_STATE_NAMES.readyForAgent}". Nothing to do.`);
     return 0;
   }
 
-  const ctx = await buildRunContext(linearClient, teamKey, issues);
   const results = await runOnce(issues, ctx);
   for (const r of results) {
     console.log(`${r.issue}: ${r.outcome}${r.reason ? ` — ${r.reason}` : ""}${r.pr ? ` — ${r.pr}` : ""}`);
