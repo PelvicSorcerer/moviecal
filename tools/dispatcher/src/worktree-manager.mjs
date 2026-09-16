@@ -569,28 +569,78 @@ export class WorktreeManager {
     this.saveState(state);
   }
 
+  markStartupRecoveryProgress(id, extra = {}) {
+    const state = this.loadState();
+    if (!state[id]?.startupRecovery) return null;
+    Object.assign(state[id].startupRecovery, extra);
+    this.saveState(state);
+    return state[id];
+  }
+
+  _startupRecoveryChange(id, entry) {
+    const recovery = entry.startupRecovery;
+    return {
+      id,
+      linearIssueId: entry.linearIssueId || null,
+      path: entry.path,
+      from: recovery.from,
+      to: "abandoned",
+      reason: recovery.reason,
+      dirty: recovery.dirty,
+      uncommittedPaths: recovery.uncommittedPaths || [],
+      hasUnpushedCommits: Boolean(recovery.hasUnpushedCommits),
+    };
+  }
+
+  _abandonForStartupRecovery(state, id, entry, reason) {
+    const from = entry.status;
+    let uncommittedPaths = [];
+    let hasUnpushedCommits = false;
+    // A missing worktree has nothing left to preserve. For an existing one,
+    // fail closed: an inspection error means human review, never requeue.
+    if (fs.existsSync(entry.path)) {
+      try {
+        uncommittedPaths = this.uncommittedChanges(entry.path);
+        hasUnpushedCommits = this.hasUnpushedCommits(entry.path, entry.branch);
+      } catch {
+        uncommittedPaths = ["unable to inspect worktree safely"];
+      }
+    }
+    state[id].status = "abandoned";
+    state[id].endedAt = new Date().toISOString();
+    state[id].recoveryReason = reason;
+    // Persist each Linear effect independently so an interrupted recovery
+    // resumes this exact abandonment without duplicate completed writes.
+    state[id].startupRecovery = {
+      from,
+      reason,
+      dirty: uncommittedPaths.length > 0 || hasUnpushedCommits,
+      uncommittedPaths,
+      hasUnpushedCommits,
+      stateMoved: false,
+      commentPosted: false,
+    };
+    return this._startupRecoveryChange(id, state[id]);
+  }
+
   reconcileStartup({ isPidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } } } = {}) {
     const state = this.loadState();
     const changes = [];
     for (const [id, entry] of Object.entries(state)) {
+      if (entry.status === "abandoned" && entry.startupRecovery && !entry.startupRecovery.commentPosted) {
+        changes.push(this._startupRecoveryChange(id, entry));
+        continue;
+      }
       if (!["active", "review"].includes(entry.status)) continue;
       if (!fs.existsSync(entry.path) || !this.isIntactLinkedWorktree(entry.path)) {
-        state[id].status = "abandoned";
-        state[id].endedAt = new Date().toISOString();
-        state[id].recoveryReason = fs.existsSync(entry.path)
+        const reason = fs.existsSync(entry.path)
           ? "recorded worktree is no longer an intact linked Git worktree after dispatcher restart"
           : "recorded worktree is missing after dispatcher restart";
-        changes.push({ id, from: entry.status, to: "abandoned", reason: state[id].recoveryReason });
+        changes.push(this._abandonForStartupRecovery(state, id, entry, reason));
       } else if (entry.status === "review" && !entry.prNumber) {
-        state[id].status = "abandoned";
-        state[id].endedAt = new Date().toISOString();
-        state[id].recoveryReason = "review record has no PR number after dispatcher restart";
-        changes.push({ id, from: "review", to: "abandoned", reason: state[id].recoveryReason });
+        changes.push(this._abandonForStartupRecovery(state, id, entry, "review record has no PR number after dispatcher restart"));
       } else if (entry.status === "active" && (!entry.workerPid || !isPidAlive(entry.workerPid))) {
-        state[id].status = "abandoned";
-        state[id].endedAt = new Date().toISOString();
-        state[id].recoveryReason = "dispatcher restarted after worker stopped without a terminal update";
-        changes.push({ id, from: "active", to: "abandoned", reason: state[id].recoveryReason });
+        changes.push(this._abandonForStartupRecovery(state, id, entry, "dispatcher restarted after worker stopped without a terminal update"));
       }
     }
     const knownPaths = new Set(Object.values(state).map((entry) => path.resolve(entry.path)));

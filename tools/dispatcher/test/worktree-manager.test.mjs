@@ -509,11 +509,12 @@ describe("WorktreeManager", () => {
   });
 
   it("recovers active assignments with missing workers or worktrees", () => {
-    manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+    manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix", linearIssueId: "linear-1" });
     manager.setWorkerPid("MOV-1", 1234);
     const changes = manager.reconcileStartup({ isPidAlive: () => false });
-    expect(changes[0]).toMatchObject({ id: "MOV-1", from: "active", to: "abandoned" });
+    expect(changes[0]).toMatchObject({ id: "MOV-1", linearIssueId: "linear-1", from: "active", to: "abandoned", dirty: false });
     expect(manager.loadState()["MOV-1"].recoveryReason).toMatch(/worker stopped/);
+    expect(manager.loadState()["MOV-1"].startupRecovery).toMatchObject({ stateMoved: false, commentPosted: false });
   });
 
   it("recovers an active assignment whose existing path no longer resolves as a linked Git worktree (MOV-202)", () => {
