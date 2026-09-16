@@ -46,6 +46,7 @@ import { rerunFailedJobs, collectRepairEvidence, commentOnPullRequest } from "./
 import { collectRepositoryContext } from "./repository-context.mjs";
 import { applyStagedWorkflowEdit } from "./workflow-edit-apply.mjs";
 import { AgentSessionBridge, createAgentSessionCapability } from "./agent-session.mjs";
+import { diagnoseUnrecognizedFailure } from "./worker-diagnosis.mjs";
 
 export const IOS_RUNNER_NAME = "moviecal-ios-runner";
 export const GITHUB_REPO = "PelvicSorcerer/moviecal";
@@ -113,6 +114,12 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     // MOV-192: this durable store turns a sole, reset-bearing provider refusal
     // into one deferred retry instead of the no-op fallback's escalation.
     usageLimitStore: new UsageLimitStore(usageLimitStatePath()),
+    // MOV-179: advisory-only diagnosis for the residual "unrecognized
+    // failure" escalation bucket. diagnoseUnrecognizedFailure itself already
+    // fails safe (missing ANTHROPIC_API_KEY, network error, timeout, bad
+    // response all resolve to `{ ok: false }`), so this is passed straight
+    // through with no extra wrapping here.
+    diagnoseFailureFn: diagnoseUnrecognizedFailure,
     // MOV-190: repair has a separate durable ledger, so a daemon restart
     // cannot turn a bounded repair budget into an unbounded retry loop.
     ledger: new RepairLedger(repairLedgerStatePath()),

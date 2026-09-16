@@ -43,6 +43,20 @@ import { UsageLimitStore } from "../src/usage-limit.mjs";
 import { CircuitBreakerStore } from "../src/circuit-breaker.mjs";
 import { CREDENTIAL_FAILURE } from "../src/credential-failure.mjs";
 
+// MOV-179: the real diagnosis adapter makes a live Anthropic API call.
+// Nothing in this file wants that -- the point of the describe block below is
+// to prove buildRunContext() actually wires `diagnoseFailureFn` to
+// worker-diagnosis.mjs's export, not to re-test that module's own network
+// call (worker-diagnosis.test.mjs already does). Mocking at the module
+// boundary, rather than overriding ctx.diagnoseFailureFn by hand the way
+// fakeLeaves() does for other leaves, is what makes this test fail if the
+// wiring line in run-context.mjs is ever reverted: an overridden ctx value
+// would mask that regression completely.
+const diagnoseUnrecognizedFailureMock = vi.hoisted(() => vi.fn());
+vi.mock("../src/worker-diagnosis.mjs", () => ({
+  diagnoseUnrecognizedFailure: diagnoseUnrecognizedFailureMock,
+}));
+
 // buildRunContext calls checkIosRunnerOnline(), which shells out to `gh` for
 // a live network call. Nothing in these tests wants that: the fixtures below
 // never involve the iOS Companion App project, so iosRunnerOnline's value is
@@ -577,6 +591,97 @@ describe("credential-failure circuit breaker, one continuous run across two poll
 
     // The breaker closed automatically -- no human touched it.
     expect(new CircuitBreakerStore(`${TMP_ROOT}/circuit-breaker.json`).isOpen(CREDENTIAL_FAILURE)).toBe(false);
+  });
+});
+
+describe("advisory diagnosis for the unrecognized-failure escalation, through the real buildRunContext wiring (MOV-179)", () => {
+  beforeEach(() => {
+    fs.rmSync(TMP_ROOT, { recursive: true, force: true });
+    diagnoseUnrecognizedFailureMock.mockReset();
+  });
+
+  function unrecognizedFailureIssue(id) {
+    return {
+      id: `id-${id}`, identifier: id, title: "Hits an unrecognized failure",
+      description: READY_SECTIONS, url: `https://linear.app/moviecal/issue/${id}`,
+      project: null, labels: ["execution:mac"], delegate: DELEGATE, blockedByIds: [],
+    };
+  }
+
+  it("emits the diagnostic comment exactly once when the fake adapter succeeds, through the real ctx.diagnoseFailureFn wiring", async () => {
+    const issue = unrecognizedFailureIssue("MOV-DIAG-A");
+    const linearClient = fakeLinearClient({ "id-MOV-DIAG-A": issue });
+    const ctx = { ...(await buildRunContext(linearClient, TEAM_KEY, [issue])), ...fakeLeaves() };
+
+    // If run-context.mjs's `diagnoseFailureFn: diagnoseUnrecognizedFailure`
+    // wiring line is ever removed, ctx.diagnoseFailureFn falls back to
+    // run-loop.mjs's own NO_DIAGNOSIS default, this mock is never invoked,
+    // and the assertions below on the emitted comment fail.
+    diagnoseUnrecognizedFailureMock.mockResolvedValue({
+      ok: true,
+      confident: true,
+      diagnosis: "The worker crashed with an unhandled exception before producing any output.",
+      evidence: "TypeError: boom",
+    });
+
+    const name = worktreeName(issue.identifier, issue.title);
+    const logDir = path.join(ctx.logRoot, name);
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.writeFileSync(path.join(logDir, "stdout.log"), "TypeError: boom\n");
+    ctx.spawnWorkerFn = vi.fn(async () => ({ exitCode: 1, logDir }));
+
+    const [result] = await runOnce([issue], ctx);
+
+    expect(result.outcome).toBe("worker-failed");
+    expect(diagnoseUnrecognizedFailureMock).toHaveBeenCalledTimes(1);
+    const lastMove = linearClient.calls.filter((c) => c.type === "moveToState").at(-1);
+    expect(lastMove).toMatchObject({ issueId: "id-MOV-DIAG-A", stateId: "state-needs-human" });
+    const lastComment = linearClient.calls.filter((c) => c.type === "addComment").at(-1);
+    expect(lastComment.body).toContain("Diagnosis (advisory, not verified)");
+    expect(lastComment.body).toContain("unhandled exception");
+  });
+
+  it("still escalates with the plain comment, unblocked, when the real-wired adapter fails", async () => {
+    const issue = unrecognizedFailureIssue("MOV-DIAG-B");
+    const linearClient = fakeLinearClient({ "id-MOV-DIAG-B": issue });
+    const ctx = { ...(await buildRunContext(linearClient, TEAM_KEY, [issue])), ...fakeLeaves() };
+
+    diagnoseUnrecognizedFailureMock.mockRejectedValue(new Error("diagnosis call timed out"));
+
+    const name = worktreeName(issue.identifier, issue.title);
+    const logDir = path.join(ctx.logRoot, name);
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.writeFileSync(path.join(logDir, "stdout.log"), "TypeError: boom\n");
+    ctx.spawnWorkerFn = vi.fn(async () => ({ exitCode: 1, logDir }));
+
+    const [result] = await runOnce([issue], ctx);
+
+    expect(result.outcome).toBe("worker-failed");
+    expect(diagnoseUnrecognizedFailureMock).toHaveBeenCalledTimes(1);
+    const lastMove = linearClient.calls.filter((c) => c.type === "moveToState").at(-1);
+    expect(lastMove).toMatchObject({ issueId: "id-MOV-DIAG-B", stateId: "state-needs-human" });
+    const lastComment = linearClient.calls.filter((c) => c.type === "addComment").at(-1);
+    expect(lastComment.body).not.toContain("Diagnosis");
+    expect(lastComment.body).toContain("TypeError: boom");
+  });
+
+  it("never invokes the real-wired adapter for a credential-failure signature, an already-classified path", async () => {
+    const issue = unrecognizedFailureIssue("MOV-DIAG-C");
+    const linearClient = fakeLinearClient({ "id-MOV-DIAG-C": issue });
+    const ctx = { ...(await buildRunContext(linearClient, TEAM_KEY, [issue])), ...fakeLeaves() };
+
+    diagnoseUnrecognizedFailureMock.mockResolvedValue({ ok: true, confident: true, diagnosis: "should never be seen" });
+
+    const name = worktreeName(issue.identifier, issue.title);
+    const logDir = path.join(ctx.logRoot, name);
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.writeFileSync(path.join(logDir, "stdout.log"), "401 OAuth access token has expired. Re-authenticate to continue.\n");
+    ctx.spawnWorkerFn = vi.fn(async () => ({ exitCode: 1, logDir }));
+
+    const [result] = await runOnce([issue], ctx);
+
+    expect(result.outcome).toBe("credential-failure");
+    expect(diagnoseUnrecognizedFailureMock).not.toHaveBeenCalled();
   });
 });
 

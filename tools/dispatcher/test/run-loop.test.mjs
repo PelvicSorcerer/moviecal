@@ -1530,6 +1530,246 @@ describe("runOnce", () => {
     });
   });
 
+  describe("advisory diagnosis for unrecognized failures (MOV-179)", () => {
+    let tmpLogRoot;
+    beforeEach(() => {
+      tmpLogRoot = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-diagnosis-run-"));
+    });
+    afterEach(() => {
+      fs.rmSync(tmpLogRoot, { recursive: true, force: true });
+    });
+
+    function writeOrdinaryFailureLog(logDir) {
+      fs.mkdirSync(logDir, { recursive: true });
+      fs.writeFileSync(path.join(logDir, "stdout.log"), "TypeError: cannot read property 'foo' of undefined\n");
+    }
+
+    it("splices a confident, grounded diagnosis into the generic worker-failed comment, ahead of the raw log", async () => {
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      writeOrdinaryFailureLog(logDir);
+      const diagnoseFailureFn = vi.fn(async () => ({
+        ok: true,
+        confident: true,
+        diagnosis: "The worker crashed with an unhandled TypeError before it could start any real work.",
+        evidence: "TypeError: cannot read property 'foo' of undefined",
+      }));
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        diagnoseFailureFn,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("worker-failed");
+      expect(diagnoseFailureFn).toHaveBeenCalledTimes(1);
+      expect(diagnoseFailureFn).toHaveBeenCalledWith(
+        expect.objectContaining({ exitCode: 1, logTail: expect.stringContaining("TypeError") }),
+      );
+
+      const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
+      expect(lastComment.body).toContain("Diagnosis (advisory, not verified)");
+      expect(lastComment.body).toContain("unhandled TypeError");
+      expect(lastComment.body).toContain("Evidence:");
+      // The raw log tail is still present -- the diagnosis is additive, not a replacement.
+      expect(lastComment.body).toContain("TypeError: cannot read property 'foo' of undefined");
+      // The diagnosis section reads first, ahead of the raw dump.
+      expect(lastComment.body.indexOf("Diagnosis")).toBeLessThan(lastComment.body.indexOf("```"));
+    });
+
+    it("states uncertainty explicitly rather than a fabricated cause when the adapter is not confident", async () => {
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      writeOrdinaryFailureLog(logDir);
+      const diagnoseFailureFn = vi.fn(async () => ({
+        ok: true,
+        confident: false,
+        diagnosis: "No specific error signature could be confidently identified from the available evidence.",
+        evidence: null,
+      }));
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        diagnoseFailureFn,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("worker-failed");
+      const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
+      expect(lastComment.body).toContain("not confident");
+      expect(lastComment.body).toContain("No specific error signature could be confidently identified");
+    });
+
+    it("falls back to today's plain comment when the diagnosis adapter throws — escalation is never blocked on it", async () => {
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      writeOrdinaryFailureLog(logDir);
+      const diagnoseFailureFn = vi.fn(async () => {
+        throw new Error("rate limited");
+      });
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        diagnoseFailureFn,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("worker-failed");
+      const lastMove = ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1);
+      expect(lastMove.stateId).toBe("state-needs-human");
+      const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
+      expect(lastComment.body).not.toContain("Diagnosis");
+      expect(lastComment.body).toContain("TypeError: cannot read property 'foo' of undefined");
+    });
+
+    it("falls back to today's plain comment when the diagnosis adapter reports ok: false", async () => {
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      writeOrdinaryFailureLog(logDir);
+      const diagnoseFailureFn = vi.fn(async () => ({ ok: false, reason: "ANTHROPIC_API_KEY not set" }));
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        diagnoseFailureFn,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("worker-failed");
+      const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
+      expect(lastComment.body).not.toContain("Diagnosis");
+    });
+
+    it("never calls the diagnosis adapter when no adapter is wired — existing callers unaffected", async () => {
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      writeOrdinaryFailureLog(logDir);
+      const ctx = baseCtx({ logRoot: tmpLogRoot, spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })) });
+      expect(ctx.diagnoseFailureFn).toBeUndefined();
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("worker-failed");
+      const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
+      expect(lastComment.body).not.toContain("Diagnosis");
+    });
+
+    it("never calls the diagnosis adapter for a nested-sandbox-crash — already a dedicated classification", async () => {
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      fs.mkdirSync(logDir, { recursive: true });
+      fs.writeFileSync(path.join(logDir, "stdout.log"), "Exit code 71\nsandbox-exec: sandbox_apply: Operation not permitted\n");
+      const diagnoseFailureFn = vi.fn(async () => ({ ok: true, confident: true, diagnosis: "should never be seen" }));
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        diagnoseFailureFn,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 71, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("nested-sandbox-crash");
+      expect(diagnoseFailureFn).not.toHaveBeenCalled();
+    });
+
+    it("never calls the diagnosis adapter for a credential failure — already a dedicated classification", async () => {
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      fs.mkdirSync(logDir, { recursive: true });
+      fs.writeFileSync(path.join(logDir, "stdout.log"), "401 OAuth access token has expired. Re-authenticate to continue.\n");
+      const diagnoseFailureFn = vi.fn(async () => ({ ok: true, confident: true, diagnosis: "should never be seen" }));
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        diagnoseFailureFn,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("credential-failure");
+      expect(diagnoseFailureFn).not.toHaveBeenCalled();
+    });
+
+    it("never calls the diagnosis adapter for a security-policy scope/safety block — the sibling issue's classification", async () => {
+      const diagnoseFailureFn = vi.fn(async () => ({ ok: true, confident: true, diagnosis: "should never be seen" }));
+      const ctx = baseCtx({
+        diagnoseFailureFn,
+        auditWorkerResultFn: vi.fn(() => ({
+          ok: false,
+          violations: [{ action: "gh api -X DELETE repos/o/r/rulesets/1", reason: "direct GitHub API access" }],
+        })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("security-blocked");
+      expect(diagnoseFailureFn).not.toHaveBeenCalled();
+    });
+
+    it("never calls the diagnosis adapter for a recognized, reset-bearing provider usage limit — already a dedicated classification", async () => {
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      fs.mkdirSync(logDir, { recursive: true });
+      fs.writeFileSync(path.join(logDir, "stdout.log"), "Claude AI usage limit reached · resets 2026-09-14T17:00:00Z\n");
+      const diagnoseFailureFn = vi.fn(async () => ({ ok: true, confident: true, diagnosis: "should never be seen" }));
+      const usageLimitStore = {
+        get: () => null,
+        record: (_id, data) => data,
+        clear: () => {},
+        deferral: () => ({ deferred: false, until: null, reason: null }),
+      };
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        diagnoseFailureFn,
+        usageLimitStore,
+        now: () => new Date("2026-09-14T12:00:00.000Z"),
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("usage-limit-deferred");
+      expect(diagnoseFailureFn).not.toHaveBeenCalled();
+    });
+
+    it("calls the diagnosis adapter exactly once and splices its diagnosis into the publish-failed comment", async () => {
+      const diagnoseFailureFn = vi.fn(async () => ({
+        ok: true,
+        confident: true,
+        diagnosis: "The non-force push was rejected because the remote branch has diverged.",
+        evidence: "! [rejected] agent/MOV-1-fix-the-thing -> agent/MOV-1-fix-the-thing (non-fast-forward)",
+      }));
+      const publishWorkerResultFn = vi.fn(() => {
+        throw new Error("git push rejected: non-fast-forward");
+      });
+      const ctx = baseCtx({ diagnoseFailureFn, publishWorkerResultFn });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("publish-failed");
+      expect(diagnoseFailureFn).toHaveBeenCalledTimes(1);
+      expect(diagnoseFailureFn).toHaveBeenCalledWith(
+        expect.objectContaining({ auditText: expect.stringContaining("non-fast-forward") }),
+      );
+      const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
+      expect(lastComment.body).toContain("Diagnosis (advisory, not verified)");
+      expect(lastComment.body).toContain("remote branch has diverged");
+    });
+
+    it("still escalates the publish-failed comment, unblocked, when the diagnosis adapter fails", async () => {
+      const diagnoseFailureFn = vi.fn(async () => {
+        throw new Error("diagnosis call timed out");
+      });
+      const publishWorkerResultFn = vi.fn(() => {
+        throw new Error("git push rejected: non-fast-forward");
+      });
+      const ctx = baseCtx({ diagnoseFailureFn, publishWorkerResultFn });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result).toMatchObject({ outcome: "publish-failed", error: "git push rejected: non-fast-forward" });
+      expect(ctx.worktreeManager.statusCalls).toEqual([{ id: "MOV-1", status: "failed" }]);
+      const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
+      expect(lastComment.body).not.toContain("Diagnosis");
+      expect(lastComment.body).toContain("git push rejected: non-fast-forward");
+    });
+  });
+
   describe("dispatch-time provider usage limit (MOV-151)", () => {
     const NOW = new Date("2026-09-14T12:00:00.000Z");
     const USAGE_LIMIT_LOG = "Claude AI usage limit reached · resets 2026-09-14T17:00:00Z\n";
