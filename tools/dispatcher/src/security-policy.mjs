@@ -7,11 +7,29 @@
 
 function canonicalize(text) {
   return String(text || "")
+    // An escaped shell operator is literal data, not a command separator. Keep
+    // it distinct while normalizing so a regex such as `foo\\|git` cannot be
+    // mistaken for a pipeline that invokes Git.
+    .replace(/\\([;|&])/g, "__literal_operator_$1__")
     .replace(/\\\s/g, " ")
     .replace(/["'`]/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function shellSegments(normalized) {
+  return normalized.split(/\s*(?:&&|\|\||[;|&])\s*/);
+}
+
+function isCredentialOperation(segment) {
+  if (!/\bnpm\b/.test(segment)) return false;
+
+  // `npm run <script>` is local script execution. Its script name and
+  // pass-through test paths must not be interpreted as npm credential access.
+  // Other npm subcommands retain the existing conservative detection.
+  const withoutRunInvocation = segment.replace(/\bnpm\s+run\s+\S+(?:\s+.*)?$/, "npm run");
+  return /\bnpm\b[^\n]*(?:secret|credential|token|password)/.test(withoutRunInvocation);
 }
 
 // A scope rule protects the dispatcher's ownership of an operational tool.
@@ -26,9 +44,14 @@ export const COMMAND_RULES = [
     category: "scope",
   },
   { re: /\bsecurity +(?:find|dump|export|unlock|set|add|delete)-/, reason: "keychain access from a worker", category: "safety" },
-  { re: /\b(?:gh|vercel|supabase|npm|aws)\b[^\n]*(?:secret|credential|token|password)/, reason: "secret or credential mutation/access", category: "safety" },
+  { re: /\b(?:gh|vercel|supabase|aws)\b[^\n]*(?:secret|credential|token|password)/, reason: "secret or credential mutation/access", category: "safety" },
+  {
+    test: (normalized) => shellSegments(normalized).some(isCredentialOperation),
+    reason: "secret or credential mutation/access",
+    category: "safety",
+  },
   { re: /\b(?:printenv|env|set)\b[^\n]*(?:key|token|secret|password)/, reason: "prints credential-shaped environment data", category: "safety" },
-  { re: /\b(?:echo|printf)\b[^\n]*(?:key|token|secret|password)/, reason: "prints credential-shaped data", category: "safety" },
+  { re: /\b(?:echo|printf)\b[^;|&\n]*(?:key|token|secret|password)/, reason: "prints credential-shaped data", category: "safety" },
   { re: /supabase_db_url_prod/, reason: "references the production database URL", category: "safety" },
   { re: /\bsupabase\b[^\n]*(?:db +(?:reset|push)|migration +up|link|functions +deploy|projects? +(?:create|delete))\b/, reason: "mutates a Supabase resource", category: "safety" },
   { re: /\bvercel\b[^\n]*(?:--prod\b| +deploy\b| +promote\b| +alias\b| +domains?\b| +env\b)/, reason: "mutates a Vercel or production resource", category: "safety" },
@@ -66,8 +89,8 @@ const HUMAN_DECISION_PATTERNS = [
 /** Classify a structured tool command or file path. */
 export function classifyAction(text, { workerMode = "implementation" } = {}) {
   const normalized = canonicalize(text);
-  for (const { re, reason, category } of [...COMMAND_RULES, ...PATH_RULES]) {
-    if (re.test(normalized)) return { verdict: "hard-deny", reason, category };
+  for (const { re, test, reason, category } of [...COMMAND_RULES, ...PATH_RULES]) {
+    if ((test ? test(normalized) : re.test(normalized))) return { verdict: "hard-deny", reason, category };
   }
   if (workerMode === "repair") {
     for (const { re, reason } of REPAIR_ONLY_RULES) {
