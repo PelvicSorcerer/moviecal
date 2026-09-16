@@ -142,6 +142,8 @@ The authoritative CI gate is `.github/workflows/supabase-verify.yml`, which star
 
 The authoritative CI gate is `.github/workflows/supabase-verify.yml`'s `lane-full-stack-runtime` job, which injects disposable Supabase secrets through GitHub Actions. Locally, the same command can run only when those disposable env vars are present.
 
+For the CI-dev secret source, recovery procedure, and production-boundary rules, see [CI-dev Supabase secret recovery](../operators/supabase-ci-secret-recovery.md).
+
 ### External smoke (`lane:smoke-external`)
 
 **Purpose:** Detect real third-party provider drift without destabilizing ordinary PR validation.
