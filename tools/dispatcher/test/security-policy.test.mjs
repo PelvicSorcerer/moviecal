@@ -41,6 +41,17 @@ describe("classifyAction", () => {
     expect(classifyAction(command).verdict).toBe("hard-deny");
   });
 
+  it.each([
+    'grep -n "EPERM\\|git exec\\|sandbox-exec coverage" docs/planning/testing-lanes.md 2>/dev/null',
+    'grep -n "foo\\|git" docs/planning/testing-lanes.md',
+  ])("allows escaped regular-expression text that merely spells git: %s", (command) => {
+    expect(classifyAction(command)).toEqual({ verdict: "allow", reason: null, category: null });
+  });
+
+  it("still hard-denies Git after a real no-whitespace pipeline", () => {
+    expect(classifyAction("printf source|git hash-object --stdin").verdict).toBe("hard-deny");
+  });
+
   it("keeps even read-only GitHub CLI calls in the dispatcher", () => {
     expect(classifyAction("gh pr view 42 --json title").verdict).toBe("hard-deny");
   });
@@ -74,6 +85,26 @@ describe("classifyAction", () => {
 
   it("hard-denies npm publish", () => {
     expect(classifyAction("npm publish").verdict).toBe("hard-deny");
+  });
+
+  it.each([
+    "npm run lane:unit -- tools/dispatcher/test/credential-failure.test.mjs",
+    "npm run credential-contract-test",
+  ])("allows local npm run commands whose names or test paths mention credentials: %s", (command) => {
+    expect(classifyAction(command)).toEqual({ verdict: "allow", reason: null, category: null });
+  });
+
+  it.each([
+    "npm token create",
+    "npm config set credential helper",
+    "npm run verify; npm token create",
+  ])("continues to hard-deny npm credential operations: %s", (command) => {
+    expect(classifyAction(command).verdict).toBe("hard-deny");
+  });
+
+  it("does not treat a later grep pattern as an echo of a credential", () => {
+    expect(classifyAction('echo ---; grep -rln "ANTHROPIC_API_KEY\\|anthropic" tools/dispatcher/src')).toEqual({ verdict: "allow", reason: null, category: null });
+    expect(classifyAction("echo $ANTHROPIC_API_KEY").verdict).toBe("hard-deny");
   });
 
   it("hard-denies editing AGENTS.md", () => {
