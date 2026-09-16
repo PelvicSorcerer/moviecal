@@ -160,6 +160,7 @@ describe("worktree reclaim under real concurrent access (MOV-198)", () => {
       // instead of treating a surviving empty directory plus live PID as an
       // active worktree.
       expect(changes.some((c) => c.id === ISSUE_ID)).toBe(true);
+      expect(changes.find((c) => c.id === ISSUE_ID)).toMatchObject({ to: "abandoned" });
     },
   );
 });
