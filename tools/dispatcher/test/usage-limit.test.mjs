@@ -140,6 +140,54 @@ describe("decideUsageLimitOutcome", () => {
   it("is not applicable to a failure that is not this class", () => {
     expect(decideUsageLimitOutcome({ classification: null, now: NOW }).action).toBe("not-applicable");
   });
+
+  // MOV-205. Acceptance criterion: "A recognized, reset-bearing provider usage
+  // limit after unpublished changes retains the same dispatcher-owned worktree
+  // and schedules one deferred resume; it does not move directly to Needs
+  // Human Decision."
+  describe("with a retained dirty worktree (MOV-205)", () => {
+    it("schedules a resume in place rather than an ordinary retry", () => {
+      const verdict = decideUsageLimitOutcome({ classification, previous: null, now: NOW, retainedWorktree: true });
+      expect(verdict).toMatchObject({ action: "resume-at-reset", retryAt: "2026-09-14T17:00:00.000Z", consecutive: 1 });
+      expect(verdict.reason).toMatch(/resuming that same retained worktree/);
+    });
+
+    // Acceptance criterion: "The attempt is bounded: a second consecutive
+    // provider limit, a missing/unparseable or too-distant reset, [or] any
+    // failed re-admission ... moves the issue to Needs Human Decision."
+    // A retained worktree is not a reason to loosen any of those.
+    it.each([
+      [
+        "a second consecutive limit",
+        { previous: { consecutive: 1, retryAt: "2026-09-14T11:00:00.000Z" } },
+        /second consecutive/,
+      ],
+      ["an unparseable reset", { classification: { ...classification, resetAt: null } }, /no reset time could be parsed/],
+      [
+        "a reset beyond the deferral ceiling",
+        {
+          classification: {
+            ...classification,
+            resetAt: new Date(NOW.getTime() + MAX_USAGE_LIMIT_DEFERRAL_MS + 60_000).toISOString(),
+          },
+        },
+        /more than 24h away/,
+      ],
+    ])("still escalates on %s", (_label, overrides, expected) => {
+      const verdict = decideUsageLimitOutcome({ classification, now: NOW, retainedWorktree: true, ...overrides });
+      expect(verdict.action).toBe("escalate");
+      expect(verdict.reason).toMatch(expected);
+    });
+
+    // Acceptance criterion: "Existing clean-worktree usage-limit deferral
+    // behavior remains unchanged."
+    it("leaves the clean-worktree verdict exactly as it was", () => {
+      expect(decideUsageLimitOutcome({ classification, previous: null, now: NOW })).toMatchObject({
+        action: "retry-at-reset",
+        retryAt: "2026-09-14T17:00:00.000Z",
+      });
+    });
+  });
 });
 
 describe("UsageLimitStore", () => {
@@ -182,5 +230,78 @@ describe("UsageLimitStore", () => {
 
   it("clear() on an unknown issue is a no-op", () => {
     expect(() => store.clear("MOV-404")).not.toThrow();
+  });
+
+  describe("retained-worktree resume plan (MOV-205)", () => {
+    const PLAN = {
+      worktreePath: "/worktrees/moviecal/MOV-1-thing",
+      branch: "agent/MOV-1-thing",
+      repository: "owner/repo",
+      retryAt: "2026-09-14T17:00:00.000Z",
+      unpublishedPaths: ["src/a.ts"],
+    };
+
+    it("holds the issue back before the reset, then reports the resume as due", () => {
+      store.record("MOV-1", { retryAt: PLAN.retryAt, consecutive: 1, resume: PLAN, now: NOW });
+
+      expect(store.deferral("MOV-1", NOW).deferred).toBe(true);
+      expect(store.resumption("MOV-1", NOW)).toBeNull();
+
+      const after = new Date("2026-09-14T17:00:01Z");
+      expect(store.deferral("MOV-1", after).deferred).toBe(false);
+      expect(store.resumption("MOV-1", after)).toMatchObject({
+        issue: "MOV-1",
+        worktreePath: PLAN.worktreePath,
+        branch: PLAN.branch,
+        retryAt: PLAN.retryAt,
+        consecutive: 1,
+      });
+    });
+
+    // Acceptance criterion: "The durable record survives dispatcher restart
+    // and prevents dispatch before the provider reset."
+    it("survives a restart, both the wait and the plan it is waiting to run", () => {
+      store.record("MOV-1", { retryAt: PLAN.retryAt, consecutive: 1, resume: PLAN, now: NOW });
+
+      const restarted = new UsageLimitStore(statePath);
+      expect(restarted.deferral("MOV-1", NOW).deferred).toBe(true);
+      expect(restarted.resumption("MOV-1", new Date("2026-09-14T17:00:01Z"))).toMatchObject({
+        worktreePath: PLAN.worktreePath,
+        branch: PLAN.branch,
+      });
+    });
+
+    // The bound is "exactly one resume", so spending it has to be durable too
+    // -- otherwise a crash between the resume starting and its outcome would
+    // hand the next poll cycle a second one.
+    it("fires exactly once: consumeResume() spends the plan durably and keeps the consecutive count", () => {
+      store.record("MOV-1", { retryAt: PLAN.retryAt, consecutive: 1, resume: PLAN, now: NOW });
+      const after = new Date("2026-09-14T17:00:01Z");
+
+      const consumed = store.consumeResume("MOV-1", { now: after });
+      expect(consumed.retryAt).toBeNull();
+      expect(consumed.consecutive).toBe(1);
+      expect(consumed.resume.consumedAt).toBe(after.toISOString());
+
+      expect(store.resumption("MOV-1", after)).toBeNull();
+      expect(store.consumeResume("MOV-1", { now: after })).toBeNull();
+      expect(new UsageLimitStore(statePath).resumption("MOV-1", after)).toBeNull();
+      // Still counted, so a limit hit by the resumed worker is the *second*
+      // consecutive one and escalates.
+      expect(store.record("MOV-1", { retryAt: null, now: after }).consecutive).toBe(2);
+    });
+
+    it("is never due for a record that carries no plan, however old its retry time", () => {
+      store.record("MOV-1", { retryAt: "2026-09-14T11:00:00.000Z", now: NOW });
+      expect(store.resumption("MOV-1", NOW)).toBeNull();
+      expect(store.consumeResume("MOV-1", { now: NOW })).toBeNull();
+    });
+
+    it("drops a stale plan when the next record() does not carry one", () => {
+      store.record("MOV-1", { retryAt: PLAN.retryAt, consecutive: 1, resume: PLAN, now: NOW });
+      store.record("MOV-1", { retryAt: null, consecutive: 2, now: NOW });
+      expect(store.get("MOV-1").resume).toBeNull();
+      expect(store.resumption("MOV-1", new Date("2026-09-14T18:00:00Z"))).toBeNull();
+    });
   });
 });
