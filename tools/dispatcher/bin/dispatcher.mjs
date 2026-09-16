@@ -74,6 +74,7 @@ import { propagatePriorities, TERMINAL_PRIORITY_STATE_TYPES } from "../src/prior
 import { reconcileParents } from "../src/parent-completion-guard.mjs";
 import { defaultRunner as ghRunner } from "../src/pr-check.mjs";
 import { checkPrState, checkPrObservation, isCheckPrObservation, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
+import { reconcileStartupRecoveries } from "../src/startup-recovery.mjs";
 import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
 import { SignalLedger, StopController, handleAgentSignal } from "../src/agent-signals.mjs";
 
@@ -483,7 +484,8 @@ async function reconcileWorktrees(linearClient, teamKey) {
     worktreeRoot: worktreeRoot(),
     statePath: worktreesStatePath(),
   });
-  for (const c of worktreeManager.reconcileStartup()) {
+  const startupChanges = worktreeManager.reconcileStartup();
+  for (const c of startupChanges) {
     // Two change shapes share this array: a state-entry recovery ({id, from,
     // to, reason}) and an orphan-sweep outcome ({path, branch, from, to,
     // reason}, MOV-199) -- neither has the other's identifying field, so
@@ -496,15 +498,24 @@ async function reconcileWorktrees(linearClient, teamKey) {
 
   let doneStateId;
   let needsHumanDecisionStateId;
+  let readyForAgentStateId;
   if (linearClient && teamKey) {
     try {
       const states = await linearClient.workflowStates(teamKey);
       doneStateId = states.find((s) => s.name === RUN_STATE_NAMES.done)?.id;
       needsHumanDecisionStateId = states.find((s) => s.name === RUN_STATE_NAMES.needsHumanDecision)?.id;
+      readyForAgentStateId = states.find((s) => s.name === RUN_STATE_NAMES.readyForAgent)?.id;
     } catch (err) {
       console.error("Could not resolve Linear workflow states for PR-outcome reconciliation (continuing worktree-only):", err.message);
     }
   }
+
+  await reconcileStartupRecoveries(startupChanges, {
+    worktreeManager,
+    linearClient,
+    readyForAgentStateId,
+    needsHumanDecisionStateId,
+  });
 
   const changes = await reconcileReviewWorktrees(worktreeManager, {
     ghRepo: GITHUB_REPO,
