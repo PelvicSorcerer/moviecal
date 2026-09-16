@@ -16,6 +16,7 @@ import { collectRepositoryContext } from "./repository-context.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "./worker-guard.mjs";
 import { classifyWorkerFailure, NESTED_SANDBOX_CRASH } from "./failure-classification.mjs";
+import { classifyCredentialFailure, CREDENTIAL_FAILURE } from "./credential-failure.mjs";
 import { classifyUsageLimitFailure, decideUsageLimitOutcome } from "./usage-limit.mjs";
 import { admitUsageLimitResume } from "./usage-limit-resume.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
@@ -52,10 +53,18 @@ import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-si
  * @param {(issueIdentifier: string) => object|null} [ctx.readAgentSessionFn] - MOV-158: the prior attempt's persisted session record, used to decide attach-vs-new-linked-session; defaults to "no prior session"
  * @param {(issueIdentifier: string, snapshot: object) => void} [ctx.persistAgentSessionFn] - MOV-158: persist this attempt's session record for the next one; defaults to a no-op
  * @param {number} [ctx.stopPollIntervalMs] - MOV-158: how often to re-read the issue while a worker runs, so a de-delegation/cancellation is honoured at the next safe boundary instead of after a 45-minute worker; 0 (the default) disables the watcher entirely
- * @param {{isOpen: (name: string) => boolean, trip: (name: string, reason: string) => void, clear: (name: string) => void}} [ctx.circuitBreaker] - MOV-180: host-wide failure-signature breaker (circuit-breaker.mjs). While open, `runOnce` lets exactly one issue per batch through as a half-open probe and skips the rest with outcome "circuit-breaker-open"; defaults to a permanently-closed no-op so existing callers are unaffected
+ * @param {{isOpen: (name: string) => boolean, trip: (name: string, reason: string) => void, clear: (name: string) => void}} [ctx.circuitBreaker] - MOV-180/MOV-177: shared, named host-wide failure-signature breaker store (circuit-breaker.mjs), gating two independent breakers -- NESTED_SANDBOX_CRASH and CREDENTIAL_FAILURE. While either is open, `runOnce` lets exactly one issue per batch through as a half-open probe and skips the rest with outcome "circuit-breaker-open" (also applied dynamically within a batch if a breaker trips mid-cycle from an earlier issue's own outcome); defaults to a permanently-closed no-op so existing callers are unaffected
  * @param {{get: Function, record: Function, clear: Function, deferral: Function}} [ctx.usageLimitStore] - MOV-151: per-issue dispatch-time provider usage-limit record (usage-limit.mjs). Defaults to a no-op store, so a caller that does not wire it keeps today's "every non-zero exit escalates" behaviour exactly
  * @returns {Promise<Array<{issue: string, outcome: string, [key: string]: unknown}>>}
  */
+// MOV-180/MOV-177: the host-wide breakers that gate *dispatch* (never the
+// rest of a poll cycle — reconcile/parent/priority-propagation/promote all
+// run as separate calls in bin/dispatcher.mjs's cmdRunOnce that never consult
+// this store). Both share the one CircuitBreakerStore, which is keyed by name
+// for exactly this reason (see circuit-breaker.mjs), so listing them here is
+// the only change needed to gate dispatch on a new breaker.
+const DISPATCH_BREAKERS = [NESTED_SANDBOX_CRASH, CREDENTIAL_FAILURE];
+
 export async function runOnce(issues, ctx) {
   const {
     concurrencyLimit,
@@ -71,7 +80,8 @@ export async function runOnce(issues, ctx) {
   // subsequent run succeeds" possible: a check inside processIssue would also
   // block the very probe attempt that could clear it, since the breaker is
   // only cleared *after* that attempt's worker finishes.
-  const breakerOpenAtStart = circuitBreaker.isOpen(NESTED_SANDBOX_CRASH);
+  const openBreakersAtStart = DISPATCH_BREAKERS.filter((name) => circuitBreaker.isOpen(name));
+  const breakerOpenAtStart = openBreakersAtStart.length > 0;
   let probeClaimed = false;
 
   // MOV-138: bound how many `processIssue` calls run concurrently within this
@@ -109,12 +119,29 @@ export async function runOnce(issues, ctx) {
         // entrant to reach this point claims the probe slot, regardless of
         // how many issues are in the batch.
         if (probeClaimed) {
-          results[index] = { issue: issue.identifier, outcome: "circuit-breaker-open", reason: NESTED_SANDBOX_CRASH };
+          results[index] = { issue: issue.identifier, outcome: "circuit-breaker-open", reason: openBreakersAtStart.join(", ") };
           return;
         }
         probeClaimed = true;
       }
       await acquire();
+      // MOV-177: a breaker that was closed when this batch started can still
+      // trip mid-batch, from an earlier issue in this very same cycle
+      // finishing its worker and hitting a host-wide failure signature.
+      // Without this recheck, a dead credential burns through the rest of
+      // the batch one issue at a time — each later issue's own preflight
+      // concurrency check passes again the moment the prior one is marked
+      // "failed" — which is exactly the failure mode this issue exists to
+      // close. Only relevant when the breaker was *not* already open at the
+      // start; that case is the half-open probe above.
+      if (!breakerOpenAtStart) {
+        const trippedDuringBatch = DISPATCH_BREAKERS.filter((name) => circuitBreaker.isOpen(name));
+        if (trippedDuringBatch.length > 0) {
+          results[index] = { issue: issue.identifier, outcome: "circuit-breaker-open", reason: trippedDuringBatch.join(", ") };
+          release();
+          return;
+        }
+      }
       try {
         results[index] = await processIssue(issue, ctx);
       } finally {
@@ -856,6 +883,40 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
       return { issue: issue.identifier, outcome: "nested-sandbox-crash", exitCode: spawnResult.exitCode };
     }
 
+    // MOV-177: the dispatcher's own worker credential (`CLAUDE_CODE_OAUTH_TOKEN`
+    // today) has gone bad — a 401/`authentication_failed` signature, distinct
+    // from both the nested-sandbox-crash check above and the provider-usage-limit
+    // check below. Like the nested-sandbox crash, this is dispatcher-wide, not
+    // issue-specific: every worker fails identically until a human regenerates
+    // the credential. Requeue rather than escalate, and trip the breaker so the
+    // dispatcher stops burning through the rest of the Ready for Agent queue one
+    // issue at a time on the same dead credential.
+    const credentialFailure = classifyCredentialFailure({ exitCode: spawnResult.exitCode, logTail: tail });
+    if (credentialFailure) {
+      circuitBreaker.trip(
+        CREDENTIAL_FAILURE,
+        `worker exited ${spawnResult.exitCode} with a credential-failure signature: ${credentialFailure.evidence}`,
+      );
+      worktreeManager.markStatus(issue.identifier, "failed");
+      await publisher.publish("error", {
+        stateId: stateIds.readyForAgent,
+        summary: "Dispatcher credential is invalid or expired. Automatic dispatch is paused until this is fixed.",
+        headline: "**Dispatcher credential is invalid or expired.** Automatic dispatch is paused until this is fixed.",
+        sections: [
+          `This run failed before it could do any real work: the worker's provider credential was rejected (\`${credentialFailure.evidence}\`). This is dispatcher-wide, not specific to this issue — every worker will fail identically until the credential (\`CLAUDE_CODE_OAUTH_TOKEN\` today) is regenerated.`,
+          "",
+          "This issue has been moved back to `Ready for Agent` rather than `Needs Human Decision` — it did nothing wrong, the credential did. The dispatcher has stopped starting any further issue until a subsequent dispatch attempt succeeds, which is treated as confirmation the credential is healthy again. See docs/operators/local-execution.md §Security model.",
+          "",
+          "```",
+          tail,
+          "```",
+          "",
+          `Full run log: \`${logDir}\``,
+        ],
+      });
+      return { issue: issue.identifier, outcome: "credential-failure", exitCode: spawnResult.exitCode };
+    }
+
     // MOV-151: a dispatch-time provider usage/rate limit. The worker never got
     // a session, so nothing was implemented, nothing was pushed, and no PR
     // exists — the failure says something about the provider's quota clock and
@@ -1103,10 +1164,13 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     };
   }
 
-  // MOV-180: a worker reaching this point ran to completion under the real
-  // sandbox without hitting the nested-sandbox-crash signature — the signal
-  // this breaker uses to close again, mirroring the shape named in the issue.
-  circuitBreaker.clear(NESTED_SANDBOX_CRASH);
+  // MOV-180/MOV-177: a worker reaching this point ran to completion — proof
+  // that neither host-wide condition either breaker guards against (a nested
+  // sandbox crash, an invalid/expired dispatcher credential) is still
+  // happening, since either one would have short-circuited above before a
+  // clean exit was possible. Clearing an already-closed breaker is a no-op
+  // (see circuit-breaker.mjs), so this is safe to run unconditionally.
+  for (const name of DISPATCH_BREAKERS) circuitBreaker.clear(name);
   // MOV-151: and the provider granted this issue a session that ran to a
   // clean exit, so whatever usage-limit history it had is no longer
   // "consecutive". Nothing to forget in the overwhelmingly common case.

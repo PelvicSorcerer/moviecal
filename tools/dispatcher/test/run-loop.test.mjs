@@ -6,6 +6,8 @@ import { runOnce } from "../src/run-loop.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { AgentSessionBridge } from "../src/agent-session.mjs";
 import { NESTED_SANDBOX_CRASH } from "../src/failure-classification.mjs";
+import { CREDENTIAL_FAILURE } from "../src/credential-failure.mjs";
+import { UsageLimitStore } from "../src/usage-limit.mjs";
 
 const STATE_IDS = {
   blocked: "state-blocked",
@@ -1288,7 +1290,9 @@ describe("runOnce", () => {
       const [result] = await runOnce([ISSUE], ctx);
 
       expect(result.outcome).toBe("in-review");
-      expect(circuitBreaker.calls.clear).toEqual([NESTED_SANDBOX_CRASH]);
+      // MOV-177: a clean worker run clears every dispatch breaker, not just
+      // the nested-sandbox one — see run-loop.mjs's DISPATCH_BREAKERS list.
+      expect(circuitBreaker.calls.clear).toEqual([NESTED_SANDBOX_CRASH, CREDENTIAL_FAILURE]);
       expect(circuitBreaker.isOpen(NESTED_SANDBOX_CRASH)).toBe(false);
     });
 
@@ -1315,6 +1319,214 @@ describe("runOnce", () => {
       const [result] = await runOnce([ISSUE], ctx);
 
       expect(result.outcome).toBe("in-review");
+    });
+  });
+
+  describe("credential-failure detection and circuit breaker (MOV-177)", () => {
+    /** A minimal fake CircuitBreakerStore that records every call, in-memory only. */
+    function fakeCircuitBreaker({ initiallyOpen = false } = {}) {
+      let open = initiallyOpen;
+      return {
+        calls: { isOpen: [], trip: [], clear: [] },
+        isOpen(name) {
+          this.calls.isOpen.push(name);
+          return open;
+        },
+        trip(name, reason) {
+          this.calls.trip.push({ name, reason });
+          open = true;
+        },
+        clear(name) {
+          this.calls.clear.push(name);
+          open = false;
+        },
+      };
+    }
+
+    let tmpLogRoot;
+    beforeEach(() => {
+      tmpLogRoot = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-run-loop-test-"));
+    });
+    afterEach(() => {
+      fs.rmSync(tmpLogRoot, { recursive: true, force: true });
+    });
+
+    /** Writes a real stdout.log containing the observed production credential-failure signature. */
+    function writeCredentialFailureLog(logDir) {
+      fs.mkdirSync(logDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(logDir, "stdout.log"),
+        "401 OAuth access token has expired. Re-authenticate to continue.\n",
+      );
+    }
+
+    /**
+     * A worktree manager whose activeCount() tracks status the way the real
+     * WorktreeManager does (`status === "active"` only) rather than "ever
+     * created" — needed to prove the mid-batch breaker recheck below, not
+     * preflight's ordinary concurrency gate, is what stops issueB: once
+     * issueA is marked "failed" its slot frees up again, exactly as it would
+     * in production, so without the breaker fix issueB's own preflight would
+     * pass a beat later and it would get dispatched anyway.
+     */
+    function concurrencyAwareWorktreeManager() {
+      const entries = new Map();
+      return {
+        createCalls: [],
+        statusCalls: [],
+        activeCount: () => [...entries.values()].filter((e) => e.status === "active").length,
+        isPathFree: (p) => ![...entries.values()].some((e) => e.path === p),
+        isPathFreeForIssue: (p) => ![...entries.values()].some((e) => e.path === p),
+        create(args) {
+          const worktreePath = `/fake/worktrees/${args.name}`;
+          entries.set(args.id, { path: worktreePath, status: "active" });
+          this.createCalls.push(args);
+          return { path: worktreePath, ...args };
+        },
+        markStatus(id, status, extra = {}) {
+          this.statusCalls.push({ id, status, ...extra });
+          entries.set(id, { ...(entries.get(id) || {}), status });
+        },
+      };
+    }
+
+    it("produces the distinct 'credential is invalid or expired' comment, not the generic failure comment, and requeues to Ready for Agent", async () => {
+      const circuitBreaker = fakeCircuitBreaker();
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      writeCredentialFailureLog(logDir);
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        circuitBreaker,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result).toMatchObject({ outcome: "credential-failure", exitCode: 1 });
+      expect(circuitBreaker.calls.trip).toEqual([
+        { name: CREDENTIAL_FAILURE, reason: expect.stringContaining("OAuth access token has expired") },
+      ]);
+
+      const lastMove = ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1);
+      expect(lastMove.stateId).toBe("state-ready-for-agent");
+
+      const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
+      expect(lastComment.body).toContain("**Dispatcher credential is invalid or expired.**");
+      expect(lastComment.body).toContain("Automatic dispatch is paused until this is fixed.");
+      expect(lastComment.body).not.toContain("Worker exited with code");
+    });
+
+    it("does not trip the breaker for an ordinary failure with no auth-failure signature (not a false positive)", async () => {
+      const circuitBreaker = fakeCircuitBreaker();
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      fs.mkdirSync(logDir, { recursive: true });
+      fs.writeFileSync(path.join(logDir, "stdout.log"), "TypeError: cannot read property of undefined\n");
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        circuitBreaker,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("worker-failed");
+      expect(circuitBreaker.calls.trip).toEqual([]);
+      const lastMove = ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1);
+      expect(lastMove.stateId).toBe("state-needs-human");
+    });
+
+    it("leaves a provider usage-limit failure completely unaffected — distinct, unrelated failure class (regression guard)", async () => {
+      const circuitBreaker = fakeCircuitBreaker();
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      fs.mkdirSync(logDir, { recursive: true });
+      const resetEpochSeconds = Math.floor((Date.now() + 3600_000) / 1000);
+      fs.writeFileSync(path.join(logDir, "stdout.log"), `Claude usage limit reached · reset|${resetEpochSeconds}\n`);
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        circuitBreaker,
+        usageLimitStore: new UsageLimitStore(path.join(tmpLogRoot, "usage-limits.json")),
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("usage-limit-deferred");
+      expect(circuitBreaker.calls.trip).toEqual([]);
+    });
+
+    it("does not dispatch a further issue once the breaker is already open at the start of a cycle — no worktree, no worker, no Linear write", async () => {
+      const circuitBreaker = fakeCircuitBreaker({ initiallyOpen: true });
+      const ctx = baseCtx({ circuitBreaker, worktreeManager: statefulWorktreeManager() });
+      const issueA = { ...ISSUE, id: "id-a", identifier: "MOV-a" };
+      const issueB = { ...ISSUE, id: "id-b", identifier: "MOV-b" };
+
+      const results = await runOnce([issueA, issueB], ctx);
+
+      // Exactly one issue (the first) is let through as the half-open probe;
+      // the rest are skipped outright.
+      const skipped = results.filter((r) => r.outcome === "circuit-breaker-open");
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0].issue).toBe("MOV-b");
+      expect(ctx.worktreeManager.createCalls).toHaveLength(1);
+      expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+      expect(ctx.linearClient.calls.some((c) => c.issueId === "id-b")).toBe(false);
+    });
+
+    it("stops claiming further issues for the rest of the SAME cycle once the breaker trips mid-batch (MOV-177)", async () => {
+      // The breaker is closed when this batch starts — issueA is the one whose
+      // worker actually trips it. Concurrency is 1, matching production
+      // (DEFAULT_CONCURRENCY): issueB's own preflight concurrency check would
+      // otherwise pass again the instant issueA is marked "failed", which is
+      // exactly the "burn through the whole queue one issue at a time" failure
+      // mode this issue exists to close.
+      const circuitBreaker = fakeCircuitBreaker();
+      const logDir = path.join(tmpLogRoot, "MOV-a-fix-the-thing");
+      writeCredentialFailureLog(logDir);
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        circuitBreaker,
+        concurrencyLimit: 1,
+        worktreeManager: concurrencyAwareWorktreeManager(),
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+      });
+      const issueA = { ...ISSUE, id: "id-a", identifier: "MOV-a" };
+      const issueB = { ...ISSUE, id: "id-b", identifier: "MOV-b" };
+
+      const results = await runOnce([issueA, issueB], ctx);
+
+      expect(results[0]).toMatchObject({ issue: "MOV-a", outcome: "credential-failure" });
+      expect(results[1]).toMatchObject({ issue: "MOV-b", outcome: "circuit-breaker-open" });
+      // issueB never got a worktree or a worker — it was never claimed.
+      expect(ctx.worktreeManager.createCalls).toHaveLength(1);
+      expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+      expect(ctx.linearClient.calls.some((c) => c.issueId === "id-b")).toBe(false);
+    });
+
+    it("closes the breaker once the half-open probe attempt succeeds", async () => {
+      const circuitBreaker = fakeCircuitBreaker({ initiallyOpen: true });
+      const ctx = baseCtx({ circuitBreaker });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("in-review");
+      expect(circuitBreaker.calls.clear).toContain(CREDENTIAL_FAILURE);
+      expect(circuitBreaker.isOpen(CREDENTIAL_FAILURE)).toBe(false);
+    });
+
+    it("re-trips (stays open) when the half-open probe hits the signature again", async () => {
+      const circuitBreaker = fakeCircuitBreaker({ initiallyOpen: true });
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      writeCredentialFailureLog(logDir);
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        circuitBreaker,
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("credential-failure");
+      expect(circuitBreaker.isOpen(CREDENTIAL_FAILURE)).toBe(true);
     });
   });
 

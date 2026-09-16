@@ -40,6 +40,8 @@ import { branchName, worktreeName } from "../src/preflight.mjs";
 import { admitRepair } from "../src/repair-policy.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
 import { UsageLimitStore } from "../src/usage-limit.mjs";
+import { CircuitBreakerStore } from "../src/circuit-breaker.mjs";
+import { CREDENTIAL_FAILURE } from "../src/credential-failure.mjs";
 
 // buildRunContext calls checkIosRunnerOnline(), which shells out to `gh` for
 // a live network call. Nothing in these tests wants that: the fixtures below
@@ -449,6 +451,132 @@ describe("dependency-gating -> promotion -> dispatch, one continuous run (MOV-19
     // fourth cycle would be an ordinary dispatch again.
     expect(ctx.usageLimitStore.resumption("MOV-RESUME", ctx.now())).toBeNull();
     expect(ctx.usageLimitStore.get("MOV-RESUME")).toBeNull();
+  });
+});
+
+describe("credential-failure circuit breaker, one continuous run across two poll cycles (MOV-177)", () => {
+  beforeEach(() => {
+    fs.rmSync(TMP_ROOT, { recursive: true, force: true });
+  });
+
+  /**
+   * A worktree manager that tracks status the way the real WorktreeManager
+   * does (activeCount() only counts "active" entries, and a same-issue
+   * terminal-status worktree is reclaimed rather than blocking a requeued
+   * issue's own path -- the MOV-181 reclaim behavior). Needed so cycle 2's
+   * redispatch of the requeued issue behaves the way it would against the
+   * real WorktreeManager: without status tracking, a plain "ever created"
+   * fake either wrongly blocks the requeued issue's own path forever, or
+   * wrongly frees a concurrency slot no real preflight would free.
+   */
+  function reclaimingWorktreeManager() {
+    const entries = new Map();
+    return {
+      createCalls: [],
+      statusCalls: [],
+      activeCount: () => [...entries.values()].filter((e) => e.status === "active").length,
+      isPathFree: (p) => ![...entries.values()].some((e) => e.path === p),
+      isPathFreeForIssue(p, issueId) {
+        const occupant = [...entries.entries()].find(([, e]) => e.path === p);
+        if (!occupant) return true;
+        const [occupantId, entry] = occupant;
+        if (occupantId === issueId && entry.status !== "active") {
+          entries.delete(occupantId);
+          return true;
+        }
+        return false;
+      },
+      create(args) {
+        const worktreePath = `${TMP_ROOT}/fake-worktrees/${args.name}`;
+        entries.set(args.id, { path: worktreePath, status: "active" });
+        this.createCalls.push(args);
+        return { path: worktreePath, ...args };
+      },
+      markStatus(id, status, extra = {}) {
+        this.statusCalls.push({ id, status, ...extra });
+        entries.set(id, { ...(entries.get(id) || {}), status });
+      },
+    };
+  }
+
+  it("trips the persisted breaker on the first credential failure, requeues it, leaves a second eligible issue unclaimed, keeps the promote pass running, and closes on a successful probe", async () => {
+    // If credential-failure.mjs's classifier or run-context.mjs's real
+    // CircuitBreakerStore wiring is ever removed, `firstResult.outcome` below
+    // reads "worker-failed" (escalated to Needs Human Decision) instead of
+    // "credential-failure", and the breaker never persists -- this is the
+    // assertion that catches both regressions at once.
+    const issueA = {
+      id: "id-cred-a", identifier: "MOV-CRED-A", title: "Hits a bad credential",
+      description: READY_SECTIONS, url: "https://linear.app/moviecal/issue/MOV-CRED-A",
+      project: null, labels: ["execution:mac"], delegate: DELEGATE, blockedByIds: [],
+    };
+    const issueB = {
+      id: "id-cred-b", identifier: "MOV-CRED-B", title: "A second eligible issue",
+      description: READY_SECTIONS, url: "https://linear.app/moviecal/issue/MOV-CRED-B",
+      project: null, labels: ["execution:mac"], delegate: DELEGATE, blockedByIds: [],
+    };
+    const linearClient = fakeLinearClient({ "id-cred-a": issueA, "id-cred-b": issueB });
+    const ctx = {
+      ...(await buildRunContext(linearClient, TEAM_KEY, [issueA, issueB])),
+      ...fakeLeaves({ worktreeManager: reclaimingWorktreeManager() }),
+    };
+
+    // Cycle 1: the worker never gets a session -- the provider credential is
+    // rejected before any real work happens.
+    const nameA = worktreeName(issueA.identifier, issueA.title);
+    const logDirA = path.join(ctx.logRoot, nameA);
+    fs.mkdirSync(logDirA, { recursive: true });
+    fs.writeFileSync(
+      path.join(logDirA, "stdout.log"),
+      "401 OAuth access token has expired. Re-authenticate to continue.\n",
+    );
+    ctx.spawnWorkerFn = vi.fn(async () => ({ exitCode: 1, logDir: logDirA }));
+
+    const [firstResult] = await runOnce([issueA], ctx);
+
+    expect(firstResult.outcome).toBe("credential-failure");
+    const lastMove = linearClient.calls.filter((c) => c.type === "moveToState").at(-1);
+    expect(lastMove).toMatchObject({ issueId: "id-cred-a", stateId: "state-ready" });
+    const lastComment = linearClient.calls.filter((c) => c.type === "addComment").at(-1);
+    expect(lastComment.body).toContain("**Dispatcher credential is invalid or expired.**");
+
+    // The breaker is real, persisted state (backed by the temp path
+    // config.mjs is mocked to above) -- a fresh store reading the same
+    // on-disk file, exactly like a restarted daemon would, sees it open.
+    expect(new CircuitBreakerStore(`${TMP_ROOT}/circuit-breaker.json`).isOpen(CREDENTIAL_FAILURE)).toBe(true);
+
+    // Regression guard: the promote pass is a completely separate call
+    // (bin/dispatcher.mjs's cmdRunOnce runs it before ever touching dispatch)
+    // that never consults the breaker at all -- it must keep working
+    // normally while dispatch is paused, not silently no-op.
+    const backlogIssue = {
+      id: "id-backlog", identifier: "MOV-BACKLOG", stateName: "Backlog",
+      description: READY_SECTIONS, labels: [], blockedByIds: [], inverseRelations: [], recentComments: [],
+    };
+    const promotion = await promoteEligible([backlogIssue], {
+      linearClient,
+      readyForAgentStateId: "state-ready",
+      isBlockerSatisfied: buildIsIssueSatisfied([backlogIssue]),
+    });
+    expect(promotion).toEqual([{ issue: "MOV-BACKLOG", promoted: true, reason: expect.any(String) }]);
+
+    // Cycle 2: issueA (requeued) and issueB (a second, independently eligible
+    // issue) are both in "Ready for Agent". The breaker is open at the start
+    // of this cycle, so exactly one issue is let through as the half-open
+    // probe -- and this time the worker actually runs and succeeds.
+    ctx.spawnWorkerFn = vi.fn(async () => ({ exitCode: 0, logDir: `${TMP_ROOT}/logs/clean` }));
+
+    const [probeResult, secondResult] = await runOnce([issueA, issueB], ctx);
+
+    expect(probeResult).toMatchObject({ issue: "MOV-CRED-A", outcome: "in-review" });
+    expect(secondResult).toMatchObject({ issue: "MOV-CRED-B", outcome: "circuit-breaker-open" });
+    // issueB was never claimed: no worktree, no worker, no Linear write.
+    expect(ctx.worktreeManager.createCalls.map((c) => c.id)).toEqual(["MOV-CRED-A", "MOV-CRED-A"]);
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+    expect(linearClient.calls.some((c) => c.issueId === "id-cred-b")).toBe(false);
+
+    // The breaker closed automatically -- no human touched it.
+    expect(new CircuitBreakerStore(`${TMP_ROOT}/circuit-breaker.json`).isOpen(CREDENTIAL_FAILURE)).toBe(false);
   });
 });
 
