@@ -1,39 +1,38 @@
 # MOV-141: Linear entitlement and hybrid-agent capability findings
 
-**Validated 2026-09-10.** This record closes the feasibility gate created by
-`MOV-140`. A capability being plan-eligible is not the same as it being ready
-to use: the cloud lane, Loops, and custom Agent Sessions remain disabled until
-their implementation issues satisfy the prerequisites below.
+**Validated 2026-09-10; retained as dated evidence.** This record closed the
+feasibility gate created by `MOV-140`. It is not the current operating model:
+use `docs/governance/hybrid-execution-architecture.md` for that.
 
 > **Plan findings superseded 2026-09-16.** The workspace has since been
 > upgraded and Loops are available. Every row below that turns on the **Basic**
 > plan — the Loops rows in particular — records what was true on the validation
-> date and is no longer current; it is kept unedited as the evidence `MOV-159`
-> reasoned from, not as a live statement of entitlement. The Agent Session
-> findings are **not** affected: that blocker is app configuration, not plan,
-> and a re-probe would still return `agent sessions disabled` until the
-> receiver approved in `MOV-159` exists. See
-> `docs/governance/mov-159-agent-session-receiver-decision.md`.
+> date and is no longer current; it is the evidence `MOV-159` reasoned from,
+> not a live statement of entitlement. The receiver and stream were later
+> implemented under `MOV-166` and its review-sized splits, but Agent Sessions
+> remain optional enrichment rather than a local-dispatch dependency. Loops
+> are now scoped by `MOV-156`/`MOV-220`; Coding Sessions remain separately
+> deferred in `Icebox`.
 
 No plan change, AI-credit purchase, Loop run, Coding Session, production
 secret, deployment, or release was used for this validation.
 
-## Executive decision
+## Decision at the validation date
 
 - Keep the **Mac lane and 30-second Linear polling as the complete operational
   fallback**. The existing app-actor GraphQL path is live and sufficient for
   route/delegate discovery, issue state, comments, and PR/check reporting.
-- The current **Basic** plan is eligible for Coding Sessions, but the moviecal
+- The then-current **Basic** plan was eligible for Coding Sessions, but the moviecal
   coding environment has not been verified and the exact AI-credit balance is
   not exposed by the public API. `MOV-153` remains the configuration and
   disposable-PR gate.
-- **Loops are not available on the current plan.** They require Business plus
-  AI credits. Do not upgrade for `MOV-156` until the cost is explicitly
-  approved.
-- The custom `moviecal-dispatcher` app is installed and delegable, but **Agent
-  Sessions are disabled** for it. The Developer Preview lifecycle must not sit
-  on the critical path. Enabling it would require an HTTPS webhook receiver;
-  the local Mac must not expose an inbound listener.
+- **Loops were not available on the validated Basic plan.** This was
+  superseded by the later workspace upgrade; `MOV-156` now owns a capped,
+  no-Coding-Session intake experiment.
+- The custom `moviecal-dispatcher` app was installed and delegable, but
+  **Agent Sessions were disabled** for it. The durable conclusion remains:
+  the preview lifecycle may not sit on the critical path, and the local Mac
+  must not expose an inbound listener.
 - Linear documents follow-up and review-repair actions for Coding Sessions,
   but no same-branch cloud repair was run here because doing so would consume
   AI credits. Until `MOV-153` proves that path, repair stays on the original
@@ -71,9 +70,9 @@ authority for the current state.
 | Custom Agent Session prompts, stop signal, stale recovery, PR link | **Fallback required** | These cannot be tested without a session. The preview contract says prompt/stop arrive as Agent Session events, stale sessions recover on a new activity, and PR URLs use session external URLs. None is a current moviecal dependency. Removing delegation or canceling/changing the issue remains the polling-based stop control at the dispatcher's safe re-read boundary. |
 | Webhooks replacing polling | **Unsupported as a replacement** | Agent Session UI requires the OAuth app's Agent Session event category and a webhook receiver. Polling cannot receive Agent Activity prompts, but it remains the full recovery path for the durable issue/PR lifecycle. |
 
-## Plan and AI-credit cost
+## Plan and AI-credit cost at the validation date
 
-The live plan is **Basic**, not Free. Linear's published annual pricing on the
+The live plan on 2026-09-10 was **Basic**, not Free. Linear's published annual pricing on the
 validation date is $10 per user/month for Basic and $16 per user/month for
 Business. Enabling Loops would therefore require a Business plan change; the
 checkout total and tax remain authoritative. No upgrade is authorized by
@@ -97,7 +96,8 @@ AI credits are a separate prepaid, workspace-level USD balance:
   eligibility window has passed, and the live workspace reports the AI add-on
   disabled.
 
-Safe pilot rule: if `MOV-153` is approved, verify the balance in the
+Safe pilot rule preserved for the deferred cloud option: if `MOV-153` is
+explicitly promoted out of `Icebox`, verify the balance in the
 authenticated UI, buy at most one $10 ad-hoc top-up, leave automatic reload
 off, set a $10 workspace/user limit, run one disposable docs-only session, and
 record its model-token, runtime, and total cost before any second session. If
@@ -106,7 +106,7 @@ fixtures and disable Coding Session permission during that test.
 
 ## Webhook contract and fallback boundary
 
-To enable custom Agent Sessions, the OAuth application must subscribe to
+At validation time, enabling custom Agent Sessions required the OAuth application to subscribe to
 **Agent Session events** and supply a reachable HTTPS webhook endpoint. Linear
 requires the receiver to respond within five seconds and the agent to emit its
 first activity or update its external URL within ten seconds. Follow-up prompts
@@ -114,23 +114,19 @@ arrive as `prompted` events; the `stop` signal forbids further agent actions
 after it is received. Linear marks an inactive session stale after 30 minutes,
 and a later activity can recover it.
 
-This cannot point directly at the local Mac. If `MOV-158` still justifies Agent
-Sessions, it needs a narrow signed relay or another hosted receiver, with event
-signature validation, idempotency, short retention, and polling recovery. That
-infrastructure is an optional richer interaction layer, not a prerequisite for
-local dispatch. `MOV-159` was the decision gate for whether its latency and
-operational value justify the added attack surface; it **approved** a signed
-Vercel receiver with outbound SSE delivery to the Mac on 2026-09-16 and
-authorized `MOV-166` to build it. The relay stays non-authoritative and polling
-stays the permanent floor. See
+This cannot point directly at the local Mac. `MOV-159` subsequently approved
+a narrow signed Vercel receiver with outbound SSE delivery to the Mac, and
+`MOV-166` plus its splits implemented that path. It remains optional:
+signature validation, idempotency, short retention, and polling recovery keep
+the relay non-authoritative and polling the permanent floor. See
 `docs/governance/mov-159-agent-session-receiver-decision.md`.
 
 ### What MOV-158 did with this finding
 
 `MOV-158` built the dispatcher-side half and stopped exactly at the boundary
-above. It added **no** listener, receiver, relay, port, webhook secret, plan
-change, or paid-credit dependency — `tools/dispatcher/test/dispatcher-wiring.test.mjs`
-asserts structurally that none has since appeared. Concretely:
+above. At that stage it added **no** listener, receiver, relay, port, webhook
+secret, plan change, or paid-credit dependency. The later receiver work is
+described in `docs/operators/local-execution.md`. Concretely, MOV-158 supplied:
 
 - One semantic lifecycle, serialized once, published as an Agent Activity when
   the capability is available and as an app-actor comment when it is not. The
@@ -148,10 +144,9 @@ asserts structurally that none has since appeared. Concretely:
   honoured at explicit safe interruption boundaries. This is the half that
   works today with no entitlement.
 
-The mutation shapes in `linear-client.mjs` remain **unverified against a live
-session**. `MOV-166` owns live enablement and validation, and is the issue that
-would first exercise them for real. See
-`docs/operators/local-execution.md` §Reporting back to Linear and §Stop controls.
+Subsequent implementation and operating status belongs to `MOV-166` and
+`docs/operators/local-execution.md`; this dated record does not override
+either.
 
 ## Sources and reproducibility
 

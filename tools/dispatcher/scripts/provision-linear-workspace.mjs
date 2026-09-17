@@ -233,16 +233,14 @@ async function main() {
   await ensureProject("Calendar Feed", webAppInit);
   await ensureProject("Platform & Infrastructure", webAppInit);
   const iosProject = await ensureProject("iOS Companion App", iosInit);
-  const localStabilizationProject = await ensureProject(
-    "Local development workflow stabilization and governance",
-    automationInit,
-  );
-  const hybridProject = await ensureProject("Hybrid Linear cloud + Mac workflow", automationInit);
+  const localDeliveryProject = await ensureProject("Autonomous local-agent delivery", automationInit);
+  const deferredCloudProject = await ensureProject("Deferred Linear cloud execution option", automationInit);
 
-  // The superseded "Developer Governance & Agent Infrastructure" project is
-  // deliberately not provisioned, updated, deleted, or relinked here. It is a
-  // live-workspace audit artifact, not part of the desired active topology.
-  // Issue reassignment is likewise a migration operation, never provisioning.
+  // The canceled "Developer Governance & Agent Infrastructure" project and
+  // the completed local-stabilization / hybrid-foundation projects are
+  // deliberately not provisioned, updated, deleted, or relinked here. They are
+  // live-workspace audit artifacts, not desired active topology. Issue
+  // reassignment is likewise a migration operation, never provisioning.
 
   // --- Project milestones ---
   async function ensureMilestones(project, names) {
@@ -268,21 +266,13 @@ async function main() {
   }
 
   await ensureMilestones(iosProject, ["Skeleton", "Auth + API client", "Navigation shell"]);
-  await ensureMilestones(localStabilizationProject, [
-    "Initial local workflow foundation",
-    "Linear actor authorization",
-    "Dispatcher governance and execution controls",
-    "Dispatcher reliability, recovery, safety, and regression coverage",
-    "Stabilization exit & Mac-lane handoff",
+  await ensureMilestones(localDeliveryProject, [
+    "Automated intake & local kickoff",
+    "Local acceptance & controlled autonomy",
   ]);
-  await ensureMilestones(hybridProject, [
-    "Hybrid workflow architecture & feasibility",
-    "Hybrid routing & Mac-lane foundations",
-    "CI & review reaction",
-    "Cloud environment & execution kickoff",
-    "Cloud execution pilots",
-    "Agent Session integration",
-    "Hybrid acceptance & controlled autonomy",
+  await ensureMilestones(deferredCloudProject, [
+    "Cloud environment & kickoff",
+    "Cloud pilots & eligibility",
   ]);
 
   log("\nDone. Re-run this script any time — it's idempotent.");

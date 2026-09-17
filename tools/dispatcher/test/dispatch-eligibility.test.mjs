@@ -88,18 +88,18 @@ describe("evaluateLocalDispatch", () => {
     });
   });
 
-  it("skips a cloud-routed issue without writing anything, even when delegated here", () => {
+  it("escalates a cloud route that crosses an active product-project boundary", () => {
     const issue = eligibleIssue({ project: "Calendar Feed", labels: ["execution:cloud"] });
     expect(evaluateLocalDispatch(issue, { expectedDelegate: EXPECTED })).toMatchObject({
-      action: "skip",
+      action: "escalate",
       eligible: false,
       route: "cloud",
-      reason: expect.stringMatching(/local Mac adapter does not execute/),
+      reason: expect.stringMatching(/cannot use execution:cloud/),
     });
   });
 
-  it("accepts an explicitly cloud-routed issue in the mixed hybrid project", () => {
-    const issue = eligibleIssue({ project: "Hybrid Linear cloud + Mac workflow", labels: ["execution:cloud"] });
+  it("skips an explicitly cloud-routed issue in the deferred cloud project", () => {
+    const issue = eligibleIssue({ project: "Deferred Linear cloud execution option", labels: ["execution:cloud"] });
     expect(evaluateLocalDispatch(issue, { expectedDelegate: EXPECTED })).toMatchObject({
       action: "skip",
       eligible: false,
@@ -249,7 +249,11 @@ describe("confirmStillClaimable", () => {
 describe("adapter selection", () => {
   const issues = [
     eligibleIssue({ identifier: "MOV-mac" }),
-    eligibleIssue({ identifier: "MOV-cloud", project: "Calendar Feed", labels: ["execution:cloud"] }),
+    eligibleIssue({
+      identifier: "MOV-cloud",
+      project: "Deferred Linear cloud execution option",
+      labels: ["execution:cloud"],
+    }),
     eligibleIssue({ identifier: "MOV-none", labels: ["type:coordination", "execution:none"] }),
     eligibleIssue({ identifier: "MOV-unrouted", labels: [] }),
     eligibleIssue({ identifier: "MOV-other-delegate", delegate: HUMAN }),
@@ -272,7 +276,9 @@ describe("adapter selection", () => {
   it("does not let an un-materialized cloud inference reach the cloud lane", () => {
     // Inference says "cloud"; no label was ever applied. The label is the only
     // routing authority, so this issue executes nowhere until a human acts.
-    const inferredOnly = [eligibleIssue({ identifier: "MOV-inferred", project: "Calendar Feed", labels: [] })];
+    const inferredOnly = [
+      eligibleIssue({ identifier: "MOV-inferred", project: "Deferred Linear cloud execution option", labels: [] }),
+    ];
     expect(selectCloudCandidates(inferredOnly)).toEqual([]);
     expect(selectLocalCandidates(inferredOnly, { expectedDelegate: EXPECTED })).toEqual([]);
   });

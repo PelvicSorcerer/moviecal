@@ -562,11 +562,14 @@ describe("runOnce", () => {
   describe("route + delegation gate (MOV-143)", () => {
     /** Every way an issue can fail to be this dispatcher's to claim, and stay untouched. */
     const notOurs = [
-      ["cloud-routed", { project: "Calendar Feed", labels: ["execution:cloud"] }],
+      ["cloud-routed", { project: "Deferred Linear cloud execution option", labels: ["execution:cloud"] }],
       ["coordination-only", { labels: ["type:coordination", "execution:none"] }],
       ["delegated to a human", { delegate: { id: "user-adam", name: "Adam", displayName: "Adam" } }],
       ["not delegated at all", { delegate: null }],
-      ["cloud-routed AND delegated elsewhere", { project: "Calendar Feed", labels: ["execution:cloud"], delegate: null }],
+      [
+        "cloud-routed AND delegated elsewhere",
+        { project: "Deferred Linear cloud execution option", labels: ["execution:cloud"], delegate: null },
+      ],
     ];
 
     it.each(notOurs)("skips a %s issue with no worktree, no worker, and no Linear write", async (_label, patch) => {
@@ -664,7 +667,7 @@ describe("runOnce", () => {
         const { ctx } = ctxWithRefresh({
           ...ISSUE,
           stateName: "Ready for Agent",
-          project: "Calendar Feed",
+          project: "Deferred Linear cloud execution option",
           labels: ["execution:cloud"],
         });
 
@@ -782,7 +785,11 @@ describe("runOnce", () => {
 
       it("stays a no-op across repeated cycles for an ineligible issue — no comment spam", async () => {
         const ctx = baseCtx({ worktreeManager: statefulWorktreeManager() });
-        const issue = { ...ISSUE, project: "Calendar Feed", labels: ["execution:cloud"] };
+        const issue = {
+          ...ISSUE,
+          project: "Deferred Linear cloud execution option",
+          labels: ["execution:cloud"],
+        };
 
         const outcomes = [];
         for (let cycle = 0; cycle < 3; cycle += 1) {
