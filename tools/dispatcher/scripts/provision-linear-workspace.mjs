@@ -10,8 +10,7 @@
 // - Custom views: the saved-view filterData JSON shape isn't documented in
 //   the public API/schema, and getting it wrong risks shipping a saved view
 //   that looks legitimate but silently returns nothing. Build the target
-//   views by hand in the Linear UI instead using the
-//   definitions in the governance doc.
+//   views by hand in the Linear UI using the governance-doc definitions.
 // - GitHub connection / issue import: integrationGithubConnect and
 //   issueImportCreateGithub both require an OAuth `code` + `installationId`
 //   obtained by clicking through GitHub's App-install consent screen in a
