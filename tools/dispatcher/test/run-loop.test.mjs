@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runOnce } from "../src/run-loop.mjs";
+import { activeAttempt, clearActiveAttempts } from "../src/active-attempt-registry.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { AgentSessionBridge } from "../src/agent-session.mjs";
 import { NESTED_SANDBOX_CRASH } from "../src/failure-classification.mjs";
@@ -2385,5 +2386,43 @@ describe("runOnce", () => {
         expect(usageLimitStore.resumption("MOV-1", new Date("2026-09-14T18:00:00Z"))).toBeNull();
       });
     });
+  });
+});
+
+// MOV-166: an in-flight attempt must be findable by issue id (for an inbound
+// Agent Session signal to route to), and only for as long as it is actually
+// in flight -- registered once claimed, unregistered once settled, whatever
+// the outcome.
+describe("active-attempt registry wiring", () => {
+  beforeEach(() => {
+    clearActiveAttempts();
+  });
+
+  it("registers the attempt while the worker runs, and unregisters it once runOnce settles", async () => {
+    const deferred = deferredSpawnWorkerFn();
+    const ctx = baseCtx({ spawnWorkerFn: deferred.fn });
+
+    const runPromise = runOnce([ISSUE], ctx);
+    await flushMicrotasks();
+
+    const entry = activeAttempt(ISSUE.id);
+    expect(entry).not.toBeNull();
+    expect(entry.identifier).toBe("MOV-1");
+    expect(entry.controller.stopped).toBe(false);
+    expect(entry.publisher).toBeDefined();
+
+    deferred.controls[0]();
+    await runPromise;
+
+    expect(activeAttempt(ISSUE.id)).toBeNull();
+  });
+
+  it("unregisters even when the attempt is not eligible and never reaches registration", async () => {
+    const ctx = baseCtx();
+    const issue = { ...ISSUE, labels: [...ISSUE.labels, "human-only"] };
+
+    await runOnce([issue], ctx);
+
+    expect(activeAttempt(issue.id)).toBeNull();
   });
 });
