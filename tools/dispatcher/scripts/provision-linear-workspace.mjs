@@ -9,8 +9,8 @@
 // Deliberately NOT provisioned here (see docs/governance/linear-information-architecture.md):
 // - Custom views: the saved-view filterData JSON shape isn't documented in
 //   the public API/schema, and getting it wrong risks shipping a saved view
-//   that looks legitimate but silently returns nothing. Build the 7 target
-//   views by hand in the Linear UI instead (a few minutes total) using the
+//   that looks legitimate but silently returns nothing. Build the target
+//   views by hand in the Linear UI instead using the
 //   definitions in the governance doc.
 // - GitHub connection / issue import: integrationGithubConnect and
 //   issueImportCreateGithub both require an OAuth `code` + `installationId`
@@ -197,6 +197,7 @@ async function main() {
 
   const webAppInit = await ensureInitiative("Web App");
   const iosInit = await ensureInitiative("Native iOS App");
+  const automationInit = await ensureInitiative("Automate moviecal Development and Delivery");
 
   // --- Projects ---
   const projectsData = await gql(`query { projects { nodes { id name } } }`);
@@ -232,8 +233,17 @@ async function main() {
   await ensureProject("Shared Watchlists", webAppInit);
   await ensureProject("Calendar Feed", webAppInit);
   await ensureProject("Platform & Infrastructure", webAppInit);
-  const governanceProject = await ensureProject("Developer Governance & Agent Infrastructure", webAppInit);
   const iosProject = await ensureProject("iOS Companion App", iosInit);
+  const localStabilizationProject = await ensureProject(
+    "Local development workflow stabilization and governance",
+    automationInit,
+  );
+  const hybridProject = await ensureProject("Hybrid Linear cloud + Mac workflow", automationInit);
+
+  // The superseded "Developer Governance & Agent Infrastructure" project is
+  // deliberately not provisioned, updated, deleted, or relinked here. It is a
+  // live-workspace audit artifact, not part of the desired active topology.
+  // Issue reassignment is likewise a migration operation, never provisioning.
 
   // --- Project milestones ---
   async function ensureMilestones(project, names) {
@@ -259,14 +269,21 @@ async function main() {
   }
 
   await ensureMilestones(iosProject, ["Skeleton", "Auth + API client", "Navigation shell"]);
-  await ensureMilestones(governanceProject, [
+  await ensureMilestones(localStabilizationProject, [
+    "Initial local workflow foundation",
     "Linear actor authorization",
+    "Dispatcher governance and execution controls",
+    "Dispatcher reliability, recovery, safety, and regression coverage",
+    "Stabilization exit & Mac-lane handoff",
+  ]);
+  await ensureMilestones(hybridProject, [
     "Hybrid workflow architecture & feasibility",
-    "Routing & local foundations",
+    "Hybrid routing & Mac-lane foundations",
     "CI & review reaction",
-    "Cloud execution pilot",
-    "Controlled autonomy",
+    "Cloud environment & execution kickoff",
+    "Cloud execution pilots",
     "Agent Session integration",
+    "Hybrid acceptance & controlled autonomy",
   ]);
 
   log("\nDone. Re-run this script any time — it's idempotent.");
