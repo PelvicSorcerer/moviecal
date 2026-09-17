@@ -212,6 +212,18 @@ export function loadAgentSessionStreamConfig(envPath = agentSessionEnvPath()) {
 }
 
 /**
+ * MOV-166/MOV-214-215: is live mid-run prompt delivery into the Claude worker
+ * switched on? A separate, independent flag from `agentSessionsEnabled()` --
+ * steering is materially riskier than the receiver alone (it changes the
+ * worker invocation mode), so it gets its own on/off switch, off by default.
+ * With this off, the routed worker invocation and `spawnWorker()`'s return
+ * shape are byte-identical to today, on every worker and every issue.
+ */
+export function agentSessionSteeringEnabled(env = process.env) {
+  return truthy(env.MOVIECAL_AGENT_SESSION_STEERING);
+}
+
+/**
  * Is bounded automatic CI/review repair switched on? (MOV-188.)
  *
  * Off unless `MOVIECAL_AUTO_REPAIR` is explicitly truthy, and off is the

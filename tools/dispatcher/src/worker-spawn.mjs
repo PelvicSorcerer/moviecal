@@ -57,6 +57,39 @@ export function redactWorkerOutput(text, { env = process.env } = {}) {
     .replace(/(?<![-\w])((?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|ACCESS_KEY)\b\s*[=:]\s*)[^\s\"'\\]+/gi, "$1[REDACTED]");
 }
 
+/** One `--input-format stream-json` user-turn frame, plain conversational content only. */
+function streamJsonUserMessage(text) {
+  return { type: "user", message: { role: "user", content: [{ type: "text", text: String(text ?? "") }] } };
+}
+
+/**
+ * MOV-166/214-215: parse newline-delimited JSON out of a Claude worker's
+ * `--output-format stream-json` stdout, calling `onTurnComplete` for each
+ * `{"type":"result", ...}` line -- the event that marks one turn finished.
+ * This is a read-only tap: it never consumes bytes the existing
+ * log/redaction pipeline also needs, and a non-JSON or partial line is
+ * silently ignored rather than treated as an error (worker output is not a
+ * contract this dispatcher controls).
+ */
+function makeTurnBoundaryParser(onTurnComplete) {
+  let carry = "";
+  return (chunk) => {
+    carry += chunk.toString("utf8");
+    const lines = carry.split("\n");
+    carry = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let parsed;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (parsed && typeof parsed === "object" && parsed.type === "result") onTurnComplete();
+    }
+  };
+}
+
 function redactionStream(env) {
   let carry = "";
   return new Transform({
@@ -120,7 +153,12 @@ function reapProcessGroup(pid, { graceMs, killImpl }) {
  * @param {{mode?: 'implementation'|'repair'}} [opts.securityContext] - when present, enforce the shared MOV-145 guard
  * @param {NodeJS.Platform} [opts.platform] - injectable for tests
  * @param {(cwd: string) => {protectedRepositoryPaths: string[], gitMetadataPaths: string[]}} [opts.repositoryGuardPathsFn] - injectable for tests
- * @returns {Promise<{exitCode: number, logDir: string}>}
+ * @param {boolean} [opts.steering] - MOV-214/215: when true (Claude only; the invocation must already carry
+ *   `--input-format stream-json`, see worker-routing.mjs), keep stdin open after the initial brief instead of
+ *   closing it, and return `{promise, writeTurn, requestClose, nextTurnBoundary}` instead of a bare `Promise` --
+ *   `promise` still resolves exactly as it does today. Off by default: every existing caller and every non-Claude
+ *   worker gets today's exact bare-Promise behavior with stdin closed after the brief, byte-for-byte.
+ * @returns {Promise<{exitCode: number, logDir: string, pid: number|null}>|{promise: Promise<{exitCode: number, logDir: string, pid: number|null}>, writeTurn: (text: string) => void, requestClose: () => void, nextTurnBoundary: () => Promise<{ended: boolean}>}}
  */
 export function spawnWorker({
   invocation,
@@ -134,18 +172,30 @@ export function spawnWorker({
   securityContext,
   platform = process.platform,
   repositoryGuardPathsFn = repositoryGuardPaths,
+  steering = false,
 }) {
   fs.mkdirSync(logDir, { recursive: true });
   const stdoutPath = path.join(logDir, "stdout.log");
   const stderrPath = path.join(logDir, "stderr.log");
   const manifestPath = path.join(logDir, "manifest.json");
 
-  return new Promise((resolve, reject) => {
+  // Hoisted so writeTurn/requestClose/nextTurnBoundary (built after the
+  // promise below, steering-only) can reach the live child and its turn
+  // state. `child` stays undefined if the executor rejects before spawning
+  // (e.g. the darwin-only security-sandbox check) -- every steering helper
+  // guards for that.
+  let child;
+  let childClosed = false;
+  let pendingTurns = 0;
+  const turnWaiters = [];
+
+  const promise = new Promise((resolve, reject) => {
     const startedAt = new Date().toISOString();
     let effectiveInvocation = invocation;
     let workerEnv = process.env;
     if (securityContext) {
       if (platform !== "darwin") {
+        childClosed = true; // no child will ever spawn; nextTurnBoundary() must not hang
         reject(new Error(`worker safety sandbox is only supported on darwin (got ${platform})`));
         return;
       }
@@ -153,6 +203,7 @@ export function spawnWorker({
       try {
         repositoryPaths = repositoryGuardPathsFn(cwd);
       } catch (err) {
+        childClosed = true;
         reject(new Error(`worker safety sandbox could not resolve repository boundaries: ${err.message}`));
         return;
       }
@@ -176,7 +227,7 @@ export function spawnWorker({
     // group via setsid(), so its own pid doubles as the group id we reap on
     // exit — any grandchildren it backgrounds (xcodebuild, simctl, npm, ...)
     // are in that same group and go down with it.
-    const child = spawnImpl(effectiveInvocation.command, effectiveInvocation.args, {
+    child = spawnImpl(effectiveInvocation.command, effectiveInvocation.args, {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
@@ -194,6 +245,19 @@ export function spawnWorker({
     stderrStream.on("error", () => {});
     child.stdout?.pipe(redactionStream(process.env)).pipe(stdoutStream);
     child.stderr?.pipe(redactionStream(process.env)).pipe(stderrStream);
+    if (steering) {
+      // A second, independent listener on the same readable -- Node
+      // broadcasts every chunk to all attached 'data' listeners, so this
+      // never competes with or alters what the pipe above logs.
+      child.stdout?.on(
+        "data",
+        makeTurnBoundaryParser(() => {
+          const waiter = turnWaiters.shift();
+          if (waiter) waiter({ ended: false });
+          else pendingTurns += 1;
+        }),
+      );
+    }
 
     if (signal) {
       const killOnAbort = () => reapProcessGroup(child.pid, { graceMs: killGraceMs, killImpl });
@@ -212,8 +276,15 @@ export function spawnWorker({
         throw err;
       });
       try {
-        if (child.stdin.writable) child.stdin.write(brief);
-        child.stdin.end();
+        if (child.stdin.writable) {
+          // MOV-214/215: with steering active the brief is the *first turn*
+          // of an interactive stream-json session, not a one-shot text blob
+          // -- and stdin stays open afterward so a later trusted prompt can
+          // be written as a subsequent turn (see writeTurn/requestClose
+          // below). Without steering this is byte-for-byte today's behavior.
+          child.stdin.write(steering ? `${JSON.stringify(streamJsonUserMessage(brief))}\n` : brief);
+        }
+        if (!steering) child.stdin.end();
       } catch (err) {
         if (!err || err.code !== "EPIPE") throw err;
       }
@@ -261,12 +332,16 @@ export function spawnWorker({
 
     child.on("error", (err) => {
       settled = true;
+      childClosed = true;
+      while (turnWaiters.length) turnWaiters.shift()({ ended: true });
       stdoutStream.destroy();
       stderrStream.destroy();
       reject(err);
     });
     child.on("close", (code) => {
       exitCode = code;
+      childClosed = true;
+      while (turnWaiters.length) turnWaiters.shift()({ ended: true });
       pending.delete("child");
       reapProcessGroup(child.pid, { graceMs: killGraceMs, killImpl }).then(() => {
         pending.delete("reap");
@@ -275,6 +350,39 @@ export function spawnWorker({
       maybeFinish();
     });
   });
+
+  if (!steering) return promise;
+
+  return {
+    promise,
+    /** Write one trusted follow-up prompt as the next turn. A no-op (not a throw) once the process is gone or never started. */
+    writeTurn(text) {
+      if (!child || !child.stdin || !child.stdin.writable) return;
+      try {
+        child.stdin.write(`${JSON.stringify(streamJsonUserMessage(text))}\n`);
+      } catch (err) {
+        if (!err || err.code !== "EPIPE") throw err;
+      }
+    },
+    /** No more turns are coming for this attempt: close stdin so the worker's own interactive session ends. */
+    requestClose() {
+      if (!child || !child.stdin || !child.stdin.writable) return;
+      try {
+        child.stdin.end();
+      } catch (err) {
+        if (!err || err.code !== "EPIPE") throw err;
+      }
+    },
+    /** Resolves once the worker's current turn completes, or immediately with `{ended: true}` if it has already exited. */
+    nextTurnBoundary() {
+      if (pendingTurns > 0) {
+        pendingTurns -= 1;
+        return Promise.resolve({ ended: false });
+      }
+      if (childClosed) return Promise.resolve({ ended: true });
+      return new Promise((resolve) => turnWaiters.push(resolve));
+    },
+  };
 }
 
 /** Read the last `n` lines across stdout+stderr logs for a failed run, for reporting back to Linear. */

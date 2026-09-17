@@ -2426,3 +2426,105 @@ describe("active-attempt registry wiring", () => {
     expect(activeAttempt(issue.id)).toBeNull();
   });
 });
+
+/**
+ * A steering-capable fake spawnWorkerFn: exposes writeTurn/requestClose/
+ * nextTurnBoundary the same shape the real spawnWorker() returns, with a
+ * test-controlled `fireTurnBoundary()` standing in for the worker's own
+ * stream-json `result` line.
+ */
+function fakeSteeringSpawnWorkerFn() {
+  const writeTurns = [];
+  let closed = false;
+  let resolveExit;
+  const promise = new Promise((resolve) => {
+    resolveExit = resolve;
+  });
+  let waiter = null;
+  function fireTurnBoundary() {
+    if (waiter) {
+      const w = waiter;
+      waiter = null;
+      w({ ended: false });
+    }
+  }
+  const fn = vi.fn(() => ({
+    promise,
+    writeTurn: (text) => {
+      writeTurns.push(text);
+    },
+    requestClose: () => {
+      closed = true;
+      resolveExit({ exitCode: 0, logDir: "/fake/logs/x" });
+    },
+    nextTurnBoundary: () =>
+      new Promise((resolve) => {
+        waiter = resolve;
+      }),
+  }));
+  return { fn, writeTurns, isClosed: () => closed, fireTurnBoundary };
+}
+
+// MOV-214/215: live mid-run prompt delivery. Off by default (steeringEnabled
+// undefined in every other test in this file, which is why they all still
+// exercise today's exact one-shot spawnWorkerFn contract).
+describe("steering turn-loop wiring", () => {
+  beforeEach(() => {
+    clearActiveAttempts();
+  });
+
+  it("closes stdin at the first turn boundary when nothing is queued -- identical timing to the no-steering path", async () => {
+    const steering = fakeSteeringSpawnWorkerFn();
+    const ctx = baseCtx({ spawnWorkerFn: steering.fn, steeringEnabled: true });
+
+    const runPromise = runOnce([ISSUE], ctx);
+    await flushMicrotasks();
+    steering.fireTurnBoundary();
+    await runPromise;
+
+    expect(steering.isClosed()).toBe(true);
+    expect(steering.writeTurns).toEqual([]);
+    expect(steering.fn.mock.calls[0][0]).toMatchObject({ steering: true });
+  });
+
+  it("registers queuePrompt on the active attempt, and writes a queued prompt as the next turn instead of closing", async () => {
+    const steering = fakeSteeringSpawnWorkerFn();
+    const ctx = baseCtx({ spawnWorkerFn: steering.fn, steeringEnabled: true });
+
+    const runPromise = runOnce([ISSUE], ctx);
+    await flushMicrotasks();
+
+    const entry = activeAttempt(ISSUE.id);
+    expect(typeof entry.queuePrompt).toBe("function");
+    entry.queuePrompt("also update the docs");
+
+    steering.fireTurnBoundary(); // worker's first (and only, for this test) turn completes
+    await flushMicrotasks();
+
+    expect(steering.writeTurns).toEqual(["also update the docs"]);
+    expect(steering.isClosed()).toBe(false); // a turn was written, not a close
+
+    // Nothing further queued -> the next boundary closes stdin, same as the
+    // no-prompt path.
+    steering.fireTurnBoundary();
+    await runPromise;
+    expect(steering.isClosed()).toBe(true);
+  });
+
+  it("does not add --input-format/steering behavior for a codex-routed attempt", async () => {
+    const steering = fakeSteeringSpawnWorkerFn();
+    const ctx = baseCtx({
+      spawnWorkerFn: steering.fn,
+      steeringEnabled: true,
+    });
+    const issue = { ...ISSUE, labels: [...ISSUE.labels, "worker:codex"] };
+
+    const runPromise = runOnce([issue], ctx);
+    await flushMicrotasks();
+    steering.fireTurnBoundary();
+    await runPromise;
+
+    expect(steering.fn.mock.calls[0][0]).toMatchObject({ steering: false });
+    expect(steering.fn.mock.calls[0][0].invocation.command).toBe("codex");
+  });
+});

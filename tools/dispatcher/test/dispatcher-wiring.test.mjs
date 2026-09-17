@@ -201,6 +201,15 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
     expect(runContextSource).toMatch(/enabled:\s*agentSessionsEnabled\(\)/);
   });
 
+  it("keeps live worker steering off unless explicitly switched on, independently of the Agent Session layer (MOV-214/215)", () => {
+    const configText = readFileSync(fileURLToPath(new URL("../src/config.mjs", import.meta.url)), "utf8");
+    expect(configText).toMatch(/MOVIECAL_AGENT_SESSION_STEERING/);
+    // A separate flag from MOVIECAL_AGENT_SESSIONS -- steering changes the
+    // worker invocation mode, so it does not ride along with the receiver's.
+    expect(configText.match(/MOVIECAL_AGENT_SESSION_STEERING/g).length).toBeGreaterThan(0);
+    expect(runContextSource).toMatch(/steeringEnabled:\s*agentSessionSteeringEnabled\(\)/);
+  });
+
   it("shares one entitlement latch across the process, so a rejection is not retried per issue", () => {
     expect(runContextSource).toMatch(/const agentSessionCapability = createAgentSessionCapability\(\)/);
     expect(bodyOf("buildRunContext", runContextSource)).toMatch(/capability:\s*agentSessionCapability/);
