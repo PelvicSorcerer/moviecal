@@ -64,7 +64,6 @@ const ENV_ALLOWLIST = new Set([
   "CI",
 ]);
 const CLAUDE_PARENT_CREDENTIALS = new Set([
-  "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
   "CLAUDE_CODE_OAUTH_TOKEN",
 ]);
@@ -82,9 +81,12 @@ function isProtected(filePath, mode) {
 }
 
 /**
- * Remove credentials from the worker environment. Claude's own provider
- * credential is retained only by its parent process so it can call the model;
- * Claude then scrubs that credential from every Bash, hook, and MCP child.
+ * Remove credentials from the worker environment. Claude's own worker
+ * credentials are retained only by its parent process so it can call the
+ * model; Claude then scrubs those credentials from every Bash, hook, and MCP
+ * child. `ANTHROPIC_API_KEY` is deliberately excluded even for Claude: it is
+ * reserved for the dispatcher's advisory diagnosis adapter (MOV-211) and must
+ * never alter worker authentication or billing.
  */
 export function sanitizedWorkerEnvironment(source = process.env, { worker } = {}) {
   const env = {};

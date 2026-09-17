@@ -169,9 +169,9 @@ describe("spawnWorker", () => {
       expect(fs.readFileSync(path.join(tmpDir, command, "worker-sandbox.sb"), "utf8")).toContain("deny process-exec");
     }
     expect(calls[0].opts.env).toMatchObject({
-      ANTHROPIC_API_KEY: "anthropic_parent_only",
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
     });
+    expect(calls[0].opts.env).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(calls[1].opts.env).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(calls[1].opts.env).not.toHaveProperty("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB");
   });
