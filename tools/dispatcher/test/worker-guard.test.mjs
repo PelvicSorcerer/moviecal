@@ -38,7 +38,7 @@ describe("worker guard", () => {
     expect(env).not.toHaveProperty("SSH_AUTH_SOCK");
   });
 
-  it("keeps Claude authentication in the parent but scrubs it from subprocesses", () => {
+  it("keeps Claude worker authentication in the parent but excludes the dispatcher diagnosis key", () => {
     const source = {
       ANTHROPIC_API_KEY: "anthropic-secret",
       ANTHROPIC_AUTH_TOKEN: "anthropic-token",
@@ -47,11 +47,11 @@ describe("worker guard", () => {
     };
     const claude = sanitizedWorkerEnvironment(source, { worker: "claude" });
     expect(claude).toMatchObject({
-      ANTHROPIC_API_KEY: "anthropic-secret",
       ANTHROPIC_AUTH_TOKEN: "anthropic-token",
       CLAUDE_CODE_OAUTH_TOKEN: "claude-oauth",
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
     });
+    expect(claude).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(claude).not.toHaveProperty("GH_TOKEN");
 
     const codex = sanitizedWorkerEnvironment(source, { worker: "codex" });
