@@ -96,7 +96,10 @@ does not keep the project open.
 These issues remain in `Icebox` together. No edge from this deferred chain may
 block `MOV-156`, `MOV-220`, `MOV-161`, `MOV-162`, or completion of the
 active local project. Promoting cloud work is a deliberate scope decision, not
-an incidental consequence of its priority or milestone position.
+an incidental consequence of its priority or milestone position. Linear can
+still create a contrary relation in the UI, so every future planning-object
+change must re-audit the cross-project graph; this is a governance invariant,
+not a claim that the dispatcher can prevent an administrator from editing it.
 
 ## Source-of-truth boundaries
 
@@ -179,7 +182,11 @@ Their bounded roles are:
 
 The Loop must have no Coding Session permission and must not directly widen
 worker permissions. Manual/Triage intake and the promoter remain the complete
-fallback. A Loop run is never itself proof that an issue is dispatchable.
+fallback. Linear UI permissions are configured and live-validated by the
+human-only `MOV-156`; repository code cannot grant or inspect those
+workspace-level permissions. A Loop run is therefore never itself proof that
+an issue is dispatchable—the ordinary route, delegate, readiness, dependency,
+and preflight gates still decide that.
 
 ### Agent Sessions
 
