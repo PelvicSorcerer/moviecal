@@ -371,9 +371,41 @@ case unless MOV-214/215's flag below is also on) is published as a
 comment/activity surface every other transition uses. It does not by itself
 mean anything acted on the prompt.
 
-Live mid-run worker steering (actually delivering a trusted prompt into an
-already-running worker, rather than only recording it) is intentionally not
-part of this layer — see MOV-214/MOV-215.
+### Live mid-run worker steering (MOV-214/215)
+
+A separate, independent capability flag, `MOVIECAL_AGENT_SESSION_STEERING`
+— off by default. MOV-159 approved the receiver above but explicitly did not
+authorize altering the dispatch boundary or the worker execution model;
+MOV-214 is the decision that did, the same session MOV-166 was implemented
+(2026-09-17), at the repo owner's explicit request for the full-featured
+capability rather than a permanently record-only one.
+
+**Mechanism.** With this flag on, a Claude-routed attempt (Codex has no
+equivalent protocol and always stays record-only) is invoked with
+`--input-format stream-json` instead of one-shot print mode, and its stdin is
+kept open instead of closed after the initial brief. The dispatcher watches
+the worker's own `--output-format stream-json` output for each turn's
+completion (`spawnWorker()`'s `nextTurnBoundary()`); if a trusted prompt is
+queued when a turn completes, it's written as the next turn instead of
+closing stdin — otherwise stdin closes immediately, identical timing to the
+steering-off path. A prompt is queued the moment it's classified trusted
+(`agent-stream-client.mjs`'s `queuePrompt`) but is never written into a turn
+already in progress; only the dispatcher's own turn-loop ever calls the real
+`writeTurn`.
+
+**Trust boundary.** Only a signal `classifyPromptTrust` already marks
+`trusted: true` (the same, unmodified logic used for the receiver above) is
+ever queued, and it is written only as plain conversational content — a
+stream-json user-message frame. It cannot touch `--permission-mode`, the
+sandbox flags, or `security-policy.mjs`'s rules, all fixed at the worker's
+spawn time and never reachable from stdin content. `worker-guard.mjs`'s
+command audit covers every command the worker runs identically regardless of
+whether it originated from the initial brief or an injected turn.
+
+**Disablement.** Off returns the worker invocation and `spawnWorker()`'s
+return shape to exactly today's one-shot behavior, for every worker and every
+issue — verified by `worker-spawn.test.mjs`'s steering-off regression
+coverage.
 
 ## Security model
 

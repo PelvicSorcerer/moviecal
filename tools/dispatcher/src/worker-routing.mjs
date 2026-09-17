@@ -82,7 +82,21 @@ export function resolveRouting(issue) {
 // harness code, not by the model choosing to comply -- see
 // docs/operators/local-execution.md §Security model for what that boundary
 // does and does not cover.
-export function workerInvocation(worker, model) {
+/**
+ * @param {"claude"|"codex"} worker
+ * @param {"cheap"|"default"|"strong"} model
+ * @param {{steering?: boolean}} [opts] - MOV-214/215: `steering: true` adds
+ *   `--input-format stream-json` so the dispatcher can write further turns
+ *   onto the worker's still-open stdin (see worker-spawn.mjs's `steering`
+ *   option). Claude only -- Codex has no equivalent interactive protocol, so
+ *   `opts.steering` is silently ignored for it; the returned invocation is
+ *   identical either way. Every existing safety flag
+ *   (`--permission-mode dontAsk`, `--safe-mode`, `--strict-mcp-config`, the
+ *   sandbox-disabling `--settings`) is unaffected -- steering only changes
+ *   how additional conversational turns reach the process, never what the
+ *   process is allowed to do.
+ */
+export function workerInvocation(worker, model, { steering = false } = {}) {
   if (worker === "claude") {
     return {
       command: "claude",
@@ -100,6 +114,7 @@ export function workerInvocation(worker, model) {
         "--disable-slash-commands",
         "--output-format",
         "stream-json",
+        ...(steering ? ["--input-format", "stream-json"] : []),
         "--verbose",
         "--no-session-persistence",
         // MOV-184: Claude Code's own internal per-command Bash-tool sandbox
