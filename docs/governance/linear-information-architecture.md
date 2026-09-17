@@ -12,7 +12,7 @@ This design deliberately does not reproduce the GitHub Project's fields one-for-
 
 **Basic**, one seat, monthly subscription, with no active trial — verified from the live workspace on 2026-09-10 during `MOV-141`. The workspace originally started on Free; that historical assumption is superseded. Basic removes the 250-issue cap and is eligible for Coding Sessions.
 
-**Paid AI capabilities are in scope but not authorized.** Coding Sessions are available on Basic, but moviecal has no proven coding environment; the exact AI-credit balance is not exposed by the public API and must be checked in the authenticated UI before a pilot. Loops require Business ($16/user/month at published annual pricing on the validation date) plus AI credits. Coding Sessions cost provider tokens plus $0.25 per 20-minute sandbox block; Loop-only runs typically cost $0.07–$0.20. Nothing here authorizes an upgrade or credit purchase. See `docs/governance/mov-141-linear-capability-findings.md` for live evidence, fallbacks, and capped-pilot guidance.
+**Paid AI capabilities are in scope but not implicitly authorized.** Coding Sessions are available, but moviecal still has to prove its coding environment and record actual cost through `MOV-153`–`MOV-155`. Linear Loops are now available as a platform capability, superseding the original `MOV-141` finding, but `MOV-156` remains optional paid work in `Icebox`; it is not a kickoff, acceptance, or project-completion dependency. Nothing in this document authorizes an upgrade, credit purchase, or automatic paid execution. See `docs/governance/mov-141-linear-capability-findings.md` for the original validation evidence and `docs/governance/hybrid-execution-architecture.md` for the current gates and fallbacks.
 
 **Initiatives:** basic initiative creation and linking (used below) is enabled on this workspace — the repo owner unlocked it directly in Linear (exact mechanism not confirmed from the API side; possibly a trial or a workspace-level toggle distinct from a full Business subscription). One sub-feature remains gated regardless: assigning an initiative a "lead team" (`initiativeCreate`'s `leadTeamId` field) still returns `FEATURE_NOT_ACCESSIBLE` ("Subscribe to the Business plan to access team initiatives in your workspace"). That's not needed here — with a single team (`MOV`), a lead-team assignment wouldn't add anything — so `provision-linear-workspace.mjs` creates initiatives without it.
 
@@ -22,34 +22,53 @@ One workspace (`moviecal`), one team (`MOV`). GitHub Issues Sync is one-repo-to-
 
 ## Initiatives
 
-Two initiatives group the five projects below:
+Three initiatives group the active product and development-system outcomes:
 
-- **Web App** — everything shipping to the Next.js application: Shared Watchlists, Calendar Feed, Platform & Infrastructure, Developer Governance & Agent Infrastructure.
+- **Web App** — outcomes that ship to or directly support the Next.js application: Shared Watchlists, Calendar Feed, and Platform & Infrastructure. The superseded Developer Governance & Agent Infrastructure project remains associated only for history.
 - **Native iOS App** — the future companion app: iOS Companion App.
+- **Automate moviecal Development and Delivery** — cross-cutting development infrastructure that supports every current and future product initiative: Local development workflow stabilization and governance, and Hybrid Linear cloud + Mac workflow.
 
 (A first attempt at provisioning these hit `FEATURE_NOT_ACCESSIBLE` — initiatives were originally plan-gated on this workspace, so this doc briefly shipped a "skip initiatives, projects stand alone" design. The repo owner then enabled the feature directly in Linear, and the initiatives + links above were created and verified live. The `leadTeamId` sub-feature remains gated, see "Plan" above — irrelevant here with one team.)
 
 ## Projects
 
-| Linear project | Initiative | Replaces GitHub `Track` |
+| Linear project | Initiative | Role |
 |---|---|---|
-| Shared Watchlists | Web App | `Shared Watchlists` |
-| Calendar Feed | Web App | `Calendar` |
-| Platform & Infrastructure | Web App | `Platform` |
-| Developer Governance & Agent Infrastructure | Web App | (new) |
-| iOS Companion App | Native iOS App | `iOS` |
+| Shared Watchlists | Web App | Finite watchlist product outcome |
+| Calendar Feed | Web App | Finite calendar-feed product outcome |
+| Platform & Infrastructure | Web App | Finite platform outcome |
+| iOS Companion App | Native iOS App | Finite native-app outcome |
+| Local development workflow stabilization and governance | Automate moviecal Development and Delivery | Stabilize and hand off the existing Mac/local development path |
+| Hybrid Linear cloud + Mac workflow | Automate moviecal Development and Delivery | Deliver the unified Linear-centered cloud/Mac lifecycle |
+| Developer Governance & Agent Infrastructure | Web App | **Historical/audit only.** Superseded by the two projects above; do not assign new issues here |
 
 `Docs` and `Migration` are not projects — they are work *types*, represented as labels. `Future` is not a project — it is the `Icebox` backlog state.
 
+The legacy Developer Governance & Agent Infrastructure project is deliberately retained intact so its former organization remains auditable. The split moved all of its issues to the two finite successor projects. Do not delete it, repopulate it, or associate either successor with a product initiative such as Web App. The provisioning script leaves the legacy project untouched and never performs issue migration.
+
+## Planning-object semantics
+
+Use the smallest Linear object that expresses the actual planning relationship:
+
+- **Initiative:** a strategic outcome spanning one or more projects. An initiative may be cross-cutting; it does not have to correspond to a product surface.
+- **Project:** a finite, completable outcome with an explicit boundary. A project is not a permanent topic bucket for every future issue in an area. Later defects or enhancements belong in the ordinary backlog or a new bounded project unless they are required to satisfy the original completion criteria.
+- **Milestone:** a project-local phase containing multiple issues and a recognizable exit condition. Milestones never span projects and should not be used as reusable topic tags.
+- **Parent issue:** one bounded deliverable split into child issues, normally one implementation issue per PR. A parent must not duplicate the scope of its project or act as a permanent milestone coordinator. Parent completion is derived from child state.
+- **Label:** reusable classification across projects, such as execution route, work type, risk, worker, model, or area.
+
+Classify an issue by its actual scope, parent/child role, and dependency graph—not by whichever milestone or project historically contained it. Coordination-only work uses `type:coordination` plus `execution:none` and produces no implementation PR.
+
 ## Project milestones
 
-Used only where real sequencing exists. A milestone is a finite phase with a recognizable completion condition; it is not a topic tag, and it does not require a target date when dependency order rather than calendar time is the useful boundary. Parent issues decompose one body of work, while labels carry reusable classifications across projects.
+Used only where a real multi-issue phase exists. Every milestone is local to one project, has a recognizable exit condition, and may omit a target date when dependency order rather than calendar time is the useful boundary. Milestone display order communicates the intended project narrative; it does **not** gate issue execution.
 
 **iOS Companion App** uses `Skeleton` → `Auth + API client` → `Navigation shell`, matching the dependency chain that was GitHub issues #237 → #238/#239 → #240.
 
-**Developer Governance & Agent Infrastructure** uses these finite phases: `Linear actor authorization`, `Hybrid workflow architecture & feasibility`, `Routing & local foundations`, `CI & review reaction`, `Cloud execution pilot`, `Controlled autonomy`, and `Agent Session integration`. The former `Linear Loops & agent experience` milestone mixed the Agent Session implementation with plan-gated Loop intake work; it was narrowed to `Agent Session integration`. Loop intake and handoff work remains organized by its parent issue until that work is approved as a concrete pilot.
+**Local development workflow stabilization and governance** uses these finite phases: `Initial local workflow foundation` → `Linear actor authorization` → `Dispatcher governance and execution controls` → `Dispatcher reliability, recovery, safety, and regression coverage` → `Stabilization exit & Mac-lane handoff`. The project ends when the exit/handoff is accepted; optional Icebox work and later ordinary maintenance do not keep it open.
 
-Projects in this workspace are durable workstreams replacing the former GitHub `Track` field. A project at 100% means that every currently assigned issue is terminal; it does not mean the workstream can never receive new work. For example, **Platform & Infrastructure** remains an open, dormant track after its initial deployment and smoke-monitoring work completed.
+**Hybrid Linear cloud + Mac workflow** uses these finite phases: `Hybrid workflow architecture & feasibility` → `Hybrid routing & Mac-lane foundations` → `CI & review reaction` → `Cloud environment & execution kickoff` → `Cloud execution pilots` → `Agent Session integration` → `Hybrid acceptance & controlled autonomy`. This is a partial order, not a command to serialize every adjacent milestone: Agent Session, policy, local handoff, and cloud work may proceed in parallel where their issue dependencies permit, then converge at hybrid acceptance.
+
+A project reaching 100% means its defined outcome is complete. Do not keep a finished project open merely as a future maintenance container; create or select the bounded project that owns the new outcome.
 
 ## Workflow states
 
@@ -95,6 +114,10 @@ Issue estimates are deliberately not used. Agent routing and decomposition are g
 
 Replace the free-text `Dependencies` GitHub field with native Linear `blocked by` / `blocks` relations. Linear enforces these referentially — there is no equivalent of the old dependency-syntax validator (`scripts/lib/project-queue-common.sh`) because malformed or dangling references are not representable in the first place.
 
+Dependencies encode genuine prerequisites, not presentation order. If work in a later milestone would be invalid before an earlier phase is accepted, gate it with a meaningful exit/acceptance issue: required phase work → phase exit → later entry work. Do not make an arbitrary "last-looking" implementation issue the gate, and do not connect milestones merely to force a linear display. Leave independent work unblocked so it can proceed in parallel. Cross-project blocking is appropriate for a real handoff such as the local stabilization exit gating hybrid acceptance. Optional `Icebox` work must not block a required exit unless it is explicitly promoted into scope.
+
+Priority ranks issues that are simultaneously actionable; it is not a substitute for dependencies. Use Urgent/High/Medium/Low coarsely, and manually order only the small visible cohort of equally prioritized actionable issues. Do not curate a total ordering of the entire blocked backlog.
+
 **Relation direction — do not create these by hand.** Linear's `issueRelationCreate` mutation reads `input.issueId` as the *source* of the named relation and `input.relatedIssueId` as its *target*, so `type: "blocks"` means "`issueId` **blocks** `relatedIssueId`". Passing the pair the intuitive-but-wrong way (earlier issue as `relatedIssueId`) builds the whole chain backwards — the last issue ends up unblocked and the first shows as blocked by its successor. This has happened more than once. Use `LinearClient.addBlocksRelation({ blockerId, blockedId })` or `LinearClient.linkBlockingChain([...orderedIds])` (`tools/dispatcher/src/linear-client.mjs`), which take role-named arguments and are unit-tested against the field mapping; if you must call the raw GraphQL, verify the direction with a readback query before moving on.
 
 **Reading the direction back is just as easy to invert (MOV-128, and its follow-up fix).** An issue's own `relations` field of type `blocks` lists issues *it* blocks (its dependents), not its blockers — the same inversion class as the write-side bug above, just on the read path. The issues that actually block a given issue show up under that issue's `inverseRelations`. One more trap inside `inverseRelations`: for a `blocks` entry there, **`issue` is the blocker and `relatedIssue` is the issue itself** — read `issue`, not `relatedIssue` (`relatedIssue` is just self, and keying gate state off it makes an issue look blocked by itself, which never clears). `LinearClient.issuesInState()` derives `blockedByIds` from `inverseRelations[].issue.id`, and `tools/dispatcher/src/dependency-gate.mjs`'s `buildIsIssueSatisfied()` resolves each blocker's workflow state from `inverseRelations[].issue.state` in the same query (no extra Linear call) to gate dispatch in `tools/dispatcher/src/run-context.mjs`'s `buildRunContext()` (MOV-197 moved this out of `bin/dispatcher.mjs`, which calls `main()` at module load and so cannot be imported for testing, into this importable module so the wiring itself is covered by `tools/dispatcher/test/run-loop-e2e.test.mjs` — `bin/dispatcher.mjs`'s real `run` command still calls it for the live path).
@@ -103,6 +126,7 @@ Replace the free-text `Dependencies` GitHub field with native Linear `blocked by
 
 The supervision dashboard for a human overseeing autonomous work. **Build these by hand in the Linear UI** (Views → New view), not via the API: the saved-view `filterData` JSON shape isn't part of the documented public schema, and getting it wrong risks a saved view that looks legitimate but silently returns nothing — a few minutes of manual setup is cheaper than that risk. Each takes under a minute using Linear's own filter builder:
 
+- **Moviecal — Ready now** — team `Moviecal`; status is not `Blocked`, `Done`, `Released`, `Canceled`, `Duplicate`, or `Icebox`; issue **is not blocked** by any unresolved native relation. Do not filter by initiative, project, milestone, assignee, delegate, or `human-only`. Use no grouping or sub-grouping, order by Priority, show sub-issues, and display Priority, Status, Project, Milestone, assignee/delegate, Parent issue, and Labels. Keep expanded parents collapsed during daily scanning if their terminal children add noise. The status filter and relation filter are intentionally separate: one catches an explicitly Blocked workflow state, while the other catches unresolved prerequisites even when status drifted.
 - **Needs me** — `Needs Input` ∪ `Needs Human Decision` ∪ `Blocked`
 - **Agent activity** — `Agent Working`, grouped by project
 - **Ready to delegate** — `Ready for Agent`, sorted by priority
@@ -117,7 +141,7 @@ The supervision dashboard for a human overseeing autonomous work. **Build these 
 - **Triage Intelligence / Insights / Asks** — Business-plan features; this project's intake volume does not justify the tier.
 - **Project health / updates** — solo project, no external stakeholders to report to. Revisit if that changes.
 
-**No longer rejected — now gated instead:** **Linear Coding Sessions** and **Loops** were previously listed here as deliberately not adopted (Coding Sessions because cloud execution contradicted a Mac-only architecture; Loops on tier grounds). The hybrid execution architecture supersedes both rejections: Coding Sessions are the intended **cloud execution adapter** for eligible non-iOS work, and Loops are a candidate for intake/enrichment. `MOV-141` found Coding Sessions plan-eligible but unconfigured and Loops unavailable on the current Basic plan; both retain explicit Mac/manual fallbacks. See `docs/governance/hybrid-execution-architecture.md` §Feasibility gates. Cloud execution never covers iOS/Xcode work, which stays on the Mac adapter permanently.
+**No longer rejected — now gated instead:** **Linear Coding Sessions** and **Loops** were previously listed here as deliberately not adopted. Coding Sessions are the intended **cloud execution adapter** for eligible non-iOS work, subject to `MOV-153`–`MOV-155`. Loops are available as a candidate intake/enrichment mechanism, but `MOV-156` remains optional paid `Icebox` work and is not a required hybrid gate. Both retain explicit Mac/manual fallbacks. See `docs/governance/hybrid-execution-architecture.md` §Feasibility gates. Cloud execution never covers iOS/Xcode work, which stays on the Mac adapter permanently.
 
 ## Agent Guidance vs. repository files
 
@@ -133,7 +157,7 @@ Any rule that constrains code lives in the repo. Any rule that constrains proces
 | What to build, why, priority, acceptance criteria, discussion, decisions, **desired** status, release planning, agent delegation, human ownership | **Linear** |
 | Source code, tests, CI config, dispatcher code, testing lanes, security constraints, coding conventions, `AGENTS.md`, architecture docs | **Git repository** |
 | Branches, commits, PRs, code review, CI results, releases, external bug intake — **delivered** status | **GitHub** |
-| Which execution adapter runs a given issue (cloud vs Mac) | **A Linear route label**, scheme defined by `MOV-142` (not yet provisioned), materialized on the issue before dispatch |
+| Which execution adapter runs a given issue (cloud vs Mac) | **A Linear route label**, provisioned by `MOV-142` and materialized on the issue before dispatch |
 | Live agent progress narration, tool calls, intermediate reasoning | **Run logs** — dispatcher run logs (Mac adapter) or Linear Agent Session activity (cloud adapter); referenced from Linear, never authoritative |
 | An attempt's lifecycle presentation (acknowledgement, PR link, errors, stop) | **Linear comments**, or Agent Activities when that capability is available (MOV-158). Presentation and history only: the authoritative identity of a piece of work is the **issue + branch + PR**, never a session id. A session or comment can be lost, replayed, or replaced by a new linked attempt without changing what the work *is*. |
 
@@ -159,7 +183,7 @@ No agent conversation is ever a source of truth. Every decision an agent makes t
 
 ## Provisioning
 
-The team settings, initiatives, workflow states, labels, projects, and milestones described above are provisioned by `tools/dispatcher/scripts/provision-linear-workspace.mjs`, an idempotent script safe to re-run any time the workspace needs to be reconciled back to this design (e.g. after a manual mistake, or when setting up a second environment). It reads `LINEAR_API_KEY` from `~/.config/moviecal/linear.env`. It does not create custom views (see above).
+The active team settings, initiatives, workflow states, labels, projects, and milestones described above are provisioned by `tools/dispatcher/scripts/provision-linear-workspace.mjs`, an idempotent script safe to re-run when the workspace needs to be reconciled back to this design or when setting up a second environment. It reads `LINEAR_API_KEY` from `~/.config/moviecal/linear.env`. It does not create custom views, move issues, delete projects, or mutate the audit-only legacy project.
 
 ## GitHub Issues: migration and ongoing sync
 

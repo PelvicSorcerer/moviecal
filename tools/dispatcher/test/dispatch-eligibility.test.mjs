@@ -98,6 +98,17 @@ describe("evaluateLocalDispatch", () => {
     });
   });
 
+  it("accepts an explicitly cloud-routed issue in the mixed hybrid project", () => {
+    const issue = eligibleIssue({ project: "Hybrid Linear cloud + Mac workflow", labels: ["execution:cloud"] });
+    expect(evaluateLocalDispatch(issue, { expectedDelegate: EXPECTED })).toMatchObject({
+      action: "skip",
+      eligible: false,
+      route: "cloud",
+      reason: expect.stringMatching(/local Mac adapter does not execute/),
+    });
+    expect(selectCloudCandidates([issue])).toEqual([issue]);
+  });
+
   it("skips a coordination-only (execution:none) issue", () => {
     const issue = eligibleIssue({ labels: ["type:coordination", "execution:none"] });
     expect(evaluateLocalDispatch(issue, { expectedDelegate: EXPECTED })).toMatchObject({

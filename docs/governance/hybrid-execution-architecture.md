@@ -1,9 +1,10 @@
 # Hybrid execution architecture: Linear-managed cloud + local Mac
 
-**Status: decided, not yet implemented.** This document records the architecture
-decision only. Nothing described here is enabled by adopting this document —
-Loops, Coding Sessions, the dispatcher daemon's cloud lane, and auto-merge all
-remain off until their own issues land. See §Rollout gates.
+**Status: decided and partially implemented.** Routing, the Mac adapter,
+CI/review observation, bounded repair, and the polling/comment lifecycle are in
+place. Coding Sessions, the cloud kickoff/pilots, the authorized Agent Session
+receiver, and auto-merge remain behind their own issue gates. See §Rollout
+gates.
 
 This is the authoritative statement of how `moviecal` executes engineering work.
 It supersedes the "all implementation runs on this Mac" premise that
@@ -12,8 +13,11 @@ It supersedes the "all implementation runs on this Mac" premise that
 documents remain accurate about the Mac path and the Linear workspace design;
 this one governs where they now sit in a larger picture.
 
-Tracking: `MOV-139` (coordination), `MOV-140` (this document), `MOV-141`
-(feasibility validation), `MOV-142` (routing labels).
+The **Hybrid Linear cloud + Mac workflow** project is the authoritative
+coordination object. `MOV-139` is retained as canceled historical context and
+must not produce an implementation PR. `MOV-140` records the architecture,
+`MOV-141` records the original feasibility validation, and `MOV-142`/`MOV-143`
+own route provisioning and enforcement.
 
 ## The decision
 
@@ -34,14 +38,12 @@ contract** (below), not two parallel systems with separate lifecycles. An issue
 is executed by exactly one adapter, and both report into the same Linear states
 and the same GitHub PR flow.
 
-**What exists today vs. what this describes.** Only the **Mac adapter** is built
-and running (`docs/operators/local-execution.md`). The behavioral contract below
-is **normative** — the spec any adapter must meet — not a description of
-something enforced across two adapters today. Nothing validates a candidate
-adapter against it yet; that is `MOV-153`–`MOV-155`'s job when the cloud lane is
-piloted. Read the contract as the requirement the cloud adapter is being held
-to, and the property the Mac adapter is already checked against by virtue of
-being the thing the contract was written from.
+**What exists today vs. what this describes.** The **Mac adapter** is built and
+running (`docs/operators/local-execution.md`), and the shared routing,
+observation, repair, and reconciliation foundations are implemented. The cloud
+adapter is not yet enabled. The behavioral contract below is **normative** —
+`MOV-153`–`MOV-155` must prove a Coding Session satisfies it before ordinary
+work uses the cloud lane.
 
 **The cloud lane cannot build, test, or ship iOS.** Xcode, the iOS Simulator,
 and the self-hosted macOS runner exist only on the Mac. No amount of cloud
@@ -69,7 +71,7 @@ something *should* ship, **Linear wins**.
 This section is **normative and forward-looking**. It states what any execution
 adapter must do. The Mac adapter meets it today (it is the reference
 implementation the contract was extracted from); the cloud adapter must be shown
-to meet it before it carries real work (§Rollout gates, stage 7).
+to meet it before it carries real work (§Rollout gates, stages 4–5).
 
 An execution adapter is anything that satisfies:
 
@@ -112,9 +114,12 @@ cloud-eligible, regardless of its subject matter.
 | Component | Role |
 |---|---|
 | **Linear issue** | The unit of work. Carries spec, acceptance criteria, Testing Expectations, dependencies, and the execution route. |
-| **Linear project / milestone** | Sequencing and release grouping. `blocks` relations, not milestones, gate dispatch. |
-| **Loops** | Candidate intake, enrichment, and platform-splitting automation. **Unavailable on the current Basic plan**; an approved Business upgrade plus AI credits would be required (`MOV-141`). |
-| **Agent Sessions** | Linear's richer Developer Preview surface for an agent's lifecycle on an issue. **Disabled for `moviecal-dispatcher` and not a current dependency.** The dispatcher uses ordinary app-actor GraphQL comments, workflow state, route, and delegate fields instead (`MOV-122`, `MOV-141`). |
+| **Linear initiative** | Strategic roll-up across finite projects. Development automation is cross-cutting and belongs to `Automate moviecal Development and Delivery`, not a product initiative. |
+| **Linear project** | One finite, completable outcome. The project is the coordination object; do not duplicate it with an umbrella issue. |
+| **Linear milestone** | One project-local phase with exit criteria. Display order communicates the plan; `blocks` relations gate execution. |
+| **Parent issue** | One bounded deliverable split into child issues/PRs, never a substitute for a project or milestone. |
+| **Loops** | Available candidate intake/enrichment automation. `MOV-156` is optional paid `Icebox` work and is not a kickoff or acceptance dependency. |
+| **Agent Sessions** | Optional presentation/latency enrichment over the durable issue/PR/branch lifecycle. `MOV-159` authorized the receiver architecture and `MOV-166` owns implementation/live validation; polling and app-actor comments remain the complete fallback. |
 | **Linear Coding Session** | The intended cloud execution adapter. The Basic plan is eligible and the workspace feature is on, but no moviecal environment or AI-credit pilot has been verified; `MOV-153` remains the configuration gate. |
 | **Local dispatcher** | The Mac execution adapter. Built and running (`MOV-120`); polls `Ready for Agent`, promotes from `Backlog` (`MOV-129`), provisions worktrees, spawns workers. |
 | **GitHub checks** | The merge gate. `master-protection` requires `lane-baseline`, `lane-unit`, `lane-integration`, `lane-browser`, `lane-review`, with `bypass_actors: []`. Identical for both adapters. |
@@ -131,12 +136,14 @@ three mutually-exclusive options, one per adapter plus one for "executes
 nowhere":
 
 - **Mac** — iOS Companion App project, anything Xcode-dependent, anything
-  needing a local secret or the self-hosted runner. This is also the default
-  and the fallback: an issue whose route is unclear goes here.
+  in Local development workflow stabilization and governance, anything needing
+  a local secret or the self-hosted runner. This is also the default and the
+  fallback: an issue whose route is unclear goes here.
 - **Cloud** — eligible non-iOS work, once the cloud adapter is piloted and
   proven (§Rollout gates).
 - **None** — coordination/umbrella issues that must never produce their own PR
-  (e.g. `MOV-139`); excluded from the automated promoter.
+  and are excluded from the automated promoter. `MOV-139` is a canceled
+  historical example; the hybrid project now owns project-wide coordination.
 
 The route may be *inferred* by rule, but it is **materialized on the issue
 before dispatch** so the decision is auditable after the fact, with an
@@ -158,13 +165,22 @@ future adapter must bring its own writer identity rather than inheriting
 Sequencing is unchanged and adapter-independent: `blocks` relations plus the
 dispatcher's preflight gates decide *when*; the route decides *where*.
 
+The **Hybrid Linear cloud + Mac workflow** project is intentionally
+mixed-route. Its project name cannot infer one adapter for every issue, so an
+unlabelled issue safely infers Mac while either explicit `execution:cloud` or
+`execution:mac` is valid. Semantic Mac-only constraints still win: an iOS,
+Xcode, self-hosted-runner, or local-secret issue cannot be labelled cloud even
+inside the hybrid project.
+
 `MOV-142` provisions these routes as a mutually-exclusive Linear label group
 (`execution:cloud` / `execution:mac` / `execution:none`) and supplies the
 deterministic inference: `type:coordination` → `execution:none`; the iOS
-Companion App project, Xcode/Simulator/runner work, and local-secret work →
-`execution:mac`; supported non-iOS projects → `execution:cloud`; anything
-ambiguous → `execution:mac`. Inference is advisory — the label must be
-materialized on the issue to be authoritative.
+Companion App and Local development workflow stabilization and governance
+projects, Xcode/Simulator/runner work, and local-secret work → `execution:mac`;
+supported non-iOS product projects → `execution:cloud`; the mixed hybrid
+project and anything ambiguous → `execution:mac` until an explicit route is
+materialized. Inference is advisory — the label must be materialized on the
+issue to be authoritative.
 
 `MOV-142` wired this into exactly one behaviour: an issue that infers
 `execution:none` never auto-promotes. `MOV-143` added the second: the local
@@ -177,67 +193,73 @@ race. Applying the labels and delegations to the existing backlog is an
 operator step, not part of that change — `dispatcher dry-run` reports exactly
 which queued issues are executable (`docs/operators/local-execution.md`
 §Dispatch trigger). An `execution:cloud` issue is not runnable until the cloud
-lane is piloted (stage 7 below) regardless.
+lane passes the environment, kickoff, and pilot gates below.
 
 ## Feasibility gates
 
-`MOV-141` validated every capability below on 2026-09-10. "Plan-supported" is
-not the same as "ready": unconfigured or Developer Preview surfaces stay behind
-their implementation gates, and each has a named fallback so the architecture
-degrades rather than stalls. See
+`MOV-141` performed the original validation on 2026-09-10; later workspace
+availability and the `MOV-159` decision supersede the rows noted below.
+"Available" is not the same as "ready": unconfigured or Developer Preview
+surfaces stay behind their implementation gates, and each has a named fallback
+so the architecture degrades rather than stalls. See
 `docs/governance/mov-141-linear-capability-findings.md` for evidence and cost
 details.
 
-**These gates are asymmetric.** Every capability here is something the *cloud*
-path would newly depend on. None of them gates the Mac adapter, which is built,
-running, and depends on none of these — its "fallback" column is, in every case,
-just what it already does. If every gate below fails, the Mac lane is unaffected
-and the system is exactly what it is today.
+**These gates are asymmetric.** They govern optional cloud execution or richer
+Linear presentation; none replaces the Mac adapter's durable polling/comment
+path. If a capability below fails, the fallback is the already-operational Mac
+lane and manual Linear workflow rather than a stalled delivery system.
 
 | Capability | Status | Fallback if unsupported |
 |---|---|---|
-| Loops available on the workspace plan | **unsupported on current Basic plan**; Business required | Manual/`Triage` intake as today |
-| Loop can delegate directly to the `moviecal-dispatcher` agent | **unproven and unnecessary** while Loops are unavailable | **Proven:** write `execution:mac` + `moviecal-dispatcher` delegate; dispatcher polling reads both (`MOV-165`) |
+| Loops available on the workspace plan | **available, but not enabled for moviecal intake**; `MOV-156` is optional paid `Icebox` work | Manual/`Triage` intake as today |
+| Loop can delegate directly to the `moviecal-dispatcher` agent | **not a required gate**; any future Loop must call the same bounded routing/delegation operation | **Proven:** write `execution:mac` + `moviecal-dispatcher` delegate; dispatcher polling reads both (`MOV-165`) |
 | Coding Session can be resumed/followed-up after CI or review feedback | product-supported, but same-branch behavior **unproven in moviecal** until `MOV-153` | Human repairs the original cloud PR branch on the Mac; `MOV-149`/`MOV-157` must support existing cloud branches before automating the handoff |
-| Agent Session lifecycle (create / activity / prompt / stop-signal / stale-session / PR-link) for the custom app actor | **unsupported in current configuration**; live creation returned `agent sessions disabled`; API is Developer Preview | Continue stable app-actor GraphQL (issue fields, comments, states) and let the Mac adapter carry the work |
-| Webhook delivery sufficient to replace polling | **not configured and not required**; Agent Session UI requires the Agent Session event category plus an HTTPS receiver | Retain 30s polling as the complete durable-workflow fallback; never expose the Mac directly |
+| Agent Session lifecycle (create / activity / prompt / stop-signal / stale-session / PR-link) for the custom app actor | `MOV-159` decided **GO** on an authenticated hosted receiver; `MOV-166` is authorized but not implemented/live-validated | Continue stable app-actor GraphQL (issue fields, comments, states) and let the Mac adapter carry the work |
+| Webhook delivery sufficient to replace polling | **deliberately no**; `MOV-166` may add an authenticated hosted receiver plus outbound Mac stream for latency, never authority | Retain 30s polling as the complete durable-workflow fallback; never expose the Mac directly |
 | AI-credit consumption per cloud session | **known formula, not yet measured:** provider token cost + $0.25 per 20-minute sandbox block | Cloud pilot stays off until a human verifies/adds a capped balance and `MOV-153` records the first session's actual cost |
 
 **Developer Preview caveat.** Linear's custom Agent Session APIs are Developer
-Preview. Nothing on the critical path may depend on them without a non-preview
-fallback that is itself proven. A preview API breaking must degrade the system
-to the Mac lane, never halt it. To be explicit about scope: the dispatcher does
-**not** use these APIs today — it authenticates as the `MOV-122` app actor and
-uses only stable GraphQL (`commentCreate`, `issueUpdate`). This gate constrains
-what the *cloud* lane may build on, and retroactively condemns nothing.
+Preview. Nothing on the durable control path may depend on them without the
+proven polling/comment fallback. A preview API breaking must lose presentation
+or latency, never issue/PR/branch identity or dispatch. `MOV-158` supplies the
+feature-gated lifecycle bridge; `MOV-166` may enable it only after the approved
+receiver passes live validation.
 
-**Plan and cost.** The workspace is on Basic. Coding Sessions are eligible on
-Basic; Loops require Business (published annual pricing on the validation date:
-$16/user/month). Both consume prepaid AI credits. Coding Sessions cost provider
-tokens plus $0.25 per 20-minute sandbox block; Loop-only runs typically cost
-$0.07–$0.20. **No upgrade or AI-credit purchase is authorized by this
-document.** See the MOV-141 findings for the capped pilot budget.
+**Plan and cost.** Coding Sessions and Loops can consume paid capacity. Their
+current UI availability does not authorize a subscription change, AI-credit
+purchase, or automatic spend. `MOV-153` owns the capped Coding Session proof;
+`MOV-156` remains optional paid `Icebox` work and must not become a hidden
+hybrid dependency.
 
 ## Rollout gates
 
-Staged; each gate must hold before the next opens. Every stage is independently
-reversible.
+The rollout is a dependency graph, not a requirement to serialize every
+adjacent milestone. Milestone order communicates the narrative; native issue
+relations enforce only the hard gates below. Independent branches may advance
+in parallel, and every component remains independently reversible.
 
-1. **Architecture recorded** (this document) — docs only, nothing enabled.
-2. **Feasibility validated** (`MOV-141`) — every capability marked supported,
-   unsupported, or fallback-required, with cost recorded.
-3. **Routing provisioned** (`MOV-142`) — `execution:*` labels exist, validation
-   rejects conflicts, coordination issues excluded from promotion.
-4. **Mac lane hardened** (`MOV-143`–`MOV-146`) — dispatch restricted to
-   Mac-routed, `moviecal-dispatcher`-delegated issues (`MOV-143`, done);
-   singleton/crash-recovery, worker safety enforcement, service verified.
-5. **Observation before action** (`MOV-147`, `MOV-148`, `MOV-152`) — CI/review
-   state is observed and reported to Linear before anything reacts to it.
-6. **Bounded repair** (`MOV-149`, `MOV-150`, `MOV-151`) — human-triggered
-   repair first, then bounded automatic repair.
-7. **Cloud pilots** (`MOV-153`–`MOV-155`) — low-risk docs/test work first, then
-   web/server work, with an eligibility matrix published.
-8. **Acceptance drills** (`MOV-161`), then risk-scoped auto-merge (`MOV-162`).
+1. **Architecture and feasibility** (`MOV-140`, `MOV-141`) — completed.
+2. **Routing and Mac foundations** (`MOV-142`–`MOV-146`, plus repository-model
+   alignment in `MOV-213`) — route labels, single-writer delegation, recovery,
+   safety, and service behavior must be valid before unified kickoff.
+3. **CI/review observation and bounded reaction** (`MOV-147`–`MOV-152`) —
+   completed before pilots rely on merge reconciliation or repair.
+4. **Cloud environment and kickoff** — `MOV-153` proves the environment, then
+   `MOV-157` proves exactly-one route-aware kickoff and the Mac fallback.
+5. **Cloud pilots** — `MOV-157` gates `MOV-154`; the low-risk pilot gates
+   `MOV-155`, which publishes the eligibility matrix.
+6. **Agent Session branch** — `MOV-159` authorized the receiver; `MOV-166`
+   implements and live-validates it. This branch may run in parallel with the
+   cloud work because polling/comments remain complete without it.
+7. **Local handoff and policy** — local stabilization exits through
+   `MOV-211` → `MOV-212`; `MOV-160` resolves testing/readiness policy. These may
+   also proceed in parallel.
+8. **Convergence and autonomy** — required cloud, Mac, Agent Session, policy,
+   and local-handoff deliverables block `MOV-161`; acceptance drills then gate
+   risk-scoped auto-readiness/merge in `MOV-162`.
+
+`MOV-156` is excluded from this graph while it remains optional `Icebox` work.
 
 ## Rollback
 
@@ -264,9 +286,9 @@ unchanged. Nothing here introduces a one-way door.
   `docs/governance/linear-information-architecture.md` §Deliberately not
   adopted. Coding Sessions are now the intended cloud adapter — **subject to
   the feasibility gates above**, and never for iOS work.
-- The blanket rejection of **Loops** on tier grounds in the same section. Loops
-  remain an intake candidate, but `MOV-141` confirmed that they require a
-  separately approved Business upgrade and AI-credit budget.
+- The blanket rejection of **Loops** on tier grounds in the same section.
+  Loops are now available as an intake candidate, but `MOV-156` remains an
+  optional paid experiment rather than a required delivery gate.
 
 Retired GitHub-Project-era material in `docs/operators/archive/` and
 `docs/planning/archive/` is unaffected and remains historical reference only.
