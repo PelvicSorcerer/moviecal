@@ -11,7 +11,7 @@ Use this checklist when updating docs before or during feature work. It describe
 - `docs/technical/*`: architecture, auth/security, data model, API design, calendar feed, TMDb, deployment.
 - `docs/planning/repository-testing-strategy.md`: authoritative repository testing policy and test-layer guidance.
 - `docs/planning/testing-lanes.md`: explicit lane commands, CI job names, and what each lane is expected to catch.
-- `docs/planning/manual-versus-automated-testing-policy.md`: manual-only, temporary-manual, and automated-required check classification; promotion rules for recurring manual regressions.
+- `docs/planning/manual-versus-automated-testing-policy.md`: automated, local-agent evidence, temporary-manual, and permanently manual-only verification classification; human-testing declaration and draft-to-ready rules; promotion rules for recurring manual regressions.
 - `docs/planning/*`: implementation plan, issue hygiene, and recommended sequence.
 
 ## Consistency checks

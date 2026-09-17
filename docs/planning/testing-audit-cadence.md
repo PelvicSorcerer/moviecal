@@ -2,7 +2,7 @@
 
 This document defines when the repository's testing health is reviewed, what is checked, and how findings re-enter the project queue. It is part of the testing governance program tracked in #122.
 
-For the check classifications (automated-required, temporary-manual, manual-only) that determine which gaps are promotion candidates, see [manual-versus-automated-testing-policy.md](./manual-versus-automated-testing-policy.md). For the capability-to-layer map used to assess coverage gaps, see [repository-testing-strategy.md](./repository-testing-strategy.md). For quarantine rules, see [browser-runtime-test-stability.md](./browser-runtime-test-stability.md).
+For the verification classifications (automated, local-agent evidence, temporary-manual, permanently manual-only) that determine which gaps are promotion candidates, see [manual-versus-automated-testing-policy.md](./manual-versus-automated-testing-policy.md). For the capability-to-layer map used to assess coverage gaps, see [repository-testing-strategy.md](./repository-testing-strategy.md). For quarantine rules, see [browser-runtime-test-stability.md](./browser-runtime-test-stability.md).
 
 ## Trigger
 

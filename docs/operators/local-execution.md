@@ -43,6 +43,15 @@ The previous system assumed agents ran in degraded cloud containers: no `gh` CLI
   GitHub auto-merge on green required checks → Linear moves to Done automatically
 ```
 
+Draft is a hard handoff boundary, not an intermediate state the dispatcher may
+clear. An authorized human reviewer promotes it only after applying
+`docs/planning/manual-versus-automated-testing-policy.md` and completing the
+PR's structured `Readiness Evidence`. Low-risk work may be promoted without a
+human test run only when the issue explicitly says `Human testing:
+not-required`, all acceptance criteria have automated or reproducible
+local-agent evidence, and no mandatory human gate applies. Missing evidence or
+a missing marker keeps the PR draft.
+
 Dispatcher code lives in `tools/dispatcher/` in this repository (TypeScript, using the repo's existing Node 24 + Vitest toolchain). Runtime config lives outside the repo at `~/.config/moviecal/` (mode 700) — API keys and `.env.local` must never be committed. Run logs live at `~/Library/Logs/moviecal-dispatcher/`, retained 90 days.
 
 ## Dispatch trigger
