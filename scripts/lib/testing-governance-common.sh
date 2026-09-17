@@ -45,6 +45,10 @@ testing_governance_validate() {
       echo "MISSING required 'Test Impact' section in .github/pull_request_template.md" >&2
       failures=$((failures + 1))
     fi
+    if ! grep -q "^## Readiness Evidence" "$pr_template" || ! grep -q "Human testing:" "$pr_template"; then
+      echo "MISSING structured readiness evidence / human-testing marker in .github/pull_request_template.md" >&2
+      failures=$((failures + 1))
+    fi
   else
     echo "MISSING .github/pull_request_template.md" >&2
     failures=$((failures + 1))
@@ -54,6 +58,10 @@ testing_governance_validate() {
   if [ -f "$agent_task_template" ]; then
     if ! grep -qi "Testing Expectations" "$agent_task_template"; then
       echo "MISSING required 'Testing Expectations' section in .github/ISSUE_TEMPLATE/agent_task.md" >&2
+      failures=$((failures + 1))
+    fi
+    if ! grep -q "^## Manual Verification" "$agent_task_template" || ! grep -q "^Human testing:" "$agent_task_template"; then
+      echo "MISSING structured Manual Verification / human-testing marker in .github/ISSUE_TEMPLATE/agent_task.md" >&2
       failures=$((failures + 1))
     fi
   else

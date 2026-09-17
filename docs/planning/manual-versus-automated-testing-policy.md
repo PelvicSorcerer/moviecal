@@ -6,11 +6,13 @@ For environment rules shared by manual and automated testing modes, especially d
 
 Manual testing and automated testing work together. Automation provides fast, repeatable regression confidence on stable product surfaces. Manual testing covers exploratory work, release confidence, and gaps that automation cannot yet prove deterministically. Manual testing does not replace automation for behavior that can and should be verified in pull-request validation.
 
-## Check classifications
+## Verification classifications
 
-Every verification step should fit one of three classes.
+Every verification step must fit one of four classes. The classification says
+both who can supply the evidence and whether that evidence can be repeated in
+pull-request validation.
 
-### Automated-required
+### Automated (required)
 
 Behavior in this class must be covered by automated tests in pull-request validation when the affected surface is deterministic enough to run in CI.
 
@@ -25,6 +27,24 @@ Examples:
 If automated coverage is not practical in the same pull request, the issue **Testing Expectations** and PR **Test Impact** sections must name a concrete follow-up issue before review handoff. Do not leave automated-required behavior on an open-ended manual checklist.
 
 See [repository-testing-strategy.md](./repository-testing-strategy.md) for the capability-to-layer map and mock-versus-real integration rules.
+
+### Local-agent evidence
+
+Behavior in this class is verified by a local agent in the provisioned issue
+worktree, but is not part of a deterministic CI lane. Evidence must be
+reproducible and attached to the handoff or PR: the exact command or procedure,
+environment assumptions, result, and any artifact path or link.
+
+Examples:
+
+- a macOS-only integration check that cannot run on GitHub-hosted Linux
+- a disposable local-stack or simulator command whose setup is not a required CI lane
+- a one-time migration, packaging, or operator exercise with captured output
+
+Local-agent evidence is not human testing. It cannot satisfy a human gate for
+subjective judgment, assistive-technology use, a physical device, or a
+security-sensitive user flow. Stable repeatable evidence should move into
+automated-required coverage rather than remain in this class indefinitely.
 
 ### Temporary-manual
 
@@ -44,7 +64,7 @@ Temporary-manual checks are time-bounded. Each one needs either:
 
 Do not treat temporary-manual checks as permanent substitutes for automation on stable product surfaces.
 
-### Manual-only
+### Permanently manual-only
 
 Behavior in this class is appropriately verified by humans and is not expected to move into everyday pull-request automation.
 
@@ -56,7 +76,71 @@ Examples:
 - calendar-client behavior in external apps such as iOS Calendar after subscribing to a feed
 - visual polish, copy clarity, and layout judgment that automated assertions would make brittle
 
-Manual-only checks may still inspire follow-up automation when a pattern becomes repeatable, but they do not create the same promotion obligation as temporary-manual or recurring regression checks.
+Permanently manual-only checks may still inspire follow-up automation when a pattern becomes repeatable, but they do not create the same promotion obligation as temporary-manual or recurring regression checks.
+
+## Declaring whether human testing is required
+
+Every local implementation issue must contain a `## Manual Verification`
+section with exactly one structured marker:
+
+- `Human testing: required`
+- `Human testing: not-required`
+
+Absence of the section or marker is an incomplete issue, never an implicit
+waiver. `not-required` is allowed only when all acceptance criteria are covered
+by automated-required checks and/or reproducible local-agent evidence and none
+of the mandatory human gates below applies. The issue must explain the
+rationale. `required` must include an issue-specific checklist whose items are
+classified as temporary-manual or permanently manual-only.
+
+Human testing is always required for:
+
+- iOS simulator interaction, physical-device behavior, external iOS app
+  integration, and platform permission flows (an `xcodebuild` result alone is
+  local-agent or automated evidence, not interactive evidence)
+- visual polish, responsive layout judgment, animation, and screenshot review
+- accessibility behavior that depends on VoiceOver, keyboard/focus traversal,
+  Dynamic Type, contrast judgment, or another assistive technology
+- auth, authorization, private-data, token, calendar-feed, destructive-data,
+  payment, or production/deployment flows where a failure could expose data or
+  materially affect a user
+
+Low-risk documentation, internal refactors, pure helpers, and deterministic
+server changes may use `Human testing: not-required` when their automated and
+local-agent evidence covers every acceptance criterion. Risk labels do not
+waive the gates above.
+
+Representative decisions:
+
+| Change surface | Default declaration | Required evidence |
+|---|---|---|
+| Web copy or layout visible to users | `required` | CI plus human visual/accessibility checklist as applicable |
+| Deterministic server helper or route with no sensitive boundary | `not-required` | Unit/integration coverage for every acceptance criterion |
+| Auth, authorization, private database/RLS, or calendar-token flow | `required` | Automated security boundary coverage plus a disposable-account human checklist |
+| Database migration with no user-visible or sensitive behavior | Case by case | Real-stack automation or reproducible local-agent evidence; human testing if destructive or privacy-sensitive |
+| iOS build-only configuration | Case by case | `xcodebuild` evidence may support `not-required` only when no simulator/device interaction or platform permission behavior changes |
+| iOS UI, simulator/device, external Calendar, or permission behavior | `required` | iOS lane evidence plus a human simulator/device checklist |
+
+## Draft-to-ready decision
+
+The local dispatcher always opens a draft PR. Only an authorized human reviewer
+may promote that draft to ready for review; the worker and unattended
+dispatcher never do so.
+
+Before promotion, the reviewer confirms the PR's `## Readiness Evidence`
+section records:
+
+- the same `Human testing` marker as the issue
+- passing required CI and the exact local-agent evidence, if any
+- for `required`, the human tester and dated checklist result, including any
+  failed or deferred item
+- for `not-required`, the reviewer-approved rationale that every acceptance
+  criterion is covered and no mandatory human gate applies
+- `Ready promoted by`, naming the human reviewer and date
+
+A failed checklist keeps the PR in draft until fixed and re-tested. A deferred
+required item keeps it in draft unless the issue scope and acceptance criteria
+are explicitly changed by a human. Green CI alone never promotes a draft.
 
 ## How manual checklists relate to automated coverage
 
@@ -66,12 +150,14 @@ Issue-specific manual checklists and automated tests answer different questions:
 |---|---|---|
 | **Testing Expectations** (issue) | What automated coverage should this change add or update? | Issue body |
 | **Test Impact** (PR) | What automated coverage actually changed, or why not? | PR body |
-| **Manual testing checklist** | What still needs human eyes on the pushed branch before review? | Worker handoff / orchestrator collection |
+| **Manual Verification** (issue) | Is human execution required, and why? | Issue body |
+| **Readiness Evidence** (PR) | Who supplied the required automated, agent, and human evidence and who approved readiness? | PR body |
 
 Use this split consistently:
 
 - Put deterministic behavior in **Testing Expectations** and automate it in the same PR when practical.
-- Put only temporary-manual and manual-only behavior in the issue-specific manual checklist.
+- Put reproducible non-CI worktree results in local-agent evidence.
+- Put only temporary-manual and permanently manual-only behavior in a required issue-specific manual checklist.
 - Do not duplicate automated-required checks in the manual checklist unless the issue explicitly calls for a release-confidence spot check on top of existing automation.
 - When a manual checklist item verifies the same behavior as an automated test, prefer the automated test for everyday regression and drop the manual duplicate on the next pass.
 
@@ -95,13 +181,13 @@ Promotion workflow:
 3. Link that follow-up issue from the originating PR **Test Impact** section if the automation will not land in the same PR.
 4. Remove the manual duplicate once automated coverage exists and is referenced in **Test Impact**.
 
-Do not close a promotion loop by widening manual checklists indefinitely. The goal is to shrink temporary-manual scope over time while keeping manual-only judgment where humans add real value.
+Do not close a promotion loop by widening manual checklists indefinitely. The goal is to shrink temporary-manual scope over time while keeping permanently manual-only judgment where humans add real value.
 
 ## Operating rules
 
 - Run `npm run verify` (and any issue-specific automated commands) before asking for human local testing.
-- Human local testing happens on the pushed issue branch before the PR is promoted from draft or work-in-progress to ready for review.
-- Every implementation issue should include both **Testing Expectations** and an issue-specific manual testing checklist. See `AGENTS.md`, `.github/ISSUE_TEMPLATE/agent_task.md`, and `.github/pull_request_template.md`.
+- When required, human local testing happens on the pushed issue branch before the PR is promoted from draft or work-in-progress to ready for review.
+- Every local implementation issue must include both **Testing Expectations** and **Manual Verification**. A checklist is mandatory when `Human testing: required`; a rationale is mandatory when `Human testing: not-required`.
 - Deferred automated coverage must reference a concrete follow-up issue number, not a vague backlog note.
 - Keep all examples, fixtures, seeded data, and disposable credentials fake or dev-only. Do not use production secrets, private URLs, or real user data in manual or automated test guidance.
 

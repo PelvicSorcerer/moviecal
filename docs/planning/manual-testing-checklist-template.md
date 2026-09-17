@@ -1,6 +1,6 @@
 # Manual testing checklist template
 
-Use this template when the orchestrator hands an implementation branch to a human tester for local verification.
+Use this template when an issue declares `Human testing: required` and an implementation branch is handed to a human tester for local verification. If the issue declares `Human testing: not-required`, record the rationale in the issue and PR instead; do not create an empty checklist.
 
 Manual testing should happen on the pushed worker-owned issue branch before the PR is promoted to ready for review. A draft PR may exist earlier for visibility, but draft status does not replace the checklist.
 
@@ -12,6 +12,7 @@ Classify each checklist item using [manual-versus-automated-testing-policy.md](.
 - Branch to test: `[BRANCH_NAME]`
 - Environment/setup assumptions:
   - `[Required auth state, test user, seed data, env vars, feature flags]`
+- Classification for each check: `[temporary-manual | permanently manual-only]`
 - Happy-path checks:
   - `[Primary user flow step 1]`
   - `[Primary user flow step 2]`

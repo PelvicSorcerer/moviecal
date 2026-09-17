@@ -22,7 +22,14 @@ State the expected automated coverage up front. Use `docs/planning/repository-te
 - Verification commands: <!-- e.g. npm run verify, npm run lane:browser -->
 - Deferred coverage follow-up: <!-- if any layer above is deferred, name the concrete follow-up Linear issue that must exist before merge; do not defer to a vague umbrella testing issue -->
 
-- Manual testing checklist: issue-specific local verification steps for the human tester, including setup assumptions, happy path, edge cases, regression checks, and expected results
+## Manual Verification
+
+Human testing: <!-- required | not-required; delete one. This marker is mandatory. -->
+
+- Rationale: <!-- explain why human testing is required, or why deterministic automation/local-agent evidence covers every acceptance criterion and no mandatory human gate applies -->
+- Local-agent evidence: <!-- exact non-CI commands/procedure and expected artifacts, or "none" -->
+- Manual testing checklist: <!-- mandatory when required: classified temporary-manual/permanently manual-only steps with setup, happy path, edge cases, regressions, and expected results; omit when not-required -->
+
 - Security notes: required for auth, database, calendar, cron, tokens, or secrets work
 - Out of scope: prevent adjacent backlog creep
 - Constraints: (e.g., no secrets, TypeScript strict, keep changes small)
