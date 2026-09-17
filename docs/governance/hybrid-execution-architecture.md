@@ -4,8 +4,9 @@
 adapter. Linear Coding Sessions are a separately deferred option, not a
 dependency of local delivery. The filename is retained because it is linked
 from completed hybrid-foundation issues and decision records. The bounded
-intake Loop is also live, but it is not an implementation adapter and stops
-before execution or delegation.
+intake and handoff Loops are also live, but neither is an implementation
+adapter. Intake stops before delegation; handoff may set only the dispatcher
+delegate on an already-eligible `execution:mac` issue.
 
 This document is the authoritative statement of how `moviecal` turns Linear
 work into repository changes. `docs/operators/local-execution.md` is the
@@ -174,7 +175,8 @@ The current capabilities differ:
 
 ### Loops
 
-`MOV-156` and `MOV-220` are active local-delivery work, not cloud work.
+`MOV-156` and `MOV-220` are validated local-delivery capabilities, not cloud
+work.
 Their bounded roles are:
 
 - enrich intake and draft a complete specification;
@@ -197,7 +199,18 @@ writing code, opening branches/PRs, delegating, or acting directly on GitHub.
 Three fixture runs cost $1.21 under a $2 weekly cap. See
 [`mov-156-linear-intake-loop-validation.md`](mov-156-linear-intake-loop-validation.md)
 for the permissions, fixtures, corrective boundedness test, cost, and rollback
-evidence. `MOV-220` still owns the separate handoff.
+evidence.
+
+`MOV-220` live-validated the separate handoff on 2026-09-17. The published
+**Moviecal local handoff** Loop triggers only on a `Moviecal` issue entering
+`Ready for Agent`, can mutate only that triggering issue, and sets only
+`delegate = moviecal-dispatcher` after rechecking the complete route,
+specification, dependency, human-only, coordination, and delegation boundary.
+Happy-path, replay, cancellation, route-change, delegation-removal, and
+Mac-offline fixtures produced exactly the expected one-or-zero local attempts.
+See
+[`mov-220-loop-to-mac-handoff-validation.md`](mov-220-loop-to-mac-handoff-validation.md)
+for the configuration, fixture evidence, failure follow-up, and rollback.
 
 ### Agent Sessions
 
