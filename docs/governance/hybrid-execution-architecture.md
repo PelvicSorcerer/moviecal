@@ -3,7 +3,9 @@
 **Status: active.** The Mac dispatcher is the only enabled implementation
 adapter. Linear Coding Sessions are a separately deferred option, not a
 dependency of local delivery. The filename is retained because it is linked
-from completed hybrid-foundation issues and decision records.
+from completed hybrid-foundation issues and decision records. The bounded
+intake Loop is also live, but it is not an implementation adapter and stops
+before execution or delegation.
 
 This document is the authoritative statement of how `moviecal` turns Linear
 work into repository changes. `docs/operators/local-execution.md` is the
@@ -187,6 +189,15 @@ human-only `MOV-156`; repository code cannot grant or inspect those
 workspace-level permissions. A Loop run is therefore never itself proof that
 an issue is dispatchable—the ordinary route, delegate, readiness, dependency,
 and preflight gates still decide that.
+
+`MOV-156` live-validated the published intake role on 2026-09-17. It processes
+exactly one oldest `Triage` issue per run, has no connectors or web search, and
+is explicitly forbidden from starting Coding Sessions or other agent sessions,
+writing code, opening branches/PRs, delegating, or acting directly on GitHub.
+Three fixture runs cost $1.21 under a $2 weekly cap. See
+[`mov-156-linear-intake-loop-validation.md`](mov-156-linear-intake-loop-validation.md)
+for the permissions, fixtures, corrective boundedness test, cost, and rollback
+evidence. `MOV-220` still owns the separate handoff.
 
 ### Agent Sessions
 

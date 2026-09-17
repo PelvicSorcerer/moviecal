@@ -14,6 +14,12 @@ This design deliberately does not reproduce the GitHub Project's fields one-for-
 
 **Paid AI capabilities remain explicitly bounded.** `MOV-156` is active local-delivery work for least-privilege intake enrichment, with a capped budget and no Coding Session permission; `MOV-220` separately owns the Loop-to-Mac handoff. Coding Session work (`MOV-153`–`MOV-155`, plus `MOV-157`) is isolated in the deferred-cloud project and remains in `Icebox`. Nothing here authorizes a credit purchase, cloud pilot, or automatic paid execution. See `docs/governance/mov-141-linear-capability-findings.md` for dated evidence and `docs/governance/hybrid-execution-architecture.md` for current gates and fallbacks.
 
+`MOV-156` subsequently validated and enabled the intake Loop with a $2 weekly
+per-Loop cap. At validation the workspace had $0 workspace credits, automatic
+reload disabled, and $20 promotional Loop credits; three runs cost $1.21. See
+`docs/governance/mov-156-linear-intake-loop-validation.md` for the live
+configuration and audit evidence.
+
 **Initiatives:** initiative creation and linking is enabled on this workspace. The original Basic-plan probe found the lead-team sub-feature gated, but with one team (`MOV`) that field adds nothing; `provision-linear-workspace.mjs` therefore creates initiatives without a lead-team assignment.
 
 ## Workspace / Teams
@@ -145,7 +151,7 @@ The supervision dashboard for a human overseeing autonomous work. **Build these 
 - **Triage Intelligence / Insights / Asks** — Business-plan features; this project's intake volume does not justify the tier.
 - **Project health / updates** — solo project, no external stakeholders to report to. Revisit if that changes.
 
-**Gated capabilities:** **Linear Coding Sessions** are preserved as a deferred option, isolated in their own project and `Icebox` chain; they are not the current default for non-iOS work. **Loops** are now scoped to the active local project through `MOV-156` and `MOV-220`, but must have no Coding Session permission and must preserve manual/Triage intake plus the promoter as a complete fallback. Cloud execution never covers iOS/Xcode work. See `docs/governance/hybrid-execution-architecture.md`.
+**Gated capabilities:** **Linear Coding Sessions** are preserved as a deferred option, isolated in their own project and `Icebox` chain; they are not the current default for non-iOS work. **Loops** are adopted only for the bounded intake role validated by `MOV-156`; the distinct `MOV-220` handoff remains gated. The Loop has no Coding Session authorization and preserves manual/Triage intake plus the promoter as a complete fallback. Cloud execution never covers iOS/Xcode work. See `docs/governance/hybrid-execution-architecture.md`.
 
 ## Agent Guidance vs. repository files
 

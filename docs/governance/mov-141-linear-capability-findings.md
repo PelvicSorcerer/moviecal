@@ -12,7 +12,9 @@ use `docs/governance/hybrid-execution-architecture.md` for that.
 > implemented under `MOV-166` and its review-sized splits, but Agent Sessions
 > remain optional enrichment rather than a local-dispatch dependency. Loops
 > are now scoped by `MOV-156`/`MOV-220`; Coding Sessions remain separately
-> deferred in `Icebox`.
+> deferred in `Icebox`. The subsequent bounded Loop configuration, fixture
+> evidence, and measured cost are recorded in
+> `docs/governance/mov-156-linear-intake-loop-validation.md`.
 
 No plan change, AI-credit purchase, Loop run, Coding Session, production
 secret, deployment, or release was used for this validation.
