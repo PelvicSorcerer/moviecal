@@ -151,7 +151,7 @@ The supervision dashboard for a human overseeing autonomous work. **Build these 
 - **Triage Intelligence / Insights / Asks** — Business-plan features; this project's intake volume does not justify the tier.
 - **Project health / updates** — solo project, no external stakeholders to report to. Revisit if that changes.
 
-**Gated capabilities:** **Linear Coding Sessions** are preserved as a deferred option, isolated in their own project and `Icebox` chain; they are not the current default for non-iOS work. **Loops** are adopted only for the bounded intake role validated by `MOV-156`; the distinct `MOV-220` handoff remains gated. The Loop has no Coding Session authorization and preserves manual/Triage intake plus the promoter as a complete fallback. Cloud execution never covers iOS/Xcode work. See `docs/governance/hybrid-execution-architecture.md`.
+**Gated capabilities:** **Linear Coding Sessions** are preserved as a deferred option, isolated in their own project and `Icebox` chain; they are not the current default for non-iOS work. **Loops** are adopted only for the bounded intake role validated by `MOV-156` and the distinct delegate-only local handoff validated by `MOV-220`. Neither Loop has Coding Session authorization. Manual/Triage intake, the promoter, manual delegation, and dispatcher polling remain the complete fallback. Cloud execution never covers iOS/Xcode work. See `docs/governance/hybrid-execution-architecture.md`.
 
 ## Agent Guidance vs. repository files
 

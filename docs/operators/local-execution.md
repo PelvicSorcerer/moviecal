@@ -76,6 +76,17 @@ Because routing and delegation are ordinary Linear fields a human can change at 
 
 **Delegation is a prerequisite, not a formality.** An issue that is specced, promoted, and correctly labeled `execution:mac` still will not run until it is delegated to `moviecal-dispatcher` in Linear. `dispatcher doctor` prints the identity being matched, and `dispatcher dry-run` prints each queued issue's delegate and eligibility, so an empty run is diagnosable rather than mysterious. The identity is matched against the app's workspace name and, when set, `LINEAR_APP_ACTOR_ID` from `~/.config/moviecal/linear-app.env` (MOV-122); either identifier qualifies. Setting that variable to the actor's real UUID (it currently holds the app *name*) tightens the match.
 
+**Bounded automatic handoff (MOV-220).** The enabled **Moviecal local
+handoff** Linear Loop watches only `Moviecal` issues entering `Ready for
+Agent`. It rechecks the full local boundary and, for a complete unblocked
+non-human-only, non-coordination issue carrying exactly `execution:mac`, may
+set only `delegate = moviecal-dispatcher`. It cannot start a Coding Session or
+worker, cannot choose `execution:cloud`, and cannot make other issue changes.
+An already-matching delegate is a no-op. Disable that Loop to return to manual
+delegation; the polling dispatcher and every gate in this section are
+unchanged. Configuration and live stop/replay/offline evidence are recorded in
+`docs/governance/mov-220-loop-to-mac-handoff-validation.md`.
+
 ## Automated promotion
 
 `Ready for Agent` is filled automatically, not by hand (MOV-129), and the dispatcher now runs **priority propagation before promotion** (MOV-366). Poll-cycle order is:
