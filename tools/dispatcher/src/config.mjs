@@ -33,6 +33,17 @@ export function envLocalPath() {
   return path.join(configDir(), "env.local");
 }
 
+/**
+ * MOV-166: the Mac's own record of the two Agent Session receiver secrets.
+ * Only `streamCredential` is read by dispatcher code at runtime (it
+ * authenticates the Mac's outbound stream connection); `webhookSigningSecret`
+ * is kept here purely so rotation has one local place to look -- the receiver
+ * (on Vercel) is what actually verifies it, never this process.
+ */
+export function agentSessionEnvPath() {
+  return path.join(configDir(), "agent-session.env");
+}
+
 export function worktreesStatePath() {
   return path.join(configDir(), "worktrees.json");
 }
@@ -181,6 +192,23 @@ export function agentSessionsEnabled(env = process.env) {
 
 function truthy(value) {
   return ["1", "true", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+/**
+ * MOV-166: the Mac's outbound Agent Session stream endpoint and credential --
+ * the only Agent Session secret this process ever reads. The webhook signing
+ * secret is a *receiver*-side credential (verified on Vercel, never here); an
+ * operator may keep their own reference copy of it in the same file at
+ * `agentSessionEnvPath()` for rotation convenience, but this loader
+ * deliberately never names or parses that key, so the dispatcher itself
+ * stays free of it -- see the structural guard in dispatcher-wiring.test.mjs.
+ */
+export function loadAgentSessionStreamConfig(envPath = agentSessionEnvPath()) {
+  const env = parseEnvFile(envPath);
+  return {
+    streamUrl: env.AGENT_SESSION_STREAM_URL || process.env.AGENT_SESSION_STREAM_URL || null,
+    streamCredential: env.AGENT_SESSION_STREAM_CREDENTIAL || process.env.AGENT_SESSION_STREAM_CREDENTIAL || null,
+  };
 }
 
 /**

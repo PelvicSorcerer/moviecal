@@ -79,6 +79,12 @@ export const AGENT_EVENT_KINDS = Object.freeze([
   "repair",
   "stopped",
   "complete",
+  // MOV-166: a trusted Agent Session follow-up prompt was received. Purely
+  // informational -- it does not by itself mean the prompt reached the
+  // worker (that additionally requires MOV-215's steering path to be active
+  // for this attempt); the record must be truthful either way, so the
+  // summary text callers pass distinguishes "delivered" from "recorded only".
+  "prompt-received",
 ]);
 
 /**
@@ -220,6 +226,13 @@ export function activityFor(rawEvent = {}) {
         sessionStatus: SESSION_STATUS.active,
         externalUrl: text(event.prUrl) || null,
       };
+
+    case "prompt-received":
+      // `thought` (like "plan"/"repair"): informational, does not change
+      // session status. Never `elicitation` -- that puts the session into
+      // awaitingInput, which is about *our* output waiting on a human, the
+      // opposite of what recording an inbound prompt means.
+      return { content: { type: "thought", body }, sessionStatus: SESSION_STATUS.active, externalUrl: null };
 
     case "waiting-input":
       // `elicitation` is the content type that puts a session into

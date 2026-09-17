@@ -280,9 +280,14 @@ Two rules that are easy to get wrong and are enforced in code:
   the dispatcher is still the writer gets a single explanatory comment, and no
   stop ever changes the workflow state.
 
-**There is no inbound listener, receiver, relay, port, or webhook secret**, and
-`tools/dispatcher/test/dispatcher-wiring.test.mjs` asserts structurally that
-none appears. To exercise the inbound half, replay a saved payload:
+**The local Mac still opens no inbound listener, port, or server of any kind**
+— `tools/dispatcher/test/dispatcher-wiring.test.mjs` asserts this
+structurally. What changed with MOV-166 is that a receiver now exists
+*elsewhere* (a Vercel function, not on the Mac), and the Mac holds an
+**outbound** authenticated connection to it — see §Agent Session receiver
+below. Before MOV-166, and still true today with the receiver disabled or
+unreachable, the inbound half can be exercised by replaying a saved payload
+with no network at all:
 
 ```
 dispatcher agent-signal --fixture tools/dispatcher/fixtures/agent-session-stop.example.json
@@ -291,8 +296,7 @@ dispatcher agent-signal --fixture tools/dispatcher/fixtures/agent-session-stop.e
 That command is read-only: it normalizes the payload, applies the trust policy,
 runs it through the stop controller twice to show the replay is a no-op, prints
 what would happen, and mutates nothing. The example fixture is hand-written from
-Linear's published preview docs — not captured from a live delivery, because
-there is no receiver to capture one with.
+Linear's published preview docs.
 
 **Prompt trust.** A follow-up prompt is trusted only when it comes from a real
 workspace user, and never from this dispatcher's own actor (an agent acting on
@@ -300,6 +304,76 @@ its own emitted activity is a feedback loop, not a follow-up). A **stop** is
 deliberately *not* subject to that policy: refusing to stop because the
 requester was not on an allowlist is the wrong failure mode. Stops are always
 honoured; only instructions need trust.
+
+### Agent Session receiver (MOV-166)
+
+The architecture MOV-159 approved and MOV-166 implements: a signed-webhook
+receiver on the existing Vercel account, with the Mac holding an **outbound**
+authenticated stream to it. Full rationale:
+`docs/governance/mov-159-agent-session-receiver-decision.md`.
+
+**Shape.** `src/app/api/agent-session/route.ts` — `POST` is Linear's webhook
+(HMAC-verified via the *existing, unmodified*
+`tools/dispatcher/src/agent-signals.mjs` `verifyWebhookSignature`, before the
+body is parsed for meaning; fails closed with no secret configured); `GET` is
+the Mac's stream, authenticated with a separate bearer credential. Both live
+in the same route module so a `POST` can reach an already-open `GET`'s
+in-memory subscriber set when Vercel serves both from the same warm instance.
+This is deliberately **best-effort, not a guaranteed-delivery queue**: no new
+vendor, no database (MOV-159's explicit boundary). A `POST` landing on a
+different or cold instance than the Mac's open connection is buffered for up
+to **10 minutes** and lost if never picked up in that window. That degrades to
+30-second polling, the permanent, complete fallback — this is a known
+characteristic, not a bug, and it's why the receiver is authorized to be this
+simple.
+
+**Two independent freshness checks.** The receiver only verifies the
+signature and relays the raw, verified payload; it never re-implements
+`agent-signals.mjs`'s own logic. All semantic parsing — kind, the existing
+60-second `WEBHOOK_MAX_AGE_MS` freshness check, trust, dedup-by-delivery-id —
+happens on the Mac (`tools/dispatcher/src/agent-stream-client.mjs`, via the
+same `handleAgentSignal` the fixture-replay CLI path already used). The
+receiver's own 10-minute relay-buffer retention is a separate, outer bound: it
+governs how long an *already-verified* event is held waiting for the Mac to
+reconnect, not whether a delivery itself is fresh.
+
+**Secrets.** Two dev-only values, `LINEAR_WEBHOOK_SIGNING_SECRET` and
+`AGENT_SESSION_STREAM_CREDENTIAL` (see `.env.example`). Both live in Vercel's
+project environment variables (required — the receiver only runs there); the
+Mac keeps its own copy of the **stream credential** at
+`~/.config/moviecal/agent-session.env` (mode 600,
+`config.mjs`'s `agentSessionEnvPath()`), which is the only one dispatcher code
+actually reads at runtime. An operator may also keep a reference copy of the
+webhook signing secret in that same file for rotation convenience, but
+dispatcher source never names or parses that key — see the structural guard
+in `dispatcher-wiring.test.mjs`. Rotate each independently: changing one never
+requires changing the other.
+
+**Disablement and rollback.** One capability flag,
+`MOVIECAL_AGENT_SESSIONS` — off (the default) means the Mac never even
+attempts to connect, exactly today's behavior. Full rollback: delete the
+Vercel function and remove the Agent Session event subscription from the
+`moviecal-dispatcher` OAuth app; no dispatcher code needs reverting, since the
+receiver was always an enrichment layer, never a dependency.
+
+**Outage behavior.** Receiver down, stream dropped, Vercel deploy failed, or a
+Linear delivery lost all resolve identically: no signal arrives, and
+30-second polling continues to carry the complete lifecycle. The Mac
+reconnects with exponential backoff (`AgentStreamClient`) on any drop or
+credential rejection, including Vercel's own ~300-second forced connection
+close (`maxDuration` on the route) — that's an ordinary reconnect, not a
+special case.
+
+**Trusted prompts, recorded or delivered.** A trusted follow-up prompt with no
+live-steering-capable attempt registered (the common case, and the *only*
+case unless MOV-214/215's flag below is also on) is published as a
+`prompt-received` lifecycle event — informational, not actionable, the same
+comment/activity surface every other transition uses. It does not by itself
+mean anything acted on the prompt.
+
+Live mid-run worker steering (actually delivering a trusted prompt into an
+already-running worker, rather than only recording it) is intentionally not
+part of this layer — see MOV-214/MOV-215.
 
 ## Security model
 
