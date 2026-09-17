@@ -2,7 +2,7 @@
 
 Read `AGENTS.md` first. This document covers the local-Mac execution path: how a Linear work item becomes a running agent in an isolated git worktree on this machine, and what every worker (human or agent) needs to know about that environment. It replaces the former per-platform operator guides (`claude-code.md`, `codex.md`) and the cloud-orchestrator model (`codex-orchestration.md`, `multi-platform-dispatch-policy.md`), which are retained under `docs/operators/archive/` as historical reference.
 
-> **This is the Mac execution adapter's operator guide — one of two adapters, not the whole execution model.** `docs/governance/hybrid-execution-architecture.md` is the authoritative architecture: Linear owns desired lifecycle state, GitHub owns delivered state, and eligible non-iOS work may route to a Linear-managed **cloud** adapter instead of this one. Everything below remains accurate and current for the Mac lane, which is permanent — iOS/Xcode work can only run here. `MOV-141` found the cloud adapter plan-eligible but operationally unproven; `MOV-153` is its configuration and disposable-PR gate. Until that passes, this is the only live adapter.
+> **This is the active execution adapter's operator guide.** `docs/governance/hybrid-execution-architecture.md` is the authoritative architecture: Linear owns desired lifecycle state, GitHub owns delivered state, and the Mac dispatcher is the only enabled implementation adapter. Linear Coding Sessions are isolated in **Deferred Linear cloud execution option** and remain `Icebox`; they are not a dependency or default for non-iOS work. iOS/Xcode work is permanently Mac-only.
 
 See `docs/governance/linear-information-architecture.md` for the Linear workspace design this path is driven by, and `docs/operators/worker-routing.md` for how a worker binary and model are selected per issue.
 
@@ -10,7 +10,7 @@ See `docs/governance/linear-information-architecture.md` for the Linear workspac
 
 The previous system assumed agents ran in degraded cloud containers: no `gh` CLI, GitHub GraphQL blocked by a network proxy, no Docker, no persistent local state. None of that applies here. This Mac has a full `gh` install, direct GitHub API access, a real filesystem, and a real process supervisor. Do not carry forward workarounds written for that constrained environment — they produce strictly worse behavior locally (e.g. avoiding `gh` in favor of a comment-command workflow when `gh` is simply available).
 
-**Not to be confused with the new cloud adapter.** The "cloud-agent model" retired above is the old multi-platform GitHub-Project-era arrangement (Cursor Cloud, Copilot, cloud Codex) — a different thing from the Linear-managed Coding Session adapter introduced in `docs/governance/hybrid-execution-architecture.md`. The lesson that survives is narrow and still applies: never assume an execution environment's capabilities; both adapters are defined by an explicit contract and an explicit capability table, not by assumption.
+**Not to be confused with the deferred cloud option.** The "cloud-agent model" retired above is the old multi-platform GitHub-Project-era arrangement (Cursor Cloud, Copilot, cloud Codex). Linear Coding Sessions are a distinct, currently disabled option. The lesson that survives is narrow: never assume an execution environment's capabilities; prove them against an explicit contract before enabling them.
 
 ## Architecture
 
@@ -223,17 +223,16 @@ durable identity.** Sessions and comments are presentation and history — never
 authoritative control state, and never something a later attempt has to resume
 to stay correct.
 
-**Today, surface 2 is always the one that runs, and that is the supported
-configuration.** `MOV-141` found Agent Sessions **disabled** for the
-`moviecal-dispatcher` app: enabling them requires the OAuth app to subscribe to
-Agent Session events and expose a reachable HTTPS receiver, which the local Mac
-must not do. `MOV-159` is the decision gate for whether a signed relay is worth
-its attack surface; `MOV-166` owns any live enablement and validation. See
-`docs/governance/mov-141-linear-capability-findings.md`.
+**Surface 2 remains the complete default.** `MOV-159` approved the optional
+Agent Session receiver and `MOV-166` delivered it through review-sized splits,
+but the capability remains additive and feature-gated. The receiver is hosted
+on Vercel and the Mac connects outbound; the Mac never exposes a listener.
+Disabling sessions changes presentation and latency only, not dispatch
+correctness. See `docs/governance/mov-159-agent-session-receiver-decision.md`.
 
 The layer is therefore off unless `MOVIECAL_AGENT_SESSIONS` is explicitly set,
 and off is not a degraded mode — it is the complete operational lifecycle. With
-it on and the app still unentitled, the dispatcher makes exactly **one** failed
+it on and the app unavailable or unentitled, the dispatcher makes exactly **one** failed
 `agentSessionCreateOnIssue` per process, latches the answer, and publishes
 comments for the rest of the daemon's life. It never repeatedly attempts a
 mutation Linear has already refused. `dispatcher doctor` prints which surface is
@@ -264,7 +263,8 @@ Two sources feed one controller:
   two compatible states — both, because a re-read can race the dispatcher's own
   transition). A stop during the worker kills its process group, exactly as a
   timeout does.
-- **Agent Session `stop` payloads** — the low-latency path, unavailable today.
+- **Agent Session `stop` payloads** — the optional low-latency path when the
+  signed receiver and outbound stream are enabled.
   `handleAgentSignal()` normalizes, verifies, and replays them through the *same*
   controller, so enabling the receiver would change latency and nothing else.
 
@@ -561,11 +561,21 @@ The plist's own `StandardOutPath`/`StandardErrorPath` (`~/Library/Logs/moviecal-
 
 ## Known gaps / follow-ups
 
-- Dispatch is currently poll-based (default 30s interval, `dispatcher run [--interval ms]`), and so are the stop controls (§Stop controls). Webhook-driven dispatch is **blocked on an architecture decision, not on implementation**: the dispatcher-side contract for Linear Agent Sessions is built and feature-gated (MOV-158), but Linear requires a reachable HTTPS receiver the local Mac must not expose. `MOV-159` decides whether a signed relay is worth its attack surface; `MOV-166` owns live enablement and validation if it is. Polling remains the complete lifecycle either way.
-- The Agent Session mutation shapes in `linear-client.mjs` have never been exercised against a live session (MOV-141: `agent sessions disabled`). They are unverified until `MOV-166`; every path through them is non-fatal and falls back to comments.
+- Dispatch remains deliberately poll-based (default 30s interval,
+  `dispatcher run [--interval ms]`). Agent Session webhooks do not replace
+  dispatch polling; they add optional low-latency stop/prompt delivery over the
+  outbound stream. Polling remains the complete lifecycle with the receiver,
+  stream, or session feature disabled.
+- Linear Coding Sessions are not enabled for delivery. `MOV-153`,
+  `MOV-157`, `MOV-154`, and `MOV-155` remain together in the deferred
+  cloud project's `Icebox` and do not block local intake, dispatch,
+  acceptance, or autonomy.
 - **Backfill is an operator task, not a code task.** MOV-143 makes `execution:mac` + the `moviecal-dispatcher` delegate hard preconditions, so any queued issue missing either one stops being dispatched the moment the daemon restarts onto this code. Run `dispatcher dry-run` first: it lists every `Ready for Agent` issue with its route, delegate, and eligibility, and ends with an `Executable on this Mac: n/m` line. Apply the missing labels and delegations before restarting the service.
 - The delegate match accepts the app's workspace *name* as well as `LINEAR_APP_ACTOR_ID`, because that variable currently holds the name rather than the actor UUID. That is looser than an id-only match by design (see `dispatch-eligibility.mjs`); setting the variable to the real actor UUID tightens it without any code change.
-- `dispatcher run` is implemented and unit-tested against every outcome (preflight block, routing block, worker success, worker failure, worker exits 0 with no PR and a clean worktree, worker exits 0 with no PR and an `abandoned-dirty` worktree, spawn error), but has not yet been exercised against the live Linear workspace — that first real run is migration Stage 10 (end-to-end verification), tracked in `docs/planning/decision-log.md`.
+- `dispatcher run` has completed live Linear-to-GitHub issue delivery and
+  subsequent reliability/repair work. The remaining acceptance scope is the
+  local-first drill in `MOV-161`, after bounded intake/handoff and testing
+  policy are complete.
 - Docker is not installed on this Mac, so `npm run lane:real-stack` / `lane:full-stack` stay CI-only locally; use the `supabase-verify` GitHub Actions workflow as the authoritative DB gate.
 - MOV-115 (two-way GitHub sync) is **done** — see `docs/governance/linear-information-architecture.md` §GitHub Issues: migration and ongoing sync.
 - MOV-116 (an automated `lane-review` status check for independent PR scrutiny, plus wiring `security-policy.mjs`'s hard-deny list into real enforcement) is partially done — see §Security model above. `lane-review` is now a required status check (MOV-119); the hard-deny-enforcement half is still unresolved.

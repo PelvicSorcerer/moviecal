@@ -178,13 +178,13 @@ export function resolveDispatcherDelegate({ linearAppPath = linearAppEnvPath() }
  * Is the (optional) Linear Agent Session enrichment layer switched on?
  * (MOV-158.)
  *
- * Off unless `MOVIECAL_AGENT_SESSIONS` is explicitly truthy, and off is the
- * correct setting today: MOV-141 found Agent Sessions **disabled** for the
- * `moviecal-dispatcher` app, and enabling them needs an approved HTTPS event
- * receiver that does not exist (MOV-159 decides whether to build one; MOV-166
- * owns live enablement). Nothing about this flag adds a listener, a secret, or
- * a plan change — with it on and no entitlement, the dispatcher makes one
- * failed mutation, latches the answer, and keeps using comments.
+ * Off unless `MOVIECAL_AGENT_SESSIONS` is explicitly truthy. MOV-159/166
+ * supplied the optional signed HTTPS receiver and outbound Mac stream, but
+ * off remains a complete supported configuration: polling, states, and
+ * comments carry the durable lifecycle. Nothing about this flag adds a Mac
+ * listener or changes dispatch authority; with it on and no entitlement, the
+ * dispatcher makes one failed mutation, latches the answer, and keeps using
+ * comments.
  */
 export function agentSessionsEnabled(env = process.env) {
   return truthy(env.MOVIECAL_AGENT_SESSIONS);
