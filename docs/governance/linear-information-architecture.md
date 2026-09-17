@@ -10,9 +10,18 @@ This design deliberately does not reproduce the GitHub Project's fields one-for-
 
 ## Plan
 
-**Basic**, one seat, monthly subscription, with no active trial — verified from the live workspace on 2026-09-10 during `MOV-141`. The workspace originally started on Free; that historical assumption is superseded. Basic removes the 250-issue cap and is eligible for Coding Sessions.
+The workspace was upgraded after the Basic-plan validation in `MOV-141`; Loops
+are available as of 2026-09-17. The exact current subscription SKU is an
+authenticated billing fact, not a repository assumption.
 
-**Paid AI capabilities are in scope but not authorized.** Coding Sessions are available on Basic, but moviecal has no proven coding environment; the exact AI-credit balance is not exposed by the public API and must be checked in the authenticated UI before a pilot. Loops require Business ($16/user/month at published annual pricing on the validation date) plus AI credits. Coding Sessions cost provider tokens plus $0.25 per 20-minute sandbox block; Loop-only runs typically cost $0.07–$0.20. Nothing here authorizes an upgrade or credit purchase. See `docs/governance/mov-141-linear-capability-findings.md` for live evidence, fallbacks, and capped-pilot guidance.
+**Paid AI authorization is capability-specific.** `MOV-156` authorizes the
+published intake Loop only, with a $2 weekly per-Loop cap. At validation the
+workspace had $0 workspace credits, automatic reload disabled, and $20
+promotional Loop credits; three validation runs cost $1.21. Coding Sessions
+remain separately gated by `MOV-153` and are explicitly forbidden to the
+intake Loop. See
+`docs/governance/mov-156-linear-intake-loop-validation.md` for the live
+configuration, evidence, fallbacks, and rollback.
 
 **Initiatives:** basic initiative creation and linking (used below) is enabled on this workspace — the repo owner unlocked it directly in Linear (exact mechanism not confirmed from the API side; possibly a trial or a workspace-level toggle distinct from a full Business subscription). One sub-feature remains gated regardless: assigning an initiative a "lead team" (`initiativeCreate`'s `leadTeamId` field) still returns `FEATURE_NOT_ACCESSIBLE` ("Subscribe to the Business plan to access team initiatives in your workspace"). That's not needed here — with a single team (`MOV`), a lead-team assignment wouldn't add anything — so `provision-linear-workspace.mjs` creates initiatives without it.
 
@@ -117,7 +126,13 @@ The supervision dashboard for a human overseeing autonomous work. **Build these 
 - **Triage Intelligence / Insights / Asks** — Business-plan features; this project's intake volume does not justify the tier.
 - **Project health / updates** — solo project, no external stakeholders to report to. Revisit if that changes.
 
-**No longer rejected — now gated instead:** **Linear Coding Sessions** and **Loops** were previously listed here as deliberately not adopted (Coding Sessions because cloud execution contradicted a Mac-only architecture; Loops on tier grounds). The hybrid execution architecture supersedes both rejections: Coding Sessions are the intended **cloud execution adapter** for eligible non-iOS work, and Loops are a candidate for intake/enrichment. `MOV-141` found Coding Sessions plan-eligible but unconfigured and Loops unavailable on the current Basic plan; both retain explicit Mac/manual fallbacks. See `docs/governance/hybrid-execution-architecture.md` §Feasibility gates. Cloud execution never covers iOS/Xcode work, which stays on the Mac adapter permanently.
+**No longer rejected:** **Linear Coding Sessions** and **Loops** were previously
+listed here as deliberately not adopted. Coding Sessions are now the intended
+cloud adapter for eligible non-iOS work, but remain operationally gated by
+`MOV-153`. `MOV-156` adopted Loops only for bounded intake enrichment: one
+oldest `Triage` issue per run, no execution or delegation, and a complete
+manual/promoter fallback. Cloud execution never covers iOS/Xcode work, which
+stays on the Mac adapter permanently.
 
 ## Agent Guidance vs. repository files
 

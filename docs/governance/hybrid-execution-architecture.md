@@ -1,9 +1,8 @@
 # Hybrid execution architecture: Linear-managed cloud + local Mac
 
-**Status: decided, not yet implemented.** This document records the architecture
-decision only. Nothing described here is enabled by adopting this document —
-Loops, Coding Sessions, the dispatcher daemon's cloud lane, and auto-merge all
-remain off until their own issues land. See §Rollout gates.
+**Status: staged rollout.** The Mac adapter and bounded intake Loop are live.
+Coding Sessions, the dispatcher daemon's cloud lane, and auto-merge remain off
+until their own rollout gates land. See §Rollout gates.
 
 This is the authoritative statement of how `moviecal` executes engineering work.
 It supersedes the "all implementation runs on this Mac" premise that
@@ -13,7 +12,8 @@ documents remain accurate about the Mac path and the Linear workspace design;
 this one governs where they now sit in a larger picture.
 
 Tracking: `MOV-139` (coordination), `MOV-140` (this document), `MOV-141`
-(feasibility validation), `MOV-142` (routing labels).
+(feasibility validation), `MOV-142` (routing labels), `MOV-156` (bounded
+intake Loop).
 
 ## The decision
 
@@ -113,9 +113,9 @@ cloud-eligible, regardless of its subject matter.
 |---|---|
 | **Linear issue** | The unit of work. Carries spec, acceptance criteria, Testing Expectations, dependencies, and the execution route. |
 | **Linear project / milestone** | Sequencing and release grouping. `blocks` relations, not milestones, gate dispatch. |
-| **Loops** | Candidate intake, enrichment, and platform-splitting automation. **Unavailable on the current Basic plan**; an approved Business upgrade plus AI credits would be required (`MOV-141`). |
+| **Loops** | Active only for bounded intake enrichment (`MOV-156`): one oldest `Triage` issue per run, no execution or delegation, and a $2 weekly cap. Manual intake and the promoter remain complete fallbacks. |
 | **Agent Sessions** | Linear's richer Developer Preview surface for an agent's lifecycle on an issue. **Disabled for `moviecal-dispatcher` and not a current dependency.** The dispatcher uses ordinary app-actor GraphQL comments, workflow state, route, and delegate fields instead (`MOV-122`, `MOV-141`). |
-| **Linear Coding Session** | The intended cloud execution adapter. The Basic plan is eligible and the workspace feature is on, but no moviecal environment or AI-credit pilot has been verified; `MOV-153` remains the configuration gate. |
+| **Linear Coding Session** | The intended cloud execution adapter. No moviecal environment or AI-credit pilot has been verified; `MOV-153` remains the separate configuration and authorization gate. |
 | **Local dispatcher** | The Mac execution adapter. Built and running (`MOV-120`); polls `Ready for Agent`, promotes from `Backlog` (`MOV-129`), provisions worktrees, spawns workers. |
 | **GitHub checks** | The merge gate. `master-protection` requires `lane-baseline`, `lane-unit`, `lane-integration`, `lane-browser`, `lane-review`, with `bypass_actors: []`. Identical for both adapters. |
 | **`AGENTS.md` + repo docs** | Rules that must hold even when Linear is unreachable. |
@@ -196,8 +196,8 @@ and the system is exactly what it is today.
 
 | Capability | Status | Fallback if unsupported |
 |---|---|---|
-| Loops available on the workspace plan | **unsupported on current Basic plan**; Business required | Manual/`Triage` intake as today |
-| Loop can delegate directly to the `moviecal-dispatcher` agent | **unproven and unnecessary** while Loops are unavailable | **Proven:** write `execution:mac` + `moviecal-dispatcher` delegate; dispatcher polling reads both (`MOV-165`) |
+| Loops available on the workspace plan | **supported and enabled for bounded intake** (`MOV-156`) | Disable the Loop; manual/`Triage` intake remains complete |
+| Loop can delegate directly to the `moviecal-dispatcher` agent | **not configured and unnecessary for intake**; the active Loop stops before delegation | **Proven:** a separate handoff may write `execution:mac` + `moviecal-dispatcher`; dispatcher polling reads both (`MOV-165`, with rollout owned by `MOV-220`) |
 | Coding Session can be resumed/followed-up after CI or review feedback | product-supported, but same-branch behavior **unproven in moviecal** until `MOV-153` | Human repairs the original cloud PR branch on the Mac; `MOV-149`/`MOV-157` must support existing cloud branches before automating the handoff |
 | Agent Session lifecycle (create / activity / prompt / stop-signal / stale-session / PR-link) for the custom app actor | **unsupported in current configuration**; live creation returned `agent sessions disabled`; API is Developer Preview | Continue stable app-actor GraphQL (issue fields, comments, states) and let the Mac adapter carry the work |
 | Webhook delivery sufficient to replace polling | **not configured and not required**; Agent Session UI requires the Agent Session event category plus an HTTPS receiver | Retain 30s polling as the complete durable-workflow fallback; never expose the Mac directly |
@@ -211,12 +211,13 @@ to the Mac lane, never halt it. To be explicit about scope: the dispatcher does
 uses only stable GraphQL (`commentCreate`, `issueUpdate`). This gate constrains
 what the *cloud* lane may build on, and retroactively condemns nothing.
 
-**Plan and cost.** The workspace is on Basic. Coding Sessions are eligible on
-Basic; Loops require Business (published annual pricing on the validation date:
-$16/user/month). Both consume prepaid AI credits. Coding Sessions cost provider
-tokens plus $0.25 per 20-minute sandbox block; Loop-only runs typically cost
-$0.07–$0.20. **No upgrade or AI-credit purchase is authorized by this
-document.** See the MOV-141 findings for the capped pilot budget.
+**Plan and cost.** The workspace was upgraded after `MOV-141`, and Loops are
+available. `MOV-156` authorized only the intake Loop with a $2 weekly cap; at
+validation the workspace had $0 workspace credits, automatic reload disabled,
+and $20 promotional Loop credits. Three live runs cost $1.21. Coding Sessions
+remain a separate authorization and compatibility gate. See the
+[MOV-156 validation record](mov-156-linear-intake-loop-validation.md) for
+metered costs and the active least-privilege boundary.
 
 ## Rollout gates
 
@@ -264,9 +265,9 @@ unchanged. Nothing here introduces a one-way door.
   `docs/governance/linear-information-architecture.md` §Deliberately not
   adopted. Coding Sessions are now the intended cloud adapter — **subject to
   the feasibility gates above**, and never for iOS work.
-- The blanket rejection of **Loops** on tier grounds in the same section. Loops
-  remain an intake candidate, but `MOV-141` confirmed that they require a
-  separately approved Business upgrade and AI-credit budget.
+- The blanket rejection of **Loops** on tier grounds in the same section.
+  `MOV-156` adopted a bounded, capped intake Loop while leaving execution and
+  delegation outside it.
 
 Retired GitHub-Project-era material in `docs/operators/archive/` and
 `docs/planning/archive/` is unaffected and remains historical reference only.

@@ -57,4 +57,21 @@ This reverses two earlier rejections in `linear-information-architecture.md` §D
 
 `MOV-141`'s **Basic**-plan findings are superseded as of this date — the workspace is upgraded and Loops are live — but this did **not** unblock Agent Sessions: that gate was always app configuration (Agent Session event subscription plus a reachable HTTPS receiver), not entitlement. Loops going live did reopen the MCP-enqueue option, which was re-examined and rejected as this decision's answer on the grounds that an MCP connector cannot carry Linear-emitted `prompted`/`stop` events at all, and that `MOV-165` already proved the route-label + polling handoff it would replace; a Loop-facing MCP enqueue becomes a small additive follow-up once the receiver exists, not an architecture. Residual risk is accepted and bounded: `agentSessionCreateOnIssue` has still never succeeded, so the mutation shapes in `linear-client.mjs` are unverified and `MOV-166` may find them wrong — but every session call is non-fatal, the PR link publishes on two independent paths, and the comment surface is unconditionally complete, so a failed live validation costs implementation time rather than correctness. Agent Sessions stay off the critical path permanently, not merely until validated. Full rationale, the authorized/not-authorized boundary for `MOV-166`, and the security, retention, outage, and disablement analysis are in `docs/governance/mov-159-agent-session-receiver-decision.md`.
 
+**Resolved 2026-09-17 — bounded Linear intake Loop (`MOV-156`).** Published and
+enabled `Moviecal intake enrichment`, scheduled daily at 1:00 PM, with synced
+issue/comment access, no connectors, web search off, and a hard instruction
+boundary forbidding Coding Sessions, agent sessions, code, branches, PRs,
+delegation, and direct GitHub actions. The Loop processes exactly one oldest
+`Triage` issue per run. Duplicate, web-only, iOS-only, cross-platform,
+ambiguous, high-risk, spam, and external-source fixtures proved complete specs,
+route materialization, dependency splitting, and human-stop behavior. The
+initial batch prompt mutated seven issues and therefore failed boundedness; it
+was replaced before acceptance by the one-issue rule, which both corrective
+runs obeyed. Three runs cost $1.21 under a $2 weekly cap. Disabling the Loop
+left manual intake, GitHub sync, and the deterministic promoter complete
+(promoter tests 19/19; dry-run made no mutations). All disposable fixtures
+were canceled after validation. Evidence and rollback are in
+`docs/governance/mov-156-linear-intake-loop-validation.md`; `MOV-220` owns the
+separate bounded handoff to the Mac dispatcher.
+
 See `docs/governance/hybrid-execution-architecture.md` for the full decision, `docs/governance/linear-information-architecture.md`, `docs/operators/local-execution.md`, and `docs/operators/worker-routing.md` for the target-state design these stages implement.

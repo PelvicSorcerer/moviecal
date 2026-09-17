@@ -13,7 +13,9 @@ their implementation issues satisfy the prerequisites below.
 > findings are **not** affected: that blocker is app configuration, not plan,
 > and a re-probe would still return `agent sessions disabled` until the
 > receiver approved in `MOV-159` exists. See
-> `docs/governance/mov-159-agent-session-receiver-decision.md`.
+> `docs/governance/mov-159-agent-session-receiver-decision.md`. The subsequent
+> bounded Loop configuration, fixture evidence, and measured cost are recorded
+> in `docs/governance/mov-156-linear-intake-loop-validation.md`.
 
 No plan change, AI-credit purchase, Loop run, Coding Session, production
 secret, deployment, or release was used for this validation.
