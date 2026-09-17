@@ -96,6 +96,26 @@ describe("workerInvocation", () => {
     ]);
   });
 
+  it("adds --input-format stream-json for claude only when steering is requested, changing nothing else (MOV-214/215)", () => {
+    const off = workerInvocation("claude", "default");
+    expect(off.args).not.toContain("--input-format");
+
+    const on = workerInvocation("claude", "default", { steering: true });
+    const idx = on.args.indexOf("--input-format");
+    expect(idx).toBeGreaterThan(-1);
+    expect(on.args[idx + 1]).toBe("stream-json");
+    // Removing exactly the two inserted tokens must reproduce the
+    // steering-off array byte-for-byte -- nothing safety-relevant (the
+    // permission mode, sandbox flags, the sandbox-disabling --settings
+    // override) moved, changed, or disappeared.
+    const withoutInserted = [...on.args.slice(0, idx), ...on.args.slice(idx + 2)];
+    expect(withoutInserted).toEqual(off.args);
+  });
+
+  it("ignores the steering option for codex, which has no equivalent interactive protocol (MOV-214/215)", () => {
+    expect(workerInvocation("codex", "default", { steering: true })).toEqual(workerInvocation("codex", "default"));
+  });
+
   it("disables Claude Code's own internal sandbox for every model tier (MOV-184)", () => {
     // A second, independent Seatbelt sandbox_apply call inside
     // worker-guard.mjs's already-confined outer profile deterministically

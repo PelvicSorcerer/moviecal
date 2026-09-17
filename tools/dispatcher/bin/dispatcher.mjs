@@ -49,6 +49,7 @@ import {
   resolveLinearAuth,
   resolveDispatcherDelegate,
   agentSessionsEnabled,
+  agentSessionSteeringEnabled,
   loadAgentSessionStreamConfig,
   agentSessionEnvPath,
   checkSecretFileMode,
@@ -217,6 +218,17 @@ async function cmdDoctor() {
           : `Agent Sessions are on but no stream is configured (set AGENT_SESSION_STREAM_URL/AGENT_SESSION_STREAM_CREDENTIAL in ${agentSessionEnvPath()}) — 30-second polling remains the complete recovery path`,
     });
   }
+
+  // Live mid-run worker steering (MOV-214/215). A separate flag from the
+  // receiver above: this one changes the worker invocation mode, so it is
+  // never assumed on just because sessions are.
+  checks.push({
+    name: "Live worker prompt steering",
+    ok: true,
+    detail: agentSessionSteeringEnabled()
+      ? "enabled (MOVIECAL_AGENT_SESSION_STEERING) — a trusted follow-up prompt is written to the running Claude worker's next turn; Codex attempts stay record-only"
+      : "off (default) — a trusted follow-up prompt is recorded as a prompt-received lifecycle event, not delivered live",
+  });
 
   // claude / codex on PATH
   for (const bin of ["claude", "codex"]) {

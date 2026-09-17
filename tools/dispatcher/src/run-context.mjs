@@ -23,6 +23,7 @@ import {
   logRoot,
   resolveDispatcherDelegate,
   agentSessionsEnabled,
+  agentSessionSteeringEnabled,
   autoRepairEnabled,
   resolveTrustedReviewers,
   resolveRepairBudgets,
@@ -199,5 +200,9 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
       }
     },
     stopPollIntervalMs: Number(process.env.MOVIECAL_STOP_POLL_MS ?? DEFAULT_STOP_POLL_INTERVAL_MS),
+    // MOV-214/215: off by default, and independent of agentSessionsEnabled()
+    // -- steering changes the worker invocation mode, so it gets its own
+    // switch rather than riding along with the receiver's.
+    steeringEnabled: agentSessionSteeringEnabled(),
   };
 }
