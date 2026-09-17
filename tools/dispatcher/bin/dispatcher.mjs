@@ -9,8 +9,12 @@
 //   dispatcher agent-signal --fixture <path>
 //                                  - replay a saved Linear Agent Session payload through
 //                                     the normalization/trust/stop logic and print what it
-//                                     would do. Read-only, and deliberately NOT a listener:
-//                                     there is no receiver, port, or secret (MOV-158/159)
+//                                     would do. Read-only, and deliberately NOT a listener --
+//                                     no port or secret is read here either way. The MOV-166
+//                                     receiver lives on Vercel (src/app/api/agent-session/route.ts);
+//                                     `dispatcher run` connects out to it (agent-stream-client.mjs)
+//                                     but this command still runs fully offline, exercising the
+//                                     identical normalization/trust/stop path with no network at all
 //   dispatcher gc                  - prune merged/stale worktrees and old run logs
 //   dispatcher promote [--dry-run] - move Backlog/Blocked issues that meet the
 //                                     readiness contract into Ready for Agent
@@ -45,6 +49,9 @@ import {
   resolveLinearAuth,
   resolveDispatcherDelegate,
   agentSessionsEnabled,
+  agentSessionSteeringEnabled,
+  loadAgentSessionStreamConfig,
+  agentSessionEnvPath,
   checkSecretFileMode,
   DEFAULT_CONCURRENCY,
   RUN_LOG_RETENTION_DAYS,
@@ -79,6 +86,7 @@ import { checkPrState, checkPrObservation, isCheckPrObservation, reconcileReview
 import { reconcileStartupRecoveries } from "../src/startup-recovery.mjs";
 import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
 import { SignalLedger, StopController, handleAgentSignal } from "../src/agent-signals.mjs";
+import { AgentStreamClient } from "../src/agent-stream-client.mjs";
 import { previewRepairPass, runRepairPass } from "../src/repair-run.mjs";
 
 /**
@@ -191,6 +199,35 @@ async function cmdDoctor() {
     detail: agentSessionsEnabled()
       ? "enabled (MOVIECAL_AGENT_SESSIONS) — activities are attempted once per attempt and fall back to app-actor comments if the app is not entitled"
       : "off (default) — lifecycle publishes as app-actor comments + state transitions, which is the complete surface; see docs/governance/mov-141-linear-capability-findings.md",
+  });
+
+  // Agent Session receiver stream (MOV-166). Also informational: no live
+  // connection attempt here, `doctor` stays read-only. Only meaningful when
+  // the layer above is enabled at all -- the stream is what carries events to
+  // it, not a capability of its own.
+  {
+    const streamConfig = loadAgentSessionStreamConfig();
+    const configured = AgentStreamClient.isConfigured(streamConfig);
+    checks.push({
+      name: "Agent Session receiver stream",
+      ok: true,
+      detail: !agentSessionsEnabled()
+        ? "not started — Agent Sessions are off (MOVIECAL_AGENT_SESSIONS unset)"
+        : configured
+          ? `configured — outbound connection to ${streamConfig.streamUrl} on \`dispatcher run\``
+          : `Agent Sessions are on but no stream is configured (set AGENT_SESSION_STREAM_URL/AGENT_SESSION_STREAM_CREDENTIAL in ${agentSessionEnvPath()}) — 30-second polling remains the complete recovery path`,
+    });
+  }
+
+  // Live mid-run worker steering (MOV-214/215). A separate flag from the
+  // receiver above: this one changes the worker invocation mode, so it is
+  // never assumed on just because sessions are.
+  checks.push({
+    name: "Live worker prompt steering",
+    ok: true,
+    detail: agentSessionSteeringEnabled()
+      ? "enabled (MOVIECAL_AGENT_SESSION_STEERING) — a trusted follow-up prompt is written to the running Claude worker's next turn; Codex attempts stay record-only"
+      : "off (default) — a trusted follow-up prompt is recorded as a prompt-received lifecycle event, not delivered live",
   });
 
   // claude / codex on PATH
@@ -769,11 +806,31 @@ async function cmdRunOnce({ repairLockHeld = false } = {}) {
   return 0;
 }
 
+/**
+ * MOV-166: the Mac's outbound half of the Agent Session receiver, built only
+ * when both the capability flag and stream config are present. Absent
+ * either, this returns null and the dispatcher behaves exactly as it does
+ * today -- 30-second polling, the complete recovery path either way.
+ */
+function buildAgentStreamClient() {
+  if (!agentSessionsEnabled()) return null;
+  const streamConfig = loadAgentSessionStreamConfig();
+  if (!AgentStreamClient.isConfigured(streamConfig)) return null;
+  return new AgentStreamClient(streamConfig);
+}
+
 async function cmdRun({ once, intervalMs }) {
   const lock = new DispatcherLock(dispatcherLockPath());
   try { lock.acquire(); } catch (err) { console.error(err.message); return 2; }
   process.once("exit", () => lock.release());
   if (once) { try { return await cmdRunOnce({ repairLockHeld: lock.owned }); } finally { lock.release(); } }
+
+  // Only for the persistent poll loop -- a single `--once` pass has nothing
+  // for a live stream to usefully feed. Fire-and-forget: it manages its own
+  // reconnect loop and never blocks a poll iteration.
+  const streamClient = buildAgentStreamClient();
+  if (streamClient) streamClient.start();
+
   console.log(`Starting poll loop (interval: ${intervalMs}ms). Press Ctrl+C to stop.`);
   // eslint-disable-next-line no-constant-condition
   while (true) {

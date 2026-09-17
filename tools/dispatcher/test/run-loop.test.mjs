@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runOnce } from "../src/run-loop.mjs";
+import { activeAttempt, clearActiveAttempts } from "../src/active-attempt-registry.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { AgentSessionBridge } from "../src/agent-session.mjs";
 import { NESTED_SANDBOX_CRASH } from "../src/failure-classification.mjs";
@@ -561,11 +562,14 @@ describe("runOnce", () => {
   describe("route + delegation gate (MOV-143)", () => {
     /** Every way an issue can fail to be this dispatcher's to claim, and stay untouched. */
     const notOurs = [
-      ["cloud-routed", { project: "Calendar Feed", labels: ["execution:cloud"] }],
+      ["cloud-routed", { project: "Deferred Linear cloud execution option", labels: ["execution:cloud"] }],
       ["coordination-only", { labels: ["type:coordination", "execution:none"] }],
       ["delegated to a human", { delegate: { id: "user-adam", name: "Adam", displayName: "Adam" } }],
       ["not delegated at all", { delegate: null }],
-      ["cloud-routed AND delegated elsewhere", { project: "Calendar Feed", labels: ["execution:cloud"], delegate: null }],
+      [
+        "cloud-routed AND delegated elsewhere",
+        { project: "Deferred Linear cloud execution option", labels: ["execution:cloud"], delegate: null },
+      ],
     ];
 
     it.each(notOurs)("skips a %s issue with no worktree, no worker, and no Linear write", async (_label, patch) => {
@@ -663,7 +667,7 @@ describe("runOnce", () => {
         const { ctx } = ctxWithRefresh({
           ...ISSUE,
           stateName: "Ready for Agent",
-          project: "Calendar Feed",
+          project: "Deferred Linear cloud execution option",
           labels: ["execution:cloud"],
         });
 
@@ -781,7 +785,11 @@ describe("runOnce", () => {
 
       it("stays a no-op across repeated cycles for an ineligible issue — no comment spam", async () => {
         const ctx = baseCtx({ worktreeManager: statefulWorktreeManager() });
-        const issue = { ...ISSUE, project: "Calendar Feed", labels: ["execution:cloud"] };
+        const issue = {
+          ...ISSUE,
+          project: "Deferred Linear cloud execution option",
+          labels: ["execution:cloud"],
+        };
 
         const outcomes = [];
         for (let cycle = 0; cycle < 3; cycle += 1) {
@@ -2385,5 +2393,145 @@ describe("runOnce", () => {
         expect(usageLimitStore.resumption("MOV-1", new Date("2026-09-14T18:00:00Z"))).toBeNull();
       });
     });
+  });
+});
+
+// MOV-166: an in-flight attempt must be findable by issue id (for an inbound
+// Agent Session signal to route to), and only for as long as it is actually
+// in flight -- registered once claimed, unregistered once settled, whatever
+// the outcome.
+describe("active-attempt registry wiring", () => {
+  beforeEach(() => {
+    clearActiveAttempts();
+  });
+
+  it("registers the attempt while the worker runs, and unregisters it once runOnce settles", async () => {
+    const deferred = deferredSpawnWorkerFn();
+    const ctx = baseCtx({ spawnWorkerFn: deferred.fn });
+
+    const runPromise = runOnce([ISSUE], ctx);
+    await flushMicrotasks();
+
+    const entry = activeAttempt(ISSUE.id);
+    expect(entry).not.toBeNull();
+    expect(entry.identifier).toBe("MOV-1");
+    expect(entry.controller.stopped).toBe(false);
+    expect(entry.publisher).toBeDefined();
+
+    deferred.controls[0]();
+    await runPromise;
+
+    expect(activeAttempt(ISSUE.id)).toBeNull();
+  });
+
+  it("unregisters even when the attempt is not eligible and never reaches registration", async () => {
+    const ctx = baseCtx();
+    const issue = { ...ISSUE, labels: [...ISSUE.labels, "human-only"] };
+
+    await runOnce([issue], ctx);
+
+    expect(activeAttempt(issue.id)).toBeNull();
+  });
+});
+
+/**
+ * A steering-capable fake spawnWorkerFn: exposes writeTurn/requestClose/
+ * nextTurnBoundary the same shape the real spawnWorker() returns, with a
+ * test-controlled `fireTurnBoundary()` standing in for the worker's own
+ * stream-json `result` line.
+ */
+function fakeSteeringSpawnWorkerFn() {
+  const writeTurns = [];
+  let closed = false;
+  let resolveExit;
+  const promise = new Promise((resolve) => {
+    resolveExit = resolve;
+  });
+  let waiter = null;
+  function fireTurnBoundary() {
+    if (waiter) {
+      const w = waiter;
+      waiter = null;
+      w({ ended: false });
+    }
+  }
+  const fn = vi.fn(() => ({
+    promise,
+    writeTurn: (text) => {
+      writeTurns.push(text);
+    },
+    requestClose: () => {
+      closed = true;
+      resolveExit({ exitCode: 0, logDir: "/fake/logs/x" });
+    },
+    nextTurnBoundary: () =>
+      new Promise((resolve) => {
+        waiter = resolve;
+      }),
+  }));
+  return { fn, writeTurns, isClosed: () => closed, fireTurnBoundary };
+}
+
+// MOV-214/215: live mid-run prompt delivery. Off by default (steeringEnabled
+// undefined in every other test in this file, which is why they all still
+// exercise today's exact one-shot spawnWorkerFn contract).
+describe("steering turn-loop wiring", () => {
+  beforeEach(() => {
+    clearActiveAttempts();
+  });
+
+  it("closes stdin at the first turn boundary when nothing is queued -- identical timing to the no-steering path", async () => {
+    const steering = fakeSteeringSpawnWorkerFn();
+    const ctx = baseCtx({ spawnWorkerFn: steering.fn, steeringEnabled: true });
+
+    const runPromise = runOnce([ISSUE], ctx);
+    await flushMicrotasks();
+    steering.fireTurnBoundary();
+    await runPromise;
+
+    expect(steering.isClosed()).toBe(true);
+    expect(steering.writeTurns).toEqual([]);
+    expect(steering.fn.mock.calls[0][0]).toMatchObject({ steering: true });
+  });
+
+  it("registers queuePrompt on the active attempt, and writes a queued prompt as the next turn instead of closing", async () => {
+    const steering = fakeSteeringSpawnWorkerFn();
+    const ctx = baseCtx({ spawnWorkerFn: steering.fn, steeringEnabled: true });
+
+    const runPromise = runOnce([ISSUE], ctx);
+    await flushMicrotasks();
+
+    const entry = activeAttempt(ISSUE.id);
+    expect(typeof entry.queuePrompt).toBe("function");
+    entry.queuePrompt("also update the docs");
+
+    steering.fireTurnBoundary(); // worker's first (and only, for this test) turn completes
+    await flushMicrotasks();
+
+    expect(steering.writeTurns).toEqual(["also update the docs"]);
+    expect(steering.isClosed()).toBe(false); // a turn was written, not a close
+
+    // Nothing further queued -> the next boundary closes stdin, same as the
+    // no-prompt path.
+    steering.fireTurnBoundary();
+    await runPromise;
+    expect(steering.isClosed()).toBe(true);
+  });
+
+  it("does not add --input-format/steering behavior for a codex-routed attempt", async () => {
+    const steering = fakeSteeringSpawnWorkerFn();
+    const ctx = baseCtx({
+      spawnWorkerFn: steering.fn,
+      steeringEnabled: true,
+    });
+    const issue = { ...ISSUE, labels: [...ISSUE.labels, "worker:codex"] };
+
+    const runPromise = runOnce([issue], ctx);
+    await flushMicrotasks();
+    steering.fireTurnBoundary();
+    await runPromise;
+
+    expect(steering.fn.mock.calls[0][0]).toMatchObject({ steering: false });
+    expect(steering.fn.mock.calls[0][0].invocation.command).toBe("codex");
   });
 });

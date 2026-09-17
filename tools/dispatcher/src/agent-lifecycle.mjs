@@ -12,7 +12,7 @@
 // exactly one surface for it:
 //
 //   1. a first-class **Agent Activity**, when the session bridge has a live
-//      session (feature-gated, off by default, unavailable today per MOV-141);
+//      session (feature-gated, off by default, and always optional);
 //   2. otherwise a human-readable **app-actor comment**, which is the complete
 //      operational record and always has been.
 //

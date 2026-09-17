@@ -9,9 +9,8 @@
 // Deliberately NOT provisioned here (see docs/governance/linear-information-architecture.md):
 // - Custom views: the saved-view filterData JSON shape isn't documented in
 //   the public API/schema, and getting it wrong risks shipping a saved view
-//   that looks legitimate but silently returns nothing. Build the 7 target
-//   views by hand in the Linear UI instead (a few minutes total) using the
-//   definitions in the governance doc.
+//   that looks legitimate but silently returns nothing. Build the target
+//   views by hand in the Linear UI using the governance-doc definitions.
 // - GitHub connection / issue import: integrationGithubConnect and
 //   issueImportCreateGithub both require an OAuth `code` + `installationId`
 //   obtained by clicking through GitHub's App-install consent screen in a
@@ -197,6 +196,7 @@ async function main() {
 
   const webAppInit = await ensureInitiative("Web App");
   const iosInit = await ensureInitiative("Native iOS App");
+  const automationInit = await ensureInitiative("Automate moviecal Development and Delivery");
 
   // --- Projects ---
   const projectsData = await gql(`query { projects { nodes { id name } } }`);
@@ -232,8 +232,15 @@ async function main() {
   await ensureProject("Shared Watchlists", webAppInit);
   await ensureProject("Calendar Feed", webAppInit);
   await ensureProject("Platform & Infrastructure", webAppInit);
-  const governanceProject = await ensureProject("Developer Governance & Agent Infrastructure", webAppInit);
   const iosProject = await ensureProject("iOS Companion App", iosInit);
+  const localDeliveryProject = await ensureProject("Autonomous local-agent delivery", automationInit);
+  const deferredCloudProject = await ensureProject("Deferred Linear cloud execution option", automationInit);
+
+  // The canceled "Developer Governance & Agent Infrastructure" project and
+  // the completed local-stabilization / hybrid-foundation projects are
+  // deliberately not provisioned, updated, deleted, or relinked here. They are
+  // live-workspace audit artifacts, not desired active topology. Issue
+  // reassignment is likewise a migration operation, never provisioning.
 
   // --- Project milestones ---
   async function ensureMilestones(project, names) {
@@ -259,14 +266,13 @@ async function main() {
   }
 
   await ensureMilestones(iosProject, ["Skeleton", "Auth + API client", "Navigation shell"]);
-  await ensureMilestones(governanceProject, [
-    "Linear actor authorization",
-    "Hybrid workflow architecture & feasibility",
-    "Routing & local foundations",
-    "CI & review reaction",
-    "Cloud execution pilot",
-    "Controlled autonomy",
-    "Agent Session integration",
+  await ensureMilestones(localDeliveryProject, [
+    "Automated intake & local kickoff",
+    "Local acceptance & controlled autonomy",
+  ]);
+  await ensureMilestones(deferredCloudProject, [
+    "Cloud environment & kickoff",
+    "Cloud pilots & eligibility",
   ]);
 
   log("\nDone. Re-run this script any time — it's idempotent.");

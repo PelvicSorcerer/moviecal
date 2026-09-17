@@ -2,7 +2,7 @@
 
 Read `AGENTS.md` first. This document covers the local-Mac execution path: how a Linear work item becomes a running agent in an isolated git worktree on this machine, and what every worker (human or agent) needs to know about that environment. It replaces the former per-platform operator guides (`claude-code.md`, `codex.md`) and the cloud-orchestrator model (`codex-orchestration.md`, `multi-platform-dispatch-policy.md`), which are retained under `docs/operators/archive/` as historical reference.
 
-> **This is the Mac execution adapter's operator guide — one of two adapters, not the whole execution model.** `docs/governance/hybrid-execution-architecture.md` is the authoritative architecture: Linear owns desired lifecycle state, GitHub owns delivered state, and eligible non-iOS work may route to a Linear-managed **cloud** adapter instead of this one. Everything below remains accurate and current for the Mac lane, which is permanent — iOS/Xcode work can only run here. `MOV-141` found the cloud adapter plan-eligible but operationally unproven; `MOV-153` is its configuration and disposable-PR gate. Until that passes, this is the only live adapter.
+> **This is the active execution adapter's operator guide.** `docs/governance/hybrid-execution-architecture.md` is the authoritative architecture: Linear owns desired lifecycle state, GitHub owns delivered state, and the Mac dispatcher is the only enabled implementation adapter. Linear Coding Sessions are isolated in **Deferred Linear cloud execution option** and remain `Icebox`; they are not a dependency or default for non-iOS work. iOS/Xcode work is permanently Mac-only.
 
 See `docs/governance/linear-information-architecture.md` for the Linear workspace design this path is driven by, and `docs/operators/worker-routing.md` for how a worker binary and model are selected per issue.
 
@@ -10,7 +10,7 @@ See `docs/governance/linear-information-architecture.md` for the Linear workspac
 
 The previous system assumed agents ran in degraded cloud containers: no `gh` CLI, GitHub GraphQL blocked by a network proxy, no Docker, no persistent local state. None of that applies here. This Mac has a full `gh` install, direct GitHub API access, a real filesystem, and a real process supervisor. Do not carry forward workarounds written for that constrained environment — they produce strictly worse behavior locally (e.g. avoiding `gh` in favor of a comment-command workflow when `gh` is simply available).
 
-**Not to be confused with the new cloud adapter.** The "cloud-agent model" retired above is the old multi-platform GitHub-Project-era arrangement (Cursor Cloud, Copilot, cloud Codex) — a different thing from the Linear-managed Coding Session adapter introduced in `docs/governance/hybrid-execution-architecture.md`. The lesson that survives is narrow and still applies: never assume an execution environment's capabilities; both adapters are defined by an explicit contract and an explicit capability table, not by assumption.
+**Not to be confused with the deferred cloud option.** The "cloud-agent model" retired above is the old multi-platform GitHub-Project-era arrangement (Cursor Cloud, Copilot, cloud Codex). Linear Coding Sessions are a distinct, currently disabled option. The lesson that survives is narrow: never assume an execution environment's capabilities; prove them against an explicit contract before enabling them.
 
 ## Architecture
 
@@ -42,6 +42,15 @@ The previous system assumed agents ran in degraded cloud containers: no `gh` CLI
         ▼
   GitHub auto-merge on green required checks → Linear moves to Done automatically
 ```
+
+Draft is a hard handoff boundary, not an intermediate state the dispatcher may
+clear. An authorized human reviewer promotes it only after applying
+`docs/planning/manual-versus-automated-testing-policy.md` and completing the
+PR's structured `Readiness Evidence`. Low-risk work may be promoted without a
+human test run only when the issue explicitly says `Human testing:
+not-required`, all acceptance criteria have automated or reproducible
+local-agent evidence, and no mandatory human gate applies. Missing evidence or
+a missing marker keeps the PR draft.
 
 Dispatcher code lives in `tools/dispatcher/` in this repository (TypeScript, using the repo's existing Node 24 + Vitest toolchain). Runtime config lives outside the repo at `~/.config/moviecal/` (mode 700) — API keys and `.env.local` must never be committed. Run logs live at `~/Library/Logs/moviecal-dispatcher/`, retained 90 days.
 
@@ -223,17 +232,16 @@ durable identity.** Sessions and comments are presentation and history — never
 authoritative control state, and never something a later attempt has to resume
 to stay correct.
 
-**Today, surface 2 is always the one that runs, and that is the supported
-configuration.** `MOV-141` found Agent Sessions **disabled** for the
-`moviecal-dispatcher` app: enabling them requires the OAuth app to subscribe to
-Agent Session events and expose a reachable HTTPS receiver, which the local Mac
-must not do. `MOV-159` is the decision gate for whether a signed relay is worth
-its attack surface; `MOV-166` owns any live enablement and validation. See
-`docs/governance/mov-141-linear-capability-findings.md`.
+**Surface 2 remains the complete default.** `MOV-159` approved the optional
+Agent Session receiver and `MOV-166` delivered it through review-sized splits,
+but the capability remains additive and feature-gated. The receiver is hosted
+on Vercel and the Mac connects outbound; the Mac never exposes a listener.
+Disabling sessions changes presentation and latency only, not dispatch
+correctness. See `docs/governance/mov-159-agent-session-receiver-decision.md`.
 
 The layer is therefore off unless `MOVIECAL_AGENT_SESSIONS` is explicitly set,
 and off is not a degraded mode — it is the complete operational lifecycle. With
-it on and the app still unentitled, the dispatcher makes exactly **one** failed
+it on and the app unavailable or unentitled, the dispatcher makes exactly **one** failed
 `agentSessionCreateOnIssue` per process, latches the answer, and publishes
 comments for the rest of the daemon's life. It never repeatedly attempts a
 mutation Linear has already refused. `dispatcher doctor` prints which surface is
@@ -264,7 +272,8 @@ Two sources feed one controller:
   two compatible states — both, because a re-read can race the dispatcher's own
   transition). A stop during the worker kills its process group, exactly as a
   timeout does.
-- **Agent Session `stop` payloads** — the low-latency path, unavailable today.
+- **Agent Session `stop` payloads** — the optional low-latency path when the
+  signed receiver and outbound stream are enabled.
   `handleAgentSignal()` normalizes, verifies, and replays them through the *same*
   controller, so enabling the receiver would change latency and nothing else.
 
@@ -280,9 +289,14 @@ Two rules that are easy to get wrong and are enforced in code:
   the dispatcher is still the writer gets a single explanatory comment, and no
   stop ever changes the workflow state.
 
-**There is no inbound listener, receiver, relay, port, or webhook secret**, and
-`tools/dispatcher/test/dispatcher-wiring.test.mjs` asserts structurally that
-none appears. To exercise the inbound half, replay a saved payload:
+**The local Mac still opens no inbound listener, port, or server of any kind**
+— `tools/dispatcher/test/dispatcher-wiring.test.mjs` asserts this
+structurally. What changed with MOV-166 is that a receiver now exists
+*elsewhere* (a Vercel function, not on the Mac), and the Mac holds an
+**outbound** authenticated connection to it — see §Agent Session receiver
+below. Before MOV-166, and still true today with the receiver disabled or
+unreachable, the inbound half can be exercised by replaying a saved payload
+with no network at all:
 
 ```
 dispatcher agent-signal --fixture tools/dispatcher/fixtures/agent-session-stop.example.json
@@ -291,8 +305,7 @@ dispatcher agent-signal --fixture tools/dispatcher/fixtures/agent-session-stop.e
 That command is read-only: it normalizes the payload, applies the trust policy,
 runs it through the stop controller twice to show the replay is a no-op, prints
 what would happen, and mutates nothing. The example fixture is hand-written from
-Linear's published preview docs — not captured from a live delivery, because
-there is no receiver to capture one with.
+Linear's published preview docs.
 
 **Prompt trust.** A follow-up prompt is trusted only when it comes from a real
 workspace user, and never from this dispatcher's own actor (an agent acting on
@@ -300,6 +313,108 @@ its own emitted activity is a feedback loop, not a follow-up). A **stop** is
 deliberately *not* subject to that policy: refusing to stop because the
 requester was not on an allowlist is the wrong failure mode. Stops are always
 honoured; only instructions need trust.
+
+### Agent Session receiver (MOV-166)
+
+The architecture MOV-159 approved and MOV-166 implements: a signed-webhook
+receiver on the existing Vercel account, with the Mac holding an **outbound**
+authenticated stream to it. Full rationale:
+`docs/governance/mov-159-agent-session-receiver-decision.md`.
+
+**Shape.** `src/app/api/agent-session/route.ts` — `POST` is Linear's webhook
+(HMAC-verified via the *existing, unmodified*
+`tools/dispatcher/src/agent-signals.mjs` `verifyWebhookSignature`, before the
+body is parsed for meaning; fails closed with no secret configured); `GET` is
+the Mac's stream, authenticated with a separate bearer credential. Both live
+in the same route module so a `POST` can reach an already-open `GET`'s
+in-memory subscriber set when Vercel serves both from the same warm instance.
+This is deliberately **best-effort, not a guaranteed-delivery queue**: no new
+vendor, no database (MOV-159's explicit boundary). A `POST` landing on a
+different or cold instance than the Mac's open connection is buffered for up
+to **10 minutes** and lost if never picked up in that window. That degrades to
+30-second polling, the permanent, complete fallback — this is a known
+characteristic, not a bug, and it's why the receiver is authorized to be this
+simple.
+
+**Two independent freshness checks.** The receiver only verifies the
+signature and relays the raw, verified payload; it never re-implements
+`agent-signals.mjs`'s own logic. All semantic parsing — kind, the existing
+60-second `WEBHOOK_MAX_AGE_MS` freshness check, trust, dedup-by-delivery-id —
+happens on the Mac (`tools/dispatcher/src/agent-stream-client.mjs`, via the
+same `handleAgentSignal` the fixture-replay CLI path already used). The
+receiver's own 10-minute relay-buffer retention is a separate, outer bound: it
+governs how long an *already-verified* event is held waiting for the Mac to
+reconnect, not whether a delivery itself is fresh.
+
+**Secrets.** Two dev-only values, `LINEAR_WEBHOOK_SIGNING_SECRET` and
+`AGENT_SESSION_STREAM_CREDENTIAL` (see `.env.example`). Both live in Vercel's
+project environment variables (required — the receiver only runs there); the
+Mac keeps its own copy of the **stream credential** at
+`~/.config/moviecal/agent-session.env` (mode 600,
+`config.mjs`'s `agentSessionEnvPath()`), which is the only one dispatcher code
+actually reads at runtime. An operator may also keep a reference copy of the
+webhook signing secret in that same file for rotation convenience, but
+dispatcher source never names or parses that key — see the structural guard
+in `dispatcher-wiring.test.mjs`. Rotate each independently: changing one never
+requires changing the other.
+
+**Disablement and rollback.** One capability flag,
+`MOVIECAL_AGENT_SESSIONS` — off (the default) means the Mac never even
+attempts to connect, exactly today's behavior. Full rollback: delete the
+Vercel function and remove the Agent Session event subscription from the
+`moviecal-dispatcher` OAuth app; no dispatcher code needs reverting, since the
+receiver was always an enrichment layer, never a dependency.
+
+**Outage behavior.** Receiver down, stream dropped, Vercel deploy failed, or a
+Linear delivery lost all resolve identically: no signal arrives, and
+30-second polling continues to carry the complete lifecycle. The Mac
+reconnects with exponential backoff (`AgentStreamClient`) on any drop or
+credential rejection, including Vercel's own ~300-second forced connection
+close (`maxDuration` on the route) — that's an ordinary reconnect, not a
+special case.
+
+**Trusted prompts, recorded or delivered.** A trusted follow-up prompt with no
+live-steering-capable attempt registered (the common case, and the *only*
+case unless MOV-214/215's flag below is also on) is published as a
+`prompt-received` lifecycle event — informational, not actionable, the same
+comment/activity surface every other transition uses. It does not by itself
+mean anything acted on the prompt.
+
+### Live mid-run worker steering (MOV-214/215)
+
+A separate, independent capability flag, `MOVIECAL_AGENT_SESSION_STEERING`
+— off by default. MOV-159 approved the receiver above but explicitly did not
+authorize altering the dispatch boundary or the worker execution model;
+MOV-214 is the decision that did, the same session MOV-166 was implemented
+(2026-09-17), at the repo owner's explicit request for the full-featured
+capability rather than a permanently record-only one.
+
+**Mechanism.** With this flag on, a Claude-routed attempt (Codex has no
+equivalent protocol and always stays record-only) is invoked with
+`--input-format stream-json` instead of one-shot print mode, and its stdin is
+kept open instead of closed after the initial brief. The dispatcher watches
+the worker's own `--output-format stream-json` output for each turn's
+completion (`spawnWorker()`'s `nextTurnBoundary()`); if a trusted prompt is
+queued when a turn completes, it's written as the next turn instead of
+closing stdin — otherwise stdin closes immediately, identical timing to the
+steering-off path. A prompt is queued the moment it's classified trusted
+(`agent-stream-client.mjs`'s `queuePrompt`) but is never written into a turn
+already in progress; only the dispatcher's own turn-loop ever calls the real
+`writeTurn`.
+
+**Trust boundary.** Only a signal `classifyPromptTrust` already marks
+`trusted: true` (the same, unmodified logic used for the receiver above) is
+ever queued, and it is written only as plain conversational content — a
+stream-json user-message frame. It cannot touch `--permission-mode`, the
+sandbox flags, or `security-policy.mjs`'s rules, all fixed at the worker's
+spawn time and never reachable from stdin content. `worker-guard.mjs`'s
+command audit covers every command the worker runs identically regardless of
+whether it originated from the initial brief or an injected turn.
+
+**Disablement.** Off returns the worker invocation and `spawnWorker()`'s
+return shape to exactly today's one-shot behavior, for every worker and every
+issue — verified by `worker-spawn.test.mjs`'s steering-off regression
+coverage.
 
 ## Security model
 
@@ -309,7 +424,7 @@ honoured; only instructions need trust.
 
 **Worker enforcement boundary (MOV-145).** Claude and Codex now run behind the same technical boundary in `worker-guard.mjs`; prompt text and vendor-specific settings are not trusted as the authority:
 
-- `worker-spawn.mjs` wraps either adapter in an inherited macOS Seatbelt profile. The profile denies execution of Git, `gh`, SSH transports, `curl`, and production-deploy entry points; denies reads of dispatcher/GitHub/SSH/npm credential stores (including the dev environment in repair mode); protects Git metadata and governance-controlled files; and prevents changes to dispatcher or shell credential configuration. The sanitized environment retains Claude's provider credential only in the Claude parent process and forces `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, so Bash, hooks, and MCP servers do not inherit it; Codex receives no Claude credential. There is intentionally no unguarded fallback: if the OS or native adapter sandbox cannot be applied, the worker does not start, the issue moves to `Needs Human Decision`, and the dispatcher writes a checksummed failure audit (with the Linear comment as the backstop if local audit storage is unavailable).
+- `worker-spawn.mjs` wraps either adapter in an inherited macOS Seatbelt profile. The profile denies execution of Git, `gh`, SSH transports, `curl`, and production-deploy entry points; denies reads of dispatcher/GitHub/SSH/npm credential stores (including the dev environment in repair mode); protects Git metadata and governance-controlled files; and prevents changes to dispatcher or shell credential configuration. The sanitized environment retains Claude's worker credential only in the Claude parent process and forces `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, so Bash, hooks, and MCP servers do not inherit it; Codex receives no Claude credential. The dispatcher's `ANTHROPIC_API_KEY` is never passed to either worker (MOV-211): it is reserved for the bounded advisory-diagnosis call, so it cannot change worker authentication or billing. There is intentionally no unguarded fallback: if the OS or native adapter sandbox cannot be applied, the worker does not start, the issue moves to `Needs Human Decision`, and the dispatcher writes a checksummed failure audit (with the Linear comment as the backstop if local audit storage is unavailable).
 - **`/usr/bin/security` is intentionally not denied (MOV-174), unlike the other listed binaries.** Claude Code's own startup unconditionally probes the macOS Keychain (`security find-generic-password -s "Claude Code-credentials"` / `-s "Claude Code"`) to resolve its provider credential — verified to happen regardless of whether `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or `CLAUDE_CODE_OAUTH_TOKEN` is already set in the environment. A blanket sandbox deny on this binary crashed every worker before it did any work (`EPERM` on `posix_spawn`, empty transcript), and neither alternative fix was viable: no credential env var suppresses the probe, and Claude Code's own `--bare` mode does avoid it but does not read `CLAUDE_CODE_OAUTH_TOKEN` — incompatible with running workers against a Claude subscription rather than pay-per-token Console billing. This is an accepted trade-off, not a closed gap: `security-policy.mjs`'s post-hoc transcript audit still hard-denies a worker's *own* `security find|dump|export|unlock|set|add|delete-` invocation, but that catches misuse after a read already happened, not before — there is no longer an OS-level block on a worker reading arbitrary Keychain entries by service name. **Operational caveat:** this credential lookup only succeeds while the Mac is logged in and the login Keychain is unlocked; if `launchd`'s `RunAtLoad` starts the dispatcher before that (e.g. immediately after a reboot, before anyone logs into the GUI session), worker dispatch fails with the same crash signature until login/unlock happens — this is expected given the design above, not a regression to re-investigate.
 - Credential-shaped environment variables are removed and Git interactive/keychain helpers are disabled. Claude loads only the protected project policy, disables plugins/MCP/slash commands, and runs every Bash command in its fail-closed native filesystem/network sandbox with no unsandboxed escape hatch. Codex ignores user exec policy/config, runs ephemeral `workspace-write` with approval policy `never`, and keeps model-generated command network access disabled. These harness-native sandboxes prevent an allowed test/package script from becoming an indirect network bypass.
 - Both adapters emit structured tool events. Output is redacted before being written to disk, then `security-policy.mjs` audits command attempts (including alternate GitHub API paths) while the diff audit catches protected changes regardless of command construction. Each hard-deny has an explicit category: **scope** rules keep dispatcher-owned operational tools (Git, `gh`, alternate GitHub API transports, and SSH transports) out of workers; **safety** rules protect secrets, Keychain access, production mutation, releases, and protected paths. A scope command that the native harness demonstrably denied is retained as an auditable warning, not a publication blocker; a scope command that executed or has an unknown outcome remains fail-closed. Every safety attempt remains fail-closed regardless of outcome. Warnings never preempt normal classification of the worker's actual exit (for example, a provider rate-limit retry).
@@ -455,11 +570,21 @@ The plist's own `StandardOutPath`/`StandardErrorPath` (`~/Library/Logs/moviecal-
 
 ## Known gaps / follow-ups
 
-- Dispatch is currently poll-based (default 30s interval, `dispatcher run [--interval ms]`), and so are the stop controls (§Stop controls). Webhook-driven dispatch is **blocked on an architecture decision, not on implementation**: the dispatcher-side contract for Linear Agent Sessions is built and feature-gated (MOV-158), but Linear requires a reachable HTTPS receiver the local Mac must not expose. `MOV-159` decides whether a signed relay is worth its attack surface; `MOV-166` owns live enablement and validation if it is. Polling remains the complete lifecycle either way.
-- The Agent Session mutation shapes in `linear-client.mjs` have never been exercised against a live session (MOV-141: `agent sessions disabled`). They are unverified until `MOV-166`; every path through them is non-fatal and falls back to comments.
+- Dispatch remains deliberately poll-based (default 30s interval,
+  `dispatcher run [--interval ms]`). Agent Session webhooks do not replace
+  dispatch polling; they add optional low-latency stop/prompt delivery over the
+  outbound stream. Polling remains the complete lifecycle with the receiver,
+  stream, or session feature disabled.
+- Linear Coding Sessions are not enabled for delivery. `MOV-153`,
+  `MOV-157`, `MOV-154`, and `MOV-155` remain together in the deferred
+  cloud project's `Icebox` and do not block local intake, dispatch,
+  acceptance, or autonomy.
 - **Backfill is an operator task, not a code task.** MOV-143 makes `execution:mac` + the `moviecal-dispatcher` delegate hard preconditions, so any queued issue missing either one stops being dispatched the moment the daemon restarts onto this code. Run `dispatcher dry-run` first: it lists every `Ready for Agent` issue with its route, delegate, and eligibility, and ends with an `Executable on this Mac: n/m` line. Apply the missing labels and delegations before restarting the service.
 - The delegate match accepts the app's workspace *name* as well as `LINEAR_APP_ACTOR_ID`, because that variable currently holds the name rather than the actor UUID. That is looser than an id-only match by design (see `dispatch-eligibility.mjs`); setting the variable to the real actor UUID tightens it without any code change.
-- `dispatcher run` is implemented and unit-tested against every outcome (preflight block, routing block, worker success, worker failure, worker exits 0 with no PR and a clean worktree, worker exits 0 with no PR and an `abandoned-dirty` worktree, spawn error), but has not yet been exercised against the live Linear workspace — that first real run is migration Stage 10 (end-to-end verification), tracked in `docs/planning/decision-log.md`.
+- `dispatcher run` has completed live Linear-to-GitHub issue delivery and
+  subsequent reliability/repair work. The remaining acceptance scope is the
+  local-first drill in `MOV-161`, after bounded intake/handoff and testing
+  policy are complete.
 - Docker is not installed on this Mac, so `npm run lane:real-stack` / `lane:full-stack` stay CI-only locally; use the `supabase-verify` GitHub Actions workflow as the authoritative DB gate.
 - MOV-115 (two-way GitHub sync) is **done** — see `docs/governance/linear-information-architecture.md` §GitHub Issues: migration and ongoing sync.
 - MOV-116 (an automated `lane-review` status check for independent PR scrutiny, plus wiring `security-policy.mjs`'s hard-deny list into real enforcement) is partially done — see §Security model above. `lane-review` is now a required status check (MOV-119); the hard-deny-enforcement half is still unresolved.

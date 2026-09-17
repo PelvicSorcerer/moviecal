@@ -110,6 +110,7 @@ describe("activity serialization", () => {
       progress: ["action", SESSION_STATUS.active],
       "pr-opened": ["action", SESSION_STATUS.active],
       "waiting-input": ["elicitation", SESSION_STATUS.awaitingInput],
+      "prompt-received": ["thought", SESSION_STATUS.active],
       error: ["error", SESSION_STATUS.error],
       stopped: ["response", SESSION_STATUS.complete],
       complete: ["response", SESSION_STATUS.complete],

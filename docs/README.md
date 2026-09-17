@@ -6,7 +6,7 @@ Recommended reading order for contributors and agents:
 
 1. `AGENTS.md` (repo root) — generic agent contract; routes to `docs/operators/local-execution.md` and `worker-routing.md`
 2. `.github/copilot-instructions.md`
-3. `docs/governance/hybrid-execution-architecture.md` — the two-adapter execution model and feasibility gates
+3. `docs/governance/hybrid-execution-architecture.md` — the active local-first model, optional Linear capabilities, and separately deferred cloud path
 4. `docs/governance/linear-information-architecture.md` — the Linear workspace design and source-of-truth boundaries
 5. `docs/operators/local-execution.md` — the local-Mac dispatcher: worktree lifecycle, worker interface, security model
 6. `docs/product/product-brief.md`

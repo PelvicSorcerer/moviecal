@@ -22,6 +22,7 @@ import { admitUsageLimitResume } from "./usage-limit-resume.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
 import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-signals.mjs";
+import { registerActiveAttempt, unregisterActiveAttempt, updateActiveAttempt } from "./active-attempt-registry.mjs";
 
 /**
  * @param {object[]} issues - from LinearClient.issuesInState()
@@ -147,6 +148,11 @@ export async function runOnce(issues, ctx) {
         results[index] = await processIssue(issue, ctx);
       } finally {
         release();
+        // MOV-166: this issue is no longer a live attempt an inbound signal
+        // could apply to, whether or not it ever actually got as far as
+        // registerActiveAttempt() (unregistering something never registered
+        // is a no-op).
+        unregisterActiveAttempt(issue.id);
       }
     }),
   );
@@ -272,6 +278,37 @@ function raceWorkerTimeout(promise, timeoutMs) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+/**
+ * MOV-214/215: the steering turn-loop. Runs alongside the worker/stop/timeout
+ * race (never awaited by it), and is the *only* thing that ever calls the
+ * real `spawnWorker()`-returned `writeTurn`/`requestClose` -- a trusted
+ * prompt arriving mid-turn only ever reaches `promptQueue` (see
+ * `agent-stream-client.mjs`'s `queuePrompt`), and is written as the worker's
+ * next turn at its next turn boundary, never spliced into one already in
+ * progress.
+ *
+ * With nothing ever queued, this closes stdin at the very first boundary --
+ * identical timing to today's exact one-shot behavior. `signal` stops the
+ * loop from acting once the attempt has otherwise settled (killed by a
+ * timeout or a stop); the worker process itself is what actually exits
+ * either way, so a stopped loop changes nothing about correctness, only
+ * about not calling into a handle whose usefulness has already ended.
+ */
+async function runSteeringTurnLoop(spawned, promptQueue, signal) {
+  while (!signal.aborted) {
+    const boundary = await spawned.nextTurnBoundary();
+    if (boundary.ended || signal.aborted) return;
+    if (promptQueue.pending !== null) {
+      const text = promptQueue.pending;
+      promptQueue.pending = null;
+      spawned.writeTurn(text);
+    } else {
+      spawned.requestClose();
+      return;
+    }
+  }
+}
+
 async function processIssue(issue, ctx) {
   const {
     linearClient,
@@ -303,6 +340,7 @@ async function processIssue(issue, ctx) {
     circuitBreaker = { isOpen: () => false, trip: () => {}, clear: () => {} },
     usageLimitStore = NO_USAGE_LIMIT_STORE,
     diagnoseFailureFn = NO_DIAGNOSIS,
+    steeringEnabled = false,
     now = () => new Date(),
     logger = console,
   } = ctx;
@@ -558,6 +596,13 @@ async function processIssue(issue, ctx) {
   });
   await publisher.begin({ existing: readAgentSessionFn(issue.identifier) });
 
+  // MOV-166: makes this attempt findable by issue id for an inbound Agent
+  // Session signal (the stream client looks it up to route a stop to the
+  // right StopController, or a trusted prompt to `publisher` / a live
+  // worker's `writeTurn`, once one is registered below). Unregistered in
+  // `runOnce()`'s existing per-issue try/finally, alongside `release()`.
+  registerActiveAttempt(issue.id, { identifier: issue.identifier, controller: stopController, publisher });
+
   try {
     return await runClaimedAttempt({
       issue,
@@ -587,6 +632,7 @@ async function processIssue(issue, ctx) {
         circuitBreaker,
         usageLimitStore,
         diagnoseFailureFn,
+        steeringEnabled,
         now,
         logger,
       },
@@ -683,6 +729,10 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     circuitBreaker,
     usageLimitStore,
     diagnoseFailureFn = NO_DIAGNOSIS,
+    // MOV-214/215: live mid-run prompt delivery, off by default and Claude-only
+    // (see workerInvocation()/spawnWorker()'s own steering gates). With this
+    // false -- today's default -- everything below behaves exactly as before.
+    steeringEnabled = false,
     now,
     logger,
   } = ctx;
@@ -741,7 +791,13 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     repositoryContext,
     resume,
   });
-  const invocation = workerInvocation(routing.worker, routing.model);
+  // MOV-214/215: steering only ever applies to the Claude worker -- Codex has
+  // no equivalent interactive protocol, and workerInvocation()/spawnWorker()
+  // both silently ignore the option for it, but computing it once here keeps
+  // this function's own branching (registry registration, the turn-loop)
+  // from having to repeat that condition.
+  const steeringActive = steeringEnabled && routing.worker === "claude";
+  const invocation = workerInvocation(routing.worker, routing.model, { steering: steeringActive });
   const logDir = path.join(logRoot, entry.name);
 
   // Two abort controllers with different jobs: `abortController` kills the
@@ -751,14 +807,34 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
   const watcherAbort = new AbortController();
   let spawnResult;
   try {
-    const workerPromise = spawnWorkerFn({
+    const spawned = spawnWorkerFn({
       invocation,
       cwd: entry.path,
       brief,
       logDir,
       signal: abortController.signal,
       securityContext: { mode: workerMode },
+      steering: steeringActive,
     });
+    // Without steering, spawnWorkerFn returns a bare Promise, exactly as
+    // before. With it, spawnWorkerFn returns {promise, writeTurn,
+    // requestClose, nextTurnBoundary} -- workerPromise is the one thing every
+    // path below still races/awaits identically either way.
+    const workerPromise = steeringActive ? spawned.promise : spawned;
+    if (steeringActive) {
+      // A single-slot queue: `agent-stream-client.mjs` only ever calls
+      // `queuePrompt`, never the real writeTurn directly, so a prompt can
+      // never be spliced into a turn already in progress -- the turn-loop
+      // below is the only thing that writes it, at a turn boundary.
+      const promptQueue = { pending: null };
+      updateActiveAttempt(issue.id, { queuePrompt: (text) => { promptQueue.pending = text; } });
+      // Fire-and-forget: this loop's own lifetime is bounded by the worker
+      // process exiting (nextTurnBoundary() resolves {ended:true} once it
+      // does) or watcherAbort firing once this attempt has otherwise settled.
+      runSteeringTurnLoop(spawned, promptQueue, watcherAbort.signal).catch((err) => {
+        logger.error(`Steering turn-loop for ${issue.identifier} failed (worker continues unaffected): ${err.message}`);
+      });
+    }
     // The race below owns this rejection; these no-op handlers only stop Node
     // reporting the loser of the race as an unhandled rejection.
     Promise.resolve(workerPromise).catch(() => {});

@@ -44,15 +44,27 @@ fi
 
 # Collect unique route segments by enumerating route.ts files.
 declare -a segments=()
-declare -A seen_segments=()
 
 while IFS= read -r route_file; do
   # Strip the api_dir prefix to get the relative path: e.g. calendar/[token]/route.ts
   relative="${route_file#"$api_dir/"}"
   # The segment is the first path component.
   segment="${relative%%/*}"
-  if [ -z "${seen_segments[$segment]:-}" ]; then
-    seen_segments[$segment]=1
+
+  # macOS ships Bash 3.2, which has indexed arrays but not Bash 4's
+  # associative arrays. The sorted route list groups duplicate segments, but
+  # scan the collected values so uniqueness does not depend on that ordering.
+  segment_seen=0
+  if [ "${#segments[@]}" -gt 0 ]; then
+    for existing_segment in "${segments[@]}"; do
+      if [ "$existing_segment" = "$segment" ]; then
+        segment_seen=1
+        break
+      fi
+    done
+  fi
+
+  if [ "$segment_seen" -eq 0 ]; then
     segments+=("$segment")
   fi
 done < <(find "$api_dir" -name "route.ts" | sort)

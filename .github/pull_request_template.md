@@ -22,6 +22,16 @@
 - [ ] `npm run verify`
 - [ ] Other: <!-- e.g. manual checklist, db:lint, e2e -->
 
+## Readiness Evidence
+
+Human testing: <!-- required | not-required; must match the Linear issue -->
+
+- Local-agent evidence: <!-- exact command/procedure, result, and artifact path/link; or "none" -->
+- Human tester and date: <!-- required when human testing is required; otherwise "N/A" -->
+- Checklist result: <!-- pass/fail plus notes; or "N/A — not-required" -->
+- No-human-testing rationale: <!-- required when not-required; confirm all acceptance criteria are covered and no mandatory human gate applies -->
+- Ready promoted by: <!-- authorized human reviewer and date; workers/dispatcher must leave this blank while the PR is draft -->
+
 ## Security notes
 
 <!-- Required for auth, database, calendar feeds, cron, tokens, or secrets work. Remove if not applicable. -->

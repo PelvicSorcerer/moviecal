@@ -169,6 +169,11 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
     const configText = readFileSync(fileURLToPath(new URL("../src/config.mjs", import.meta.url)), "utf8");
     const secretPathHelpers = [...configText.matchAll(/^export function (\w*(?:EnvPath|Path))\(/gm)].map((m) => m[1]);
     expect(secretPathHelpers.sort()).toEqual([
+      // MOV-166: the Mac's own outbound-stream credential to the Agent
+      // Session receiver -- authorized by MOV-159/MOV-166, unlike the
+      // webhook signing secret, which is receiver-side only and never named
+      // in dispatcher source (see the assertion below).
+      "agentSessionEnvPath",
       "circuitBreakerStatePath",
       "dispatcherLockPath",
       "envLocalPath",
@@ -182,6 +187,9 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       "worktreesStatePath",
     ]);
     for (const [name, text] of dispatcherSources) {
+      // MOV-166: the receiver's webhook signing secret is verified on Vercel,
+      // never here -- it must never be named or parsed by dispatcher source,
+      // even though the Mac's own stream credential now legitimately is.
       expect(/WEBHOOK_SECRET|AGENT_SESSION_SECRET|SIGNING_SECRET/.test(text), name).toBe(false);
     }
   });
@@ -191,6 +199,15 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
     expect(configText).toMatch(/MOVIECAL_AGENT_SESSIONS/);
     // An unset variable must read as off, never as on.
     expect(runContextSource).toMatch(/enabled:\s*agentSessionsEnabled\(\)/);
+  });
+
+  it("keeps live worker steering off unless explicitly switched on, independently of the Agent Session layer (MOV-214/215)", () => {
+    const configText = readFileSync(fileURLToPath(new URL("../src/config.mjs", import.meta.url)), "utf8");
+    expect(configText).toMatch(/MOVIECAL_AGENT_SESSION_STEERING/);
+    // A separate flag from MOVIECAL_AGENT_SESSIONS -- steering changes the
+    // worker invocation mode, so it does not ride along with the receiver's.
+    expect(configText.match(/MOVIECAL_AGENT_SESSION_STEERING/g).length).toBeGreaterThan(0);
+    expect(runContextSource).toMatch(/steeringEnabled:\s*agentSessionSteeringEnabled\(\)/);
   });
 
   it("shares one entitlement latch across the process, so a rejection is not retried per issue", () => {

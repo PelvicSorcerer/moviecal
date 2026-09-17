@@ -33,6 +33,17 @@ export function envLocalPath() {
   return path.join(configDir(), "env.local");
 }
 
+/**
+ * MOV-166: the Mac's own record of the two Agent Session receiver secrets.
+ * Only `streamCredential` is read by dispatcher code at runtime (it
+ * authenticates the Mac's outbound stream connection); `webhookSigningSecret`
+ * is kept here purely so rotation has one local place to look -- the receiver
+ * (on Vercel) is what actually verifies it, never this process.
+ */
+export function agentSessionEnvPath() {
+  return path.join(configDir(), "agent-session.env");
+}
+
 export function worktreesStatePath() {
   return path.join(configDir(), "worktrees.json");
 }
@@ -167,13 +178,13 @@ export function resolveDispatcherDelegate({ linearAppPath = linearAppEnvPath() }
  * Is the (optional) Linear Agent Session enrichment layer switched on?
  * (MOV-158.)
  *
- * Off unless `MOVIECAL_AGENT_SESSIONS` is explicitly truthy, and off is the
- * correct setting today: MOV-141 found Agent Sessions **disabled** for the
- * `moviecal-dispatcher` app, and enabling them needs an approved HTTPS event
- * receiver that does not exist (MOV-159 decides whether to build one; MOV-166
- * owns live enablement). Nothing about this flag adds a listener, a secret, or
- * a plan change — with it on and no entitlement, the dispatcher makes one
- * failed mutation, latches the answer, and keeps using comments.
+ * Off unless `MOVIECAL_AGENT_SESSIONS` is explicitly truthy. MOV-159/166
+ * supplied the optional signed HTTPS receiver and outbound Mac stream, but
+ * off remains a complete supported configuration: polling, states, and
+ * comments carry the durable lifecycle. Nothing about this flag adds a Mac
+ * listener or changes dispatch authority; with it on and no entitlement, the
+ * dispatcher makes one failed mutation, latches the answer, and keeps using
+ * comments.
  */
 export function agentSessionsEnabled(env = process.env) {
   return truthy(env.MOVIECAL_AGENT_SESSIONS);
@@ -181,6 +192,35 @@ export function agentSessionsEnabled(env = process.env) {
 
 function truthy(value) {
   return ["1", "true", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+/**
+ * MOV-166: the Mac's outbound Agent Session stream endpoint and credential --
+ * the only Agent Session secret this process ever reads. The webhook signing
+ * secret is a *receiver*-side credential (verified on Vercel, never here); an
+ * operator may keep their own reference copy of it in the same file at
+ * `agentSessionEnvPath()` for rotation convenience, but this loader
+ * deliberately never names or parses that key, so the dispatcher itself
+ * stays free of it -- see the structural guard in dispatcher-wiring.test.mjs.
+ */
+export function loadAgentSessionStreamConfig(envPath = agentSessionEnvPath()) {
+  const env = parseEnvFile(envPath);
+  return {
+    streamUrl: env.AGENT_SESSION_STREAM_URL || process.env.AGENT_SESSION_STREAM_URL || null,
+    streamCredential: env.AGENT_SESSION_STREAM_CREDENTIAL || process.env.AGENT_SESSION_STREAM_CREDENTIAL || null,
+  };
+}
+
+/**
+ * MOV-166/MOV-214-215: is live mid-run prompt delivery into the Claude worker
+ * switched on? A separate, independent flag from `agentSessionsEnabled()` --
+ * steering is materially riskier than the receiver alone (it changes the
+ * worker invocation mode), so it gets its own on/off switch, off by default.
+ * With this off, the routed worker invocation and `spawnWorker()`'s return
+ * shape are byte-identical to today, on every worker and every issue.
+ */
+export function agentSessionSteeringEnabled(env = process.env) {
+  return truthy(env.MOVIECAL_AGENT_SESSION_STEERING);
 }
 
 /**

@@ -3,9 +3,16 @@
 **Decided 2026-09-16.** This record closes the human decision gate created by
 `MOV-158` and authorizes `MOV-166`.
 
+**Implementation update 2026-09-17:** `MOV-166` and its review-sized splits
+`MOV-217`, `MOV-216`, and `MOV-215` completed the receiver, outbound
+stream, and bounded worker-steering code. This document preserves the decision
+boundary; `docs/operators/local-execution.md` is authoritative for current
+operation. The feature remains optional, off by capability flags unless
+configured, and never replaces polling or grants local dispatch authority.
+
 No infrastructure, plan change, secret, or paid credit was created by this
-decision itself. It authorizes `MOV-166` to create them under the boundary
-below; nothing is enabled until that issue runs.
+decision itself. It authorized the later implementation under the boundary
+below.
 
 ## Decision
 

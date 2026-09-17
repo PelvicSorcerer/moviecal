@@ -169,9 +169,9 @@ describe("spawnWorker", () => {
       expect(fs.readFileSync(path.join(tmpDir, command, "worker-sandbox.sb"), "utf8")).toContain("deny process-exec");
     }
     expect(calls[0].opts.env).toMatchObject({
-      ANTHROPIC_API_KEY: "anthropic_parent_only",
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
     });
+    expect(calls[0].opts.env).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(calls[1].opts.env).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(calls[1].opts.env).not.toHaveProperty("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB");
   });
@@ -435,5 +435,170 @@ describe("worker log redaction", () => {
     // Deliberately not shaped like a real key prefix (e.g. "sk-...") so this
     // fixture doesn't itself trip CI's separate secret-shape scanner.
     expect(redactWorkerOutput("API_KEY=totally-fake-test-value-not-real", { env: {} })).toBe("API_KEY=[REDACTED]");
+  });
+});
+
+/**
+ * A steering-test fixture with manual control over stdout emission and
+ * process close, unlike fakeChildProcess() above (which auto-closes on a
+ * fixed timer) -- steering tests need to trigger a turn-completion line and a
+ * close event at chosen points, independent of each other.
+ */
+function fakeSteeringChildProcess() {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  let written = "";
+  let ended = false;
+  let closed = false;
+  child.stdin = new Writable({
+    write(chunk, _enc, cb) {
+      written += chunk.toString();
+      cb();
+    },
+  });
+  const originalEnd = child.stdin.end.bind(child.stdin);
+  child.stdin.end = (...args) => {
+    ended = true;
+    return originalEnd(...args);
+  };
+  child.getWritten = () => written;
+  child.stdinEnded = () => ended;
+  child.emitTurnComplete = () => child.stdout.write(`${JSON.stringify({ type: "result" })}\n`);
+  child.emitClose = (code = 0) => {
+    if (closed) return;
+    closed = true;
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", code);
+  };
+  return child;
+}
+
+describe("spawnWorker — steering (MOV-214/215)", () => {
+  let tmpDir;
+  let activeChild;
+  let activePromise;
+
+  afterEach(async () => {
+    activeChild?.emitClose();
+    await activePromise;
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+    activeChild = undefined;
+    activePromise = undefined;
+  });
+
+  function spawnSteering(overrides = {}) {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-steering-"));
+    let capturedChild;
+    const spawnImpl = () => {
+      capturedChild = fakeSteeringChildProcess();
+      return capturedChild;
+    };
+    const result = spawnWorker({
+      invocation: { command: "claude", args: ["-p", "--input-format", "stream-json"] },
+      cwd: "/tmp/some-worktree",
+      brief: "the brief text",
+      logDir: path.join(tmpDir, "run"),
+      spawnImpl,
+      steering: true,
+      ...overrides,
+    });
+    activeChild = capturedChild;
+    activePromise = result.promise;
+    return { result, getChild: () => capturedChild };
+  }
+
+  it("returns {promise, writeTurn, requestClose, nextTurnBoundary} instead of a bare Promise", () => {
+    const { result } = spawnSteering();
+    expect(result).toHaveProperty("promise");
+    expect(typeof result.writeTurn).toBe("function");
+    expect(typeof result.requestClose).toBe("function");
+    expect(typeof result.nextTurnBoundary).toBe("function");
+    expect(result.promise).toBeInstanceOf(Promise);
+  });
+
+  it("sends the initial brief as a stream-json user-turn frame, and leaves stdin open", async () => {
+    const { getChild } = spawnSteering();
+    await new Promise((resolve) => setImmediate(resolve));
+    const child = getChild();
+    const parsed = JSON.parse(child.getWritten().trim());
+    expect(parsed).toEqual({ type: "user", message: { role: "user", content: [{ type: "text", text: "the brief text" }] } });
+    expect(child.stdinEnded()).toBe(false);
+  });
+
+  it("resolves nextTurnBoundary() when the worker emits a result line", async () => {
+    const { result, getChild } = spawnSteering();
+    const boundaryPromise = result.nextTurnBoundary();
+    getChild().emitTurnComplete();
+    await expect(boundaryPromise).resolves.toEqual({ ended: false });
+  });
+
+  it("resolves a turn boundary observed before nextTurnBoundary() was even called", async () => {
+    const { result, getChild } = spawnSteering();
+    getChild().emitTurnComplete();
+    await new Promise((resolve) => setImmediate(resolve));
+    await expect(result.nextTurnBoundary()).resolves.toEqual({ ended: false });
+  });
+
+  it("writeTurn writes a new stream-json frame without closing stdin", async () => {
+    const { result, getChild } = spawnSteering();
+    await new Promise((resolve) => setImmediate(resolve));
+    const child = getChild();
+    child.getWritten(); // drain isn't needed; just re-read after
+    result.writeTurn("also update the docs");
+    const lines = child.getWritten().trim().split("\n");
+    expect(JSON.parse(lines.at(-1))).toEqual({
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: "also update the docs" }] },
+    });
+    expect(child.stdinEnded()).toBe(false);
+  });
+
+  it("requestClose ends stdin", async () => {
+    const { result, getChild } = spawnSteering();
+    await new Promise((resolve) => setImmediate(resolve));
+    result.requestClose();
+    expect(getChild().stdinEnded()).toBe(true);
+  });
+
+  it("resolves nextTurnBoundary() with ended:true once the process has already closed", async () => {
+    const { result, getChild } = spawnSteering();
+    getChild().emitClose(0);
+    await result.promise;
+    await expect(result.nextTurnBoundary()).resolves.toEqual({ ended: true });
+  });
+
+  it("resolves a pending nextTurnBoundary() with ended:true if the process closes first", async () => {
+    const { result, getChild } = spawnSteering();
+    const boundaryPromise = result.nextTurnBoundary();
+    getChild().emitClose(0);
+    await expect(boundaryPromise).resolves.toEqual({ ended: true });
+  });
+
+  it("writeTurn is a safe no-op once the process has exited (never throws)", async () => {
+    const { result, getChild } = spawnSteering();
+    getChild().emitClose(0);
+    await result.promise;
+    expect(() => result.writeTurn("too late")).not.toThrow();
+  });
+
+  it("without the steering flag, behavior is byte-for-byte today's: bare Promise, stdin closed after the brief", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-steering-off-"));
+    let capturedChild;
+    const spawnImpl = () => {
+      capturedChild = fakeChildProcess({ exitCode: 0 });
+      return capturedChild;
+    };
+    const result = spawnWorker({
+      invocation: { command: "claude", args: ["-p"] },
+      cwd: "/tmp/some-worktree",
+      brief: "the brief text",
+      logDir: path.join(tmpDir, "run"),
+      spawnImpl,
+    });
+    expect(result).toBeInstanceOf(Promise);
+    await result;
+    expect(capturedChild.getWritten()).toBe("the brief text");
   });
 });
