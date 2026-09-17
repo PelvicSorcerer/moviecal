@@ -22,6 +22,7 @@ import { admitUsageLimitResume } from "./usage-limit-resume.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
 import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-signals.mjs";
+import { registerActiveAttempt, unregisterActiveAttempt } from "./active-attempt-registry.mjs";
 
 /**
  * @param {object[]} issues - from LinearClient.issuesInState()
@@ -147,6 +148,11 @@ export async function runOnce(issues, ctx) {
         results[index] = await processIssue(issue, ctx);
       } finally {
         release();
+        // MOV-166: this issue is no longer a live attempt an inbound signal
+        // could apply to, whether or not it ever actually got as far as
+        // registerActiveAttempt() (unregistering something never registered
+        // is a no-op).
+        unregisterActiveAttempt(issue.id);
       }
     }),
   );
@@ -557,6 +563,13 @@ async function processIssue(issue, ctx) {
     },
   });
   await publisher.begin({ existing: readAgentSessionFn(issue.identifier) });
+
+  // MOV-166: makes this attempt findable by issue id for an inbound Agent
+  // Session signal (the stream client looks it up to route a stop to the
+  // right StopController, or a trusted prompt to `publisher` / a live
+  // worker's `writeTurn`, once one is registered below). Unregistered in
+  // `runOnce()`'s existing per-issue try/finally, alongside `release()`.
+  registerActiveAttempt(issue.id, { identifier: issue.identifier, controller: stopController, publisher });
 
   try {
     return await runClaimedAttempt({

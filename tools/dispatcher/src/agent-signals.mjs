@@ -282,9 +282,13 @@ export function stopRequestFromSignal(signal) {
  * path and the polling path converge on one `StopController` (acceptance
  * criterion 4) and a replayed delivery is a no-op.
  *
- * Verification is the caller's: a future receiver checks the signature against
- * the raw bytes before handing the parsed payload here. There is no receiver
- * today, and this function neither opens nor implies one.
+ * Verification is the caller's: the MOV-166 receiver
+ * (`src/app/api/agent-session/route.ts`, a separate deployment) checks the
+ * signature against the raw bytes with `verifyWebhookSignature` above before
+ * ever relaying a payload; this function still neither opens nor implies a
+ * listener itself. It's reached from that receiver, relayed over the Mac's
+ * outbound stream client (`agent-stream-client.mjs`), and from the
+ * fixture-replay CLI path -- never from anything listening on the Mac.
  *
  * @param {object} payload - a parsed Agent Session webhook body
  * @param {object} opts
@@ -410,6 +414,11 @@ export class StopController {
     this.onStop = onStop;
     this._request = null;
     this.boundariesChecked = [];
+    // MOV-166: an external stop (the Agent Session stream) must wake a
+    // sleeping watchForStop() loop immediately -- otherwise `stopped` becomes
+    // true right away but nothing notices until the next poll tick, and the
+    // whole point of a live stream over 30-60s polling is lost latency.
+    this._wake = new AbortController();
   }
 
   get stopped() {
@@ -418,6 +427,11 @@ export class StopController {
 
   get stopRequest() {
     return this._request;
+  }
+
+  /** Aborts once the first stop request is recorded; watchForStop() races its sleep against this. */
+  get wakeSignal() {
+    return this._wake.signal;
   }
 
   /** Record a stop request. Returns the effective (first) request. */
@@ -430,6 +444,7 @@ export class StopController {
     } catch {
       // A stop must be recorded even if a listener throws.
     }
+    this._wake.abort();
     return this._request;
   }
 
@@ -479,8 +494,13 @@ export function abortableSleep(ms, signal) {
  */
 export async function watchForStop({ controller, observeStopFn, intervalMs = 0, signal, sleepFn = abortableSleep } = {}) {
   if (typeof observeStopFn !== "function" || !(intervalMs > 0) || !controller) return null;
+  // MOV-166: race the poll sleep against the controller's own wake signal too,
+  // so a stop delivered externally (the Agent Session stream) interrupts the
+  // sleep immediately instead of waiting out the rest of this tick's interval.
+  const wakeSignal = controller.wakeSignal;
+  const sleepSignal = wakeSignal ? (signal ? AbortSignal.any([signal, wakeSignal]) : wakeSignal) : signal;
   while (!controller.stopped && !(signal && signal.aborted)) {
-    await sleepFn(intervalMs, signal);
+    await sleepFn(intervalMs, sleepSignal);
     if (signal && signal.aborted) break;
     if (controller.stopped) break;
     let observed = null;
