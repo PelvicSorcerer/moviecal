@@ -143,7 +143,7 @@ describe("checkPrObservation", () => {
     });
   });
 
-  it("reads PR data and required contexts without mutating repository state", () => {
+  it("reads required contexts from the ruleset-aware rules endpoint first", () => {
     const calls = [];
     const runner = (command, args) => {
       calls.push([command, args]);
@@ -151,12 +151,32 @@ describe("checkPrObservation", () => {
         state: "OPEN", isDraft: false, headRefOid: "sha", baseRefName: "master",
         statusCheckRollup: [{ name: "build", sha: "sha", conclusion: "FAILURE" }],
       });
-      return JSON.stringify({ contexts: ["build"] });
+      return JSON.stringify([
+        { type: "deletion" },
+        { type: "required_status_checks", parameters: { required_status_checks: [{ context: "build" }] } },
+      ]);
     };
     const result = checkPrObservation(42, "owner/repo", runner);
     expect(result).toMatchObject({ state: "OPEN", headSha: "sha", actionable: true });
     expect(calls).toHaveLength(2);
-    expect(calls[1][1][1]).toBe("repos/owner/repo/branches/master/protection/required_status_checks");
+    expect(calls[1][1][1]).toBe("repos/owner/repo/rules/branches/master");
+  });
+
+  it("falls back to legacy branch protection when the rules endpoint has nothing", () => {
+    const calls = [];
+    const runner = (command, args) => {
+      calls.push([command, args]);
+      if (args[0] === "pr") return JSON.stringify({
+        state: "OPEN", isDraft: false, headRefOid: "sha", baseRefName: "master",
+        statusCheckRollup: [{ name: "build", sha: "sha", conclusion: "FAILURE" }],
+      });
+      if (args[1] === "repos/owner/repo/rules/branches/master") return JSON.stringify([]);
+      return JSON.stringify({ contexts: ["build"] });
+    };
+    const result = checkPrObservation(42, "owner/repo", runner);
+    expect(result).toMatchObject({ state: "OPEN", headSha: "sha", actionable: true });
+    expect(calls).toHaveLength(3);
+    expect(calls[2][1][1]).toBe("repos/owner/repo/branches/master/protection/required_status_checks");
   });
 });
 
