@@ -113,7 +113,7 @@ MOV-240 merged (#502) and the redrive fixture [MOV-242](https://linear.app/movie
 
 A second redrive, [MOV-244](https://linear.app/moviecal/issue/MOV-244), reproduced the same clean claim/worktree/branch on merged master (8fe1bda) and hit a **third** false positive with a different root cause: `grep -n -i "npm install\|node_modules\|npm ci" ... AGENTS.md` was misclassified as an edit. Unlike MOV-240/MOV-243 (missing command coverage), this traced to a parser bug in `canonicalize()` shared by the whole guard — its placeholder for an escaped shell operator (`\|` → `__literal_operator_|__`) embedded the operator's own character, so `shellSegments()` re-split on the placeholder text and fragmented the command, defeating the MOV-240 read-only carve-out. Verified fail-closed in the observed case; [MOV-245](https://linear.app/moviecal/issue/MOV-245) is the held follow-up, with regression coverage added for both directions (a hidden real write after an escaped operator still hard-denies). MOV-245 is [PR #509](https://github.com/PelvicSorcerer/moviecal/pull/509), pending CI at time of writing.
 
-Both Loops remain manually disabled in Linear for the duration of this redrive sequence; they have not yet been restored.
+Both Loops were manually disabled in Linear for the MOV-242/244/246 redrive sequence and were restored after MOV-246 completed the clean observation, matching the fixture procedure's per-drill disable/restore pattern.
 
 ## Completion rule
 
