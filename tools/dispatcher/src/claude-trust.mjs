@@ -1,7 +1,7 @@
 // Pre-trusts a freshly-created worktree in Claude Code's global config so a
 // headless `claude -p` worker doesn't hit the interactive workspace-trust
 // dialog (which has no non-interactive answer and would leave the worker
-// unable to use its .claude/settings.json permissions at all).
+// unable to use its .claude/settings.json project defaults).
 //
 // This is safe specifically because the dispatcher only ever calls it on a
 // path it just created itself via `git worktree add` from this same trusted

@@ -31,6 +31,11 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 - `.env.example` is placeholder-only. `.env.local` may exist with placeholder values and does not mean live integrations are ready.
 - Local Mac environment/tooling details (what's installed, credential locations, worktree layout) live in `docs/operators/local-execution.md`.
 
+## Security model
+
+- `.claude/settings.json` provides only shared interactive defaults. It must not contain worker-only `permissions.deny` or sandbox policy, because a tracked project settings file applies equally to human sessions in every worktree.
+- `workerInvocation()` injects Claude's worker-only permission denies through its dispatcher-owned `--settings` payload. `worker-guard.mjs` remains the authoritative, fail-closed OS-level enforcement boundary; do not move those worker constraints back into tracked project settings.
+
 ## Verification contract
 
 - Testing lanes are defined in `docs/planning/testing-lanes.md`. The default fast pull-request gate is `npm run verify` (baseline, unit, and integration lanes).

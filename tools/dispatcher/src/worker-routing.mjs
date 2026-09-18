@@ -7,6 +7,59 @@
 export const WORKERS = ["claude", "codex"];
 export const MODEL_TIERS = ["cheap", "default", "strong"];
 
+// MOV-237: These denies deliberately live with workerInvocation(), rather
+// than in tracked .claude/settings.json. A project settings file is applied to
+// every Claude session rooted in the repository, including a human's ordinary
+// interactive worktree. The dispatcher alone passes this settings payload, so
+// the early Claude-level defense in depth remains worker-scoped. The outer
+// worker-guard.mjs Seatbelt profile remains the authoritative enforcement
+// boundary and independently enforces these restrictions.
+export const CLAUDE_WORKER_PERMISSION_DENIES = [
+  "Bash(git*)",
+  "Bash(gh api*)",
+  "Bash(gh pr create*)",
+  "Bash(gh pr edit*)",
+  "Bash(gh pr merge*)",
+  "Bash(gh pr close*)",
+  "Bash(gh issue*)",
+  "Bash(gh secret*)",
+  "Bash(gh ruleset*)",
+  "Bash(gh release*)",
+  "Bash(gh repo delete*)",
+  "Bash(curl*)",
+  "Bash(wget*)",
+  "Bash(ssh*)",
+  "Bash(scp*)",
+  "Bash(sftp*)",
+  "Bash(security*)",
+  "Bash(npm publish*)",
+  "Bash(vercel*)",
+  "Bash(supabase *reset*)",
+  "Bash(supabase *drop*)",
+  "Bash(*SUPABASE_DB_URL_PROD*)",
+  "Read(~/.config/gh/**)",
+  "Read(~/.config/moviecal/**)",
+  "Read(~/.ssh/**)",
+  "Read(~/.git-credentials)",
+  "Read(~/.netrc)",
+  "Read(~/.npmrc)",
+  "Read(.env)",
+  "Read(.env.local)",
+  "Edit(AGENTS.md)",
+  "Edit(.github/copilot-instructions.md)",
+  "Edit(docs/product/**)",
+  "Edit(.github/workflows/**)",
+  "Edit(.claude/**)",
+  "Edit(.codex/**)",
+];
+
+export const CLAUDE_WORKER_SETTINGS = {
+  permissions: { deny: CLAUDE_WORKER_PERMISSION_DENIES },
+  // Claude's own inner sandbox cannot nest within worker-guard.mjs's
+  // restrictive Seatbelt profile. The outer profile remains fail-closed.
+  sandbox: { enabled: false },
+};
+
 const WORKER_LABEL_RE = /^worker:(claude|codex|any)$/;
 const MODEL_LABEL_RE = /^model:(cheap|default|strong)$/;
 
@@ -72,13 +125,14 @@ export function resolveRouting(issue) {
 // headless subprocess with no TTY (verified directly against the CLI version
 // installed on this Mac, 2.1.208). `--permission-mode dontAsk` is the fix:
 // it auto-denies anything not already covered by permissions.allow in
-// .claude/settings.json or the built-in read-only command set, instead of
+// the base project allow list, the worker-only deny list below, or the
+// built-in read-only command set, instead of
 // prompting -- so an unmatched call fails cleanly rather than hanging. (A
 // newer, more precise combination -- `acceptEdits` plus `--permission-prompts
 // none` -- requires Claude Code v2.1.259+; the installed version rejects
 // `--permission-prompts` as an unknown option, so this uses the
 // version-compatible single flag instead.) Permission rules (including the
-// deny list in .claude/settings.json) are enforced by Claude Code's own
+// deny list in CLAUDE_WORKER_SETTINGS) are enforced by Claude Code's own
 // harness code, not by the model choosing to comply -- see
 // docs/operators/local-execution.md §Security model for what that boundary
 // does and does not cover.
@@ -130,7 +184,7 @@ export function workerInvocation(worker, model, { steering = false } = {}) {
         // own inner sandbox is redundant, not protective -- disable it here
         // rather than leave two colliding layers where only one is needed.
         "--settings",
-        JSON.stringify({ sandbox: { enabled: false } }),
+        JSON.stringify(CLAUDE_WORKER_SETTINGS),
       ],
     };
   }

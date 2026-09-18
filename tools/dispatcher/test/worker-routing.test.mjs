@@ -3,6 +3,8 @@ import {
   parseRoutingLabels,
   resolveRouting,
   workerInvocation,
+  CLAUDE_WORKER_PERMISSION_DENIES,
+  CLAUDE_WORKER_SETTINGS,
   modelIdForTier,
   codexReasoningEffortForTier,
   codexModelIdForTier,
@@ -92,7 +94,7 @@ describe("workerInvocation", () => {
       "--verbose",
       "--no-session-persistence",
       "--settings",
-      JSON.stringify({ sandbox: { enabled: false } }),
+      JSON.stringify(CLAUDE_WORKER_SETTINGS),
     ]);
   });
 
@@ -129,7 +131,8 @@ describe("workerInvocation", () => {
       const settingsIndex = invocation.args.indexOf("--settings");
       expect(settingsIndex).toBeGreaterThan(-1);
       const parsed = JSON.parse(invocation.args[settingsIndex + 1]);
-      expect(parsed).toEqual({ sandbox: { enabled: false } });
+      expect(parsed.sandbox).toEqual({ enabled: false });
+      expect(parsed.permissions).toEqual({ deny: CLAUDE_WORKER_PERMISSION_DENIES });
     }
   });
 
@@ -139,8 +142,8 @@ describe("workerInvocation", () => {
   });
 
   it("scopes the claude invocation to a non-hanging, non-bypassing permission mode", () => {
-    // dontAsk auto-denies anything not covered by .claude/settings.json
-    // permissions.allow, instead of prompting -- which is what prevents a
+    // dontAsk auto-denies anything not covered by the base project allow list
+    // or the dispatcher-only worker deny list, instead of prompting -- which is what prevents a
     // headless run with no TTY from hanging on an unmatched permission
     // request. Verified against the installed CLI version (2.1.208): the
     // newer `acceptEdits` + `--permission-prompts none` combination is
@@ -151,6 +154,47 @@ describe("workerInvocation", () => {
     expect(invocation.args).not.toContain("bypassPermissions");
     expect(invocation.args).not.toContain("--dangerously-skip-permissions");
     expect(invocation.args).not.toContain("--permission-prompts");
+  });
+
+  it("keeps every legacy Claude deny in the dispatcher-only settings payload (MOV-237)", () => {
+    expect(CLAUDE_WORKER_PERMISSION_DENIES).toEqual([
+      "Bash(git*)",
+      "Bash(gh api*)",
+      "Bash(gh pr create*)",
+      "Bash(gh pr edit*)",
+      "Bash(gh pr merge*)",
+      "Bash(gh pr close*)",
+      "Bash(gh issue*)",
+      "Bash(gh secret*)",
+      "Bash(gh ruleset*)",
+      "Bash(gh release*)",
+      "Bash(gh repo delete*)",
+      "Bash(curl*)",
+      "Bash(wget*)",
+      "Bash(ssh*)",
+      "Bash(scp*)",
+      "Bash(sftp*)",
+      "Bash(security*)",
+      "Bash(npm publish*)",
+      "Bash(vercel*)",
+      "Bash(supabase *reset*)",
+      "Bash(supabase *drop*)",
+      "Bash(*SUPABASE_DB_URL_PROD*)",
+      "Read(~/.config/gh/**)",
+      "Read(~/.config/moviecal/**)",
+      "Read(~/.ssh/**)",
+      "Read(~/.git-credentials)",
+      "Read(~/.netrc)",
+      "Read(~/.npmrc)",
+      "Read(.env)",
+      "Read(.env.local)",
+      "Edit(AGENTS.md)",
+      "Edit(.github/copilot-instructions.md)",
+      "Edit(docs/product/**)",
+      "Edit(.github/workflows/**)",
+      "Edit(.claude/**)",
+      "Edit(.codex/**)",
+    ]);
   });
 
   it("builds a codex invocation with the workspace-write sandbox, no brief-path arg (stdin instead)", () => {
