@@ -3,5 +3,5 @@
 // Not referenced by any product code; safe to delete once the drill
 // completes.
 export function addRepairFixture(a: number, b: number): number {
-  return a - b;
+  return a + b;
 }
