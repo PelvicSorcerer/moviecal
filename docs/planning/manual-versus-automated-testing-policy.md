@@ -123,9 +123,12 @@ Representative decisions:
 
 ## Draft-to-ready decision
 
-The local dispatcher always opens a draft PR. Only an authorized human reviewer
-may promote that draft to ready for review; the worker and unattended
-dispatcher never do so.
+The local dispatcher always opens a draft PR. Ordinarily, only an authorized
+human reviewer may promote it to ready for review. The sole exception is the
+MOV-162 fail-closed autonomy policy: an explicitly marked, `risk:low`,
+`agent-ready`, `execution:mac` docs-only PR with `Human testing:
+not-required`, complete evidence, and current passing checks may be promoted
+automatically. All other PRs remain human-controlled.
 
 Before promotion, the reviewer confirms the PR's `## Readiness Evidence`
 section records:
@@ -137,6 +140,14 @@ section records:
 - for `not-required`, the reviewer-approved rationale that every acceptance
   criterion is covered and no mandatory human gate applies
 - `Ready promoted by`, naming the human reviewer and date
+
+For the MOV-162 exception, `Autonomy: eligible` replaces the human promotion
+line only for the qualifying draft-to-ready action. Auto-merge remains
+conservative: the ready PR must retain passing current-SHA required checks
+(including the independent `lane-review` control) and have no requested
+changes before the dispatcher asks GitHub to enable normal auto-merge.
+GitHub's ruleset and required checks remain authoritative; the dispatcher
+never bypasses them.
 
 A failed checklist keeps the PR in draft until fixed and re-tested. A deferred
 required item keeps it in draft unless the issue scope and acceptance criteria

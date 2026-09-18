@@ -149,7 +149,10 @@ describe("checkPrObservation", () => {
       calls.push([command, args]);
       if (args[0] === "pr") return JSON.stringify({
         state: "OPEN", isDraft: false, headRefOid: "sha", baseRefName: "master",
-        statusCheckRollup: [{ name: "build", sha: "sha", conclusion: "FAILURE" }],
+        body: "Autonomy: eligible", files: [{ path: "docs/example.md" }],
+        // gh's statusCheckRollup may omit a check-level SHA even though the
+        // rollup itself is scoped to this head; observe it as the head SHA.
+        statusCheckRollup: [{ name: "build", conclusion: "FAILURE" }],
       });
       return JSON.stringify([
         { type: "deletion" },
@@ -157,7 +160,10 @@ describe("checkPrObservation", () => {
       ]);
     };
     const result = checkPrObservation(42, "owner/repo", runner);
-    expect(result).toMatchObject({ state: "OPEN", headSha: "sha", actionable: true });
+    expect(result).toMatchObject({
+      state: "OPEN", headSha: "sha", body: "Autonomy: eligible", changedFiles: ["docs/example.md"], actionable: true,
+      checks: { required: [expect.objectContaining({ sha: "sha" })] },
+    });
     expect(calls).toHaveLength(2);
     expect(calls[1][1][1]).toBe("repos/owner/repo/rules/branches/master");
   });

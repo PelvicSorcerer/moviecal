@@ -458,6 +458,30 @@ Repair mode is stricter: tests, test-runner configuration, dispatcher code, stag
 
 **Preview and supervised first use (MOV-191).** Live repair is available only inside `dispatcher run` while its singleton dispatcher lock is held; a repair-pass failure is caught so normal issue dispatch continues. `npm run dispatcher:repair` runs the equivalent read-only admission preview (`dispatcher repair --dry-run`): it reads current PR observations, checkout guards, and the durable budget ledger, but never reserves an attempt, starts a worker, reruns CI, writes Linear/GitHub evidence, or changes a worktree. Before enabling `MOVIECAL_AUTO_REPAIR` unattended, an operator must: (1) create a disposable dispatcher-owned draft PR with a deliberately failing, supported test lane; (2) run the preview and confirm the exact branch, SHA, failure fingerprint, and proposed action; (3) enable the switch for one supervised poll and confirm the repair/rerun remains on that PR and records one Linear activity/comment plus one plain GitHub PR comment; (4) confirm its ledger attempt and the next poll's idempotent result; and (5) disable the switch, inspect the PR/worktree/log/audit record, and only then decide whether unattended use is appropriate. Never use a production-sensitive, forked, dirty, or human-owned PR for this exercise.
 
+**Risk-scoped PR readiness and merge (MOV-162).** This capability is off by
+default: `MOVIECAL_PR_AUTONOMY` must be explicitly truthy *and*
+`MOVIECAL_PR_AUTONOMY_MAX_ACTIONS` must set a positive durable rollout cap.
+The initial allowlist is intentionally docs-only. A PR must be dispatcher-owned
+on an `agent/MOV-NNN-*` branch in this repository; its Linear issue must carry
+`agent-ready`, `risk:low`, and `execution:mac`; and its PR body must state
+`Autonomy: eligible`, `Human testing: not-required`, non-empty local-agent
+evidence, and a non-empty no-human-testing rationale. `human-only`, sensitive
+labels (auth, calendar, database, deployment, or security), missing or stale
+latest-SHA checks, skipped/failed checks, missing evidence, requested changes,
+repair activity, and every non-`docs/` changed path are refusals.
+
+The per-issue kill switch is `Autonomy: disabled` in the Linear issue body;
+the same marker in a PR body stops that PR. Removing the global environment
+switch returns every PR to manual readiness and merge without affecting Linear
+tracking or normal local execution. Action reservations are written before a
+GitHub mutation to `~/.config/moviecal/pr-autonomy-ledger.json`, so a restart
+cannot retry an action or widen the staged cap. The first action makes a draft
+ready; only a later current-SHA pass of every required check (including the
+independent `lane-review` control) with no requested changes permits `gh pr
+merge --auto --merge`. This enables GitHub's ordinary auto-merge and never
+uses an admin override or bypasses the ruleset. Each action posts a Linear rollout metric;
+the initial review date is 2026-10-02.
+
 Repair publication has a separate trusted path, `publishRepairResult()`. It
 requires the checkout to remain at the exact SHA used for admission, requires
 the original PR to exist both before and after publication, and pushes only to

@@ -128,6 +128,8 @@ export function observePullRequest({ pr, checks = [], requiredChecks = [], revie
       (pr?.headRepositoryOwner?.login && pr?.headRepository?.name
         ? `${pr.headRepositoryOwner.login}/${pr.headRepository.name}`
         : pr?.headRepository || null),
+    body: pr?.body || "",
+    changedFiles: (pr?.files || []).map((file) => file.path || file.name).filter(Boolean),
     mergeState: pr?.mergeStateStatus || pr?.mergeable || null,
     checks: rollup,
     review: {
@@ -160,7 +162,15 @@ export function isCheckPrObservation(value) {
 /** Read-only GitHub CLI observer. Optional protection/review calls fail closed as observation errors. */
 export function checkPrObservation(prNumber, repo, runner = defaultRunner) {
   try {
-    const pr = JSON.parse(runner("gh", ["pr", "view", String(prNumber), "--repo", repo, "--json", "url,state,mergedAt,isDraft,headRefOid,headRefName,headRepository,headRepositoryOwner,baseRefName,mergeStateStatus,reviewDecision,statusCheckRollup,reviews,comments"]));
+    const pr = JSON.parse(runner("gh", ["pr", "view", String(prNumber), "--repo", repo, "--json", "url,state,mergedAt,isDraft,headRefOid,headRefName,headRepository,headRepositoryOwner,baseRefName,mergeStateStatus,reviewDecision,statusCheckRollup,reviews,comments,body,files"]));
+    // `statusCheckRollup` is scoped by GitHub to the PR's current head. Some
+    // GH CLI check shapes omit a commit field, so stamp only those shape-less
+    // entries with the head returned in the same immutable observation. An
+    // explicit old SHA stays old and is rejected by the autonomy policy.
+    const checks = (pr.statusCheckRollup || []).map((check) => ({
+      ...check,
+      sha: checkSha(check) || pr.headRefOid || null,
+    }));
     let requiredChecks = [];
     try {
       // The modern rules endpoint reflects the branch's *effective* required
@@ -177,7 +187,7 @@ export function checkPrObservation(prNumber, repo, runner = defaultRunner) {
         requiredChecks = protection.contexts || (protection.checks || []).map((check) => check.context || check.name).filter(Boolean);
       } catch { /* Rulesets and external checks may not expose branch protection details. */ }
     }
-    return observePullRequest({ pr, checks: pr.statusCheckRollup || [], requiredChecks, reviews: pr.reviews || [], comments: pr.comments || [] });
+    return observePullRequest({ pr, checks, requiredChecks, reviews: pr.reviews || [], comments: pr.comments || [] });
   } catch (error) {
     return { observationError: { recoverable: true, message: error.message }, state: "UNAVAILABLE", actionable: false };
   }

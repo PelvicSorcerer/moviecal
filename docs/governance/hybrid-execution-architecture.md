@@ -240,7 +240,7 @@ See `docs/governance/mov-159-agent-session-receiver-decision.md` and
 | Agent Sessions / stream | Lifecycle remains available through polling, state, and comments |
 | Dispatcher daemon | Issues accumulate without mutation until a human restarts it or works manually |
 | Automatic repair | Failures escalate for human action |
-| Automatic readiness/merge | Review and merge remain manual |
+| Automatic readiness/merge | Disabled by default; MOV-162 permits only the documented low-risk, docs-only rollout through GitHub auto-merge |
 | Future cloud option | Deferred issues remain in `Icebox`; local delivery is unchanged |
 
 No optional component is allowed to become a hidden prerequisite of the active
