@@ -115,6 +115,8 @@ A second redrive, [MOV-244](https://linear.app/moviecal/issue/MOV-244), reproduc
 
 Both Loops were manually disabled in Linear for the MOV-242/244/246 redrive sequence and were restored after MOV-246 completed the clean observation, matching the fixture procedure's per-drill disable/restore pattern.
 
+**Operator error, not a new bug:** the MOV-247 iOS-execution fixture initially hit the identical MOV-244/MOV-245 escaped-operator symptom even though MOV-245 was already merged. Cause: the dispatcher daemon runs from its own dedicated, not-auto-updated worktree (`~/code/worktrees/moviecal/dispatcher-daemon`, per `docs/operators/local-execution.md`'s explicit warning) and was still checked out at 9ac7f96 (MOV-240 only) — merging MOV-243/MOV-245 to `master` never reached the running process. `MOV-246`'s clean pass was luck: that worker's orientation commands simply didn't happen to hit either still-unfixed pattern. Remediated per the documented procedure: `git pull` in the daemon worktree to 406fa34, then `launchctl kickstart -k gui/$(id -u)/com.moviecal.dispatcher`. This is a reminder for the rest of this ledger: **every dispatcher-source fix in this drill must be followed by a daemon worktree pull + restart before the next redrive is meaningful**, not just a `master` merge.
+
 ## Completion rule
 
 MOV-161 may be completed only when every ledger row is observed or has a
