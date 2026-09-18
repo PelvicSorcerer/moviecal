@@ -1,5 +1,5 @@
 {
-  "$comment": "Defense in depth for dispatcher-spawned Claude workers. MOV-145 gives both adapters an inherited macOS guard, native network-isolated command sandboxes, stripped privileged credentials, structured auditing, and dispatcher-only Git/publication. Workers leave filesystem changes only; Git and all remote mutation are denied.",
+  "$comment": "Interactive project defaults. Dispatcher-spawned Claude workers receive their additional permission denies through workerInvocation() so those defense-in-depth controls do not apply to ordinary human sessions in this repository or its worktrees.",
   "env": {
     "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1"
   },
@@ -16,53 +16,6 @@
       "Bash(npx playwright *)",
       "Bash(xcodebuild *)",
       "Bash(xcrun simctl *)"
-    ],
-    "deny": [
-      "Bash(git*)",
-      "Bash(gh api*)",
-      "Bash(gh pr create*)",
-      "Bash(gh pr edit*)",
-      "Bash(gh pr merge*)",
-      "Bash(gh pr close*)",
-      "Bash(gh issue*)",
-      "Bash(gh secret*)",
-      "Bash(gh ruleset*)",
-      "Bash(gh release*)",
-      "Bash(gh repo delete*)",
-      "Bash(curl*)",
-      "Bash(wget*)",
-      "Bash(ssh*)",
-      "Bash(scp*)",
-      "Bash(sftp*)",
-      "Bash(security*)",
-      "Bash(npm publish*)",
-      "Bash(vercel*)",
-      "Bash(supabase *reset*)",
-      "Bash(supabase *drop*)",
-      "Bash(*SUPABASE_DB_URL_PROD*)",
-      "Read(~/.config/gh/**)",
-      "Read(~/.config/moviecal/**)",
-      "Read(~/.ssh/**)",
-      "Read(~/.git-credentials)",
-      "Read(~/.netrc)",
-      "Read(~/.npmrc)",
-      "Read(.env)",
-      "Read(.env.local)",
-      "Edit(AGENTS.md)",
-      "Edit(.github/copilot-instructions.md)",
-      "Edit(docs/product/**)",
-      "Edit(.github/workflows/**)",
-      "Edit(.claude/**)",
-      "Edit(.codex/**)"
     ]
-  },
-  "sandbox": {
-    "enabled": true,
-    "failIfUnavailable": true,
-    "autoAllowBashIfSandboxed": true,
-    "allowUnsandboxedCommands": false,
-    "network": {
-      "allowedDomains": []
-    }
   }
 }
