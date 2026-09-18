@@ -5,12 +5,18 @@
 // validates the resulting diff, and keeps all remote publication in the
 // trusted dispatcher process.
 
+// Word-only stand-ins for escaped shell operators: the placeholder itself
+// must contain none of `;`, `|`, `&`, or shellSegments' split below would
+// re-split on the placeholder's own text and undo the escaping it exists to
+// provide (MOV-244 hit this with a quoted `\|` inside a `grep` pattern).
+const ESCAPED_OPERATOR_PLACEHOLDERS = { ";": "__escaped_semicolon__", "|": "__escaped_pipe__", "&": "__escaped_amp__" };
+
 function canonicalize(text) {
   return String(text || "")
     // An escaped shell operator is literal data, not a command separator. Keep
     // it distinct while normalizing so a regex such as `foo\\|git` cannot be
     // mistaken for a pipeline that invokes Git.
-    .replace(/\\([;|&])/g, "__literal_operator_$1__")
+    .replace(/\\([;|&])/g, (_, operator) => ESCAPED_OPERATOR_PLACEHOLDERS[operator])
     .replace(/\\\s/g, " ")
     .replace(/["'`]/g, "")
     .replace(/\s+/g, " ")
