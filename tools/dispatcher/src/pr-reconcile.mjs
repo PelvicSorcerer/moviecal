@@ -163,9 +163,20 @@ export function checkPrObservation(prNumber, repo, runner = defaultRunner) {
     const pr = JSON.parse(runner("gh", ["pr", "view", String(prNumber), "--repo", repo, "--json", "url,state,mergedAt,isDraft,headRefOid,headRefName,headRepository,headRepositoryOwner,baseRefName,mergeStateStatus,reviewDecision,statusCheckRollup,reviews,comments"]));
     let requiredChecks = [];
     try {
-      const protection = JSON.parse(runner("gh", ["api", `repos/${repo}/branches/${encodeURIComponent(pr.baseRefName)}/protection/required_status_checks`]));
-      requiredChecks = protection.contexts || (protection.checks || []).map((check) => check.context || check.name).filter(Boolean);
-    } catch { /* Rulesets and external checks may not expose branch protection details. */ }
+      // The modern rules endpoint reflects the branch's *effective* required
+      // checks regardless of whether they come from a ruleset or classic
+      // branch protection; the legacy endpoint below 404s for ruleset-only
+      // repos (this repo included), so it is tried first.
+      const rules = JSON.parse(runner("gh", ["api", `repos/${repo}/rules/branches/${encodeURIComponent(pr.baseRefName)}`]));
+      const statusCheckRule = (Array.isArray(rules) ? rules : []).find((rule) => rule.type === "required_status_checks");
+      requiredChecks = (statusCheckRule?.parameters?.required_status_checks || []).map((check) => check.context).filter(Boolean);
+    } catch { /* Unprotected branches, or an environment without the rules API. */ }
+    if (requiredChecks.length === 0) {
+      try {
+        const protection = JSON.parse(runner("gh", ["api", `repos/${repo}/branches/${encodeURIComponent(pr.baseRefName)}/protection/required_status_checks`]));
+        requiredChecks = protection.contexts || (protection.checks || []).map((check) => check.context || check.name).filter(Boolean);
+      } catch { /* Rulesets and external checks may not expose branch protection details. */ }
+    }
     return observePullRequest({ pr, checks: pr.statusCheckRollup || [], requiredChecks, reviews: pr.reviews || [], comments: pr.comments || [] });
   } catch (error) {
     return { observationError: { recoverable: true, message: error.message }, state: "UNAVAILABLE", actionable: false };
