@@ -165,4 +165,22 @@ describe("classifyAction", () => {
     expect(classifyAction(action, { workerMode: "repair" }).verdict).toBe("hard-deny");
     expect(classifyAction(action, { workerMode: "implementation" }).verdict).not.toBe("hard-deny");
   });
+
+  it.each([
+    "npx vitest --config vitest.integration.config.ts --run tools/dispatcher/test/startup-recovery.integration.test.mjs",
+    'grep -n -i "EPERM\\|sandbox\\|spawnSync git" docs/operators/local-execution.md',
+    "cat tools/dispatcher/src/security-policy.mjs",
+    "npm test -- test/auth.test.ts",
+    "npx playwright test e2e/smoke.spec.ts",
+  ])("allows repair workers to read or run (not edit) protected paths: %s", (action) => {
+    expect(classifyAction(action, { workerMode: "repair" }).verdict).toBe("allow");
+  });
+
+  it.each([
+    "npx vitest --update tools/dispatcher/test/security-policy.test.mjs",
+    "npx playwright test --update-snapshots e2e/smoke.spec.ts",
+    "cat README.md > tools/dispatcher/src/security-policy.mjs",
+  ])("still hard-denies repair workers writing to protected paths: %s", (action) => {
+    expect(classifyAction(action, { workerMode: "repair" }).verdict).toBe("hard-deny");
+  });
 });

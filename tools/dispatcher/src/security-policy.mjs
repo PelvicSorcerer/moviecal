@@ -68,6 +68,25 @@ function isReadOnlyProtectedPathInspection(normalized, pathRule) {
   );
 }
 
+// A repair worker must still be able to read and run the paths repair mode
+// marks read-only (tests, dispatcher code, governance docs, test config) —
+// "read-only" means it cannot edit them, not that it cannot look at or
+// execute them, per docs/operators/local-execution.md's repair-mode
+// description. Running the project's own test runner against a protected
+// path is inspection unless it carries a snapshot-writing flag.
+const REPAIR_READ_ONLY_COMMANDS = /^(?:cat|head|tail|grep|rg|ls|stat|sed|find|npx\s+vitest|vitest|npx\s+playwright|playwright|npm\s+(?:run\s+)?test)\b/;
+
+function writesTestSnapshot(segment) {
+  return /^(?:npx\s+)?(?:vitest|playwright)\b[^\n]*\s(?:-u|--update(?:-snapshots)?)\b/.test(segment);
+}
+
+function isReadOnlyRepairInspection(normalized, pathRule) {
+  const references = shellSegments(normalized).filter((segment) => pathRule.test(segment));
+  return references.length > 0 && references.every(
+    (segment) => REPAIR_READ_ONLY_COMMANDS.test(segment) && !writesProtectedPath(segment, pathRule) && !writesTestSnapshot(segment),
+  );
+}
+
 // A scope rule protects the dispatcher's ownership of an operational tool.
 // A safety rule protects secrets, irreversible actions, or the policy itself.
 // The distinction is consumed by worker-guard.mjs: a command the native
@@ -135,7 +154,9 @@ export function classifyAction(text, { workerMode = "implementation" } = {}) {
   }
   if (workerMode === "repair") {
     for (const { re, reason } of REPAIR_ONLY_RULES) {
-      if (re.test(normalized)) return { verdict: "hard-deny", reason, category: "safety" };
+      if (re.test(normalized) && !isReadOnlyRepairInspection(normalized, re)) {
+        return { verdict: "hard-deny", reason, category: "safety" };
+      }
     }
   }
   for (const { re, reason } of HUMAN_DECISION_PATTERNS) {
