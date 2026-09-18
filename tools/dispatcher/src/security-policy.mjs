@@ -32,6 +32,29 @@ function isCredentialOperation(segment) {
   return /\bnpm\b[^\n]*(?:secret|credential|token|password)/.test(withoutRunInvocation);
 }
 
+// Protected repository paths are protected from modification, not from the
+// orientation reads every worker must make before acting. Keep this list small
+// and intentionally boring: an unknown command mentioning a protected path is
+// a safety denial, while these commands can only inspect it. `sed -i` is the
+// important exception because it mutates in place.
+const READ_ONLY_PATH_COMMANDS = /^(?:cat|head|tail|grep|rg|ls|stat|sed)\b/;
+
+function writesProtectedPath(segment, pathRule) {
+  // A protected path on the right of a shell redirect is a write even when the
+  // command on the left is ordinarily read-only (for example,
+  // `cat README.md > AGENTS.md`).
+  if (new RegExp(`(?:^|\\s)\\d?(?:>>|>)\\s*${pathRule.source}`).test(segment)) return true;
+  // `sed` is read-only unless explicitly asked to edit in place.
+  return /^(?:sed)\b[^\n]*(?:\s-[a-z]*i[a-z]*(?:\s|$)|\s--in-place(?:=|\s|$))/.test(segment);
+}
+
+function isReadOnlyProtectedPathInspection(normalized, pathRule) {
+  const references = shellSegments(normalized).filter((segment) => pathRule.test(segment));
+  return references.length > 0 && references.every(
+    (segment) => READ_ONLY_PATH_COMMANDS.test(segment) && !writesProtectedPath(segment, pathRule),
+  );
+}
+
 // A scope rule protects the dispatcher's ownership of an operational tool.
 // A safety rule protects secrets, irreversible actions, or the policy itself.
 // The distinction is consumed by worker-guard.mjs: a command the native
@@ -89,8 +112,13 @@ const HUMAN_DECISION_PATTERNS = [
 /** Classify a structured tool command or file path. */
 export function classifyAction(text, { workerMode = "implementation" } = {}) {
   const normalized = canonicalize(text);
-  for (const { re, test, reason, category } of [...COMMAND_RULES, ...PATH_RULES]) {
+  for (const { re, test, reason, category } of COMMAND_RULES) {
     if ((test ? test(normalized) : re.test(normalized))) return { verdict: "hard-deny", reason, category };
+  }
+  for (const { re, reason, category } of PATH_RULES) {
+    if (re.test(normalized) && !isReadOnlyProtectedPathInspection(normalized, re)) {
+      return { verdict: "hard-deny", reason, category };
+    }
   }
   if (workerMode === "repair") {
     for (const { re, reason } of REPAIR_ONLY_RULES) {

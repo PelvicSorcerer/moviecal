@@ -107,8 +107,27 @@ describe("classifyAction", () => {
     expect(classifyAction("echo $ANTHROPIC_API_KEY").verdict).toBe("hard-deny");
   });
 
-  it("hard-denies editing AGENTS.md", () => {
-    expect(classifyAction("edit AGENTS.md").verdict).toBe("hard-deny");
+  it.each([
+    "cat AGENTS.md",
+    "head -50 AGENTS.md",
+    "sed -n '1,50p' AGENTS.md",
+    "rg -n worker AGENTS.md",
+    "ls docs/governance/ 2>/dev/null | head -20; echo ---; cat AGENTS.md 2>/dev/null | head -50",
+  ])("allows read-only protected-path orientation: %s", (command) => {
+    expect(classifyAction(command)).toEqual({ verdict: "allow", reason: null, category: null });
+  });
+
+  it.each([
+    "edit AGENTS.md",
+    "cp README.md AGENTS.md",
+    "cat README.md > AGENTS.md",
+    "printf replacement > AGENTS.md",
+    "echo replacement >> AGENTS.md",
+    "sed -i 's/old/new/' AGENTS.md",
+    "sed -ni 's/old/new/' AGENTS.md",
+    "sh -c 'echo replacement > AGENTS.md'",
+  ])("hard-denies direct or shell-mediated writes to AGENTS.md: %s", (command) => {
+    expect(classifyAction(command).verdict).toBe("hard-deny");
   });
 
   it("flags a database migration as needs-human", () => {
