@@ -26,6 +26,8 @@
 
 Human testing: <!-- required | not-required; must match the Linear issue -->
 
+Autonomy: <!-- eligible | disabled (leave disabled unless the Linear issue is explicitly low-risk, execution:mac, agent-ready, and risk:low) -->
+
 - Local-agent evidence: <!-- exact command/procedure, result, and artifact path/link; or "none" -->
 - Human tester and date: <!-- required when human testing is required; otherwise "N/A" -->
 - Checklist result: <!-- pass/fail plus notes; or "N/A — not-required" -->

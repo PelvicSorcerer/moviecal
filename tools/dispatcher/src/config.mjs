@@ -72,6 +72,11 @@ export function repairLedgerStatePath() {
   return path.join(configDir(), "repair-ledger.json");
 }
 
+/** Durable staged-rollout reservations for MOV-162 PR readiness/merge actions. */
+export function prAutonomyLedgerStatePath() {
+  return path.join(configDir(), "pr-autonomy-ledger.json");
+}
+
 export function dispatcherLockPath() {
   return path.join(configDir(), "dispatcher.lock");
 }
@@ -235,6 +240,17 @@ export function agentSessionSteeringEnabled(env = process.env) {
  */
 export function autoRepairEnabled(env = process.env) {
   return truthy(env.MOVIECAL_AUTO_REPAIR);
+}
+
+/** Off unless explicitly enabled; removing this switch immediately restores manual PR control. */
+export function prAutonomyEnabled(env = process.env) {
+  return truthy(env.MOVIECAL_PR_AUTONOMY);
+}
+
+/** A malformed rollout cap never widens automation; the default is zero actions. */
+export function resolvePrAutonomyMaxActions(env = process.env) {
+  const value = Number(env.MOVIECAL_PR_AUTONOMY_MAX_ACTIONS);
+  return Number.isInteger(value) && value >= 0 ? value : 0;
 }
 
 /**

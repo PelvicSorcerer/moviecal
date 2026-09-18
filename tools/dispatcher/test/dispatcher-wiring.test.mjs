@@ -179,6 +179,7 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       "envLocalPath",
       "linearAppEnvPath",
       "linearEnvPath",
+      "prAutonomyLedgerStatePath",
       "priorityPropagationStatePath",
       // MOV-189: dispatcher state, not a credential — it preserves the
       // automatic-repair budget across a restart.

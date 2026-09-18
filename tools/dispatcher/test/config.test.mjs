@@ -8,6 +8,8 @@ import {
   loadLinearAppConfig,
   resolveLinearAuth,
   autoRepairEnabled,
+  prAutonomyEnabled,
+  resolvePrAutonomyMaxActions,
   resolveTrustedReviewers,
   resolveRepairBudgets,
 } from "../src/config.mjs";
@@ -212,5 +214,19 @@ describe("automatic repair configuration (MOV-188)", () => {
         MOVIECAL_REPAIR_BUDGET_TOTAL: "2.5",
       }),
     ).toEqual({ ...DEFAULT_REPAIR_BUDGETS });
+  });
+});
+
+describe("PR autonomy configuration (MOV-162)", () => {
+  it("is disabled by default and only recognizes explicit truthy values", () => {
+    expect(prAutonomyEnabled({})).toBe(false);
+    expect(prAutonomyEnabled({ MOVIECAL_PR_AUTONOMY: "true" })).toBe(true);
+  });
+
+  it("defaults the staged action budget to zero and rejects unsafe values", () => {
+    expect(resolvePrAutonomyMaxActions({})).toBe(0);
+    expect(resolvePrAutonomyMaxActions({ MOVIECAL_PR_AUTONOMY_MAX_ACTIONS: "2" })).toBe(2);
+    expect(resolvePrAutonomyMaxActions({ MOVIECAL_PR_AUTONOMY_MAX_ACTIONS: "-1" })).toBe(0);
+    expect(resolvePrAutonomyMaxActions({ MOVIECAL_PR_AUTONOMY_MAX_ACTIONS: "many" })).toBe(0);
   });
 });

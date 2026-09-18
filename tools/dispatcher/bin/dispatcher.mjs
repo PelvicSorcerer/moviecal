@@ -43,6 +43,8 @@ import {
   logRoot,
   worktreesStatePath,
   usageLimitStatePath,
+  repairLedgerStatePath,
+  prAutonomyLedgerStatePath,
   priorityPropagationStatePath,
   loadLinearConfig,
   loadLinearAppConfig,
@@ -52,6 +54,8 @@ import {
   agentSessionSteeringEnabled,
   loadAgentSessionStreamConfig,
   agentSessionEnvPath,
+  prAutonomyEnabled,
+  resolvePrAutonomyMaxActions,
   checkSecretFileMode,
   DEFAULT_CONCURRENCY,
   RUN_LOG_RETENTION_DAYS,
@@ -88,6 +92,8 @@ import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "
 import { SignalLedger, StopController, handleAgentSignal } from "../src/agent-signals.mjs";
 import { AgentStreamClient } from "../src/agent-stream-client.mjs";
 import { previewRepairPass, runRepairPass } from "../src/repair-run.mjs";
+import { RepairLedger } from "../src/repair-ledger.mjs";
+import { PrAutonomyLedger, runPrAutonomyPass } from "../src/pr-autonomy.mjs";
 
 /**
  * Build the LinearClient the real run/dry-run path authenticates with:
@@ -600,6 +606,28 @@ async function reportReviewCi(linearClient, teamKey) {
 }
 
 /**
+ * MOV-162's only mutating path. It runs under the dispatcher's existing
+ * process lock and delegates every allow/deny decision to the pure policy.
+ */
+async function runPrAutonomy(linearClient, teamKey) {
+  if (!prAutonomyEnabled()) return [];
+  const issues = await linearClient.issuesInState({ teamKey, stateName: RUN_STATE_NAMES.inReview });
+  const worktreeManager = new WorktreeManager({ repoRoot: REPO_ROOT, worktreeRoot: worktreeRoot(), statePath: worktreesStatePath() });
+  return runPrAutonomyPass({
+    issues,
+    worktreeManager,
+    observePrFn: (prNumber, repo) => checkPrObservation(prNumber, repo, ghRunner),
+    repo: GITHUB_REPO,
+    ledger: new PrAutonomyLedger(prAutonomyLedgerStatePath()),
+    repairLedger: new RepairLedger(repairLedgerStatePath()),
+    enabled: true,
+    maxActions: resolvePrAutonomyMaxActions(),
+    runner: ghRunner,
+    linearClient,
+  });
+}
+
+/**
  * Automated backlog promoter (MOV-129): move issues in Backlog/Blocked that
  * meet the readiness contract into "Ready for Agent". Returns 0/1 for the
  * standalone `promote` command; `promotePass()` wraps it for the run loop.
@@ -792,6 +820,15 @@ async function cmdRunOnce({ repairLockHeld = false } = {}) {
     }
   } catch (err) {
     console.error("Automatic repair pass failed (continuing to dispatch):", err.message);
+  }
+
+  try {
+    const actions = await runPrAutonomy(linearClient, teamKey);
+    for (const action of actions) {
+      if (action.action !== "none") console.log(`${action.issue}: PR autonomy ${action.action} — ${action.reason}`);
+    }
+  } catch (err) {
+    console.error("PR autonomy pass failed (continuing with manual review):", err.message);
   }
 
   if (issues.length === 0) {
