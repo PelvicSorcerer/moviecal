@@ -37,7 +37,7 @@ function isCredentialOperation(segment) {
 // and intentionally boring: an unknown command mentioning a protected path is
 // a safety denial, while these commands can only inspect it. `sed -i` is the
 // important exception because it mutates in place.
-const READ_ONLY_PATH_COMMANDS = /^(?:cat|head|tail|grep|rg|ls|stat|sed)\b/;
+const READ_ONLY_PATH_COMMANDS = /^(?:cat|head|tail|grep|rg|ls|stat|sed|find)\b/;
 
 function writesProtectedPath(segment, pathRule) {
   // A protected path on the right of a shell redirect is a write even when the
@@ -45,7 +45,14 @@ function writesProtectedPath(segment, pathRule) {
   // `cat README.md > AGENTS.md`).
   if (new RegExp(`(?:^|\\s)\\d?(?:>>|>)\\s*${pathRule.source}`).test(segment)) return true;
   // `sed` is read-only unless explicitly asked to edit in place.
-  return /^(?:sed)\b[^\n]*(?:\s-[a-z]*i[a-z]*(?:\s|$)|\s--in-place(?:=|\s|$))/.test(segment);
+  if (/^(?:sed)\b[^\n]*(?:\s-[a-z]*i[a-z]*(?:\s|$)|\s--in-place(?:=|\s|$))/.test(segment)) return true;
+  // `find` only ever mutates through one of its action primaries: -exec/-ok
+  // (and their -dir variants) run an arbitrary command, -delete removes
+  // matches, and -fprint*/-fls write results to a file. A protected path can
+  // otherwise appear anywhere in a `find` invocation — as a match target
+  // (`-name`) or a comparison argument (`-newer`) — without ever being
+  // written to.
+  return /^find\b[^\n]*(?:^|\s)-(?:exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)\b/.test(segment);
 }
 
 function isReadOnlyProtectedPathInspection(normalized, pathRule) {
