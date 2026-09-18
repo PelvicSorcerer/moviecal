@@ -807,6 +807,10 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
   const watcherAbort = new AbortController();
   let spawnResult;
   try {
+    // Real WorktreeManager instances always provide this durable handoff.
+    // Keep dependency-injected legacy test doubles compatible; they never
+    // spawn a real child and therefore cannot represent the crash window.
+    worktreeManager.prepareWorkerSpawn?.(issue.identifier);
     const spawned = spawnWorkerFn({
       invocation,
       cwd: entry.path,
@@ -815,6 +819,14 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
       signal: abortController.signal,
       securityContext: { mode: workerMode },
       steering: steeringActive,
+      // `spawnWorker()` invokes this before the brief can start work. The
+      // stored pid is also the detached process-group id, allowing a
+      // replacement dispatcher to terminate the complete worker tree before
+      // it reclaims this path (MOV-254).
+      onSpawn: ({ pid }) => {
+        if (!pid) throw new Error("worker spawn did not provide a process-group leader pid");
+        worktreeManager.setWorkerPid(issue.identifier, pid);
+      },
     });
     // Without steering, spawnWorkerFn returns a bare Promise, exactly as
     // before. With it, spawnWorkerFn returns {promise, writeTurn,
@@ -912,8 +924,6 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     });
     return { issue: issue.identifier, outcome: "timeout", timeoutMs: workerTimeoutMs };
   }
-
-  if (spawnResult.pid) worktreeManager.setWorkerPid(issue.identifier, spawnResult.pid);
 
   // MOV-158, `after-worker` boundary: the worker has exited and nothing has
   // been reported yet, so honouring a stop here costs no completed work.

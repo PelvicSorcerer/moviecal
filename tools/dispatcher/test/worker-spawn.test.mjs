@@ -119,6 +119,35 @@ describe("spawnWorker", () => {
     expect(capturedOpts.detached).toBe(true);
   });
 
+  it("records the detached process-group leader before writing the brief (MOV-254)", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
+    let capturedChild;
+    let writtenWhenRecorded;
+    let recorded;
+    const spawnImpl = () => {
+      capturedChild = fakeChildProcess({ exitCode: 0 });
+      capturedChild.pid = 4545;
+      return capturedChild;
+    };
+
+    await spawnWorker({
+      invocation: { command: "claude", args: ["-p"] },
+      cwd: "/tmp/some-worktree",
+      brief: "brief",
+      logDir: path.join(tmpDir, "run"),
+      spawnImpl,
+      killGraceMs: 0,
+      killImpl: () => {},
+      onSpawn: (worker) => {
+        recorded = worker;
+        writtenWhenRecorded = capturedChild.getWritten();
+      },
+    });
+
+    expect(recorded).toEqual({ pid: 4545 });
+    expect(writtenWhenRecorded).toBe("");
+  });
+
   it("wraps both adapters in the shared sandbox and strips worker credentials", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
     const originalToken = process.env.GH_TOKEN;

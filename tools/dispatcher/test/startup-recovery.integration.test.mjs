@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -93,5 +93,22 @@ describe("startup recovery Linear reconciliation (MOV-173)", () => {
     expect(ctx.calls[0]).toEqual({ type: "move", id: "linear-1", stateId: "human" });
     expect(ctx.calls[1].body).toContain("remote-tracking branch");
     expect(run("git", ["rev-list", "--count", "origin/master..HEAD"], ctx.entry.path).trim()).toBe("1");
+  });
+
+  it("kills an orphaned real worker process group before a clean worktree can be requeued (MOV-254)", async () => {
+    const ctx = makeContext();
+    const worker = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    worker.unref();
+    ctx.manager.setWorkerPid("MOV-1", worker.pid);
+
+    const exited = new Promise((resolve) => worker.once("exit", resolve));
+    const changes = ctx.manager.reconcileStartup();
+    await exited;
+
+    expect(changes).toEqual([expect.objectContaining({ id: "MOV-1", dirty: false })]);
+    expect(() => process.kill(worker.pid, 0)).toThrow();
   });
 });
