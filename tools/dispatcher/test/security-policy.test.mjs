@@ -113,6 +113,9 @@ describe("classifyAction", () => {
     "sed -n '1,50p' AGENTS.md",
     "rg -n worker AGENTS.md",
     "ls docs/governance/ 2>/dev/null | head -20; echo ---; cat AGENTS.md 2>/dev/null | head -50",
+    'find . -maxdepth 3 -newer AGENTS.md -not -path "./node_modules/*" -not -path "./.git/*" -type f',
+    "find . -name AGENTS.md",
+    "find . -anewer AGENTS.md -type f",
   ])("allows read-only protected-path orientation: %s", (command) => {
     expect(classifyAction(command)).toEqual({ verdict: "allow", reason: null, category: null });
   });
@@ -126,6 +129,9 @@ describe("classifyAction", () => {
     "sed -i 's/old/new/' AGENTS.md",
     "sed -ni 's/old/new/' AGENTS.md",
     "sh -c 'echo replacement > AGENTS.md'",
+    "find . -name AGENTS.md -exec sed -i s/old/new/ {} +",
+    "find . -name AGENTS.md -delete",
+    "find . -newer AGENTS.md -fprintf AGENTS.md %p",
   ])("hard-denies direct or shell-mediated writes to AGENTS.md: %s", (command) => {
     expect(classifyAction(command).verdict).toBe("hard-deny");
   });
