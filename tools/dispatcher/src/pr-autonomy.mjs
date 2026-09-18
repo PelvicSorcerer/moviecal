@@ -7,6 +7,7 @@ import { JsonStateStore } from "./state-store.mjs";
 export const AUTONOMY_DISABLE_LABEL = "autonomy:disabled";
 export const AUTONOMY_DISABLE_MARKER = /^\s*Autonomy:\s*disabled\s*$/im;
 export const AUTONOMY_SAFE_PATH_PREFIXES = Object.freeze(["docs/"]);
+export const AUTONOMY_REQUIRED_CHECKS = Object.freeze(["lane-baseline", "lane-unit", "lane-integration", "lane-browser", "lane-review"]);
 
 const BLOCKING_LABELS = new Set(["human-only", AUTONOMY_DISABLE_LABEL, "auth", "calendar", "database", "deployment", "security"]);
 const REQUIRED_LABELS = new Set(["agent-ready", "risk:low", "execution:mac"]);
@@ -48,8 +49,11 @@ export function evaluatePrAutonomy({ issue, observation, repo, repairAttempts = 
   if (observation.changedFiles.some((file) => !AUTONOMY_SAFE_PATH_PREFIXES.some((prefix) => file.startsWith(prefix)))) return deny("PR changes a path outside the initial docs-only allowlist");
   if (repairAttempts.some((attempt) => ["code-repair", "infrastructure-rerun"].includes(attempt.kind))) return deny("PR has automatic repair activity");
   const checks = observation.checks;
-  if (!checks || checks.pending || checks.timedOut || checks.ignoredStale > 0 || checks.missingRequired?.length || !checks.required?.length) return deny("required-check evidence is incomplete, stale, or missing");
-  if (checks.required.some((check) => check.sha !== observation.headSha || check.outcome !== "success")) return deny("a required check did not pass on the latest SHA");
+  if (!checks || checks.pending || checks.timedOut || checks.ignoredStale > 0 || checks.missingRequired?.length) return deny("required-check evidence is incomplete, stale, or missing");
+  const byName = new Map((checks.checks || checks.required || []).map((check) => [String(check.name).toLowerCase(), check]));
+  const required = AUTONOMY_REQUIRED_CHECKS.map((name) => byName.get(name));
+  if (required.some((check) => !check)) return deny("a documented required check is missing from the current observation");
+  if (required.some((check) => check.sha !== observation.headSha || check.outcome !== "success")) return deny("a required check did not pass on the latest SHA");
   if (observation.review?.requestedChanges?.length || observation.review?.blockingRequiredChecks?.length || String(observation.review?.decision || "").toUpperCase() === "CHANGES_REQUESTED") return deny("PR has blocking review feedback");
   if (observation.isDraft) return { eligible: true, action: "ready", reason: "eligible low-risk draft has complete current evidence" };
   return { eligible: true, action: "merge", reason: "eligible ready PR has complete current review-check evidence" };

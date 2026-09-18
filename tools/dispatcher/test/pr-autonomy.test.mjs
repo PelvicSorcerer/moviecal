@@ -34,6 +34,7 @@ function observation(overrides = {}) {
       timedOut: false,
       ignoredStale: 0,
       missingRequired: [],
+      checks: ["lane-baseline", "lane-unit", "lane-integration", "lane-browser", "lane-review"].map((name) => ({ name, sha: "new-sha", outcome: "success" })),
       required: [{ name: "lane-unit", sha: "new-sha", outcome: "success" }],
     },
     review: { decision: null, requestedChanges: [], blockingRequiredChecks: [] },
@@ -60,7 +61,7 @@ describe("MOV-162 PR autonomy policy", () => {
     ["sensitive path", {}, observation({ changedFiles: ["src/app/api/calendar/route.ts"] }), true, /docs-only/],
     ["stale SHA", {}, observation({ checks: { ...observation().checks, ignoredStale: 1 } }), true, /stale/],
     ["missing check", {}, observation({ checks: { ...observation().checks, missingRequired: ["lane-unit"] } }), true, /incomplete/],
-    ["old check SHA", {}, observation({ checks: { ...observation().checks, required: [{ name: "lane-unit", sha: "old", outcome: "success" }] } }), true, /latest SHA/],
+    ["old check SHA", {}, observation({ checks: { ...observation().checks, checks: observation().checks.checks.map((check) => check.name === "lane-unit" ? { ...check, sha: "old" } : check) } }), true, /latest SHA/],
   ])("denies %s", (_name, issueOverrides, observed, enabled, reason) => {
     expect(evaluatePrAutonomy({ issue: { ...issue, ...issueOverrides }, observation: observed, repo, enabled }).reason).toMatch(reason);
   });
