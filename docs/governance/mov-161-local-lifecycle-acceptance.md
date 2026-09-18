@@ -65,7 +65,7 @@ the live step is inherently operator-driven.
 | Trusted review repair | A trusted actionable review can trigger the bounded repair lifecycle; untrusted review cannot. | `tools/dispatcher/test/repair-lifecycle.integration.test.mjs`, `tools/dispatcher/test/repair-policy.test.mjs` | Pending MOV-161 fixture | Pending |
 | Sensitive escalation | A security-sensitive failure moves only the fixture to Needs Human Decision with an auditable reason and no repair/publication. | `tools/dispatcher/test/security-policy.test.mjs` | MOV-239: false-positive AGENTS.md safety finding, checksummed audit, no push, PR, or repair | Observed — MOV-239 |
 | Repair-budget exhaustion | Further safe repair is refused after the persisted budget is spent, including after restart. | `tools/dispatcher/test/run-loop-e2e.test.mjs` | Pending MOV-161 fixture | Pending |
-| Merge completion | GitHub is the merge authority; a merged disposable PR reaches Done via sync or the idempotent reconciliation backstop. | `tools/dispatcher/test/pr-reconcile.test.mjs` | Pending MOV-161 fixture | Pending |
+| Merge completion | GitHub is the merge authority; a merged disposable PR reaches Done via sync or the idempotent reconciliation backstop. | `tools/dispatcher/test/pr-reconcile.test.mjs` | MOV-256: the sole merge-completion fixture (documentation-only, `Fixes MOV-256` in the PR body). PR #527 marked ready, all CI green, merged by the operator; the Linear issue reached `Done` via GitHub's own magic-word sync (no dispatcher backstop comment needed) | Observed — MOV-256 |
 
 ## Fixture procedure
 
