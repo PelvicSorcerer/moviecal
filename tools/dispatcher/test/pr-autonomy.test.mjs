@@ -16,8 +16,8 @@ const issue = {
 const body = [
   "Autonomy: eligible",
   "Human testing: not-required",
-  "Local-agent evidence: npm run verify (passed)",
-  "No-human-testing rationale: docs-only change with deterministic CI coverage.",
+  "- Local-agent evidence: npm run verify (passed)",
+  "- No-human-testing rationale: docs-only change with deterministic CI coverage.",
 ].join("\n");
 
 function observation(overrides = {}) {

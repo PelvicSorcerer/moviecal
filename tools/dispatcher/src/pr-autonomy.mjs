@@ -13,8 +13,8 @@ const REQUIRED_LABELS = new Set(["agent-ready", "risk:low", "execution:mac"]);
 const REQUIRED_EVIDENCE = [
   /^\s*Autonomy:\s*eligible\s*$/im,
   /^\s*Human testing:\s*not-required\s*$/im,
-  /^\s*Local-agent evidence:\s*\S.+$/im,
-  /^\s*No-human-testing rationale:\s*\S.+$/im,
+  /^\s*(?:[-*]\s*)?Local-agent evidence:\s*\S.+$/im,
+  /^\s*(?:[-*]\s*)?No-human-testing rationale:\s*\S.+$/im,
 ];
 
 function labelsOf(issue) {
