@@ -379,6 +379,7 @@ export class WorktreeManager {
     entry.status = "active";
     entry.pid = process.pid;
     entry.workerPid = null;
+    entry.workerSpawnPending = false;
     entry.resumedAt = new Date().toISOString();
     entry.resumeCount = (entry.resumeCount || 0) + 1;
     // The scheduled resume is being spent right now; leaving these behind
@@ -493,6 +494,10 @@ export class WorktreeManager {
       status: "active",
       pid: process.pid,
       workerPid: null,
+      // Set immediately before spawnWorker() is called. If the dispatcher
+      // dies in the tiny interval between starting a child and recording its
+      // PID, recovery preserves the worktree rather than trusting it clean.
+      workerSpawnPending: false,
       startedAt: new Date().toISOString(),
     };
     const state = this.loadState();
@@ -566,6 +571,16 @@ export class WorktreeManager {
     const state = this.loadState();
     if (!state[id]) throw new Error(`no worktree record for ${id}`);
     state[id].workerPid = workerPid || null;
+    state[id].workerSpawnPending = false;
+    this.saveState(state);
+  }
+
+  /** Mark the narrow, durable handoff window before a worker is spawned (MOV-254). */
+  prepareWorkerSpawn(id) {
+    const state = this.loadState();
+    if (!state[id]) throw new Error(`no worktree record for ${id}`);
+    state[id].workerPid = null;
+    state[id].workerSpawnPending = true;
     this.saveState(state);
   }
 
@@ -592,7 +607,10 @@ export class WorktreeManager {
     };
   }
 
-  _abandonForStartupRecovery(state, id, entry, reason) {
+  _abandonForStartupRecovery(state, id, entry, reason, {
+    forceDirty = false,
+    forcedUncommittedPath = "live worker process group could not be terminated safely",
+  } = {}) {
     const from = entry.status;
     let uncommittedPaths = [];
     let hasUnpushedCommits = false;
@@ -605,6 +623,9 @@ export class WorktreeManager {
       } catch {
         uncommittedPaths = ["unable to inspect worktree safely"];
       }
+    }
+    if (forceDirty && uncommittedPaths.length === 0 && !hasUnpushedCommits) {
+      uncommittedPaths = [forcedUncommittedPath];
     }
     state[id].status = "abandoned";
     state[id].endedAt = new Date().toISOString();
@@ -623,7 +644,21 @@ export class WorktreeManager {
     return this._startupRecoveryChange(id, state[id]);
   }
 
-  reconcileStartup({ isPidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } } } = {}) {
+  reconcileStartup({
+    isPidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } },
+    // Workers are spawned detached, making workerPid both the direct child
+    // PID and its process-group ID. Once this dispatcher has acquired the
+    // singleton lock, a still-live group belongs to a prior crashed
+    // dispatcher and cannot safely retain write access to this worktree.
+    terminateWorkerProcessGroup = (workerPid) => {
+      try {
+        process.kill(-workerPid, "SIGKILL");
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  } = {}) {
     const state = this.loadState();
     const changes = [];
     for (const [id, entry] of Object.entries(state)) {
@@ -639,7 +674,39 @@ export class WorktreeManager {
         changes.push(this._abandonForStartupRecovery(state, id, entry, reason));
       } else if (entry.status === "review" && !entry.prNumber) {
         changes.push(this._abandonForStartupRecovery(state, id, entry, "review record has no PR number after dispatcher restart"));
-      } else if (entry.status === "active" && (!entry.workerPid || !isPidAlive(entry.workerPid))) {
+      } else if (entry.status === "active") {
+        if (entry.workerPid && isPidAlive(entry.workerPid)) {
+          // Never inspect a worktree as clean while its former worker can
+          // still write to it. SIGKILL is intentional: this is an orphaned
+          // group from a dispatcher that has already died, not a cooperative
+          // cancellation path. If the host will not kill it, preserve the
+          // worktree and route the issue to human review instead of requeueing.
+          if (!terminateWorkerProcessGroup(entry.workerPid)) {
+            changes.push(this._abandonForStartupRecovery(
+              state,
+              id,
+              entry,
+              "dispatcher restarted while its worker process group remained live and could not be terminated",
+              { forceDirty: true },
+            ));
+            continue;
+          }
+        } else if (entry.workerSpawnPending) {
+          // The dispatcher died after committing to spawn but before it
+          // durably recorded a PID. That may contain a live orphan, so this
+          // path cannot be considered safe for automatic reuse.
+          changes.push(this._abandonForStartupRecovery(
+            state,
+            id,
+            entry,
+            "dispatcher restarted while recording a worker process group",
+            {
+              forceDirty: true,
+              forcedUncommittedPath: "worker spawn began but no process-group leader was recorded safely",
+            },
+          ));
+          continue;
+        }
         changes.push(this._abandonForStartupRecovery(state, id, entry, "dispatcher restarted after worker stopped without a terminal update"));
       }
     }

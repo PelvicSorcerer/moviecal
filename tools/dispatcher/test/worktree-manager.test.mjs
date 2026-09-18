@@ -517,6 +517,43 @@ describe("WorktreeManager", () => {
     expect(manager.loadState()["MOV-1"].startupRecovery).toMatchObject({ stateMoved: false, commentPosted: false });
   });
 
+  it("terminates a recorded live worker group before requeuing its clean worktree (MOV-254)", () => {
+    manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix", linearIssueId: "linear-1" });
+    manager.setWorkerPid("MOV-1", 4321);
+    const terminateWorkerProcessGroup = vi.fn(() => true);
+
+    const changes = manager.reconcileStartup({
+      isPidAlive: (pid) => pid === 4321,
+      terminateWorkerProcessGroup,
+    });
+
+    expect(terminateWorkerProcessGroup).toHaveBeenCalledWith(4321);
+    expect(changes[0]).toMatchObject({ id: "MOV-1", dirty: false });
+  });
+
+  it("preserves a worktree for human review when a live worker group cannot be terminated (MOV-254)", () => {
+    manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix", linearIssueId: "linear-1" });
+    manager.setWorkerPid("MOV-1", 4321);
+
+    const changes = manager.reconcileStartup({
+      isPidAlive: (pid) => pid === 4321,
+      terminateWorkerProcessGroup: () => false,
+    });
+
+    expect(changes[0]).toMatchObject({ id: "MOV-1", dirty: true });
+    expect(changes[0].uncommittedPaths).toContain("live worker process group could not be terminated safely");
+  });
+
+  it("preserves a worktree when the dispatcher died during the worker-pid handoff (MOV-254)", () => {
+    manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix", linearIssueId: "linear-1" });
+    manager.prepareWorkerSpawn("MOV-1");
+
+    const changes = manager.reconcileStartup({ isPidAlive: () => false });
+
+    expect(changes[0]).toMatchObject({ id: "MOV-1", dirty: true });
+    expect(changes[0].uncommittedPaths).toContain("worker spawn began but no process-group leader was recorded safely");
+  });
+
   it("recovers an active assignment whose existing path no longer resolves as a linked Git worktree (MOV-202)", () => {
     const entry = manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
     manager.setWorkerPid("MOV-1", 1234);

@@ -44,6 +44,8 @@ function fakeWorktreeManager({ activeCount = 0, pathFree = true } = {}) {
       this.createCalls.push(args);
       return { path: `/fake/worktrees/${args.name}`, ...args };
     },
+    prepareWorkerSpawn() {},
+    setWorkerPid() {},
     markStatus(id, status, extra = {}) {
       this.statusCalls.push({ id, status, ...extra });
     },
@@ -99,6 +101,8 @@ function statefulWorktreeManager({ reclaimablePaths = new Set(), dirtyReasons = 
       this.createCalls.push(args);
       return { path, ...args };
     },
+    prepareWorkerSpawn() {},
+    setWorkerPid() {},
     markStatus(id, status, extra = {}) {
       this.statusCalls.push({ id, status, ...extra });
     },

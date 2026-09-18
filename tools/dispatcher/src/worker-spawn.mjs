@@ -147,6 +147,7 @@ function reapProcessGroup(pid, { graceMs, killImpl }) {
  * @param {(cmd: string, args: string[], opts: object) => import('node:child_process').ChildProcess} [opts.spawnImpl]
  * @param {number} [opts.killGraceMs] - delay between SIGTERM and SIGKILL when reaping the worker's process group
  * @param {(pid: number, signal: string) => void} [opts.killImpl] - injectable for tests; defaults to signalling the real process group
+ * @param {(worker: {pid: number|null}) => void} [opts.onSpawn] - called after the detached worker process group is created and before its brief is written; callers use this to durably record the group leader for crash recovery
  * @param {AbortSignal} [opts.signal] - MOV-138: aborting (e.g. a per-worker timeout in run-loop.mjs) reaps the
  *   worker's process group immediately, the same SIGTERM-then-SIGKILL path used once the worker exits on its own
  *   (MOV-137). The promise still only settles once the child actually closes.
@@ -168,6 +169,7 @@ export function spawnWorker({
   spawnImpl = spawn,
   killGraceMs = 5000,
   killImpl = killProcessGroup,
+  onSpawn = () => {},
   signal,
   securityContext,
   platform = process.platform,
@@ -233,6 +235,19 @@ export function spawnWorker({
       detached: true,
       env: workerEnv,
     });
+
+    // Persist the detached group leader before giving the worker its brief.
+    // If the dispatcher dies later, startup recovery can kill this exact
+    // group before it ever reuses the worktree (MOV-254). A failed durable
+    // handoff is fail-closed: do not allow an untracked worker to run.
+    try {
+      onSpawn({ pid: child.pid || null });
+    } catch (err) {
+      killImpl(child.pid, "SIGKILL");
+      childClosed = true;
+      reject(err);
+      return;
+    }
 
     const stdoutStream = fs.createWriteStream(stdoutPath);
     const stderrStream = fs.createWriteStream(stderrPath);
