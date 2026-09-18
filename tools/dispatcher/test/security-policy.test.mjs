@@ -116,9 +116,21 @@ describe("classifyAction", () => {
     'find . -maxdepth 3 -newer AGENTS.md -not -path "./node_modules/*" -not -path "./.git/*" -type f',
     "find . -name AGENTS.md",
     "find . -anewer AGENTS.md -type f",
+    'grep -n -i "npm install\\|node_modules\\|npm ci" docs/operators/local-execution.md docs/planning/testing-lanes.md AGENTS.md',
   ])("allows read-only protected-path orientation: %s", (command) => {
     expect(classifyAction(command)).toEqual({ verdict: "allow", reason: null, category: null });
   });
+
+  it.each([";", "|", "&"])(
+    "does not let an escaped %s placeholder be re-split as a real shell operator",
+    (operator) => {
+      // A protected-path write hidden after an escaped operator must still be
+      // caught in the same segment as the operator itself (MOV-244: the old
+      // placeholder for an escaped operator contained the operator's own
+      // character, so it was re-split as if it were a real one).
+      expect(classifyAction(`echo a\\${operator}b > AGENTS.md`).verdict).toBe("hard-deny");
+    },
+  );
 
   it.each([
     "edit AGENTS.md",
