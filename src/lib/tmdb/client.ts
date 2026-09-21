@@ -72,10 +72,14 @@ function normalizeOptionalString(value: unknown): string | null {
   return trimmedValue ? trimmedValue : null;
 }
 
+function isValidTMDbId(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
 function normalizeMovieSummary(
   value: unknown,
 ): NormalizedMovieSummary | null {
-  if (!isJsonRecord(value) || typeof value.id !== 'number') {
+  if (!isJsonRecord(value) || !isValidTMDbId(value.id)) {
     return null;
   }
 
