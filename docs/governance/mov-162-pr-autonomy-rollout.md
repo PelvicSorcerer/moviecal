@@ -9,8 +9,9 @@ not change Linear tracking, manual PR handling, worker routing, or CI.
 [PR #540](https://github.com/PelvicSorcerer/moviecal/pull/540) shipped the
 disabled-by-default policy, durable action ledger, bounded GitHub adapter, and
 policy tests. That proves the mechanism exists; it does **not** accept the
-mechanism for ongoing operation. The shipped path policy is still hardcoded to
-`docs/**`.
+mechanism for ongoing operation. The shipped policy preserves `docs/**` and
+allows only approved low-risk helpers in `src/**` with deterministic coverage
+in `test/**`; sensitive application behavior remains fail-closed.
 
 The supervised rollout has four distinct gates:
 
@@ -32,7 +33,7 @@ another per-PR rollout approval. It does not authorize any excluded category.
 Until `Go`, and after any `Hold` or `Roll back`, global PR autonomy stays
 disabled.
 
-## Existing docs-only policy
+## Current constrained policy
 
 Only a dispatcher-owned, same-repository `agent/MOV-NNN-*` PR may qualify. Its
 Linear issue must carry `agent-ready`, `risk:low`, and `execution:mac`. The PR
@@ -49,9 +50,11 @@ control is the current-SHA required `lane-review` check; no approval is
 substituted for that independent review gate. Any automatic repair activity
 refuses both actions.
 
-`human-only`, auth, calendar, database, deployment, and security work is
-excluded. `Autonomy: disabled` in the issue or PR and the
-`autonomy:disabled` issue label are per-item kill switches.
+`human-only`, `area:auth`, `area:calendar`, `area:database`,
+`area:deployment`, and security-sensitive work is excluded. The only allowed
+paths are `docs/**` plus non-sensitive `src/**` and `test/**`; a sensitive or
+outside-allowlist path denies the whole diff. `Autonomy: disabled` in the issue
+or PR and the `autonomy:disabled` issue label are per-item kill switches.
 
 ## Owner-approved first code boundary
 
