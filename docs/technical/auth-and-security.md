@@ -9,6 +9,13 @@
 - The Supabase service-role key stays server-side only and must never be committed.
 - The app session should be established server-side with HTTP-only cookies so protected pages and API routes do not rely on client-only auth checks.
 
+## iOS client
+
+- The iOS app authenticates via `supabase-swift`'s `Auth` module (email/password), added in `MOV-106`.
+- The Supabase session (access + refresh token) is persisted exclusively via `Auth.KeychainLocalStorage`, namespaced under the `com.moviecal.ios.supabase-auth` Keychain service — never in `UserDefaults`, a file, or logs.
+- The app ships only the Supabase anon/publishable key (`MoviecalSupabaseAnonKey` in `Info.plist`), never the service-role key.
+- Per `docs/api/v1-contract.md`, the `v1` API layer never refreshes a bearer token itself. The iOS token provider (`SupabaseAuthTokenProvider`) asks the Supabase auth client for a non-expired session on every `v1` request; if the refresh token itself is no longer valid, it throws so the app surfaces re-authentication instead of retrying silently.
+
 ## Watchlist authorization
 
 - `watchlists`, `watchlist_memberships`, and `watchlist_invite_links` are the watchlist authorization primitives.
