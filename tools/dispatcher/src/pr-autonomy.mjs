@@ -7,10 +7,20 @@ import { hasDurablePassedVerification } from "./readiness-evidence.mjs";
 
 export const AUTONOMY_DISABLE_LABEL = "autonomy:disabled";
 export const AUTONOMY_DISABLE_MARKER = /^\s*Autonomy:\s*disabled\s*$/im;
-export const AUTONOMY_SAFE_PATH_PREFIXES = Object.freeze(["docs/"]);
+// This is deliberately an allowlist. New roots or sensitive application
+// classes need explicit governance work before they can become eligible.
+export const AUTONOMY_SAFE_PATH_PREFIXES = Object.freeze(["docs/", "src/", "test/"]);
 export const AUTONOMY_REQUIRED_CHECKS = Object.freeze(["lane-baseline", "lane-unit", "lane-integration", "lane-browser", "lane-review"]);
 
-const BLOCKING_LABELS = new Set(["human-only", AUTONOMY_DISABLE_LABEL, "auth", "calendar", "database", "deployment", "security"]);
+const BLOCKING_LABELS = new Set([
+  "human-only",
+  AUTONOMY_DISABLE_LABEL,
+  // Retain the original labels as fail-closed compatibility gates, and match
+  // the area labels actually used by the Linear workspace.
+  "auth", "calendar", "database", "deployment", "security",
+  "area:auth", "area:calendar", "area:database", "area:deployment", "area:security",
+  "security-sensitive",
+]);
 const REQUIRED_LABELS = new Set(["agent-ready", "risk:low", "execution:mac"]);
 const REQUIRED_EVIDENCE = [
   /^\s*Autonomy:\s*eligible\s*$/im,
@@ -20,6 +30,35 @@ const REQUIRED_EVIDENCE = [
 
 function labelsOf(issue) {
   return new Set((issue?.labels?.nodes || issue?.labels || []).map((label) => String(label?.name || label).toLowerCase()));
+}
+
+function isSensitiveClassification(labels) {
+  return [...labels].some((label) => BLOCKING_LABELS.has(label)
+    || label.startsWith("security:")
+    || label.endsWith(":security")
+    || label.includes("security-sensitive"));
+}
+
+const SENSITIVE_APPLICATION_PATHS = Object.freeze([
+  // API/server entry points and their matching route tests.
+  /(?:^|\/)api(?:[/.]|$)/i,
+  /(?:^|\/)(?:server|middleware)(?:[._/-]|$)/i,
+  /(?:^|\/)[^/]*route(?:[._-]|$)/i,
+  // Authentication, private sessions, and calendar-feed/token boundaries.
+  /(?:^|\/)(?:auth(?:entication|orization)?|sign-?in|(?:agent-)?session)(?:[._/-]|$)/i,
+  /(?:^|\/)(?:calendar|calendar-tokens?|feed|token)(?:[._/-]|$)/i,
+  // Data access and real-stack behavior, including private watchlists.
+  /(?:^|\/)(?:supabase|database|db|migrations?|real-stack|watchlist|private-watchlists?)(?:[._/-]|$)/i,
+  // Operational and security-sensitive application behavior.
+  /(?:^|\/)(?:cron|deploy(?:ment)?|security|e2e|browser)(?:[._/-]|$)/i,
+]);
+
+/** Return true only for an explicitly approved, non-sensitive changed path. */
+export function isAutonomySafePath(file) {
+  if (typeof file !== "string" || file.length === 0 || file.startsWith("/") || file.split("/").includes("..")) return false;
+  if (file.startsWith("docs/")) return true; // Preserve the shipped docs-only policy unchanged.
+  if (!AUTONOMY_SAFE_PATH_PREFIXES.some((prefix) => file.startsWith(prefix))) return false;
+  return !SENSITIVE_APPLICATION_PATHS.some((pattern) => pattern.test(file));
 }
 
 function deny(reason) {
@@ -36,7 +75,7 @@ export function evaluatePrAutonomy({ issue, observation, repo, repairAttempts = 
   if (!enabled) return deny("global PR autonomy switch is disabled");
   if (!issue) return deny("Linear issue is unavailable");
   const labels = labelsOf(issue);
-  if ([...BLOCKING_LABELS].some((label) => labels.has(label))) return deny("issue carries a human or sensitive-work label");
+  if (isSensitiveClassification(labels)) return deny("issue carries a human or sensitive-work label");
   if (AUTONOMY_DISABLE_MARKER.test(String(issue.description || ""))) return deny("issue's autonomy kill switch is disabled");
   if (![...REQUIRED_LABELS].every((label) => labels.has(label))) return deny("issue is missing the explicit low-risk local allowlist labels");
   if (issue.stateName && issue.stateName !== "In Review") return deny("issue is not in In Review");
@@ -47,7 +86,7 @@ export function evaluatePrAutonomy({ issue, observation, repo, repairAttempts = 
   if (AUTONOMY_DISABLE_MARKER.test(String(observation.body || ""))) return deny("PR's autonomy kill switch is disabled");
   if (!hasRequiredEvidence(observation.body)) return deny("PR is missing complete explicit autonomy and no-human-testing evidence");
   if (!Array.isArray(observation.changedFiles) || observation.changedFiles.length === 0) return deny("PR has no changed-path evidence");
-  if (observation.changedFiles.some((file) => !AUTONOMY_SAFE_PATH_PREFIXES.some((prefix) => file.startsWith(prefix)))) return deny("PR changes a path outside the initial docs-only allowlist");
+  if (observation.changedFiles.some((file) => !isAutonomySafePath(file))) return deny("PR changes a sensitive or outside-approved path");
   if (repairAttempts.some((attempt) => ["code-repair", "infrastructure-rerun"].includes(attempt.kind))) return deny("PR has automatic repair activity");
   const checks = observation.checks;
   if (!checks || checks.pending || checks.timedOut || checks.ignoredStale > 0 || checks.missingRequired?.length) return deny("required-check evidence is incomplete, stale, or missing");

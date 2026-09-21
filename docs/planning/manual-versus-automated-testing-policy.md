@@ -125,10 +125,13 @@ Representative decisions:
 
 The local dispatcher always opens a draft PR. Ordinarily, only an authorized
 human reviewer may promote it to ready for review. The sole exception is the
-MOV-162 fail-closed autonomy policy: an explicitly marked, `risk:low`,
-`agent-ready`, `execution:mac` docs-only PR with `Human testing:
-not-required`, complete evidence, and current passing checks may be promoted
-automatically. All other PRs remain human-controlled.
+MOV-162/MOV-273 fail-closed autonomy policy: an explicitly marked, `risk:low`,
+`agent-ready`, `execution:mac` PR limited to `docs/**` or approved low-risk
+helpers in `src/**` with deterministic `test/**` coverage, with `Human
+testing: not-required`, complete evidence, and current passing checks may be
+promoted automatically. API/server, auth, calendar/token/feed, data-access,
+cron/deployment/security, browser-E2E, and mixed allowed/denied changes remain
+human-controlled.
 
 Before promotion, the reviewer confirms the PR's `## Readiness Evidence`
 section records:

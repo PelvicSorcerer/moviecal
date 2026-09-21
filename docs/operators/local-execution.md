@@ -468,14 +468,21 @@ Repair mode is stricter: tests, test-runner configuration, dispatcher code, stag
 **Risk-scoped PR readiness and merge (MOV-162).** This capability is off by
 default: `MOVIECAL_PR_AUTONOMY` must be explicitly truthy *and*
 `MOVIECAL_PR_AUTONOMY_MAX_ACTIONS` must set a positive durable rollout cap.
-The initial allowlist is intentionally docs-only. A PR must be dispatcher-owned
-on an `agent/MOV-NNN-*` branch in this repository; its Linear issue must carry
+The allowlist preserves `docs/**` and permits only low-risk helpers under
+`src/**` with deterministic coverage under `test/**`; it is not blanket
+permission for either root. API/server routes, auth/sign-in/session/middleware,
+calendar/token/feed, Supabase/database/real-stack/private-watchlist, cron,
+deployment, security-sensitive, and browser-E2E paths remain excluded. A PR
+must be dispatcher-owned on an `agent/MOV-NNN-*` branch in this repository; its
+Linear issue must carry
 `agent-ready`, `risk:low`, and `execution:mac`; and its PR body must state
 `Autonomy: eligible`, `Human testing: not-required`, non-empty local-agent
 evidence, and a non-empty no-human-testing rationale. `human-only`, sensitive
-labels (auth, calendar, database, deployment, or security), missing or stale
+labels (`area:auth`, `area:calendar`, `area:database`, `area:deployment`, or
+security classifications), missing or stale
 latest-SHA checks, skipped/failed checks, missing evidence, requested changes,
-repair activity, and every non-`docs/` changed path are refusals.
+repair activity, any mixed allowed/denied diff, and every path outside the
+approved low-risk policy are refusals.
 
 The per-issue kill switch is `Autonomy: disabled` in the Linear issue body;
 the same marker in a PR body stops that PR. Removing the global environment
