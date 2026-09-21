@@ -190,6 +190,6 @@ self-hosted macOS runner lane and a repo-wide dependency-field contract.
 2. Complete Phase 2 iOS skeleton:
    - `#237` / `MOV-104` (Xcode project + SwiftUI shell) — **Done**.
    - `#238` / `MOV-105` (v1 API client + Codable models) — **Done**.
-   - `#239` / `MOV-106` (Supabase auth via supabase-swift) — **Spec Ready**.
+   - `#239` / `MOV-106` (Supabase auth via supabase-swift) — **Done**.
    - `#240` / `MOV-107` (navigation shell + placeholder screens) — **Backlog**.
 3. Note: dependency tracking now uses native Linear `blocked by`/`blocks` relations (see `docs/governance/linear-information-architecture.md` §Relations); the GitHub-Project `Dependencies` field approach is superseded.
