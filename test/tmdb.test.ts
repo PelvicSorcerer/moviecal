@@ -78,6 +78,35 @@ describe('TMDb wrapper', () => {
     );
   });
 
+  it('discards search results with malformed TMDb ids', async () => {
+    setValidTMDbEnv();
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          results: [
+            { id: 603, title: 'The Matrix' },
+            { id: 0, title: 'Zero Id' },
+            { id: -1, title: 'Negative Id' },
+            { id: 1.5, title: 'Fractional Id' },
+            { id: Number.NaN, title: 'NaN Id' },
+            { id: Number.POSITIVE_INFINITY, title: 'Infinite Id' },
+          ],
+        }),
+      ),
+    );
+
+    await expect(searchMovies('matrix', fetchMock)).resolves.toEqual([
+      {
+        tmdbId: 603,
+        title: 'The Matrix',
+        releaseDate: null,
+        posterPath: null,
+        overview: null,
+      },
+    ]);
+  });
+
   it('normalizes movie details for later watchlist caching', async () => {
     setValidTMDbEnv();
 
