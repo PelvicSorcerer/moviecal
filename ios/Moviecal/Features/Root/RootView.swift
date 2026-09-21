@@ -1,22 +1,20 @@
 import SwiftUI
 
+/// The app's auth gate: renders `SignInView` while signed out and
+/// `MainTabView` once `AuthStore` reports a signed-in session, switching
+/// automatically as `authStore.state` changes.
 struct RootView: View {
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "film.stack")
-                .font(.system(size: 48))
-                .foregroundStyle(.tint)
-            Text("Moviecal")
-                .font(.title)
-                .bold()
-            Text("iOS app scaffold placeholder")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-        .padding()
-    }
-}
+    let authStore: AuthStore
+    let apiClient: APIClient
 
-#Preview {
-    RootView()
+    var body: some View {
+        switch authStore.state {
+        case .unknown:
+            ProgressView()
+        case .signedOut:
+            SignInView(authStore: authStore)
+        case .signedIn:
+            MainTabView(apiClient: apiClient, authStore: authStore)
+        }
+    }
 }

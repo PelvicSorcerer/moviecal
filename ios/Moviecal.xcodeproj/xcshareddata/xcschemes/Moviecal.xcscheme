@@ -4,7 +4,8 @@
    version = "1.7">
    <BuildAction
       parallelizeBuildables = "YES"
-      buildImplicitDependencies = "YES">
+      buildImplicitDependencies = "YES"
+      buildArchitectures = "Automatic">
       <BuildActionEntries>
          <BuildActionEntry
             buildForTesting = "YES"
@@ -34,6 +35,20 @@
                ReferencedContainer = "container:Moviecal.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "CAFEF00D0000000000000107"
+               BuildableName = "MoviecalUITests.xctest"
+               BlueprintName = "MoviecalUITests"
+               ReferencedContainer = "container:Moviecal.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -49,6 +64,16 @@
                BlueprintIdentifier = "CAFEF00D0000000000000003"
                BuildableName = "MoviecalTests.xctest"
                BlueprintName = "MoviecalTests"
+               ReferencedContainer = "container:Moviecal.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "CAFEF00D0000000000000107"
+               BuildableName = "MoviecalUITests.xctest"
+               BlueprintName = "MoviecalUITests"
                ReferencedContainer = "container:Moviecal.xcodeproj">
             </BuildableReference>
          </TestableReference>
