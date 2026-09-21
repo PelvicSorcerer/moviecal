@@ -39,4 +39,4 @@ The dedicated iOS workflow is `.github/workflows/ios-verify.yml`.
   - shared docs/config/workflow files that affect iOS dispatch, branch filtering, runner policy, or testing-lane policy
 - Historically, before `ios/` existed, `ios-verify` ran as a successful no-op/config-validation workflow that proved runner routing plus basic toolchain presence, including `xcodebuild -version`.
 - `#237` / `MOV-104` switched `ios-verify` from bootstrap mode to real CI: its `lane-ios` job now runs `xcodebuild build` plus `xcodebuild test` (XCTest smoke coverage) against `ios/Moviecal.xcodeproj`.
-- `#240` is responsible for strengthening the lane to build + XCTest + XCUITest, with snapshot coverage mandatory there.
+- `#240` / `MOV-107` is responsible for strengthening the lane to build + XCTest + XCUITest, with snapshot coverage mandatory there.

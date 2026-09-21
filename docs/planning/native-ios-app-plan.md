@@ -186,6 +186,10 @@ self-hosted macOS runner lane and a repo-wide dependency-field contract.
 
 ## Next actions
 
-1. Keep the operator docs and queue tooling aligned with the ratified iOS policy.
-2. Land the Phase 2 iOS issues in sequence: `#237`, `#238`, `#239`, `#240`.
-3. Complete the queue-tooling follow-up in `#241` so the repo scripts enforce the new `Dependencies` and iOS-runner rules automatically.
+1. Keep the operator docs and queue tooling aligned with the ratified iOS policy (ongoing).
+2. Complete Phase 2 iOS skeleton:
+   - `#237` / `MOV-104` (Xcode project + SwiftUI shell) — **Done**.
+   - `#238` / `MOV-105` (v1 API client + Codable models) — **Done**.
+   - `#239` / `MOV-106` (Supabase auth via supabase-swift) — **Spec Ready**.
+   - `#240` / `MOV-107` (navigation shell + placeholder screens) — **Backlog**.
+3. Note: dependency tracking now uses native Linear `blocked by`/`blocks` relations (see `docs/governance/linear-information-architecture.md` §Relations); the GitHub-Project `Dependencies` field approach is superseded.

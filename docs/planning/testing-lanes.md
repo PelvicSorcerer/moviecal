@@ -196,14 +196,14 @@ The iOS lane is a separate GitHub Actions workflow, `ios-verify` (job `lane-ios`
   - simulator build
   - at least one trivial XCTest smoke test
 
-### `#238` and `#239`
+### `#238` / `MOV-105` and `#239` / `MOV-106`
 
 - API-client and auth work add XCTest coverage appropriate to their scopes.
 - These issues do not require XCUITest or snapshot coverage by default.
 
-### `#240` strengthened lane
+### `#240` / `MOV-107` strengthened lane
 
-- `#240` is the first issue that must require the full lane:
+- `#240` / `MOV-107` is the first issue that must require the full lane:
   - build
   - XCTest
   - XCUITest
