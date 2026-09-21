@@ -140,6 +140,38 @@ describe('TMDb wrapper', () => {
       status: 400,
     });
   });
+
+  it.each([
+    ['1999-03-31', '1999-03-31'],
+    ['2020-02-29', '2020-02-29'],
+    ['  1999-03-31  ', '1999-03-31'],
+    ['2023-02-30', null],
+    ['2023-04-31', null],
+    ['2023-13-01', null],
+    ['2023-00-10', null],
+    ['2023-02-29', null],
+    ['1900-02-29', null],
+    ['invalid-date', null],
+  ])(
+    'normalizes release_date %s to %s',
+    async (releaseDate, expectedReleaseDate) => {
+      setValidTMDbEnv();
+
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            id: 603,
+            title: 'The Matrix',
+            release_date: releaseDate,
+          }),
+        ),
+      );
+
+      await expect(getMovieDetails(603, fetchMock)).resolves.toMatchObject({
+        releaseDate: expectedReleaseDate,
+      });
+    },
+  );
 });
 
 describe('movie search route', () => {
