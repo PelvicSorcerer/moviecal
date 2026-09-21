@@ -37,12 +37,29 @@ function normalizeReleaseDate(value: unknown): string | null {
   }
 
   const trimmedValue = value.trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmedValue);
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmedValue)) {
+  if (!match) {
     return null;
   }
 
-  return trimmedValue;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  // setUTCFullYear (unlike Date.UTC/the Date constructor) has no two-digit
+  // year special case, and it normalizes out-of-range month/day components
+  // instead of throwing, so a round-trip check reliably detects impossible
+  // calendar dates such as 2023-02-30 or 2023-02-29 (non-leap).
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+
+  const isValidCalendarDate =
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day;
+
+  return isValidCalendarDate ? trimmedValue : null;
 }
 
 function normalizeOptionalString(value: unknown): string | null {
