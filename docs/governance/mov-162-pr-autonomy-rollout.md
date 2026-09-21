@@ -125,6 +125,34 @@ no-op. No other state, branch, repository, or PR receives this authority.
 Keep both autonomy environment variables absent while this governance change
 is manually reviewed and merged.
 
+## MOV-274 evidence-capture and worker-sandbox test hygiene (MOV-277)
+
+MOV-274 produced a genuine, correctly-scoped PR (#561, all checks green) that
+nonetheless rendered `Autonomy: disabled`, for reasons entirely in the
+dispatcher rather than in that PR's own diff. First, the worker ran `npm run
+verify 2>&1 | tail -300` to shorten its own output; `readiness-evidence.mjs`'s
+exact-literal-command match (by design, MOV-275) then found no matching
+transcript event and rendered the local-agent evidence incomplete, even
+though verification genuinely passed. Second, the same run hit a real `git
+EPERM` inside a handful of `tools/dispatcher/test/**/*.integration.test.mjs`
+fixtures that shell out to a real `git` binary — `worker-guard.mjs`'s own
+Seatbelt profile already denies the worker that exact capability, so those
+fixtures cannot succeed once reached from inside a worker's own `npm run
+verify`, independent of anything about MOV-274's change.
+
+MOV-277 fixed both, without touching the evidence contract, PR #561, or
+either autonomy environment variable: the worker brief now tells every
+worker to run `npm run verify` as its own exact, unwrapped command and names
+the consequence of piping or wrapping it; and the affected fixture suites now
+skip cleanly (not fail) when a new `MOVIECAL_WORKER_SANDBOX` signal on the
+worker's own sanitized environment says they are running inside that same
+sandbox, while keeping full coverage on macOS/CI and any human/local `npm run
+verify` outside it. See `docs/operators/local-execution.md` §Security model
+and `docs/planning/testing-lanes.md` §Dispatcher sandbox-exec integration.
+This does not itself advance the rollout sequence below — MOV-274 code ready
+is still the next row a supervised poll may attempt, on a clean redrive or
+equivalent low-risk pilot.
+
 ## Action budget and sequence
 
 The cap is the total durable ledger count, not a per-run allowance. The only

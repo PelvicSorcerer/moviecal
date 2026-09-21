@@ -79,6 +79,8 @@ The default fast pull-request gate is `npm run verify`, which runs the **baselin
 
 Not expected to catch: the MOV-180/184 nested-`sandbox_apply` collision specifically — reproducing that via two nested `sandbox-exec` CLI invocations did not trigger a crash when this suite was written (see the note at the bottom of the test file), so that hazard is guarded only at the unit level, by `worker-routing.test.mjs` pinning that Claude's invocation always disables its own internal sandbox.
 
+**Also skips inside a dispatcher worker's own sandbox (MOV-274 follow-up).** This suite's fixture setup, and two otherwise cross-platform suites in this same lane (`startup-recovery.integration.test.mjs`, `worktree-reclaim-concurrency.integration.test.mjs`), shell out to a real `git` binary. When `npm run verify` itself runs as a dispatcher worker (a Claude or Codex worker's assigned verification step, not a human running the command directly), `worker-guard.mjs`'s own Seatbelt profile has already denied `git` process-exec to that worker and everything it spawns — so reaching these fixtures from inside a worker's `npm run verify` is a sandbox denial unrelated to what any of the three suites check, not a real regression. All three read `MOVIECAL_WORKER_SANDBOX` (set only on a worker's own sanitized environment, see `docs/operators/local-execution.md` §Security model) and skip cleanly when it is set, keeping full real-`git`/real-`sandbox-exec` coverage everywhere else: CI, and any human/local `npm run verify`.
+
 ### Browser (`lane:browser`)
 
 **Purpose:** Full-stack browser coverage for core user journeys using deterministic fixtures and route interception.

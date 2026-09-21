@@ -58,8 +58,18 @@ describe("MOV-275 durable local verification", () => {
     ["missing", [], "incomplete"],
     ["failed", [JSON.stringify({ type: "item.completed", item: { type: "command_execution", command: "npm run verify", exit_code: 1 } })], "failed"],
     ["ambiguous shell wrapper", [JSON.stringify({ type: "item.completed", item: { type: "command_execution", command: "npm run verify || true", exit_code: 0 } })], "incomplete"],
+    ["piped to tail (MOV-274 autonomy-pilot blocker)", [JSON.stringify({ type: "item.completed", item: { type: "command_execution", command: "npm run verify 2>&1 | tail -300", exit_code: 0 } })], "incomplete"],
   ])("fails closed for %s evidence", (_name, lines, status) => {
     expect(captureVerificationEvidence(logs(lines)).status).toBe(status);
+  });
+
+  it("renders Autonomy: eligible once the worker runs the exact command instead of piping it (MOV-274 follow-up)", () => {
+    const evidence = captureVerificationEvidence(logs([
+      JSON.stringify({ type: "item.completed", item: { id: "verify", type: "command_execution", command: "npm run verify", exit_code: 0 } }),
+    ]));
+    const body = pullRequestReadinessEvidence(eligibleIssue, evidence);
+    expect(body).toContain("Autonomy: eligible");
+    expect(hasDurablePassedVerification(body)).toBe(true);
   });
 });
 

@@ -18,6 +18,21 @@ import { classifyAction } from "./security-policy.mjs";
 export const WORKER_MODES = Object.freeze(["implementation", "repair"]);
 export const APPROVED_EXECUTOR = "moviecal-dispatcher";
 
+// Set on every worker's environment exactly when this guard put it inside the
+// real Seatbelt sandbox (see sanitizedWorkerEnvironment below) — never
+// inferred by a child process probing for the sandbox itself, since a probe
+// command (e.g. attempting `git` and catching the failure) would itself be
+// exactly the denied action it is trying to detect. Anything a worker spawns
+// -- `npm run verify` and, through it, the dispatcher's own real-Git fixture
+// integration tests -- inherits this and can use it to skip cleanly instead
+// of failing on a sandbox denial that has nothing to do with what those
+// tests are meant to check (MOV-274 follow-up).
+export const WORKER_SANDBOX_ENV_VAR = "MOVIECAL_WORKER_SANDBOX";
+
+export function isInsideWorkerSandboxEnv(env = process.env) {
+  return env[WORKER_SANDBOX_ENV_VAR] === "1";
+}
+
 const ALWAYS_PROTECTED = [
   "AGENTS.md",
   ".github/copilot-instructions.md",
@@ -96,6 +111,7 @@ export function sanitizedWorkerEnvironment(source = process.env, { worker } = {}
     if (isClaudeProviderCredential || ENV_ALLOWLIST.has(key) || !CREDENTIAL_ENV_RE.test(key)) env[key] = value;
   }
   if (worker === "claude") env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = "1";
+  env[WORKER_SANDBOX_ENV_VAR] = "1";
   env.GIT_TERMINAL_PROMPT = "0";
   env.GIT_ASKPASS = "/usr/bin/false";
   env.GIT_CONFIG_GLOBAL = "/dev/null";

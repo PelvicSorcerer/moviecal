@@ -9,9 +9,11 @@ import {
   buildWorkerSandboxProfile,
   extractToolActions,
   guardedInvocation,
+  isInsideWorkerSandboxEnv,
   repositoryGuardPaths,
   sanitizedWorkerEnvironment,
   validateRepairTarget,
+  WORKER_SANDBOX_ENV_VAR,
   writeWorkerAudit,
 } from "../src/worker-guard.mjs";
 
@@ -36,6 +38,14 @@ describe("worker guard", () => {
     expect(env).not.toHaveProperty("LINEAR_API_KEY");
     expect(env).not.toHaveProperty("SUPABASE_SERVICE_ROLE_KEY");
     expect(env).not.toHaveProperty("SSH_AUTH_SOCK");
+  });
+
+  it("marks the sanitized environment as inside the worker sandbox (MOV-274 follow-up)", () => {
+    const env = sanitizedWorkerEnvironment({ PATH: "/usr/bin" });
+    expect(env[WORKER_SANDBOX_ENV_VAR]).toBe("1");
+    expect(isInsideWorkerSandboxEnv(env)).toBe(true);
+    expect(isInsideWorkerSandboxEnv({ PATH: "/usr/bin" })).toBe(false);
+    expect(isInsideWorkerSandboxEnv({ [WORKER_SANDBOX_ENV_VAR]: "0" })).toBe(false);
   });
 
   it("keeps Claude worker authentication in the parent but excludes the dispatcher diagnosis key", () => {

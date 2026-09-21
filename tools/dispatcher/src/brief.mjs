@@ -96,6 +96,10 @@ export function generateBrief(issue, { branch, worktreePath, worker, model, upgr
   );
   lines.push("");
   lines.push(
+    "**Run `npm run verify` as its own exact command, verbatim.** The dispatcher only credits local verification when your structured tool transcript records a command whose text is the literal `npm run verify` — nothing appended. Do **not** pipe it (`npm run verify 2>&1 | tail -300`, `| cat`), redirect it (`> out.log`), chain it (`&& echo done`, `; true`), or wrap it in a subshell — even a harmless wrapper used only to shorten output breaks the exact-string match and makes correct, passing work render as unverified (`Autonomy: disabled`) on the resulting PR. Run the plain command and let it print in full; summarize the result in your own words afterward if you want a shorter record, but never alter the invocation itself.",
+  );
+  lines.push("");
+  lines.push(
     "If you hit a hard-deny action or a case that needs a human decision (see `docs/operators/local-execution.md` §Security model), stop and report the blocker instead of improvising around it — do not attempt to work around a refusal.",
   );
   lines.push("");
@@ -224,6 +228,8 @@ export function generateRepairBrief(issue, {
     "- If the correct fix needs a human decision — a governance gate, a credential, a sensitive path, an acknowledgement label, or a change this repair is not allowed to make — **stop and say so instead of improvising around it.** An honest \"this needs a human\" is a successful repair outcome; a workaround is not.",
     "",
     "**Run verification synchronously.** You are a one-shot invocation with no resume. Wait for `npm run verify` (and any other build/test command) to finish and act on its actual result before exiting. Anything still running when you exit is killed before the dispatcher audits your changes.",
+    "",
+    "**Run `npm run verify` as its own exact command, verbatim.** The dispatcher only credits local verification when your structured tool transcript records a command whose text is the literal `npm run verify` — nothing appended. Do **not** pipe it, redirect it, chain it, or wrap it in a subshell, even to shorten output — a wrapped invocation makes correct, passing work render as unverified (`Autonomy: disabled`) on the PR.",
     "",
   ];
 
