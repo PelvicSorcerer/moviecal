@@ -38,11 +38,23 @@ function normalizeReleaseDate(value: unknown): string | null {
 
   const trimmedValue = value.trim();
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmedValue)) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmedValue);
+
+  if (!match) {
     return null;
   }
 
-  return trimmedValue;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsedDate = new Date(Date.UTC(year, month - 1, day));
+
+  const isCalendarDate =
+    parsedDate.getUTCFullYear() === year &&
+    parsedDate.getUTCMonth() === month - 1 &&
+    parsedDate.getUTCDate() === day;
+
+  return isCalendarDate ? trimmedValue : null;
 }
 
 function normalizeOptionalString(value: unknown): string | null {

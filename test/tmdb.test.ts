@@ -140,6 +140,81 @@ describe('TMDb wrapper', () => {
       status: 400,
     });
   });
+
+  describe('release date normalization', () => {
+    async function normalizeReleaseDateFromDetails(
+      release_date: unknown,
+    ): Promise<string | null> {
+      setValidTMDbEnv();
+
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            id: 603,
+            title: 'The Matrix',
+            release_date,
+          }),
+        ),
+      );
+
+      const details = await getMovieDetails(603, fetchMock);
+
+      return details.releaseDate;
+    }
+
+    it.each([
+      ['1999-03-31', '1999-03-31'],
+      ['2000-01-01', '2000-01-01'],
+      ['2000-12-31', '2000-12-31'],
+    ])('keeps the valid canonical release date %s unchanged', async (input, expected) => {
+      await expect(normalizeReleaseDateFromDetails(input)).resolves.toBe(
+        expected,
+      );
+    });
+
+    it.each([
+      ['2000-02-29', '2000-02-29'],
+      ['2024-02-29', '2024-02-29'],
+    ])('keeps the valid leap-day release date %s unchanged', async (input, expected) => {
+      await expect(normalizeReleaseDateFromDetails(input)).resolves.toBe(
+        expected,
+      );
+    });
+
+    it.each([
+      ['2023-02-29', 'non-leap-year February 29'],
+      ['2025-02-30', 'February day overflow'],
+      ['2025-04-31', 'April day overflow'],
+      ['2025-01-32', 'day overflow'],
+      ['2025-13-01', 'month overflow'],
+      ['2025-00-15', 'month underflow'],
+      ['2025-01-00', 'day underflow'],
+    ])('normalizes the impossible release date %s (%s) to null', async (input) => {
+      await expect(normalizeReleaseDateFromDetails(input)).resolves.toBeNull();
+    });
+
+    it.each([
+      ['1999/03/31', 'slash-delimited date'],
+      ['31-03-1999', 'day-first date'],
+      ['1999-3-31', 'non-zero-padded month'],
+      ['invalid-date', 'non-date string'],
+      ['', 'empty string'],
+      ['   ', 'blank string'],
+    ])('normalizes the noncanonical release date %s (%s) to null', async (input) => {
+      await expect(normalizeReleaseDateFromDetails(input)).resolves.toBeNull();
+    });
+
+    it.each([
+      [null, 'null'],
+      [undefined, 'undefined'],
+      [19990331, 'a number'],
+      [true, 'a boolean'],
+      [{}, 'an object'],
+      [['1999-03-31'], 'an array'],
+    ])('normalizes the non-string release date %s to null', async (input) => {
+      await expect(normalizeReleaseDateFromDetails(input)).resolves.toBeNull();
+    });
+  });
 });
 
 describe('movie search route', () => {
