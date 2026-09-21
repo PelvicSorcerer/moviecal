@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { publishRepairResult, publishWorkerResult, pullRequestBody } from "../src/worker-publish.mjs";
 
-const ISSUE = { identifier: "MOV-42", title: "Fix the thing" };
+const ISSUE = {
+  identifier: "MOV-42",
+  title: "Fix the thing",
+  description: "## Manual Verification\n\nHuman testing: not-required\n\nRationale: deterministic tests cover the criteria.\n\nAutonomy: eligible",
+};
 
 function runnerFixture({ branch = "agent/MOV-42-fix-the-thing", dirty = " M src/app/page.tsx\n", staged = "src/app/page.tsx\n", ahead = "1", existingPr = null } = {}) {
   const calls = [];
@@ -92,11 +96,22 @@ describe("trusted worker publication", () => {
     expect(calls).toEqual([]);
   });
 
-  it("keeps required PR governance fields in the dispatcher-authored body", () => {
-    const body = pullRequestBody(ISSUE);
+  it("creates the complete structured PR contract from durable evidence", () => {
+    const body = pullRequestBody(ISSUE, { status: "passed", artifactPath: "/logs/verification-evidence.json" });
     expect(body).toContain("## Test Impact");
-    expect(body).toContain("Linear: MOV-42");
+    expect(body).toContain("## Verification");
+    expect(body).toContain("## Readiness Evidence");
+    expect(body).toContain("Human testing: not-required");
+    expect(body).toContain("Autonomy: eligible");
+    expect(body).toContain("`npm run verify` passed; durable dispatcher record");
+    expect(body).toContain("**Linear:** Fixes MOV-42");
     expect(body).toContain("Fixes MOV-42");
+  });
+
+  it("fails closed in the PR body when verification evidence is absent", () => {
+    const body = pullRequestBody(ISSUE, { status: "incomplete" });
+    expect(body).toContain("Autonomy: disabled");
+    expect(body).toContain("no durable successful exact `npm run verify` execution");
   });
 });
 

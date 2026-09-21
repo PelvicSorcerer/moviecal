@@ -23,6 +23,7 @@ import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
 import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-signals.mjs";
 import { registerActiveAttempt, unregisterActiveAttempt, updateActiveAttempt } from "./active-attempt-registry.mjs";
+import { captureVerificationEvidence } from "./readiness-evidence.mjs";
 
 /**
  * @param {object[]} issues - from LinearClient.issuesInState()
@@ -47,6 +48,7 @@ import { registerActiveAttempt, unregisterActiveAttempt, updateActiveAttempt } f
  * @param {(args: object) => object} [ctx.auditWorkerResultFn] - MOV-145; validates structured tool calls and the resulting diff before publication
  * @param {(args: {worktreePath: string, branch: string}) => object} [ctx.repositoryContextFn] - MOV-178; trusted, bounded read-only repository facts injected into the worker brief before the worker starts
  * @param {(logDir: string, report: object) => object} [ctx.writeWorkerAuditFn] - MOV-145; persists an audit record outside the worktree
+ * @param {(logDir: string) => object} [ctx.captureVerificationEvidenceFn] - MOV-275; captures only completed successful verification commands from the structured transcript
  * @param {(args: object) => object} ctx.publishWorkerResultFn - MOV-145; required trusted dispatcher-side non-force push and draft PR creation
  * @param {{id?: string|null, name?: string|null}} [ctx.dispatcherDelegate] - MOV-143: the delegate an issue must name for this dispatcher to claim it; defaults to matching `moviecal-dispatcher` by name
  * @param {(issue: object) => Promise<object|null>} [ctx.refreshIssueFn] - MOV-143: re-read an issue immediately before committing to it, so a route/delegation change since the poll snapshot is a safe no-op; defaults to reusing the snapshot (tests that don't exercise the race can omit it)
@@ -330,6 +332,7 @@ async function processIssue(issue, ctx) {
     auditWorkerResultFn = auditWorkerResult,
     repositoryContextFn = collectRepositoryContext,
     writeWorkerAuditFn = writeWorkerAudit,
+    captureVerificationEvidenceFn = captureVerificationEvidence,
     publishWorkerResultFn,
     dispatcherDelegate = {},
     refreshIssueFn = async (snapshot) => snapshot,
@@ -625,6 +628,7 @@ async function processIssue(issue, ctx) {
         auditWorkerResultFn,
         repositoryContextFn,
         writeWorkerAuditFn,
+        captureVerificationEvidenceFn,
         publishWorkerResultFn,
         dispatcherDelegate,
         refreshIssueFn,
@@ -722,6 +726,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     auditWorkerResultFn,
     repositoryContextFn,
     writeWorkerAuditFn,
+    captureVerificationEvidenceFn,
     publishWorkerResultFn,
     dispatcherDelegate,
     refreshIssueFn,
@@ -933,6 +938,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
 
   let securityReport;
   let auditRecord;
+  let verificationEvidence;
   try {
     securityReport = auditWorkerResultFn({
       worktreePath: entry.path,
@@ -969,6 +975,8 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     });
     return { issue: issue.identifier, outcome: "security-blocked", violations: securityReport.violations };
   }
+
+  verificationEvidence = captureVerificationEvidenceFn(logDir);
 
   // A native harness can prove that a scope-only command never reached the
   // shell. Keep that fact visible, but do not let it conceal the worker's
@@ -1347,7 +1355,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     if (typeof publishWorkerResultFn !== "function") {
       throw new Error("trusted dispatcher publisher is not configured");
     }
-    pr = publishWorkerResultFn({ worktreePath: entry.path, branch, repo: ghRepo, issue });
+    pr = publishWorkerResultFn({ worktreePath: entry.path, branch, repo: ghRepo, issue, verificationEvidence });
   } catch (err) {
     worktreeManager.markStatus(issue.identifier, "failed");
     // MOV-179: also the unrecognized-failure bucket — a publish refusal has

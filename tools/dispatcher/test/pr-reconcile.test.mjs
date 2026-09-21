@@ -268,6 +268,56 @@ describe("reconcileReviewWorktrees", () => {
     expect(manager._finalState()["MOV-1"].status).toBe("review");
   });
 
+  it("restores only the exact dispatcher-owned ready action after the observed Agent Working regression", async () => {
+    const manager = fakeManager({
+      "MOV-1": {
+        id: "MOV-1",
+        status: "review",
+        prNumber: 9,
+        prUrl: "https://github.com/o/r/pull/9",
+        branch: "agent/MOV-1-docs",
+        headSha: "sha-9",
+        linearIssueId: "issue-uuid-1",
+        provenance: { executor: "moviecal-dispatcher", repository: "owner/repo" },
+        prAutonomyReady: { prNumber: 9, headSha: "sha-9", branch: "agent/MOV-1-docs", repository: "owner/repo" },
+      },
+    });
+    const linearClient = fakeLinearClient({ snapshots: { "issue-uuid-1": { stateName: "Agent Working" } } });
+    const observation = {
+      state: "OPEN", isDraft: false, headSha: "sha-9", headBranch: "agent/MOV-1-docs", headRepository: "owner/repo",
+      checks: { checks: [], required: [], missingRequired: [] },
+    };
+    const ctx = { ghRepo: "owner/repo", observePrFn: () => observation, linearClient, inReviewStateId: "state-in-review" };
+
+    expect(await reconcileReviewWorktrees(manager, ctx)).toEqual([]);
+    expect(linearClient.calls).toEqual([
+      { type: "moveToState", issueId: "issue-uuid-1", stateId: "state-in-review" },
+      { type: "addComment", issueId: "issue-uuid-1", body: expect.stringContaining("Restored In Review once") },
+    ]);
+    expect(manager._finalState()["MOV-1"].prAutonomyReady.reconciledAt).toEqual(expect.any(String));
+
+    await reconcileReviewWorktrees(manager, ctx);
+    expect(linearClient.calls).toHaveLength(2);
+  });
+
+  it("does not restore a state for a mismatched or non-dispatcher PR", async () => {
+    const manager = fakeManager({
+      "MOV-1": {
+        id: "MOV-1", status: "review", prNumber: 9, branch: "agent/MOV-1-docs", headSha: "sha-9", linearIssueId: "issue-uuid-1",
+        provenance: { executor: "other", repository: "owner/repo" },
+        prAutonomyReady: { prNumber: 9, headSha: "sha-9", branch: "agent/MOV-1-docs", repository: "owner/repo" },
+      },
+    });
+    const linearClient = fakeLinearClient({ snapshots: { "issue-uuid-1": { stateName: "Agent Working" } } });
+    await reconcileReviewWorktrees(manager, {
+      ghRepo: "owner/repo",
+      observePrFn: () => ({ state: "OPEN", isDraft: false, headSha: "sha-9", headBranch: "agent/MOV-1-docs", headRepository: "owner/repo", checks: { checks: [], required: [], missingRequired: [] } }),
+      linearClient,
+      inReviewStateId: "state-in-review",
+    });
+    expect(linearClient.calls).toEqual([]);
+  });
+
   it("skips entries not in review status (and with no pending Linear sync)", async () => {
     const manager = fakeManager({
       "MOV-1": { id: "MOV-1", status: "active", prNumber: 1 },

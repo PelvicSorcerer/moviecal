@@ -3,6 +3,7 @@
 // transport so its allow/deny matrix is deterministic in tests.
 
 import { JsonStateStore } from "./state-store.mjs";
+import { hasDurablePassedVerification } from "./readiness-evidence.mjs";
 
 export const AUTONOMY_DISABLE_LABEL = "autonomy:disabled";
 export const AUTONOMY_DISABLE_MARKER = /^\s*Autonomy:\s*disabled\s*$/im;
@@ -14,7 +15,6 @@ const REQUIRED_LABELS = new Set(["agent-ready", "risk:low", "execution:mac"]);
 const REQUIRED_EVIDENCE = [
   /^\s*Autonomy:\s*eligible\s*$/im,
   /^\s*Human testing:\s*not-required\s*$/im,
-  /^\s*(?:[-*]\s*)?Local-agent evidence:\s*\S.+$/im,
   /^\s*(?:[-*]\s*)?No-human-testing rationale:\s*\S.+$/im,
 ];
 
@@ -27,7 +27,8 @@ function deny(reason) {
 }
 
 function hasRequiredEvidence(body) {
-  return REQUIRED_EVIDENCE.every((pattern) => pattern.test(String(body || "")));
+  return REQUIRED_EVIDENCE.every((pattern) => pattern.test(String(body || "")))
+    && hasDurablePassedVerification(body);
 }
 
 /** Decide whether one current PR observation may receive a narrow autonomy action. */
@@ -110,8 +111,29 @@ export async function runPrAutonomyPass({ issues = [], worktreeManager, observeP
     if (!Number.isInteger(maxActions) || maxActions <= ledger.count()) { results.push({ issue: entry.id, prNumber: entry.prNumber, action: "none", reason: "staged rollout action limit is exhausted" }); continue; }
     ledger.reserve(input);
     try {
+      // Durably reserve the exact review tuple before the external mutation.
+      // If a later local write fails, a non-draft observation of this same
+      // tuple still has enough provenance for the bounded state recovery.
+      const readyReservation = decision.action === "ready" ? {
+        prNumber: entry.prNumber,
+        headSha: observation.headSha,
+        branch: observation.headBranch,
+        repository: observation.headRepository,
+        reservedAt: new Date().toISOString(),
+      } : null;
+      if (readyReservation && typeof worktreeManager.updateEntry === "function") {
+        worktreeManager.updateEntry(entry.id, { prAutonomyReady: readyReservation });
+      }
       applyPrAutonomy({ action: decision.action, prNumber: entry.prNumber, repo, runner });
       ledger.complete(input, { outcome: "applied" });
+      if (readyReservation && typeof worktreeManager.updateEntry === "function") {
+        worktreeManager.updateEntry(entry.id, {
+          prAutonomyReady: {
+            ...readyReservation,
+            appliedAt: new Date().toISOString(),
+          },
+        });
+      }
       if (linearClient?.addComment && issue?.id) await linearClient.addComment(issue.id, `**PR autonomy (MOV-162):** ${decision.action} action applied to PR #${entry.prNumber} at SHA \`${observation.headSha}\`. Rollout actions: ${ledger.count()}/${maxActions}. Review this rollout by 2026-10-02.`);
       results.push({ issue: entry.id, prNumber: entry.prNumber, action: decision.action, reason: decision.reason });
     } catch (error) {

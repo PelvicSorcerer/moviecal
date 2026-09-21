@@ -386,12 +386,13 @@ describe("runOnce", () => {
 
     const [result] = await runOnce([ISSUE], ctx);
 
-    expect(publishWorkerResultFn).toHaveBeenCalledWith({
+    expect(publishWorkerResultFn).toHaveBeenCalledWith(expect.objectContaining({
       worktreePath: "/fake/worktrees/MOV-1-fix-the-thing",
       branch: "agent/MOV-1-fix-the-thing",
       repo: "owner/repo",
       issue: ISSUE,
-    });
+      verificationEvidence: expect.objectContaining({ status: "incomplete" }),
+    }));
     expect(ctx.findPrForBranchFn).not.toHaveBeenCalled();
     expect(result.pr).toBe("https://github.com/owner/repo/pull/4");
   });
