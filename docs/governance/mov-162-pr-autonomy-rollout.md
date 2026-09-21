@@ -23,7 +23,10 @@ The supervised rollout has four distinct gates:
    application-code/test policy and its deny matrix. It consumes no autonomy
    action.
 3. [MOV-274](https://linear.app/moviecal/issue/MOV-274/reject-impossible-release-dates-in-the-formatting-helper)
-   proves the expanded policy on a genuine pure-helper code fix—not a fixture.
+   delivered the expanded policy's genuine pure-helper fix, but was manually
+   merged after its fail-closed evidence publication. A later clean
+   application-code pilot, after the documented evidence fixes, proves the
+   automated code path—not a fixture.
 4. [MOV-272](https://linear.app/moviecal/issue/MOV-272/review-pr-autonomy-pilot-evidence-and-decide-operating-mode)
    records `Go`, `Hold`, or `Roll back` after reviewing all evidence.
 
@@ -149,9 +152,13 @@ worker's own sanitized environment says they are running inside that same
 sandbox, while keeping full coverage on macOS/CI and any human/local `npm run
 verify` outside it. See `docs/operators/local-execution.md` §Security model
 and `docs/planning/testing-lanes.md` §Dispatcher sandbox-exec integration.
-This does not itself advance the rollout sequence below — MOV-274 code ready
-is still the next row a supervised poll may attempt, on a clean redrive or
-equivalent low-risk pilot.
+MOV-278 then proved that the exact command and sandbox test hygiene were not
+enough by themselves: Claude records a successful Bash task with a linked
+non-error tool result plus a native `task_notification` completion event, not
+an `Exit code: 0` string in that result. MOV-279 makes only that structured
+correlation eligible evidence; it does not rewrite #561 or #565, edit the
+ledger, or enable autonomy. A fresh application-code pilot after MOV-279 is
+merged is therefore required for the next rollout row.
 
 ## Action budget and sequence
 
@@ -164,9 +171,9 @@ permitted rollout sequence is:
 | MOV-271 merge | 2 | switch `true`, cap `3` | one `merge`/`applied` row; count 3 |
 | MOV-271 replay | 3 | switch `true`, cap `3` | no row, mutation, or duplicate comment |
 | MOV-273 policy implementation | 3 | switch absent | manual review/merge; count remains 3 |
-| MOV-274 code ready | 3 | switch `true`, cap `4` | one `ready`/`applied` row; count 4 |
-| MOV-274 code merge | 4 | switch `true`, cap `5` | one `merge`/`applied` row; count 5 |
-| MOV-274 replay | 5 | switch `true`, cap `5` | no row, mutation, or duplicate comment |
+| Replacement code-pilot ready | 3 | switch `true`, cap `4` | one `ready`/`applied` row; count 4 |
+| Replacement code-pilot merge | 4 | switch `true`, cap `5` | one `merge`/`applied` row; count 5 |
+| Replacement code-pilot replay | 5 | switch `true`, cap `5` | no row, mutation, or duplicate comment |
 
 Remove both environment variables from the installed launchd plist and unload
 then load the service after every enabled poll. Confirm the disabled
@@ -219,10 +226,12 @@ The rollout is acceptable only when all of the following are true:
   and its replay produced no additional side effect.
 - MOV-273 was manually reviewed and merged with the approved allow/deny matrix,
   complete policy tests, global autonomy disabled, and ledger count still 3.
-- MOV-274 produced exactly one ready and one merge action on one unchanged code
-  PR SHA, and its replay produced no additional side effect.
+- One clean post-MOV-279 replacement application-code pilot produces exactly
+  one ready and one merge action on one unchanged code PR SHA, and its replay
+  produces no additional side effect.
 - The complete ledger has exactly five explained rows: the earlier MOV-264
-  ready action, MOV-271 ready and merge, and MOV-274 ready and merge.
+  ready action, MOV-271 ready and merge, and the replacement code-pilot ready
+  and merge actions.
 - GitHub shows ordinary required-check-gated auto-merge for both pilots, while
   Linear comments, GitHub state, logs, and ledger `actions/cap` metrics agree.
 - Every refusal, failure, manual intervention, rollback action, and

@@ -54,6 +54,44 @@ describe("MOV-275 durable local verification", () => {
     expect(evidence.status).toBe("passed");
   });
 
+  it("accepts the native Claude completion only when it is linked to an exact non-error verify result", () => {
+    const evidence = captureVerificationEvidence(logs([
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "verify", name: "Bash", input: { command: "npm run verify" } }] } }),
+      JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "verify", is_error: false, content: "all lanes passed" }] } }),
+      JSON.stringify({ type: "system", subtype: "task_notification", tool_use_id: "verify", status: "completed" }),
+    ]));
+
+    expect(evidence.status).toBe("passed");
+  });
+
+  it.each([
+    ["task completion alone", [
+      JSON.stringify({ type: "system", subtype: "task_notification", tool_use_id: "verify", status: "completed" }),
+    ]],
+    ["mismatched task completion", [
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "verify", name: "Bash", input: { command: "npm run verify" } }] } }),
+      JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "verify", is_error: false, content: "all lanes passed" }] } }),
+      JSON.stringify({ type: "system", subtype: "task_notification", tool_use_id: "other", status: "completed" }),
+    ]],
+    ["completion from another session with the same tool-use id", [
+      JSON.stringify({ session_id: "session-a", type: "assistant", message: { content: [{ type: "tool_use", id: "verify", name: "Bash", input: { command: "npm run verify" } }] } }),
+      JSON.stringify({ session_id: "session-a", type: "user", message: { content: [{ type: "tool_result", tool_use_id: "verify", is_error: false, content: "all lanes passed" }] } }),
+      JSON.stringify({ session_id: "session-b", type: "system", subtype: "task_notification", tool_use_id: "verify", status: "completed" }),
+    ]],
+    ["error result", [
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "verify", name: "Bash", input: { command: "npm run verify" } }] } }),
+      JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "verify", is_error: true, content: "failed" }] } }),
+      JSON.stringify({ type: "system", subtype: "task_notification", tool_use_id: "verify", status: "completed" }),
+    ]],
+    ["wrapped command", [
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "verify", name: "Bash", input: { command: "npm run verify | tail" } }] } }),
+      JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "verify", is_error: false, content: "all lanes passed" }] } }),
+      JSON.stringify({ type: "system", subtype: "task_notification", tool_use_id: "verify", status: "completed" }),
+    ]],
+  ])("fails closed for native Claude %s", (_name, lines) => {
+    expect(captureVerificationEvidence(logs(lines)).status).toBe("incomplete");
+  });
+
   it.each([
     ["missing", [], "incomplete"],
     ["failed", [JSON.stringify({ type: "item.completed", item: { type: "command_execution", command: "npm run verify", exit_code: 1 } })], "failed"],
