@@ -140,6 +140,52 @@ describe('TMDb wrapper', () => {
       status: 400,
     });
   });
+
+  it('omits search results with malformed numeric TMDb ids', async () => {
+    setValidTMDbEnv();
+
+    // Raw JSON text (not JSON.stringify on a JS object) so the `1e400`
+    // literal survives parsing into Infinity instead of being sanitized to
+    // null by JSON.stringify.
+    const rawBody = `{
+      "results": [
+        { "id": 603, "title": "The Matrix" },
+        { "id": 0, "title": "Zero Id" },
+        { "id": -5, "title": "Negative Id" },
+        { "id": 12.5, "title": "Fractional Id" },
+        { "id": 1e400, "title": "Infinite Id" }
+      ]
+    }`;
+    const fetchMock = vi.fn().mockResolvedValue(new Response(rawBody));
+
+    await expect(searchMovies('matrix', fetchMock)).resolves.toEqual([
+      {
+        tmdbId: 603,
+        title: 'The Matrix',
+        releaseDate: null,
+        posterPath: null,
+        overview: null,
+      },
+    ]);
+  });
+
+  it('rejects movie details with a NaN TMDb id', async () => {
+    setValidTMDbEnv();
+
+    // NaN has no valid JSON text representation, so the fetch response is
+    // faked directly rather than parsed from a JSON string.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: Number.NaN, title: 'Malformed Id' }),
+    } as unknown as Response);
+
+    await expect(getMovieDetails(603, fetchMock)).rejects.toMatchObject({
+      name: 'TMDbRequestError',
+      message: 'TMDb returned an invalid response.',
+      status: 502,
+    });
+  });
 });
 
 describe('movie search route', () => {

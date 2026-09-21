@@ -31,6 +31,10 @@ function isJsonRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isValidTMDbId(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
 function normalizeReleaseDate(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null;
@@ -58,7 +62,7 @@ function normalizeOptionalString(value: unknown): string | null {
 function normalizeMovieSummary(
   value: unknown,
 ): NormalizedMovieSummary | null {
-  if (!isJsonRecord(value) || typeof value.id !== 'number') {
+  if (!isJsonRecord(value) || !isValidTMDbId(value.id)) {
     return null;
   }
 
