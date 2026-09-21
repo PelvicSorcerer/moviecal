@@ -70,6 +70,7 @@
 /* Begin PBXFileReference section */
 		0971793DF4898BD6A6D55383 /* SupabaseAuthTokenProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SupabaseAuthTokenProvider.swift; sourceTree = "<group>"; };
 		0EEBBE8E5FE554D8CAB41B55 /* AuthStoreTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthStoreTests.swift; sourceTree = "<group>"; };
+		2A166CCCCB2C47E587B70A76 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		4E8A2C6D941134652C810AA3 /* AuthState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthState.swift; sourceTree = "<group>"; };
 		4E9FB09E0BDB7A8855FB7A95 /* SupabaseAuthConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SupabaseAuthConfiguration.swift; sourceTree = "<group>"; };
 		5F004882F959EC899A12D337 /* SupabaseAuthClientProtocol.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SupabaseAuthClientProtocol.swift; sourceTree = "<group>"; };
@@ -171,6 +172,7 @@
 				CAFEF00D0000000000000020 /* Models */,
 				CAFEF00D0000000000000021 /* Auth */,
 				CAFEF00D0000000000000027 /* Assets.xcassets */,
+				2A166CCCCB2C47E587B70A76 /* Info.plist */,
 			);
 			path = Moviecal;
 			sourceTree = "<group>";
@@ -682,15 +684,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Moviecal;
-				INFOPLIST_KEY_MoviecalAPIBaseURL = "$(MOVIECAL_API_BASE_URL)";
-				INFOPLIST_KEY_MoviecalSupabaseAnonKey = "$(MOVIECAL_SUPABASE_ANON_KEY)";
-				INFOPLIST_KEY_MoviecalSupabaseURL = "$(MOVIECAL_SUPABASE_URL)";
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_FILE = Moviecal/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -716,15 +710,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Moviecal;
-				INFOPLIST_KEY_MoviecalAPIBaseURL = "$(MOVIECAL_API_BASE_URL)";
-				INFOPLIST_KEY_MoviecalSupabaseAnonKey = "$(MOVIECAL_SUPABASE_ANON_KEY)";
-				INFOPLIST_KEY_MoviecalSupabaseURL = "$(MOVIECAL_SUPABASE_URL)";
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_FILE = Moviecal/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
