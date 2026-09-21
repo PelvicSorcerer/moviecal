@@ -11,9 +11,14 @@ import path from "node:path";
 const VERIFY_COMMAND = "npm run verify";
 const EVIDENCE_FILENAME = "verification-evidence.json";
 
+function correlationKey(event, toolUseId) {
+  return event.session_id ? `${event.session_id}:${toolUseId}` : toolUseId;
+}
+
 function parseTranscript(transcript) {
   const commands = new Map();
   const results = new Map();
+  const taskCompletions = new Map();
   let malformed = false;
 
   for (const rawLine of String(transcript || "").split("\n")) {
@@ -24,6 +29,17 @@ function parseTranscript(transcript) {
     } catch {
       malformed = true;
       continue;
+    }
+
+    // Claude's native task runner emits a terminal event separately from the
+    // linked tool result. It is structured harness output, not worker prose.
+    if (
+      event.type === "system"
+      && event.subtype === "task_notification"
+      && event.status === "completed"
+      && event.tool_use_id
+    ) {
+      taskCompletions.set(correlationKey(event, event.tool_use_id), true);
     }
 
     const item = event.item || {};
@@ -40,10 +56,10 @@ function parseTranscript(transcript) {
     const values = Array.isArray(content) ? content : [content];
     for (const value of values) {
       if (value?.type === "tool_use" && value.name === "Bash" && value.input?.command === VERIFY_COMMAND) {
-        commands.set(value.id, { command: VERIFY_COMMAND, completed: false, exitCode: null });
+        commands.set(correlationKey(event, value.id), { command: VERIFY_COMMAND, completed: false, exitCode: null });
       }
       if (value?.type === "tool_result" && value.tool_use_id) {
-        results.set(value.tool_use_id, {
+        results.set(correlationKey(event, value.tool_use_id), {
           isError: value.is_error === true,
           text: typeof value.content === "string" ? value.content : JSON.stringify(value.content || ""),
         });
@@ -61,9 +77,16 @@ function parseTranscript(transcript) {
       // tool result rather than in the tool-use event. A textual success
       // claim alone is deliberately insufficient.
       const exit = /(?:^|\n)Exit code:\s*(\d+)\b/i.exec(result.text);
+      if (result.isError) {
+        return { ...command, outcome: exit ? "failed" : "ambiguous" };
+      }
       return {
         ...command,
-        outcome: !result.isError && exit?.[1] === "0" ? "passed" : exit ? "failed" : "ambiguous",
+        outcome: exit?.[1] === "0" || taskCompletions.has(id)
+          ? "passed"
+          : exit
+            ? "failed"
+            : "ambiguous",
       };
     }
     return { ...command, outcome: "ambiguous" };
