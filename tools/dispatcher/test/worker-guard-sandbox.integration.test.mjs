@@ -17,10 +17,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { buildWorkerSandboxProfile, guardedInvocation, repositoryGuardPaths } from "../src/worker-guard.mjs";
+import { buildWorkerSandboxProfile, guardedInvocation, repositoryGuardPaths, isInsideWorkerSandboxEnv } from "../src/worker-guard.mjs";
 
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
-const sandboxAvailable = process.platform === "darwin" && fs.existsSync(SANDBOX_EXEC);
+// This suite's own beforeAll() drives a real `git` binary to build its
+// multi-worktree fixture, before any of its nested sandbox-exec assertions
+// even run. When `npm run verify` itself runs as a dispatcher worker, the
+// *outer* Seatbelt profile worker-guard.mjs already applied to that worker
+// denies `git` process-exec outright, so that fixture setup fails closed on
+// a sandbox denial that has nothing to do with what this suite checks. It
+// keeps running at full strength for a human/local `npm run verify` on a
+// Mac outside the worker sandbox, which is the only place it ever provided
+// real coverage (CI's lane-integration job has no Seatbelt at all) (MOV-274
+// follow-up).
+const sandboxAvailable = process.platform === "darwin" && fs.existsSync(SANDBOX_EXEC) && !isInsideWorkerSandboxEnv();
 
 describe.skipIf(!sandboxAvailable)("worker-guard sandbox-exec integration (MOV-196)", () => {
   let tmpDir;

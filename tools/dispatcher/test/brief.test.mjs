@@ -56,6 +56,13 @@ describe("generateBrief", () => {
     expect(brief).toContain("Fixes MOV-42");
   });
 
+  it("tells the worker to run npm run verify as an exact, unwrapped command (MOV-274 follow-up)", () => {
+    const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
+    expect(brief).toMatch(/exact command, verbatim/i);
+    expect(brief).toContain("npm run verify 2>&1 | tail -300");
+    expect(brief).toMatch(/Autonomy: disabled/);
+  });
+
   it("keeps remote mutation in the trusted dispatcher instead of the worker", () => {
     const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "codex", model: "default" });
     expect(brief).toMatch(/do \*\*not\*\* run Git/i);
@@ -194,6 +201,12 @@ describe("generateRepairBrief (MOV-188)", () => {
     expect(brief).toMatch(/Do not run Git/);
     expect(brief).toMatch(/never creates a replacement branch or PR/);
     expect(brief).toMatch(/stop and say so instead of improvising/);
+  });
+
+  it("tells the repair worker to run npm run verify as an exact, unwrapped command (MOV-274 follow-up)", () => {
+    const brief = generateRepairBrief(issue, options);
+    expect(brief).toMatch(/exact command, verbatim/i);
+    expect(brief).toMatch(/Autonomy: disabled/);
   });
 
   it("is a repair brief, not the implementation brief", () => {

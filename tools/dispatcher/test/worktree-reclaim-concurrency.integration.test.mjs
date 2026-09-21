@@ -33,6 +33,16 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { WorktreeManager, defaultRunner } from "../src/worktree-manager.mjs";
+import { isInsideWorkerSandboxEnv } from "../src/worker-guard.mjs";
+
+// Real `git` fixtures, same constraint as startup-recovery.integration.test.mjs:
+// under a dispatcher worker's own Seatbelt sandbox, `git` process-exec is
+// denied to the worker and every child it spawns (including `npm run verify`
+// -> vitest -> this file), so this suite cannot run there without hitting a
+// sandbox denial unrelated to worktree-reclaim behavior. Full coverage stays
+// in CI (ubuntu-latest, no sandbox involved) and any human/local run of
+// `npm run verify` outside the worker sandbox (MOV-274 follow-up).
+const insideWorkerSandbox = isInsideWorkerSandboxEnv();
 
 const ISSUE_ID = "MOV-TEST";
 
@@ -69,7 +79,7 @@ function writeState(statePath, state) {
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
 }
 
-describe("worktree reclaim under real concurrent access (MOV-198)", () => {
+describe.skipIf(insideWorkerSandbox)("worktree reclaim under real concurrent access (MOV-198)", () => {
   let tmpRoot;
   let mainDir;
   let worktreeRoot;
