@@ -160,6 +160,15 @@ correlation eligible evidence; it does not rewrite #561 or #565, edit the
 ledger, or enable autonomy. A fresh application-code pilot after MOV-279 is
 merged is therefore required for the next rollout row.
 
+MOV-280 was that fresh pilot, but its worker first ran the exact verification
+command before dependencies existed (exit 127), then installed dependencies
+and ran it successfully. The evidence parser correctly retained both attempts
+and kept #569 incomplete. MOV-281 tells implementation and repair workers to
+run `npm ci` before their first verification attempt when the local toolchain
+is absent. It does not alter #569, the evidence parser, the ledger, or the
+autonomy configuration; another clean application-code pilot after MOV-281 is
+merged is required.
+
 ## Action budget and sequence
 
 The cap is the total durable ledger count, not a per-run allowance. The only
@@ -226,7 +235,7 @@ The rollout is acceptable only when all of the following are true:
   and its replay produced no additional side effect.
 - MOV-273 was manually reviewed and merged with the approved allow/deny matrix,
   complete policy tests, global autonomy disabled, and ledger count still 3.
-- One clean post-MOV-279 replacement application-code pilot produces exactly
+- One clean post-MOV-281 replacement application-code pilot produces exactly
   one ready and one merge action on one unchanged code PR SHA, and its replay
   produces no additional side effect.
 - The complete ledger has exactly five explained rows: the earlier MOV-264

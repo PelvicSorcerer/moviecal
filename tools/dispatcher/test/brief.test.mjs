@@ -63,6 +63,13 @@ describe("generateBrief", () => {
     expect(brief).toMatch(/Autonomy: disabled/);
   });
 
+  it("prepares locked dependencies before the first durable verification attempt (MOV-281)", () => {
+    const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
+    expect(brief).toMatch(/Prepare dependencies before verification/);
+    expect(brief).toMatch(/npm ci/);
+    expect(brief).toMatch(/failed exact verification remains durable evidence/);
+  });
+
   it("keeps remote mutation in the trusted dispatcher instead of the worker", () => {
     const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "codex", model: "default" });
     expect(brief).toMatch(/do \*\*not\*\* run Git/i);
@@ -207,6 +214,13 @@ describe("generateRepairBrief (MOV-188)", () => {
     const brief = generateRepairBrief(issue, options);
     expect(brief).toMatch(/exact command, verbatim/i);
     expect(brief).toMatch(/Autonomy: disabled/);
+  });
+
+  it("prepares locked dependencies before the repair worker verifies (MOV-281)", () => {
+    const brief = generateRepairBrief(issue, options);
+    expect(brief).toMatch(/Prepare dependencies before verification/);
+    expect(brief).toMatch(/npm ci/);
+    expect(brief).toMatch(/failed exact verification remains durable evidence/);
   });
 
   it("is a repair brief, not the implementation brief", () => {
