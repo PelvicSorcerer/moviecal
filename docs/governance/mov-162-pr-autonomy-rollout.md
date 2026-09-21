@@ -98,6 +98,30 @@ launchd configuration were rechecked on 2026-09-21.
 Any difference between this table and live state is an abort condition, not
 permission to adjust the cap in place.
 
+## MOV-275 publication and state-stability recovery
+
+The supervised MOV-271 pilot exposed two fail-closed gaps before its first
+merge action: the dispatcher-created draft omitted the repository's structured
+`Readiness Evidence`, and GitHub-to-Linear synchronization changed the issue
+from `In Review` to `Agent Working` immediately after the authorized ready
+action. The rollout was stopped with global autonomy disabled; its original
+SHA and ledger rows were preserved.
+
+MOV-275 makes the publisher render the repository PR contract itself. It
+copies `Human testing` and `Autonomy` only from an explicit, internally
+consistent Manual Verification declaration and records local verification as
+passing only when the structured worker transcript proves the exact completed
+`npm run verify` command exited successfully. Missing, failed, malformed, or
+ambiguous evidence is emitted as incomplete/disabled and remains a draft.
+
+For a successful ready action, the retained registry records the exact
+dispatcher-owned issue, PR, branch, repository, and SHA. On the next sweep,
+only that still-open, now-ready tuple may recover the exact `Agent Working`
+regression to `In Review`; the correction is written once and then becomes a
+no-op. No other state, branch, repository, or PR receives this authority.
+Keep both autonomy environment variables absent while this governance change
+is manually reviewed and merged.
+
 ## Action budget and sequence
 
 The cap is the total durable ledger count, not a per-run allowance. The only

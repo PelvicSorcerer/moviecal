@@ -21,6 +21,7 @@
 import { execFileSync } from "node:child_process";
 import { COMPLETED_BLOCKER_STATE_NAMES } from "./dependency-gate.mjs";
 import { assertParentCompletable } from "./parent-completion-guard.mjs";
+import { APPROVED_EXECUTOR } from "./worker-guard.mjs";
 
 export function defaultRunner(command, args, opts = {}) {
   return execFileSync(command, args, { encoding: "utf8", ...opts });
@@ -275,6 +276,31 @@ async function escalateClosedUnmerged(entry, ctx) {
   return { synced: true, escalated: true };
 }
 
+/** Restore only the recorded draft-to-ready state regression, once. */
+async function reconcileReadyStateRegression(entry, observation, ctx) {
+  const { linearClient, inReviewStateId, ghRepo, worktreeManager } = ctx;
+  const ready = entry.prAutonomyReady;
+  if (!linearClient || !inReviewStateId || !entry.linearIssueId || !ready || ready.reconciledAt) return false;
+  if (entry.status !== "review" || entry.provenance?.executor !== APPROVED_EXECUTOR || entry.provenance?.repository !== ghRepo) return false;
+  if (!entry.branch?.startsWith(`agent/${entry.id}-`)) return false;
+  if (ready.prNumber !== entry.prNumber || ready.headSha !== entry.headSha || ready.branch !== entry.branch || ready.repository !== ghRepo) return false;
+  if (observation.state !== "OPEN" || observation.isDraft || observation.headSha !== ready.headSha || observation.headBranch !== ready.branch || observation.headRepository !== ready.repository) return false;
+
+  const snapshot = await linearClient.issueSnapshot(entry.linearIssueId);
+  // Do not normalize arbitrary Linear states: the only known GitHub-sync
+  // regression is exactly In Review -> Agent Working.
+  if (!snapshot || snapshot.stateName !== "Agent Working") return false;
+  await linearClient.moveToState(entry.linearIssueId, inReviewStateId);
+  worktreeManager.updateEntry(entry.id, {
+    prAutonomyReady: { ...ready, reconciledAt: new Date().toISOString() },
+  });
+  await linearClient.addComment(
+    entry.linearIssueId,
+    `**Dispatcher PR-autonomy state recovery (MOV-275):** PR #${entry.prNumber}${entry.prUrl ? ` (${entry.prUrl})` : ""} was promoted from draft to ready at SHA \`${ready.headSha}\`, then external GitHub synchronization regressed this dispatcher-owned review item to Agent Working. Restored In Review once for the same open PR/branch/SHA.`,
+  );
+  return true;
+}
+
 /**
  * Sweep every worktree with a recorded `prNumber` and react to its real PR
  * state:
@@ -332,6 +358,13 @@ export async function reconcileReviewWorktrees(worktreeManager, ctx) {
       if (!pr || pr.observationError) continue;
       outcomeState = pr.state;
       extra = { mergedAt: pr.mergedAt ?? null, headSha: pr.headSha ?? null };
+      if (observePrFn) {
+        try {
+          await reconcileReadyStateRegression(entry, pr, { ...ctx, worktreeManager });
+        } catch (error) {
+          console.error(`${id}: PR-autonomy Linear state recovery failed (retrying next pass):`, error.message);
+        }
+      }
     } else {
       outcomeState = entry.status === "merged" ? "MERGED" : "CLOSED";
     }

@@ -48,6 +48,7 @@ import { collectRepositoryContext } from "./repository-context.mjs";
 import { applyStagedWorkflowEdit } from "./workflow-edit-apply.mjs";
 import { AgentSessionBridge, createAgentSessionCapability } from "./agent-session.mjs";
 import { diagnoseUnrecognizedFailure } from "./worker-diagnosis.mjs";
+import { captureVerificationEvidence } from "./readiness-evidence.mjs";
 
 export const IOS_RUNNER_NAME = "moviecal-ios-runner";
 export const GITHUB_REPO = "PelvicSorcerer/moviecal";
@@ -145,6 +146,7 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     spawnWorkerFn: spawnWorker,
     auditWorkerResultFn: auditWorkerResult,
     writeWorkerAuditFn: writeWorkerAudit,
+    captureVerificationEvidenceFn: captureVerificationEvidence,
     publishWorkerResultFn: (args) => publishWorkerResult({ ...args, runner: ghRunner }),
     publishRepairResultFn: (args) => publishRepairResult({ ...args, runner: ghRunner }),
     uncommittedChangesFn: (worktreePath) => worktreeManager.uncommittedChanges(worktreePath),

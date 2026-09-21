@@ -16,7 +16,7 @@ const issue = {
 const body = [
   "Autonomy: eligible",
   "Human testing: not-required",
-  "- Local-agent evidence: npm run verify (passed)",
+  "- Local-agent evidence: `npm run verify` passed; durable dispatcher record: `/logs/MOV-1/verification-evidence.json`.",
   "- No-human-testing rationale: docs-only change with deterministic CI coverage.",
 ].join("\n");
 
@@ -58,6 +58,7 @@ describe("MOV-162 PR autonomy policy", () => {
     ["per-issue kill switch", { description: "Autonomy: disabled" }, observation(), true, /kill switch/],
     ["cloud route", { labels: ["agent-ready", "risk:low", "execution:cloud"] }, observation(), true, /allowlist/],
     ["manual evidence", {}, observation({ body: "Autonomy: eligible\nHuman testing: required" }), true, /evidence/],
+    ["non-durable local evidence", {}, observation({ body: body.replace("; durable dispatcher record: `/logs/MOV-1/verification-evidence.json`.", " (passed)") }), true, /evidence/],
     ["sensitive path", {}, observation({ changedFiles: ["src/app/api/calendar/route.ts"] }), true, /docs-only/],
     ["stale SHA", {}, observation({ checks: { ...observation().checks, ignoredStale: 1 } }), true, /stale/],
     ["missing check", {}, observation({ checks: { ...observation().checks, missingRequired: ["lane-unit"] } }), true, /incomplete/],
@@ -88,11 +89,12 @@ describe("MOV-162 action bounds", () => {
       has: vi.fn(() => false), count: vi.fn(() => 0), reserve: vi.fn(), complete: vi.fn(),
     };
     const runner = vi.fn();
-    const manager = { loadState: () => saved };
+    const manager = { loadState: () => saved, updateEntry: (id, extra) => { saved[id] = { ...saved[id], ...extra }; } };
     saved["MOV-1"] = { id: "MOV-1", status: "review", prNumber: 7 };
     const first = await runPrAutonomyPass({ issues: [issue], worktreeManager: manager, observePrFn: () => observation(), repo, ledger, enabled: true, maxActions: 1, runner });
     expect(first[0].action).toBe("ready");
     expect(ledger.reserve).toHaveBeenCalledBefore(runner);
     expect(runner).toHaveBeenCalledTimes(1);
+    expect(saved["MOV-1"].prAutonomyReady).toMatchObject({ prNumber: 7, headSha: "new-sha", branch: "agent/MOV-1-docs", repository: repo });
   });
 });

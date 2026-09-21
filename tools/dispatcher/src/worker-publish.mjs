@@ -7,12 +7,13 @@
 
 import { execFileSync } from "node:child_process";
 import { findPrForBranch } from "./pr-check.mjs";
+import { pullRequestReadinessEvidence } from "./readiness-evidence.mjs";
 
 export function defaultRunner(command, args, opts = {}) {
   return execFileSync(command, args, { encoding: "utf8", ...opts });
 }
 
-export function pullRequestBody(issue) {
+export function pullRequestBody(issue, verificationEvidence) {
   return [
     "## Summary",
     "",
@@ -20,14 +21,18 @@ export function pullRequestBody(issue) {
     "",
     "## Test Impact",
     "",
-    "- The worker was required to add or update the automated coverage in the Linear issue's Testing Expectations and run `npm run verify` before handoff.",
-    "- GitHub CI remains authoritative for the recorded lane results.",
+    "- Automated coverage and any deferred coverage remain subject to the Linear issue's Testing Expectations and human review.",
+    "- GitHub CI remains authoritative for required-check results.",
     "",
-    "## Manual testing",
+    "## Verification",
     "",
-    "- Complete the Manual Testing Checklist on the pushed branch before promoting this draft PR.",
+    verificationEvidence?.status === "passed"
+      ? "- [x] `npm run verify` (dispatcher-captured structured result)"
+      : "- [ ] `npm run verify` (no durable passing dispatcher record)",
     "",
-    `Linear: ${issue.identifier}`,
+    pullRequestReadinessEvidence(issue, verificationEvidence),
+    "",
+    `**Linear:** Fixes ${issue.identifier}`,
     "",
     `Fixes ${issue.identifier}`,
   ].join("\n");
@@ -38,7 +43,7 @@ export function pullRequestBody(issue) {
  * execFileSync (no shell), branch identity is checked again immediately
  * before the push, and a non-fast-forward remote rejects naturally.
  */
-export function publishWorkerResult({ worktreePath, branch, repo, issue, runner = defaultRunner } = {}) {
+export function publishWorkerResult({ worktreePath, branch, repo, issue, verificationEvidence, runner = defaultRunner } = {}) {
   if (!branch?.startsWith(`agent/${issue?.identifier}-`)) {
     throw new Error("assigned branch does not match the dispatcher issue namespace");
   }
@@ -73,7 +78,7 @@ export function publishWorkerResult({ worktreePath, branch, repo, issue, runner 
       "--title",
       `${issue.identifier}: ${issue.title}`,
       "--body",
-      pullRequestBody(issue),
+      pullRequestBody(issue, verificationEvidence),
     ], { cwd: worktreePath });
     pr = findPrForBranch(branch, repo, runner);
   }

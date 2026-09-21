@@ -545,12 +545,14 @@ async function reconcileWorktrees(linearClient, teamKey) {
   let doneStateId;
   let needsHumanDecisionStateId;
   let readyForAgentStateId;
+  let inReviewStateId;
   if (linearClient && teamKey) {
     try {
       const states = await linearClient.workflowStates(teamKey);
       doneStateId = states.find((s) => s.name === RUN_STATE_NAMES.done)?.id;
       needsHumanDecisionStateId = states.find((s) => s.name === RUN_STATE_NAMES.needsHumanDecision)?.id;
       readyForAgentStateId = states.find((s) => s.name === RUN_STATE_NAMES.readyForAgent)?.id;
+      inReviewStateId = states.find((s) => s.name === RUN_STATE_NAMES.inReview)?.id;
     } catch (err) {
       console.error("Could not resolve Linear workflow states for PR-outcome reconciliation (continuing worktree-only):", err.message);
     }
@@ -570,6 +572,7 @@ async function reconcileWorktrees(linearClient, teamKey) {
     linearClient,
     doneStateId,
     needsHumanDecisionStateId,
+    inReviewStateId,
   });
   for (const c of changes) {
     console.log(`${c.id}: PR #${c.prNumber} is ${c.to === "merged" ? "merged" : "closed"} — worktree marked "${c.to}"`);
