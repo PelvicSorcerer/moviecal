@@ -19,8 +19,30 @@ final class AppShellSnapshotTests: XCTestCase {
         assertSnapshot(of: SignInView(authStore: authStore), named: "SignIn")
     }
 
-    func testSearchSnapshot() {
-        assertSnapshot(of: SearchView(), named: "Search")
+    func testSearchIdleSnapshot() {
+        assertSnapshot(of: SearchContentView(state: .idle, onRetry: {}), named: "Search-Idle")
+    }
+
+    func testSearchNoResultsSnapshot() {
+        assertSnapshot(of: SearchContentView(state: .noResults, onRetry: {}), named: "Search-NoResults")
+    }
+
+    func testSearchWithResultsSnapshot() {
+        let result = MovieSearchResult(
+            tmdbId: 603,
+            title: "The Matrix",
+            releaseDate: "1999-03-31",
+            posterPath: nil,
+            overview: "A hacker discovers the truth."
+        )
+        assertSnapshot(of: SearchContentView(state: .loaded([result]), onRetry: {}), named: "Search-WithResults")
+    }
+
+    func testSearchFailedSnapshot() {
+        assertSnapshot(
+            of: SearchContentView(state: .failed("Unable to search movies. Try again."), onRetry: {}),
+            named: "Search-Failed"
+        )
     }
 
     func testSettingsSnapshotWhenSignedIn() async {

@@ -8,7 +8,7 @@ struct MainTabView: View {
 
     var body: some View {
         TabView {
-            SearchView()
+            SearchView(apiClient: apiClient)
                 .tabItem {
                     Label("Search", systemImage: "magnifyingglass")
                 }
