@@ -77,13 +77,16 @@ describe("ios manual-test command", () => {
 
   it("writes a private temporary xcconfig and removes it on disposal", () => {
     const temporaryConfig = createTemporaryXcconfig({
-      url: "https://manual-test.supabase.co",
+      url: "https://manual-test.supabase.co/api/v1",
       anonKey: "sb_publishable_test_value",
     });
 
     try {
       expect(readFileSync(temporaryConfig.file, "utf8")).toContain(
         "MOVIECAL_SUPABASE_URL_SCHEME = https",
+      );
+      expect(readFileSync(temporaryConfig.file, "utf8")).toContain(
+        "MOVIECAL_SUPABASE_URL_AUTHORITY_AND_PATH = manual-test.supabase.co/api/v1",
       );
       expect(readFileSync(temporaryConfig.file, "utf8")).not.toContain('"');
       expect(temporaryConfig.file).toContain("moviecal-ios-manual-");
