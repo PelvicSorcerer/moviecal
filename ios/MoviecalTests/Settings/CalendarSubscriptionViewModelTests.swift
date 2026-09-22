@@ -30,7 +30,7 @@ final class CalendarSubscriptionViewModelTests: XCTestCase {
     }
 
     func testLoadSuccessPopulatesLoadedState() async {
-        let json = #"{ "subscriptionUrl": "https://moviecal.example/api/calendar/AbC123SecretToken" }"#
+        let json = #"{ "subscriptionUrl": "https://calendar.example.test/" }"#
             .data(using: .utf8)!
 
         MockURLProtocol.requestHandler = { request in
@@ -48,7 +48,7 @@ final class CalendarSubscriptionViewModelTests: XCTestCase {
 
         XCTAssertEqual(
             viewModel.state,
-            .loaded(URL(string: "https://moviecal.example/api/calendar/AbC123SecretToken")!)
+            .loaded(URL(string: "https://calendar.example.test/")!)
         )
     }
 
@@ -73,7 +73,7 @@ final class CalendarSubscriptionViewModelTests: XCTestCase {
             if requestCount == 1 {
                 throw URLError(.notConnectedToInternet)
             }
-            let json = #"{ "subscriptionUrl": "https://moviecal.example/api/calendar/AbC123SecretToken" }"#
+            let json = #"{ "subscriptionUrl": "https://calendar.example.test/" }"#
                 .data(using: .utf8)!
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -93,7 +93,7 @@ final class CalendarSubscriptionViewModelTests: XCTestCase {
         await viewModel.load()
         XCTAssertEqual(
             viewModel.state,
-            .loaded(URL(string: "https://moviecal.example/api/calendar/AbC123SecretToken")!)
+            .loaded(URL(string: "https://calendar.example.test/")!)
         )
     }
 }

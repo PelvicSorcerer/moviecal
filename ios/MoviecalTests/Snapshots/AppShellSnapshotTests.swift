@@ -51,7 +51,7 @@ final class AppShellSnapshotTests: XCTestCase {
     }
 
     func testCalendarSubscriptionLoadedSnapshot() {
-        let url = URL(string: "https://moviecal.example/api/calendar/AbC123SecretToken")!
+        let url = URL(string: "https://calendar.example.test/")!
         assertSnapshot(
             of: Form { Section("Calendar Subscription") { CalendarSubscriptionSectionView(state: .loaded(url), onRetry: {}) } },
             named: "CalendarSubscription-Loaded"
