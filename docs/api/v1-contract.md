@@ -64,6 +64,7 @@ Adds a movie to the personal watchlist.
 - Request body: `{ "tmdbId": number }`.
 - Response `201`: `{ "item": WatchlistItem }` (same shape as an element of `items` above).
 - `400` if `tmdbId` is missing or not a number.
+- **Idempotent-looking for a duplicate `tmdbId`:** re-adding a movie already on the caller's personal watchlist still returns `201` with the existing item, not an error (`addWatchlistItem` in `src/lib/watchlist/items.ts` falls back to the pre-existing row on a unique-constraint conflict). Clients cannot distinguish a fresh insert from a duplicate from this response alone and should not try to.
 
 ### `DELETE /api/v1/watchlist`
 
