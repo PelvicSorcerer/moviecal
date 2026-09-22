@@ -57,6 +57,7 @@ import {
   agentSessionEnvPath,
   prAutonomyEnabled,
   resolvePrAutonomyMaxActions,
+  resolveIssueSpecMode,
   checkSecretFileMode,
   DEFAULT_CONCURRENCY,
   RUN_LOG_RETENTION_DAYS,
@@ -241,6 +242,24 @@ async function cmdDoctor() {
       ? "enabled (MOVIECAL_AGENT_SESSION_STEERING) — a trusted follow-up prompt is written to the running Claude worker's next turn; Codex attempts stay record-only"
       : "off (default) — a trusted follow-up prompt is recorded as a prompt-received lifecycle event, not delivered live",
   });
+
+  // Issue-completeness contract (MOV-303/MOV-307). Informational: `report` is
+  // the shipped default and is not a misconfiguration, so this never fails
+  // the check — it exists so an operator can see which mode is live before
+  // wondering why an incomplete issue did (or did not) promote.
+  {
+    const mode = resolveIssueSpecMode();
+    checks.push({
+      name: "issue completeness contract",
+      ok: true,
+      detail:
+        mode === "enforce"
+          ? "enforce — an incomplete issue is not promoted"
+          : mode === "off"
+            ? "off (MOVIECAL_ISSUE_SPEC_MODE=off) — the promoter gate does not run"
+            : "report (default) — promotion is unchanged; violations are logged. Switch to enforce once the backlog is backfilled",
+    });
+  }
 
   // claude / codex on PATH
   for (const bin of ["claude", "codex"]) {
@@ -647,6 +666,7 @@ async function cmdPromoteOnce({ dryRun = false } = {}) {
     return 1;
   }
 
+  const issueSpecMode = resolveIssueSpecMode();
   const issues = await linearClient.issuesForPromotion({ teamKey, stateNames: PROMOTABLE_STATES });
   const isBlockerSatisfied = buildIsIssueSatisfied(issues);
   const results = await promoteEligible(issues, {
@@ -654,12 +674,21 @@ async function cmdPromoteOnce({ dryRun = false } = {}) {
     readyForAgentStateId: readyState.id,
     isBlockerSatisfied,
     dryRun,
+    issueSpecMode,
   });
 
   const promoted = results.filter((r) => r.promoted);
   for (const r of results) {
     if (r.promoted) console.log(`${r.issue}: ${dryRun ? "would promote" : "promoted"} — ${r.reason}`);
     else console.log(`${r.issue}: skip — ${r.reason}`);
+    // MOV-303/MOV-307: in `report` mode (the default) an incomplete issue
+    // still promotes, so its violations would otherwise be invisible here.
+    // Log them on every non-enforcing pass — in `enforce` mode they are
+    // already the skip reason above, and repeating them would just double
+    // the output.
+    if (issueSpecMode !== "enforce" && r.specViolations.length > 0) {
+      console.log(`${r.issue}: issue-spec violations (${issueSpecMode} mode, not enforced) — ${r.specViolations.join("; ")}`);
+    }
   }
   console.log(
     dryRun

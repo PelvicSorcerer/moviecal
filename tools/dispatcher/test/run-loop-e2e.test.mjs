@@ -297,7 +297,9 @@ describe("dependency-gating -> promotion -> dispatch, one continuous run (MOV-19
       readyForAgentStateId: "state-ready",
       isBlockerSatisfied: buildIsIssueSatisfied([blockedDescription]),
     });
-    expect(notYet).toEqual([{ issue: "MOV-DEP2", promoted: false, reason: expect.stringContaining("unresolved blocker") }]);
+    expect(notYet).toEqual([
+      { issue: "MOV-DEP2", promoted: false, reason: expect.stringContaining("unresolved blocker"), specViolations: expect.any(Array) },
+    ]);
     expect(linearClient.calls).toEqual([]);
 
     // Step 2: the blocker resolves. Same shape a fresh issuesForPromotion()
@@ -313,7 +315,9 @@ describe("dependency-gating -> promotion -> dispatch, one continuous run (MOV-19
       readyForAgentStateId: "state-ready",
       isBlockerSatisfied: buildIsIssueSatisfied([readyDescription]),
     });
-    expect(promoted).toEqual([{ issue: "MOV-DEP2", promoted: true, reason: expect.any(String) }]);
+    expect(promoted).toEqual([
+      { issue: "MOV-DEP2", promoted: true, reason: expect.any(String), specViolations: expect.any(Array) },
+    ]);
     expect(linearClient.calls).toEqual([
       { type: "moveToState", issueId: "id-dep2", stateId: "state-ready" },
       { type: "addComment", issueId: "id-dep2", body: PROMOTION_COMMENT },
@@ -615,7 +619,9 @@ describe("credential-failure circuit breaker, one continuous run across two poll
       readyForAgentStateId: "state-ready",
       isBlockerSatisfied: buildIsIssueSatisfied([backlogIssue]),
     });
-    expect(promotion).toEqual([{ issue: "MOV-BACKLOG", promoted: true, reason: expect.any(String) }]);
+    expect(promotion).toEqual([
+      { issue: "MOV-BACKLOG", promoted: true, reason: expect.any(String), specViolations: expect.any(Array) },
+    ]);
 
     // Cycle 2: issueA (requeued) and issueB (a second, independently eligible
     // issue) are both in "Ready for Agent". The breaker is open at the start

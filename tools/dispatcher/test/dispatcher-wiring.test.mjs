@@ -95,6 +95,16 @@ describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
     expect(repair).not.toMatch(/runRepairPass/);
   });
 
+  it("keeps the issue-completeness contract at report unless an operator raises it (MOV-303/MOV-307)", () => {
+    const configText = readFileSync(fileURLToPath(new URL("../src/config.mjs", import.meta.url)), "utf8");
+    expect(configText).toMatch(/MOVIECAL_ISSUE_SPEC_MODE/);
+    // An unrecognized or unset value must read as `report`, never `enforce`:
+    // a typo that silently stalled the queue would be indistinguishable from
+    // the promoter being broken.
+    expect(configText).toMatch(/ISSUE_SPEC_MODES\.includes\(raw\)\s*\?\s*raw\s*:\s*DEFAULT_ISSUE_SPEC_MODE/);
+    expect(source).toMatch(/issueSpecMode:\s*resolveIssueSpecMode\(\)|const issueSpecMode = resolveIssueSpecMode\(\)/);
+  });
+
   it("promotePass swallows errors so a promote failure cannot abort dispatch", () => {
     const body = bodyOf("promotePass");
     expect(body).toMatch(/try\s*\{/);

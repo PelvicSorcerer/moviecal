@@ -9,6 +9,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { LOCAL_DISPATCHER_DELEGATE } from "./dispatch-eligibility.mjs";
 import { DEFAULT_REPAIR_BUDGETS } from "./ci-outcomes.mjs";
+import { ISSUE_SPEC_MODES, DEFAULT_ISSUE_SPEC_MODE } from "./issue-spec.mjs";
 
 export const REPO_ROOT = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),
@@ -245,6 +246,22 @@ export function agentSessionSteeringEnabled(env = process.env) {
  */
 export function autoRepairEnabled(env = process.env) {
   return truthy(env.MOVIECAL_AUTO_REPAIR);
+}
+
+/**
+ * How strictly the issue-completeness contract is applied (MOV-303).
+ *
+ * `off` ignores it entirely; `report` (the default) promotes exactly as
+ * before and only logs/comments what is missing; `enforce` additionally
+ * refuses to promote an incomplete issue. It ships as `report` deliberately:
+ * turning this on at merge time would strand every backlog issue filed before
+ * the contract existed, so the owner switches to `enforce` only after the
+ * backlog is backfilled. An unrecognized value reads as `report` rather than
+ * as `enforce`, so a typo can never silently stall the queue.
+ */
+export function resolveIssueSpecMode(env = process.env) {
+  const raw = String(env.MOVIECAL_ISSUE_SPEC_MODE ?? "").trim().toLowerCase();
+  return ISSUE_SPEC_MODES.includes(raw) ? raw : DEFAULT_ISSUE_SPEC_MODE;
 }
 
 /** Off unless explicitly enabled; removing this switch immediately restores manual PR control. */
