@@ -635,6 +635,9 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
+				MOVIECAL_SUPABASE_ANON_KEY = "your-supabase-anon-key";
+				MOVIECAL_SUPABASE_URL_AUTHORITY_AND_PATH = "your-project-ref.supabase.co";
+				MOVIECAL_SUPABASE_URL_SCHEME = https;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -691,6 +694,9 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = NO;
 				SDKROOT = iphoneos;
+				MOVIECAL_SUPABASE_ANON_KEY = "your-supabase-anon-key";
+				MOVIECAL_SUPABASE_URL_AUTHORITY_AND_PATH = "your-project-ref.supabase.co";
+				MOVIECAL_SUPABASE_URL_SCHEME = https;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
 			};
