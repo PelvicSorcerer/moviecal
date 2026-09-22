@@ -240,14 +240,43 @@ export function formatShadowReport(decision) {
   }, null, 2);
 }
 
+/**
+ * A CI observation describes a snapshot, not merely a PR head. A required
+ * check can legitimately move from pending to failed without a new commit;
+ * that terminal fact must be publishable once, while an unchanged poll must
+ * remain quiet. Deliberately omit volatile fields such as details URLs.
+ */
+export function observationSnapshotKey({ decision, observation = {} } = {}) {
+  if (!decision?.prNumber || !decision?.headSha) throw new Error("observationSnapshotKey requires a decision with prNumber and headSha");
+  const checks = (observation.requiredCheckStates || observation.requiredChecks || [])
+    .map((check) => typeof check === "string" ? { name: check, outcome: "unknown" } : {
+      name: check.name || check.context || "unknown-check",
+      outcome: check.outcome || check.conclusion || check.status || "unknown",
+    })
+    .sort((a, b) => `${a.name}:${a.outcome}`.localeCompare(`${b.name}:${b.outcome}`));
+  const snapshot = JSON.stringify({
+    checks,
+    missingRequired: [...(observation.missingRequired || [])].map(String).sort(),
+    pending: Boolean(observation.pending),
+    timedOut: Boolean(observation.timedOut),
+    action: decision.action,
+    idempotencyKeys: [...(decision.idempotencyKeys || [])].sort(),
+  });
+  const fingerprint = createHash("sha256").update(snapshot).digest("hex").slice(0, 16);
+  return `ci-observation:${decision.prNumber}:${decision.headSha}:${fingerprint}`;
+}
+
 /** Stable human-readable Linear status, intentionally not a control command. */
 export function linearObservationStatus({ decision, observation } = {}) {
-  const observationKey = `ci-observation:${decision.prNumber}:${decision.headSha}`;
+  const observationKey = observationSnapshotKey({ decision, observation });
   const checks = observation?.requiredChecks?.length ? observation.requiredChecks.join(", ") : "none reported";
+  const provisional = Boolean(observation?.pending) && !observation?.timedOut;
   return [
     "**CI observation (read-only)** — PR #" + decision.prNumber + ", SHA `" + decision.headSha + "`",
     ...(decision.prUrl ? [`PR: ${decision.prUrl}`] : []),
-    `Decision: **${decision.action}** — ${decision.reason}.`,
+    provisional
+      ? "Decision: **provisional** — required checks are still pending; no terminal CI conclusion is available yet."
+      : `Decision: **${decision.action}** — ${decision.reason}.`,
     "Classification: `" + decision.classification + "`; grouped failures: " + decision.groupedFailureCount + "; required checks: " + checks + ".",
     `Attempt budget: code repair ${decision.attempts.codeRepair.used}/${decision.attempts.codeRepair.limit}, infrastructure rerun ${decision.attempts.infrastructureRerun.used}/${decision.attempts.infrastructureRerun.limit}, total ${decision.attempts.total.used}/${decision.attempts.total.limit}.`,
     "Observation key: `" + observationKey + "` (status record only; not a machine-control message).",
@@ -257,7 +286,7 @@ export function linearObservationStatus({ decision, observation } = {}) {
 /** Publish one concise, idempotent status record when a Linear client is supplied. */
 export async function reportObservationToLinear({ linearClient, issueId, decision, observation, existingBodies = [] } = {}) {
   if (!linearClient?.addComment || !issueId) throw new Error("reportObservationToLinear requires a Linear client and issueId");
-  const key = `ci-observation:${decision.prNumber}:${decision.headSha}`;
+  const key = observationSnapshotKey({ decision, observation });
   if (existingBodies.some((body) => text(body).includes(key))) return { reported: false, reason: "already reported", key };
   await linearClient.addComment(issueId, linearObservationStatus({ decision, observation }));
   return { reported: true, key };

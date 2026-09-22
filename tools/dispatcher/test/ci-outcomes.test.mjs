@@ -7,6 +7,7 @@ import {
   formatShadowReport,
   idempotencyKey,
   linearObservationStatus,
+  observationSnapshotKey,
   reportObservationToLinear,
 } from "../src/ci-outcomes.mjs";
 
@@ -132,10 +133,37 @@ describe("idempotency and shadow output", () => {
     const decision = decideCiOutcome({ prNumber: 1, headSha: "sha", events: [{ name: "unit", conclusion: "FAILURE", message: "test failed" }] });
     const client = { calls: [], addComment: async (id, body) => client.calls.push({ id, body }) };
     const first = await reportObservationToLinear({ linearClient: client, issueId: "linear-1", decision, observation: { requiredChecks: ["unit"] } });
-    const second = await reportObservationToLinear({ linearClient: client, issueId: "linear-1", decision, observation: {}, existingBodies: [client.calls[0].body] });
+    const second = await reportObservationToLinear({ linearClient: client, issueId: "linear-1", decision, observation: { requiredChecks: ["unit"] }, existingBodies: [client.calls[0].body] });
     expect(first.reported).toBe(true);
     expect(second.reported).toBe(false);
     expect(client.calls[0].body).toContain("CI observation (read-only)");
     expect(linearObservationStatus({ decision, observation: {} })).not.toContain("/project-update");
+  });
+
+  it("publishes a terminal result after a provisional pending snapshot on the same head", async () => {
+    const pending = decideCiOutcome({ prNumber: 1, headSha: "sha", events: [{ name: "lane-ios", conclusion: "pending" }] });
+    const failed = decideCiOutcome({ prNumber: 1, headSha: "sha", events: [{ name: "lane-ios", conclusion: "failure" }] });
+    const pendingObservation = { requiredChecks: ["lane-ios"], requiredCheckStates: [{ name: "lane-ios", outcome: "pending" }], pending: true };
+    const failedObservation = { requiredChecks: ["lane-ios"], requiredCheckStates: [{ name: "lane-ios", outcome: "failure" }] };
+    const client = { calls: [], addComment: async (id, body) => client.calls.push({ id, body }) };
+
+    await reportObservationToLinear({ linearClient: client, issueId: "linear-1", decision: pending, observation: pendingObservation });
+    await reportObservationToLinear({ linearClient: client, issueId: "linear-1", decision: failed, observation: failedObservation, existingBodies: [client.calls[0].body] });
+
+    expect(client.calls).toHaveLength(2);
+    expect(client.calls[0].body).toContain("Decision: **provisional**");
+    expect(client.calls[0].body).not.toContain("no actionable failure observed");
+    expect(client.calls[1].body).toContain("propose-code-repair");
+    expect(observationSnapshotKey({ decision: pending, observation: pendingObservation })).not.toBe(observationSnapshotKey({ decision: failed, observation: failedObservation }));
+  });
+
+  it("does not repeat an unchanged observation snapshot", async () => {
+    const decision = decideCiOutcome({ prNumber: 1, headSha: "sha", events: [{ name: "lane-ios", conclusion: "failure" }] });
+    const observation = { requiredChecks: ["lane-ios"], requiredCheckStates: [{ name: "lane-ios", outcome: "failure" }] };
+    const client = { calls: [], addComment: async (id, body) => client.calls.push({ id, body }) };
+    await reportObservationToLinear({ linearClient: client, issueId: "linear-1", decision, observation });
+    const repeated = await reportObservationToLinear({ linearClient: client, issueId: "linear-1", decision, observation, existingBodies: [client.calls[0].body] });
+    expect(repeated).toMatchObject({ reported: false, reason: "already reported" });
+    expect(client.calls).toHaveLength(1);
   });
 });

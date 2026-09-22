@@ -89,6 +89,7 @@ import { defaultRunner as ghRunner } from "../src/pr-check.mjs";
 import { checkPrState, checkPrObservation, isCheckPrObservation, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
 import { reconcileStartupRecoveries } from "../src/startup-recovery.mjs";
 import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
+import { reportReviewCi as reportReviewCiPass } from "../src/review-ci-observer.mjs";
 import { SignalLedger, StopController, handleAgentSignal } from "../src/agent-signals.mjs";
 import { AgentStreamClient } from "../src/agent-stream-client.mjs";
 import { previewRepairPass, runRepairPass } from "../src/repair-run.mjs";
@@ -582,30 +583,17 @@ async function reconcileWorktrees(linearClient, teamKey) {
 
 /** Report current CI decisions for review PRs; no worker or CI mutation occurs. */
 async function reportReviewCi(linearClient, teamKey) {
-  const reviewIssues = await linearClient.issuesInState({ teamKey, stateName: RUN_STATE_NAMES.inReview });
-  const byIdentifier = new Map(reviewIssues.map((issue) => [issue.identifier, issue]));
-  const manager = new WorktreeManager({ repoRoot: REPO_ROOT, worktreeRoot: worktreeRoot(), statePath: worktreesStatePath() });
-  const results = [];
-  for (const entry of Object.values(manager.loadState())) {
-    if (entry.status !== "review" || !entry.prNumber) continue;
-    const issue = byIdentifier.get(entry.id);
-    if (!issue) continue;
-    const observation = checkPrObservation(entry.prNumber, GITHUB_REPO, ghRunner);
-    if (observation.observationError || !observation.headSha) continue;
-    const events = (observation.checks?.checks || []).map((check) => ({ ...check, sha: check.sha || observation.headSha, conclusion: check.outcome }));
-    const decision = decideCiOutcome({ prNumber: entry.prNumber, prUrl: entry.prUrl || null, headSha: observation.headSha, events });
-    const existingBodies = typeof linearClient?.issueComments === "function"
-      ? await linearClient.issueComments(issue.id)
-      : [];
-    results.push(await reportObservationToLinear({
-      linearClient,
-      issueId: issue.id,
-      decision,
-      observation: { requiredChecks: observation.checks.required.map((check) => check.name) },
-      existingBodies,
-    }));
-  }
-  return results;
+  return reportReviewCiPass({
+    linearClient,
+    teamKey,
+    inReviewStateName: RUN_STATE_NAMES.inReview,
+    WorktreeManager,
+    worktreeManagerOptions: { repoRoot: REPO_ROOT, worktreeRoot: worktreeRoot(), statePath: worktreesStatePath() },
+    observePrFn: (prNumber, repo) => checkPrObservation(prNumber, repo, ghRunner),
+    githubRepo: GITHUB_REPO,
+    decideCiOutcome,
+    reportObservationToLinear,
+  });
 }
 
 /**
@@ -870,6 +858,27 @@ async function cmdRun({ once, intervalMs }) {
   // reconnect loop and never blocks a poll iteration.
   const streamClient = buildAgentStreamClient();
   if (streamClient) streamClient.start();
+
+  // A dispatch worker may run longer than the CI jobs on review PRs. Keep the
+  // read-only observer alive independently so a pending snapshot cannot hide
+  // a later terminal failure until that unrelated worker returns. This is
+  // intentionally observation-only: repair still runs through cmdRunOnce's
+  // single-flight, lock-held path and therefore cannot mutate a PR while the
+  // implementation worker owns the only dispatch slot.
+  let observingReviewCi = false;
+  const reviewCiMonitor = setInterval(async () => {
+    if (observingReviewCi) return;
+    observingReviewCi = true;
+    try {
+      const built = buildLinearClient();
+      if (built) await reportReviewCi(built.client, built.teamKey);
+    } catch (err) {
+      console.error("Background CI observation failed (continuing to dispatch):", err.message);
+    } finally {
+      observingReviewCi = false;
+    }
+  }, intervalMs);
+  process.once("exit", () => clearInterval(reviewCiMonitor));
 
   console.log(`Starting poll loop (interval: ${intervalMs}ms). Press Ctrl+C to stop.`);
   // eslint-disable-next-line no-constant-condition
