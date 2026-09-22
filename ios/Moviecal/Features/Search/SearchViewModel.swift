@@ -14,7 +14,22 @@ final class SearchViewModel {
         case failed(String)
     }
 
+    /// Per-row state for `POST /api/v1/watchlist`, keyed by `tmdbId`. The
+    /// server's insert is idempotent-looking for a duplicate `tmdbId` — it
+    /// returns `201` with the (pre-)existing item either way
+    /// (`addWatchlistItem` in `src/lib/watchlist/items.ts`) — so there is no
+    /// separate "already on watchlist" case here: any `201` maps to
+    /// `.added`, matching the server's own behavior instead of guessing at
+    /// one.
+    enum AddToWatchlistState: Equatable {
+        case idle
+        case adding
+        case added
+        case failed(String)
+    }
+
     private(set) var state: SearchState = .idle
+    private(set) var addToWatchlistStates: [Int: AddToWatchlistState] = [:]
 
     var query: String = "" {
         didSet {
@@ -89,5 +104,37 @@ final class SearchViewModel {
             }
         }
         return "Unable to search movies. Try again."
+    }
+
+    /// Adds `result` to the personal watchlist via `POST /api/v1/watchlist`
+    /// and tracks the outcome per-row in `addToWatchlistStates`. A no-op
+    /// while already `.adding` or once `.added`, so a row that already
+    /// succeeded can't fire a second request.
+    func addToWatchlist(_ result: MovieSearchResult) async {
+        switch addToWatchlistStates[result.tmdbId] {
+        case .adding, .added:
+            return
+        case .idle, .failed, nil:
+            break
+        }
+
+        addToWatchlistStates[result.tmdbId] = .adding
+        do {
+            _ = try await apiClient.addWatchlistItem(tmdbId: result.tmdbId)
+            addToWatchlistStates[result.tmdbId] = .added
+        } catch {
+            addToWatchlistStates[result.tmdbId] = .failed(Self.addToWatchlistErrorMessage(for: error))
+        }
+    }
+
+    private static func addToWatchlistErrorMessage(for error: Error) -> String {
+        if let apiError = error as? APIClientError, case .invalidRequest = apiError {
+            // A real search result always carries a valid tmdbId, so a 400
+            // here means something unexpected rather than a transient/user
+            // fixable failure — but the row still offers the same retry
+            // affordance as any other failure.
+            return "Something went wrong adding this movie."
+        }
+        return "Couldn't add to watchlist. Try again."
     }
 }

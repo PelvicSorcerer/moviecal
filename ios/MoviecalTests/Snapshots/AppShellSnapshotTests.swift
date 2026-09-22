@@ -38,6 +38,24 @@ final class AppShellSnapshotTests: XCTestCase {
         assertSnapshot(of: SearchContentView(state: .loaded([result]), onRetry: {}), named: "Search-WithResults")
     }
 
+    func testSearchWithResultsAddedSnapshot() {
+        let result = MovieSearchResult(
+            tmdbId: 603,
+            title: "The Matrix",
+            releaseDate: "1999-03-31",
+            posterPath: nil,
+            overview: "A hacker discovers the truth."
+        )
+        assertSnapshot(
+            of: SearchContentView(
+                state: .loaded([result]),
+                addToWatchlistStates: [603: .added],
+                onRetry: {}
+            ),
+            named: "Search-WithResults-Added"
+        )
+    }
+
     func testSearchFailedSnapshot() {
         assertSnapshot(
             of: SearchContentView(state: .failed("Unable to search movies. Try again."), onRetry: {}),

@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The Search tab: debounced TMDb movie search over
-/// `GET /api/v1/movies/search` (read-only — adding a result to the
-/// watchlist is a separate, later feature).
+/// `GET /api/v1/movies/search`, plus a per-row "Add to Watchlist" action
+/// over `POST /api/v1/watchlist`.
 struct SearchView: View {
     @State private var viewModel: SearchViewModel
 
@@ -12,9 +12,12 @@ struct SearchView: View {
 
     var body: some View {
         NavigationStack {
-            SearchContentView(state: viewModel.state) {
-                await viewModel.retry()
-            }
+            SearchContentView(
+                state: viewModel.state,
+                addToWatchlistStates: viewModel.addToWatchlistStates,
+                onRetry: { await viewModel.retry() },
+                onAddToWatchlist: { result in await viewModel.addToWatchlist(result) }
+            )
             .navigationTitle("Search")
             .searchable(text: $viewModel.query, prompt: "Movies")
         }
@@ -26,7 +29,21 @@ struct SearchView: View {
 /// without depending on a real or mocked network round trip.
 struct SearchContentView: View {
     let state: SearchViewModel.SearchState
+    let addToWatchlistStates: [Int: SearchViewModel.AddToWatchlistState]
     let onRetry: () async -> Void
+    let onAddToWatchlist: (MovieSearchResult) async -> Void
+
+    init(
+        state: SearchViewModel.SearchState,
+        addToWatchlistStates: [Int: SearchViewModel.AddToWatchlistState] = [:],
+        onRetry: @escaping () async -> Void,
+        onAddToWatchlist: @escaping (MovieSearchResult) async -> Void = { _ in }
+    ) {
+        self.state = state
+        self.addToWatchlistStates = addToWatchlistStates
+        self.onRetry = onRetry
+        self.onAddToWatchlist = onAddToWatchlist
+    }
 
     var body: some View {
         Group {
@@ -41,7 +58,11 @@ struct SearchContentView: View {
                 ProgressView()
             case .loaded(let results):
                 List(results) { result in
-                    SearchResultRow(result: result)
+                    SearchResultRow(
+                        result: result,
+                        addState: addToWatchlistStates[result.tmdbId] ?? .idle,
+                        onAdd: { Task { await onAddToWatchlist(result) } }
+                    )
                 }
                 .listStyle(.plain)
             case .noResults:
@@ -63,6 +84,8 @@ struct SearchContentView: View {
 
 private struct SearchResultRow: View {
     let result: MovieSearchResult
+    let addState: SearchViewModel.AddToWatchlistState
+    let onAdd: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -89,7 +112,52 @@ private struct SearchResultRow: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
+                if case .failed(let message) = addState {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
+
+            Spacer(minLength: 8)
+
+            AddToWatchlistButton(state: addState, onAdd: onAdd)
+        }
+    }
+}
+
+/// The add-to-watchlist affordance for a single search result row. Once a
+/// row reaches `.added` it renders a static checkmark rather than a
+/// re-tappable button, per MOV-293's "confirmed" state.
+private struct AddToWatchlistButton: View {
+    let state: SearchViewModel.AddToWatchlistState
+    let onAdd: () -> Void
+
+    var body: some View {
+        switch state {
+        case .idle:
+            Button(action: onAdd) {
+                Image(systemName: "plus.circle")
+                    .font(.title2)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Add to Watchlist")
+        case .adding:
+            ProgressView()
+                .accessibilityLabel("Adding to Watchlist")
+        case .added:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.title2)
+                .foregroundStyle(.green)
+                .accessibilityLabel("Added to Watchlist")
+        case .failed:
+            Button(action: onAdd) {
+                Image(systemName: "arrow.clockwise.circle")
+                    .font(.title2)
+                    .foregroundStyle(.red)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Retry adding to Watchlist")
         }
     }
 }
