@@ -11,11 +11,30 @@ struct WatchlistView: View {
 
     var body: some View {
         NavigationStack {
-            WatchlistContentView(state: viewModel.state) {
-                await viewModel.load()
-            }
+            WatchlistContentView(
+                state: viewModel.state,
+                onRetry: { await viewModel.load() },
+                onDelete: { item in await viewModel.remove(item: item) }
+            )
             .navigationTitle("Watchlist")
             .task { await viewModel.load() }
+            .alert(
+                "Couldn't Remove Item",
+                isPresented: Binding(
+                    get: { viewModel.removalErrorMessage != nil },
+                    set: { isPresented in
+                        if !isPresented {
+                            viewModel.dismissRemovalError()
+                        }
+                    }
+                ),
+                actions: {
+                    Button("OK", role: .cancel) {}
+                },
+                message: {
+                    Text(viewModel.removalErrorMessage ?? "")
+                }
+            )
         }
     }
 }
@@ -26,6 +45,7 @@ struct WatchlistView: View {
 struct WatchlistContentView: View {
     let state: WatchlistViewModel.LoadState
     let onRetry: () async -> Void
+    var onDelete: (WatchlistItem) async -> Void = { _ in }
 
     var body: some View {
         Group {
@@ -47,6 +67,13 @@ struct WatchlistContentView: View {
                             Text(releaseDate)
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
+                        }
+                    }
+                    .swipeActions {
+                        Button(role: .destructive) {
+                            Task { await onDelete(item) }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
                         }
                     }
                 }
