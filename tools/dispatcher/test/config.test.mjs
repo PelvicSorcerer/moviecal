@@ -12,6 +12,7 @@ import {
   resolvePrAutonomyMaxActions,
   resolveTrustedReviewers,
   resolveRepairBudgets,
+  resolveIssueSpecMode,
 } from "../src/config.mjs";
 import { DEFAULT_REPAIR_BUDGETS } from "../src/ci-outcomes.mjs";
 
@@ -228,5 +229,25 @@ describe("PR autonomy configuration (MOV-162)", () => {
     expect(resolvePrAutonomyMaxActions({ MOVIECAL_PR_AUTONOMY_MAX_ACTIONS: "2" })).toBe(2);
     expect(resolvePrAutonomyMaxActions({ MOVIECAL_PR_AUTONOMY_MAX_ACTIONS: "-1" })).toBe(0);
     expect(resolvePrAutonomyMaxActions({ MOVIECAL_PR_AUTONOMY_MAX_ACTIONS: "many" })).toBe(0);
+  });
+});
+
+describe("issue-completeness mode (MOV-303)", () => {
+  it("defaults to report, so merging the contract cannot stall a backlog that predates it", () => {
+    expect(resolveIssueSpecMode({})).toBe("report");
+    expect(resolveIssueSpecMode({ MOVIECAL_ISSUE_SPEC_MODE: "" })).toBe("report");
+  });
+
+  it("honours each recognized mode, case- and whitespace-insensitively", () => {
+    expect(resolveIssueSpecMode({ MOVIECAL_ISSUE_SPEC_MODE: "off" })).toBe("off");
+    expect(resolveIssueSpecMode({ MOVIECAL_ISSUE_SPEC_MODE: " Enforce " })).toBe("enforce");
+    expect(resolveIssueSpecMode({ MOVIECAL_ISSUE_SPEC_MODE: "REPORT" })).toBe("report");
+  });
+
+  it("reads an unrecognized value as report, never as enforce", () => {
+    // A typo that silently stalled the promotion queue would be
+    // indistinguishable from the promoter itself being broken.
+    expect(resolveIssueSpecMode({ MOVIECAL_ISSUE_SPEC_MODE: "enforced" })).toBe("report");
+    expect(resolveIssueSpecMode({ MOVIECAL_ISSUE_SPEC_MODE: "strict" })).toBe("report");
   });
 });

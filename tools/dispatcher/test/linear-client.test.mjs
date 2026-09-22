@@ -242,6 +242,67 @@ describe("LinearClient", () => {
     expect(variables.stateNames).toEqual(["Backlog", "Blocked"]);
   });
 
+  // MOV-303/MOV-307: the issue-completeness contract needs three fields
+  // nothing else in the dispatcher reads. They are normalized here so
+  // `issue-spec.mjs` stays a pure function over a plain object. (The audit
+  // pass's own `issuesForSpecAudit` query is covered separately — MOV-308.)
+  describe("issue-completeness fields on issuesForPromotion (MOV-303/MOV-307)", () => {
+    const specNode = (overrides = {}) => ({
+      id: "id-303",
+      identifier: "MOV-303",
+      title: "Spec promotion subject",
+      description: "## Acceptance criteria\n- x",
+      url: "https://linear.app/moviecal/issue/MOV-303",
+      state: { name: "Backlog" },
+      project: {
+        name: "Autonomous local-agent delivery",
+        state: "started",
+        projectMilestones: { nodes: [{ id: "ms-1" }, { id: "ms-2" }] },
+      },
+      projectMilestone: { name: "Local acceptance & controlled autonomy" },
+      labels: { nodes: [{ name: "type:feat" }] },
+      relations: { nodes: [] },
+      inverseRelations: { nodes: [] },
+      comments: { nodes: [{ body: "a prior comment" }] },
+      ...overrides,
+    });
+
+    it("normalizes project status, milestone count, and milestone for the promoter gate", async () => {
+      const fetchImpl = mockFetch({ issues: { nodes: [specNode()] } });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const [issue] = await client.issuesForPromotion({ teamKey: "MOV", stateNames: ["Backlog", "Blocked"] });
+
+      expect(issue).toMatchObject({
+        identifier: "MOV-303",
+        stateName: "Backlog",
+        project: "Autonomous local-agent delivery",
+        projectStatus: "started",
+        projectMilestoneCount: 2,
+        milestone: "Local acceptance & controlled autonomy",
+        recentComments: ["a prior comment"],
+      });
+
+      const [, init] = fetchImpl.mock.calls[0];
+      const { query } = JSON.parse(init.body);
+      expect(query).toMatch(/projectMilestone \{ name \}/);
+      expect(query).toMatch(/projectMilestones \{ nodes \{ id \} \}/);
+    });
+
+    it("reports no project status or milestone count for an issue with no project", async () => {
+      const fetchImpl = mockFetch({
+        issues: { nodes: [specNode({ project: null, projectMilestone: null })] },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const [issue] = await client.issuesForPromotion({ teamKey: "MOV", stateNames: ["Backlog"] });
+
+      // Not "a project with zero milestones", which is a different (and
+      // compliant) thing — there is no project at all.
+      expect(issue).toMatchObject({ project: null, projectStatus: null, projectMilestoneCount: 0, milestone: null });
+    });
+  });
+
   it("issuesForPriorityPropagation includes state type and priority for non-terminal scans", async () => {
     const fetchImpl = mockFetch({
       issues: {

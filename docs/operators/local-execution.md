@@ -129,11 +129,28 @@ After propagation, `dispatcher run` executes the promoter over every issue in `B
 - it is **not** labeled `human-only`;
 - its description has a non-empty **acceptance-criteria** section (heading matching `/^#+\s*acceptance criteria/i`);
 - its description has a non-empty **Testing Expectations** section (`/^#+\s*testing expectations/i`);
-- every issue that `blocks` it is in a completed/canceled state (`Done`, `Released`, `Canceled`, `Duplicate`), resolved via the same `inverseRelations` data the dependency gate uses.
+- every issue that `blocks` it is in a completed/canceled state (`Done`, `Released`, `Canceled`, `Duplicate`), resolved via the same `inverseRelations` data the dependency gate uses;
+- **in `enforce` mode only** (MOV-303/MOV-307), it satisfies the issue-completeness contract — labels, project, and milestone. In `report` mode, the shipped default, this clause does not apply and promotion behaves exactly as it did before.
 
 For a `Blocked` issue there is one extra condition: its most recent `**Dispatcher preflight failed:**` comment must name an unresolved-relation reason (now resolved). An issue blocked for any other reason — a missing secret, a worktree collision, a human's decision — is left alone.
 
 On promotion the promoter comments `Auto-promoted to Ready for Agent — …` (which, via the app-actor identity from MOV-122, notifies the repo owner). It is idempotent: a promoted issue is no longer in `Backlog`/`Blocked`, so a second pass does nothing.
+
+### Issue completeness (MOV-303/MOV-307)
+
+The contract itself — the per-kind label schema, the project rule, the milestone opt-out marker, and the fact that relations are required but not machine-checked — lives in `docs/governance/linear-information-architecture.md` §Issue completeness contract. `tools/dispatcher/src/issue-spec.mjs` is its only machine-checkable expression; the promoter's gate is its first consumer.
+
+**Mode.** `MOVIECAL_ISSUE_SPEC_MODE` = `off` | `report` | `enforce`, resolved by `resolveIssueSpecMode()` and printed by `dispatcher doctor`. It defaults to **`report`**, and an unrecognized value reads as `report` rather than `enforce` — a typo must never silently stall the queue. Raising it to `enforce` is the owner's step, taken only once the existing backlog has been backfilled; merging the contract itself therefore changes no live promotion behavior.
+
+| Mode | Promoter |
+|---|---|
+| `off` | contract ignored |
+| `report` (default) | promotes as before; violations are logged as `MOV-N: issue-spec violations (report mode, not enforced) — …` |
+| `enforce` | an incomplete issue is **not** promoted; the skip reason is `incomplete issue spec (MOV-303): <every missing item>` |
+
+**Planned follow-up (MOV-308):** a wider audit pass that comments on every open non-`Triage` issue — `human-only`, coordination, `Spec Ready`, `Icebox`, and started issues — none of which the promoter ever looks at. Not yet implemented; this table gains an Audit pass column once it lands.
+
+**Pending:** `AGENTS.md`'s "Planning-object changes" bullet still needs a one-line pointer to the contract for anyone filing an issue. `AGENTS.md` is a worker-protected path (§Security model), so a dispatched worker cannot write it — that line is an owner edit.
 
 **Execution routing.** `execution:{cloud,mac,none}` is a mutually-exclusive
 Linear label group, provisioned idempotently by
