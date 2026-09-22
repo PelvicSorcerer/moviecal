@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Settings tab: account info, sign-out, and (MOV-291) view/share of the
-/// calendar subscription link. Token rotation is a separate follow-up issue.
+/// Settings tab: account info, sign-out, and (MOV-291/MOV-295) view, share,
+/// and rotate of the calendar subscription link.
 struct SettingsView: View {
     let authStore: AuthStore
 
@@ -26,7 +26,13 @@ struct SettingsView: View {
                 Section("Calendar Subscription") {
                     CalendarSubscriptionSectionView(
                         state: calendarViewModel.state,
-                        onRetry: { await calendarViewModel.load() }
+                        isConfirmingRotation: calendarViewModel.isConfirmingRotation,
+                        isRotating: calendarViewModel.isRotating,
+                        rotationErrorMessage: calendarViewModel.rotationErrorMessage,
+                        onRetry: { await calendarViewModel.load() },
+                        onRequestRotation: { calendarViewModel.requestRotation() },
+                        onCancelRotation: { calendarViewModel.cancelRotation() },
+                        onConfirmRotation: { await calendarViewModel.confirmRotation() }
                     )
                 }
 
@@ -68,9 +74,20 @@ struct SettingsView: View {
 /// representation of it, and the real URL is exposed solely through the
 /// user-triggered `ShareLink` share sheet — never logged, never shown as
 /// plain text that could be screenshotted and shared unintentionally.
+///
+/// Rotation's confirmation prompt is rendered inline (rather than a system
+/// `.alert`/`.confirmationDialog`) so it participates in the same
+/// state-driven rendering — and snapshot coverage — as every other state
+/// here.
 struct CalendarSubscriptionSectionView: View {
     let state: CalendarSubscriptionViewModel.LoadState
+    var isConfirmingRotation: Bool = false
+    var isRotating: Bool = false
+    var rotationErrorMessage: String?
     let onRetry: () async -> Void
+    var onRequestRotation: () -> Void = {}
+    var onCancelRotation: () -> Void = {}
+    var onConfirmRotation: () async -> Void = {}
 
     var body: some View {
         Group {
@@ -89,6 +106,47 @@ struct CalendarSubscriptionSectionView: View {
                     Label("Share Calendar Link", systemImage: "square.and.arrow.up")
                 }
                 .accessibilityIdentifier("settings.calendarSubscription.share")
+
+                if isConfirmingRotation {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(
+                            "Rotating creates a new subscription link and immediately "
+                                + "stops the current one from working. Any calendar app "
+                                + "subscribed to it will need to re-subscribe with the new link."
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("settings.calendarSubscription.rotate.confirmationMessage")
+
+                        HStack {
+                            Button("Cancel", role: .cancel) {
+                                onCancelRotation()
+                            }
+                            .accessibilityIdentifier("settings.calendarSubscription.rotate.cancel")
+
+                            Spacer()
+
+                            Button("Rotate", role: .destructive) {
+                                Task { await onConfirmRotation() }
+                            }
+                            .disabled(isRotating)
+                            .accessibilityIdentifier("settings.calendarSubscription.rotate.confirm")
+                        }
+                    }
+                    .accessibilityIdentifier("settings.calendarSubscription.rotate.confirmation")
+                } else {
+                    Button("Rotate", role: .destructive) {
+                        onRequestRotation()
+                    }
+                    .disabled(isRotating)
+                    .accessibilityIdentifier("settings.calendarSubscription.rotate")
+                }
+
+                if let rotationErrorMessage {
+                    Label(rotationErrorMessage, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("settings.calendarSubscription.rotate.error")
+                }
             case .failed(let message):
                 Label(message, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.red)
