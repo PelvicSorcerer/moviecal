@@ -175,6 +175,15 @@ function runCommand(command, args, { cwd, capture = false, environment, timeout 
 }
 
 function sourceIdentity(cwd) {
+  const dirtyPaths = execFileSync("git", ["status", "--porcelain"], {
+    cwd,
+    encoding: "utf8",
+  }).trim();
+
+  if (dirtyPaths) {
+    throw new Error("The iOS manual-test checkout must be clean to report an exact source SHA.");
+  }
+
   const branch = execFileSync("git", ["branch", "--show-current"], {
     cwd,
     encoding: "utf8",
@@ -227,10 +236,15 @@ function assertBuiltConfiguration(appPath, config, command, cwd) {
 
 export function runManualTestBuild(
   options,
-  { cwd = process.cwd(), command = runCommand, log = console.log } = {},
+  {
+    cwd = process.cwd(),
+    command = runCommand,
+    getSourceIdentity = sourceIdentity,
+    log = console.log,
+  } = {},
 ) {
   const config = readManualTestConfiguration(options.envFile);
-  const source = sourceIdentity(cwd);
+  const source = getSourceIdentity(cwd);
 
   if (options.dryRun) {
     log(`iOS manual-test configuration validated for ${source.branch}@${source.sha}.`);

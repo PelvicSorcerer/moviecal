@@ -114,7 +114,11 @@ describe("ios manual-test command", () => {
           ].join("\n"),
         ),
       },
-      { command, log },
+      {
+        command,
+        getSourceIdentity: () => ({ branch: "test", sha: "abcdef0" }),
+        log,
+      },
     );
 
     expect(command).not.toHaveBeenCalled();
