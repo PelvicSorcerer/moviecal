@@ -993,36 +993,66 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     });
   }
 
-  if (spawnResult.exitCode !== 0) {
-    const tail = tailLogs(logDir, 50);
-    const classification = classifyWorkerFailure({ exitCode: spawnResult.exitCode, logTail: tail });
+  // MOV-299: Codex can narrate a first-tool sandbox refusal and exit 0. Run
+  // this dedicated host-failure check before the ordinary nonzero-exit gate;
+  // its classifier requires both the structured report and no audited tool
+  // activity, so an arbitrary zero-change/zero-exit result still follows the
+  // normal publication path below.
+  const tail = tailLogs(logDir, 50);
+  const classification = classifyWorkerFailure({
+    exitCode: spawnResult.exitCode,
+    logTail: tail,
+    toolActions: securityReport.actions,
+  });
 
-    if (classification?.category === NESTED_SANDBOX_CRASH) {
-      // MOV-180: this is an environment-wide fault, not a task failure —
-      // every worker on this Mac hits it identically while it holds. Requeue
-      // the issue for a later retry instead of leaving it looking like a real
-      // per-issue failure in Needs Human Decision, and stop dispatching
-      // anything else until the condition is confirmed cleared.
-      circuitBreaker.trip(NESTED_SANDBOX_CRASH, `worker exited ${spawnResult.exitCode} with the nested-sandbox-crash signature`);
-      worktreeManager.markStatus(issue.identifier, "failed");
-      await publisher.publish("error", {
-        stateId: stateIds.readyForAgent,
-        summary: "Worker hit a host-wide nested-sandbox crash, not a task failure. Requeued to Ready for Agent; dispatch is paused until the Mac is fixed.",
-        headline: "**Environment failure, not a task failure: nested macOS sandbox crash (MOV-180).**",
-        sections: [
-          "This run failed before it could do any real work: the harness's own tool sandbox could not apply a second Seatbelt profile inside the one `worker-guard.mjs` already applies to the worker process (`sandbox_apply: Operation not permitted`, exit 71). Every worker on this Mac fails identically while this condition holds — it is not specific to this issue, and re-running it here will not help.",
-          "",
-          "This issue has been moved back to `Ready for Agent` rather than `Needs Human Decision`, and the dispatcher has stopped starting any further issue until the condition is confirmed cleared. See docs/operators/local-execution.md §Security model for the manual recovery procedure: a clean `launchctl bootout` + `launchctl bootstrap` of `com.moviecal.dispatcher` (`launchctl kickstart -k` is not sufficient).",
-          "",
-          "```",
-          tail,
-          "```",
-          "",
-          `Full run log: \`${logDir}\``,
-        ],
-      });
-      return { issue: issue.identifier, outcome: "nested-sandbox-crash", exitCode: spawnResult.exitCode };
-    }
+  if (classification?.category === NESTED_SANDBOX_CRASH) {
+    // MOV-180/MOV-299: this is an environment-wide fault, not a task failure
+    // — every worker on this Mac hits it identically while it holds. Requeue
+    // the issue for a later retry instead of leaving it looking like a real
+    // per-issue failure in Needs Human Decision, and stop dispatching anything
+    // else until the condition is confirmed cleared.
+    const legacyNestedSandboxCrash = spawnResult.exitCode === 71;
+    circuitBreaker.trip(
+      NESTED_SANDBOX_CRASH,
+      legacyNestedSandboxCrash
+        ? `worker exited ${spawnResult.exitCode} with the nested-sandbox-crash signature`
+        : `worker exited ${spawnResult.exitCode} with sandbox_apply: Operation not permitted before an executed tool action`,
+    );
+    worktreeManager.markStatus(issue.identifier, "failed");
+    await publisher.publish("error", {
+      stateId: stateIds.readyForAgent,
+      summary: "Worker hit a host-wide nested-sandbox crash, not a task failure. Requeued to Ready for Agent; dispatch is paused until the Mac is fixed.",
+      headline: legacyNestedSandboxCrash
+        ? "**Environment failure, not a task failure: nested macOS sandbox crash (MOV-180).**"
+        : "**Environment failure, not a task failure: nested macOS sandbox crash (MOV-299).**",
+      sections: legacyNestedSandboxCrash
+        ? [
+            "This run failed before it could do any real work: the harness's own tool sandbox could not apply a second Seatbelt profile inside the one `worker-guard.mjs` already applies to the worker process (`sandbox_apply: Operation not permitted`, exit 71). Every worker on this Mac fails identically while this condition holds — it is not specific to this issue, and re-running it here will not help.",
+            "",
+            "This issue has been moved back to `Ready for Agent` rather than `Needs Human Decision`, and the dispatcher has stopped starting any further issue until the condition is confirmed cleared. See docs/operators/local-execution.md §Security model for the manual recovery procedure: a clean `launchctl bootout` + `launchctl bootstrap` of `com.moviecal.dispatcher` (`launchctl kickstart -k` is not sufficient).",
+            "",
+            "```",
+            tail,
+            "```",
+            "",
+            `Full run log: \`${logDir}\``,
+          ]
+        : [
+            `This run failed before it could do any real work: the worker reported \`sandbox_apply: Operation not permitted\` before an executed tool action (worker exit ${spawnResult.exitCode}). Every worker on this Mac may fail identically while this condition holds — it is not specific to this issue, and re-running it here will not help.`,
+            "",
+            "This issue has been moved back to `Ready for Agent` rather than `Needs Human Decision`, and the dispatcher has stopped starting any further issue until the condition is confirmed cleared. See docs/operators/local-execution.md §Security model for the manual recovery procedure.",
+            "",
+            "```",
+            tail,
+            "```",
+            "",
+            `Full run log: \`${logDir}\``,
+          ],
+    });
+    return { issue: issue.identifier, outcome: "nested-sandbox-crash", exitCode: spawnResult.exitCode };
+  }
+
+  if (spawnResult.exitCode !== 0) {
 
     // MOV-177: the dispatcher's own worker credential (`CLAUDE_CODE_OAUTH_TOKEN`
     // today) has gone bad — a 401/`authentication_failed` signature, distinct

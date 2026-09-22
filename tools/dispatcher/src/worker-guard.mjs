@@ -479,6 +479,7 @@ function statusPaths(output) {
  */
 export function auditWorkerResult({ worktreePath, branch, logDir, mode = "implementation", baseRef = "origin/master", runner = defaultRunner, fsImpl = fs } = {}) {
   const violations = [];
+  let actions = [];
   const actualBranch = String(runner("git", ["branch", "--show-current"], { cwd: worktreePath })).trim();
   if (actualBranch !== branch) {
     violations.push({ action: actualBranch || "detached HEAD", reason: `worker left assigned branch ${branch}` });
@@ -493,9 +494,10 @@ export function auditWorkerResult({ worktreePath, branch, logDir, mode = "implem
     violations.push({ action: stdoutPath, reason: "structured worker transcript is missing" });
   } else {
     const transcript = auditWorkerTranscript(fsImpl.readFileSync(stdoutPath, "utf8"), { mode });
+    actions = transcript.actions;
     violations.push(...transcript.violations);
   }
-  return { ok: violations.length === 0, mode, baseRef, branch, actualBranch, committed, dirty, violations };
+  return { ok: violations.length === 0, mode, baseRef, branch, actualBranch, committed, dirty, actions, violations };
 }
 
 /** Persist an audit record outside the worker-writable worktree. */

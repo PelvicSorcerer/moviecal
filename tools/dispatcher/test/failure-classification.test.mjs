@@ -26,6 +26,52 @@ describe("classifyWorkerFailure", () => {
     expect(result).toBeNull();
   });
 
+  it("recognizes Codex's graceful exit when its structured message reports the signature before tool activity", () => {
+    const result = classifyWorkerFailure({
+      exitCode: 0,
+      logTail: JSON.stringify({
+        type: "item.completed",
+        item: {
+          type: "agent_message",
+          text: "Blocked before implementation: sandbox-exec: sandbox_apply: Operation not permitted",
+        },
+      }),
+      toolActions: [],
+    });
+
+    expect(result).toEqual({ category: NESTED_SANDBOX_CRASH });
+  });
+
+  it("recognizes the same structured Codex report for a non-71 failure exit", () => {
+    const result = classifyWorkerFailure({
+      exitCode: 1,
+      logTail: JSON.stringify({
+        type: "item.completed",
+        item: { type: "agent_message", text: "sandbox_apply: Operation not permitted" },
+      }),
+      toolActions: [],
+    });
+
+    expect(result).toEqual({ category: NESTED_SANDBOX_CRASH });
+  });
+
+  it("does not reclassify a Codex report after an executed tool action", () => {
+    const result = classifyWorkerFailure({
+      exitCode: 0,
+      logTail: JSON.stringify({
+        type: "item.completed",
+        item: { type: "agent_message", text: "sandbox_apply: Operation not permitted" },
+      }),
+      toolActions: [{ kind: "command", value: "rg --files", outcome: "executed" }],
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not reclassify an arbitrary zero-exit/zero-change result", () => {
+    expect(classifyWorkerFailure({ exitCode: 0, logTail: "no files changed", toolActions: [] })).toBeNull();
+  });
+
   it("does not match an ordinary task failure", () => {
     const result = classifyWorkerFailure({ exitCode: 1, logTail: "Error: could not resolve module 'foo'" });
 
