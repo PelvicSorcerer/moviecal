@@ -44,7 +44,7 @@
 	<key>MoviecalAPIBaseURL</key>
 	<string>$(MOVIECAL_API_BASE_URL)</string>
 	<key>MoviecalSupabaseURL</key>
-	<string>$(MOVIECAL_SUPABASE_URL)</string>
+	<string>$(MOVIECAL_SUPABASE_URL_SCHEME)://$(MOVIECAL_SUPABASE_URL_AUTHORITY_AND_PATH)</string>
 	<key>MoviecalSupabaseAnonKey</key>
 	<string>$(MOVIECAL_SUPABASE_ANON_KEY)</string>
 </dict>
