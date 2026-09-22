@@ -42,6 +42,7 @@
         "check:testing-governance": "bash scripts/testing-governance-check.sh",
         "check:surface-drift": "bash scripts/check-surface-drift.sh",
         "dispatcher:doctor": "node tools/dispatcher/bin/dispatcher.mjs doctor",
+        "dispatcher:health": "node tools/dispatcher/bin/dispatcher.mjs health",
         "dispatcher:dry-run": "node tools/dispatcher/bin/dispatcher.mjs dry-run",
         "dispatcher:repair": "node tools/dispatcher/bin/dispatcher.mjs repair --dry-run",
         "dispatcher:gc": "node tools/dispatcher/bin/dispatcher.mjs gc"

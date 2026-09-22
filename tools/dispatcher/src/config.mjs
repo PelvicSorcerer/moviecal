@@ -77,6 +77,11 @@ export function prAutonomyLedgerStatePath() {
   return path.join(configDir(), "pr-autonomy-ledger.json");
 }
 
+/** Non-secret launchd first-poll status (MOV-287). */
+export function dispatcherLaunchHealthStatePath() {
+  return path.join(configDir(), "dispatcher-launch-health.json");
+}
+
 export function dispatcherLockPath() {
   return path.join(configDir(), "dispatcher.lock");
 }

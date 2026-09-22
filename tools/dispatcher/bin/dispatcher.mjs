@@ -45,6 +45,7 @@ import {
   usageLimitStatePath,
   repairLedgerStatePath,
   prAutonomyLedgerStatePath,
+  dispatcherLaunchHealthStatePath,
   priorityPropagationStatePath,
   loadLinearConfig,
   loadLinearAppConfig,
@@ -94,6 +95,10 @@ import { AgentStreamClient } from "../src/agent-stream-client.mjs";
 import { previewRepairPass, runRepairPass } from "../src/repair-run.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
 import { PrAutonomyLedger, runPrAutonomyPass } from "../src/pr-autonomy.mjs";
+import {
+  checkGithubCliAuth,
+  DispatcherLaunchHealthStore,
+} from "../src/launch-health.mjs";
 
 /**
  * Build the LinearClient the real run/dry-run path authenticates with:
@@ -289,6 +294,13 @@ async function cmdDoctor() {
 
   printChecks(checks);
   return checks.every((c) => c.ok) ? 0 : 1;
+}
+
+/** Read-only view of the launchd first-poll record, for an operator. */
+function cmdHealth() {
+  const health = new DispatcherLaunchHealthStore(dispatcherLaunchHealthStatePath()).status();
+  console.log(JSON.stringify(health, null, 2));
+  return ["healthy", "unknown"].includes(health.status) ? 0 : 1;
 }
 
 async function tryRunAsync(fn) {
@@ -790,6 +802,15 @@ async function cmdRunOnce({ repairLockHeld = false } = {}) {
   const linearClient = built?.client;
   const teamKey = built?.teamKey;
 
+  // This is intentionally before reconciliation: that path can observe PRs
+  // and may publish lifecycle changes. A broken launchd `gh` credential must
+  // never reach either observation or mutation, even when Linear works.
+  const githubAuth = checkGithubCliAuth();
+  if (!githubAuth.ok) {
+    console.error(`Dispatcher startup blocked (${githubAuth.kind}): ${githubAuth.diagnostic}`);
+    return { exitCode: 3, startupFailure: githubAuth };
+  }
+
   // reconcileWorktrees() is async: this await must fully complete before
   // promotePass() and reportReviewCi() run below, so reconciliation never
   // races the promote/dispatch pass. It is the only call to that function.
@@ -798,7 +819,7 @@ async function cmdRunOnce({ repairLockHeld = false } = {}) {
   await propagatePass();
   await promotePass();
 
-  if (!built) return 1;
+  if (!built) return { exitCode: 1, startupFailure: { kind: "linear-auth-unavailable", diagnostic: "Linear authentication is unavailable; run dispatcher doctor and repair the configured credential." } };
 
   try {
     await reportReviewCi(linearClient, teamKey);
@@ -836,14 +857,14 @@ async function cmdRunOnce({ repairLockHeld = false } = {}) {
 
   if (issues.length === 0) {
     console.log(`No issues in "${RUN_STATE_NAMES.readyForAgent}". Nothing to do.`);
-    return 0;
+    return { exitCode: 0 };
   }
 
   const results = await runOnce(issues, ctx);
   for (const r of results) {
     console.log(`${r.issue}: ${r.outcome}${r.reason ? ` — ${r.reason}` : ""}${r.pr ? ` — ${r.pr}` : ""}`);
   }
-  return 0;
+  return { exitCode: 0 };
 }
 
 /**
@@ -863,7 +884,16 @@ async function cmdRun({ once, intervalMs }) {
   const lock = new DispatcherLock(dispatcherLockPath());
   try { lock.acquire(); } catch (err) { console.error(err.message); return 2; }
   process.once("exit", () => lock.release());
-  if (once) { try { return await cmdRunOnce({ repairLockHeld: lock.owned }); } finally { lock.release(); } }
+  const launchHealth = new DispatcherLaunchHealthStore(dispatcherLaunchHealthStatePath());
+  launchHealth.beginFirstPoll();
+  if (once) {
+    try {
+      const result = await cmdRunOnce({ repairLockHeld: lock.owned });
+      if (result.exitCode === 0) launchHealth.completeFirstPoll();
+      else launchHealth.failFirstPoll(result.startupFailure || { kind: "first-poll-failed", diagnostic: "Dispatcher first poll did not complete successfully; inspect dispatcher.stderr.log." });
+      return result.exitCode;
+    } finally { lock.release(); }
+  }
 
   // Only for the persistent poll loop -- a single `--once` pass has nothing
   // for a live stream to usefully feed. Fire-and-forget: it manages its own
@@ -873,11 +903,24 @@ async function cmdRun({ once, intervalMs }) {
 
   console.log(`Starting poll loop (interval: ${intervalMs}ms). Press Ctrl+C to stop.`);
   // eslint-disable-next-line no-constant-condition
+  let firstPoll = true;
   while (true) {
     try {
-      await cmdRunOnce({ repairLockHeld: lock.owned });
+      const result = await cmdRunOnce({ repairLockHeld: lock.owned });
+      if (firstPoll) {
+        if (result.exitCode === 0) launchHealth.completeFirstPoll();
+        else {
+          launchHealth.failFirstPoll(result.startupFailure || { kind: "first-poll-failed", diagnostic: "Dispatcher first poll did not complete successfully; inspect dispatcher.stderr.log." });
+          return result.exitCode;
+        }
+        firstPoll = false;
+      }
     } catch (err) {
       console.error("Poll iteration failed:", err.message);
+      if (firstPoll) {
+        launchHealth.failFirstPoll({ kind: "first-poll-threw", diagnostic: "Dispatcher first poll threw before completion; inspect dispatcher.stderr.log." });
+        return 1;
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
@@ -902,6 +945,9 @@ async function main() {
   switch (cmd) {
     case "doctor":
       process.exitCode = await cmdDoctor();
+      break;
+    case "health":
+      process.exitCode = cmdHealth();
       break;
     case "dry-run": {
       const fixtureFlagIdx = rest.indexOf("--fixture");
@@ -955,7 +1001,7 @@ async function main() {
     }
     default:
       console.error(
-        "Usage: dispatcher <doctor|dry-run|shadow|agent-signal|gc|promote|priorities|reconcile-parents|repair|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
+        "Usage: dispatcher <doctor|health|dry-run|shadow|agent-signal|gc|promote|priorities|reconcile-parents|repair|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
       );
       process.exitCode = 1;
   }
