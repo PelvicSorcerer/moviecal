@@ -18,7 +18,7 @@ struct MainTabView: View {
                     Label("Watchlist", systemImage: "bookmark")
                 }
 
-            SettingsView(authStore: authStore)
+            SettingsView(apiClient: apiClient, authStore: authStore)
                 .tabItem {
                     Label("Settings", systemImage: "gearshape")
                 }

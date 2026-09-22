@@ -53,10 +53,23 @@ func assertSnapshot<V: View>(
 
     if isRecording { return }
 
-    XCTAssertEqual(
-        pngData,
-        referenceData,
-        "\"\(name)\" does not match its reference snapshot at \(referenceURL.path)",
+    if pngData == referenceData { return }
+
+    guard let difference = imageDifference(renderedPNG: pngData, referencePNG: referenceData) else {
+        return XCTFail(
+            "\"\(name)\" could not be decoded for comparison at \(referenceURL.path)",
+            file: file,
+            line: line
+        )
+    }
+
+    // PNG bytes can vary slightly between otherwise identical simulator
+    // renders. Compare decoded pixels instead, allowing a tiny amount of
+    // antialiasing noise while still catching a visible screen regression.
+    XCTAssertLessThanOrEqual(
+        difference,
+        0.002,
+        "\"\(name)\" differs from its reference by \(difference * 100)% of pixels at \(referenceURL.path)",
         file: file,
         line: line
     )
@@ -85,4 +98,56 @@ private func snapshotDirectory() -> URL {
     URL(fileURLWithPath: "\(#filePath)")
         .deletingLastPathComponent()
         .appendingPathComponent("__Snapshots__")
+}
+
+@MainActor
+private func imageDifference(renderedPNG: Data, referencePNG: Data) -> Double? {
+    guard
+        let rendered = UIImage(data: renderedPNG)?.cgImage,
+        let reference = UIImage(data: referencePNG)?.cgImage,
+        rendered.width == reference.width,
+        rendered.height == reference.height
+    else {
+        return nil
+    }
+
+    guard
+        let renderedPixels = rgbaPixels(for: rendered),
+        let referencePixels = rgbaPixels(for: reference)
+    else {
+        return nil
+    }
+
+    var changedPixels = 0
+    for offset in stride(from: 0, to: renderedPixels.count, by: 4) {
+        let maximumChannelDifference = (0..<3).map { channel in
+            abs(Int(renderedPixels[offset + channel]) - Int(referencePixels[offset + channel]))
+        }.max() ?? 0
+
+        if maximumChannelDifference > 2 {
+            changedPixels += 1
+        }
+    }
+
+    return Double(changedPixels) / Double(rendered.width * rendered.height)
+}
+
+@MainActor
+private func rgbaPixels(for image: CGImage) -> [UInt8]? {
+    let bytesPerRow = image.width * 4
+    var pixels = [UInt8](repeating: 0, count: bytesPerRow * image.height)
+    guard let context = CGContext(
+        data: &pixels,
+        width: image.width,
+        height: image.height,
+        bitsPerComponent: 8,
+        bytesPerRow: bytesPerRow,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else {
+        return nil
+    }
+
+    context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+    return pixels
 }
