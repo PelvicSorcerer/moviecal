@@ -15,6 +15,7 @@
 		57BBE4818D52843C2262BF75 /* SupabaseAuthClientProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F004882F959EC899A12D337 /* SupabaseAuthClientProtocol.swift */; };
 		5FCA6236632217416FC1F8BE /* SupabaseAuthConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E9FB09E0BDB7A8855FB7A95 /* SupabaseAuthConfiguration.swift */; };
 		804C599BA2E66ED804BAF21C /* LiveSupabaseAuthClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93DDE1EFF41364B3803039D1 /* LiveSupabaseAuthClient.swift */; };
+		8E7B97AF40A85E8BE9274532 /* ConfigurationErrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8771ABF71114B4D1906FDC04 /* ConfigurationErrorView.swift */; };
 		A5D9402080B0053ED61DC354 /* SupabaseAuthTokenProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47950CD3118E2D33A213C2E /* SupabaseAuthTokenProviderTests.swift */; };
 		BB29145C7C106CD6679925A3 /* MockSupabaseAuthClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F02A38E218F265D94A9740F2 /* MockSupabaseAuthClient.swift */; };
 		BBAB92282EF4722A234AB6EB /* AuthStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EEBBE8E5FE554D8CAB41B55 /* AuthStoreTests.swift */; };
@@ -35,10 +36,30 @@
 		CAFEF00D0000000000000065 /* MockURLProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000053 /* MockURLProtocol.swift */; };
 		CAFEF00D0000000000000066 /* APIClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000054 /* APIClientTests.swift */; };
 		CAFEF00D0000000000000067 /* ModelDecodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000055 /* ModelDecodingTests.swift */; };
+		CAFEF00D0000000000000071 /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000070 /* SignInView.swift */; };
+		CAFEF00D0000000000000073 /* SignInViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000072 /* SignInViewModel.swift */; };
+		CAFEF00D0000000000000075 /* UITestFakeSupabaseAuthClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000074 /* UITestFakeSupabaseAuthClient.swift */; };
+		CAFEF00D0000000000000077 /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000076 /* MainTabView.swift */; };
+		CAFEF00D0000000000000079 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000078 /* SearchView.swift */; };
+		CAFEF00D0000000000000081 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000080 /* SettingsView.swift */; };
+		CAFEF00D0000000000000083 /* WatchlistView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000082 /* WatchlistView.swift */; };
+		CAFEF00D0000000000000085 /* WatchlistViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000084 /* WatchlistViewModel.swift */; };
+		CAFEF00D0000000000000087 /* WatchlistViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000086 /* WatchlistViewModelTests.swift */; };
+		CAFEF00D0000000000000089 /* SignInViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000088 /* SignInViewModelTests.swift */; };
+		CAFEF00D0000000000000091 /* SnapshotAssertion.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000090 /* SnapshotAssertion.swift */; };
+		CAFEF00D0000000000000093 /* AppShellSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000092 /* AppShellSnapshotTests.swift */; };
+		CAFEF00D0000000000000102 /* SignInToMainTabsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000101 /* SignInToMainTabsUITests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
 		CAFEF00D0000000000000043 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CAFEF00D0000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CAFEF00D0000000000000002;
+			remoteInfo = Moviecal;
+		};
+		CAFEF00D0000000000000108 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = CAFEF00D0000000000000001 /* Project object */;
 			proxyType = 1;
@@ -54,6 +75,7 @@
 		4E8A2C6D941134652C810AA3 /* AuthState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthState.swift; sourceTree = "<group>"; };
 		4E9FB09E0BDB7A8855FB7A95 /* SupabaseAuthConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SupabaseAuthConfiguration.swift; sourceTree = "<group>"; };
 		5F004882F959EC899A12D337 /* SupabaseAuthClientProtocol.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SupabaseAuthClientProtocol.swift; sourceTree = "<group>"; };
+		8771ABF71114B4D1906FDC04 /* ConfigurationErrorView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConfigurationErrorView.swift; sourceTree = "<group>"; };
 		93DDE1EFF41364B3803039D1 /* LiveSupabaseAuthClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveSupabaseAuthClient.swift; sourceTree = "<group>"; };
 		C47950CD3118E2D33A213C2E /* SupabaseAuthTokenProviderTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SupabaseAuthTokenProviderTests.swift; sourceTree = "<group>"; };
 		CAFEF00D0000000000000023 /* Moviecal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Moviecal.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -77,6 +99,20 @@
 		CAFEF00D0000000000000053 /* MockURLProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockURLProtocol.swift; sourceTree = "<group>"; };
 		CAFEF00D0000000000000054 /* APIClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClientTests.swift; sourceTree = "<group>"; };
 		CAFEF00D0000000000000055 /* ModelDecodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDecodingTests.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000070 /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000072 /* SignInViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInViewModel.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000074 /* UITestFakeSupabaseAuthClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestFakeSupabaseAuthClient.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000076 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000078 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000080 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000082 /* WatchlistView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistView.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000084 /* WatchlistViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistViewModel.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000086 /* WatchlistViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistViewModelTests.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000088 /* SignInViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInViewModelTests.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000090 /* SnapshotAssertion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotAssertion.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000092 /* AppShellSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellSnapshotTests.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000100 /* MoviecalUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MoviecalUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		CAFEF00D0000000000000101 /* SignInToMainTabsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInToMainTabsUITests.swift; sourceTree = "<group>"; };
 		CCB04380807D452BB0AE49D7 /* AuthStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthStore.swift; sourceTree = "<group>"; };
 		CF54F5821818C237F5BA7343 /* SupabaseAuthAPIClientIntegrationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SupabaseAuthAPIClientIntegrationTests.swift; sourceTree = "<group>"; };
 		F02A38E218F265D94A9740F2 /* MockSupabaseAuthClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MockSupabaseAuthClient.swift; sourceTree = "<group>"; };
@@ -99,6 +135,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CAFEF00D0000000000000105 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -107,6 +150,7 @@
 			children = (
 				CAFEF00D0000000000000015 /* Moviecal */,
 				CAFEF00D0000000000000022 /* MoviecalTests */,
+				CAFEF00D0000000000000103 /* MoviecalUITests */,
 				CAFEF00D0000000000000014 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -116,6 +160,7 @@
 			children = (
 				CAFEF00D0000000000000023 /* Moviecal.app */,
 				CAFEF00D0000000000000024 /* MoviecalTests.xctest */,
+				CAFEF00D0000000000000100 /* MoviecalUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -146,6 +191,10 @@
 			isa = PBXGroup;
 			children = (
 				CAFEF00D0000000000000018 /* Root */,
+				CAFEF00D0000000000000094 /* SignIn */,
+				CAFEF00D0000000000000095 /* Search */,
+				CAFEF00D0000000000000096 /* Settings */,
+				CAFEF00D0000000000000097 /* Watchlist */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -154,6 +203,8 @@
 			isa = PBXGroup;
 			children = (
 				CAFEF00D0000000000000026 /* RootView.swift */,
+				CAFEF00D0000000000000076 /* MainTabView.swift */,
+				8771ABF71114B4D1906FDC04 /* ConfigurationErrorView.swift */,
 			);
 			path = Root;
 			sourceTree = "<group>";
@@ -193,6 +244,7 @@
 				4E8A2C6D941134652C810AA3 /* AuthState.swift */,
 				CCB04380807D452BB0AE49D7 /* AuthStore.swift */,
 				0971793DF4898BD6A6D55383 /* SupabaseAuthTokenProvider.swift */,
+				CAFEF00D0000000000000074 /* UITestFakeSupabaseAuthClient.swift */,
 			);
 			path = Auth;
 			sourceTree = "<group>";
@@ -204,6 +256,8 @@
 				CAFEF00D0000000000000068 /* Networking */,
 				CAFEF00D0000000000000069 /* Models */,
 				E82B9F0E690D5137FE3A0EC7 /* Auth */,
+				CAFEF00D0000000000000098 /* Watchlist */,
+				CAFEF00D0000000000000099 /* Snapshots */,
 			);
 			path = MoviecalTests;
 			sourceTree = "<group>";
@@ -225,6 +279,65 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
+		CAFEF00D0000000000000094 /* SignIn */ = {
+			isa = PBXGroup;
+			children = (
+				CAFEF00D0000000000000070 /* SignInView.swift */,
+				CAFEF00D0000000000000072 /* SignInViewModel.swift */,
+			);
+			path = SignIn;
+			sourceTree = "<group>";
+		};
+		CAFEF00D0000000000000095 /* Search */ = {
+			isa = PBXGroup;
+			children = (
+				CAFEF00D0000000000000078 /* SearchView.swift */,
+			);
+			path = Search;
+			sourceTree = "<group>";
+		};
+		CAFEF00D0000000000000096 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				CAFEF00D0000000000000080 /* SettingsView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		CAFEF00D0000000000000097 /* Watchlist */ = {
+			isa = PBXGroup;
+			children = (
+				CAFEF00D0000000000000082 /* WatchlistView.swift */,
+				CAFEF00D0000000000000084 /* WatchlistViewModel.swift */,
+			);
+			path = Watchlist;
+			sourceTree = "<group>";
+		};
+		CAFEF00D0000000000000098 /* Watchlist */ = {
+			isa = PBXGroup;
+			children = (
+				CAFEF00D0000000000000086 /* WatchlistViewModelTests.swift */,
+			);
+			path = Watchlist;
+			sourceTree = "<group>";
+		};
+		CAFEF00D0000000000000099 /* Snapshots */ = {
+			isa = PBXGroup;
+			children = (
+				CAFEF00D0000000000000090 /* SnapshotAssertion.swift */,
+				CAFEF00D0000000000000092 /* AppShellSnapshotTests.swift */,
+			);
+			path = Snapshots;
+			sourceTree = "<group>";
+		};
+		CAFEF00D0000000000000103 /* MoviecalUITests */ = {
+			isa = PBXGroup;
+			children = (
+				CAFEF00D0000000000000101 /* SignInToMainTabsUITests.swift */,
+			);
+			path = MoviecalUITests;
+			sourceTree = "<group>";
+		};
 		E82B9F0E690D5137FE3A0EC7 /* Auth */ = {
 			isa = PBXGroup;
 			children = (
@@ -232,6 +345,7 @@
 				0EEBBE8E5FE554D8CAB41B55 /* AuthStoreTests.swift */,
 				C47950CD3118E2D33A213C2E /* SupabaseAuthTokenProviderTests.swift */,
 				CF54F5821818C237F5BA7343 /* SupabaseAuthAPIClientIntegrationTests.swift */,
+				CAFEF00D0000000000000088 /* SignInViewModelTests.swift */,
 			);
 			name = Auth;
 			path = Auth;
@@ -281,6 +395,24 @@
 			productReference = CAFEF00D0000000000000024 /* MoviecalTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		CAFEF00D0000000000000107 /* MoviecalUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CAFEF00D0000000000000110 /* Build configuration list for PBXNativeTarget "MoviecalUITests" */;
+			buildPhases = (
+				CAFEF00D0000000000000104 /* Sources */,
+				CAFEF00D0000000000000105 /* Frameworks */,
+				CAFEF00D0000000000000106 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CAFEF00D0000000000000109 /* PBXTargetDependency */,
+			);
+			name = MoviecalUITests;
+			productName = MoviecalUITests;
+			productReference = CAFEF00D0000000000000100 /* MoviecalUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -296,6 +428,10 @@
 						CreatedOnToolsVersion = 16.2;
 					};
 					CAFEF00D0000000000000003 = {
+						CreatedOnToolsVersion = 16.2;
+						TestTargetID = CAFEF00D0000000000000002;
+					};
+					CAFEF00D0000000000000107 = {
 						CreatedOnToolsVersion = 16.2;
 						TestTargetID = CAFEF00D0000000000000002;
 					};
@@ -319,6 +455,7 @@
 			targets = (
 				CAFEF00D0000000000000002 /* Moviecal */,
 				CAFEF00D0000000000000003 /* MoviecalTests */,
+				CAFEF00D0000000000000107 /* MoviecalUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -333,6 +470,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		CAFEF00D0000000000000040 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CAFEF00D0000000000000106 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -363,6 +507,15 @@
 				3745137F7F58EFCE2946A030 /* AuthState.swift in Sources */,
 				407B34BF4E43BBCCF6B879C0 /* AuthStore.swift in Sources */,
 				05162BF8F731FF063EA2EF8F /* SupabaseAuthTokenProvider.swift in Sources */,
+				CAFEF00D0000000000000075 /* UITestFakeSupabaseAuthClient.swift in Sources */,
+				CAFEF00D0000000000000071 /* SignInView.swift in Sources */,
+				CAFEF00D0000000000000073 /* SignInViewModel.swift in Sources */,
+				CAFEF00D0000000000000077 /* MainTabView.swift in Sources */,
+				CAFEF00D0000000000000079 /* SearchView.swift in Sources */,
+				CAFEF00D0000000000000081 /* SettingsView.swift in Sources */,
+				CAFEF00D0000000000000083 /* WatchlistView.swift in Sources */,
+				CAFEF00D0000000000000085 /* WatchlistViewModel.swift in Sources */,
+				8E7B97AF40A85E8BE9274532 /* ConfigurationErrorView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -378,6 +531,18 @@
 				BBAB92282EF4722A234AB6EB /* AuthStoreTests.swift in Sources */,
 				A5D9402080B0053ED61DC354 /* SupabaseAuthTokenProviderTests.swift in Sources */,
 				3613820ED224C062500FFFCB /* SupabaseAuthAPIClientIntegrationTests.swift in Sources */,
+				CAFEF00D0000000000000087 /* WatchlistViewModelTests.swift in Sources */,
+				CAFEF00D0000000000000089 /* SignInViewModelTests.swift in Sources */,
+				CAFEF00D0000000000000091 /* SnapshotAssertion.swift in Sources */,
+				CAFEF00D0000000000000093 /* AppShellSnapshotTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CAFEF00D0000000000000104 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CAFEF00D0000000000000102 /* SignInToMainTabsUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -388,6 +553,11 @@
 			isa = PBXTargetDependency;
 			target = CAFEF00D0000000000000002 /* Moviecal */;
 			targetProxy = CAFEF00D0000000000000043 /* PBXContainerItemProxy */;
+		};
+		CAFEF00D0000000000000109 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CAFEF00D0000000000000002 /* Moviecal */;
+			targetProxy = CAFEF00D0000000000000108 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -598,6 +768,40 @@
 			};
 			name = Release;
 		};
+		CAFEF00D0000000000000111 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moviecal.ios.MoviecalUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Moviecal;
+			};
+			name = Debug;
+		};
+		CAFEF00D0000000000000112 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moviecal.ios.MoviecalUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Moviecal;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -624,6 +828,15 @@
 			buildConfigurations = (
 				CAFEF00D0000000000000011 /* Debug */,
 				CAFEF00D0000000000000012 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CAFEF00D0000000000000110 /* Build configuration list for PBXNativeTarget "MoviecalUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CAFEF00D0000000000000111 /* Debug */,
+				CAFEF00D0000000000000112 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
