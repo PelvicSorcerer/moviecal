@@ -127,6 +127,100 @@ final class WatchlistViewModelTests: XCTestCase {
         await viewModel.load()
         XCTAssertEqual(viewModel.state, .loaded([]))
     }
+
+    private func makeItem(id: String, title: String) -> WatchlistItem {
+        WatchlistItem(
+            id: id,
+            addedAt: "2026-06-13T05:00:00.000Z",
+            movie: Movie(
+                id: 42,
+                tmdbId: 603,
+                title: title,
+                releaseDate: "1999-03-31",
+                posterPath: nil,
+                overview: nil
+            )
+        )
+    }
+
+    private func loadedViewModel(items: [WatchlistItem]) async -> WatchlistViewModel {
+        let json = try! JSONEncoder().encode(WatchlistListResponseBodyStub(items: items))
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, json)
+        }
+
+        let viewModel = WatchlistViewModel(apiClient: makeClient())
+        await viewModel.load()
+        return viewModel
+    }
+
+    func testRemoveSuccessDropsItemFromState() async {
+        let item1 = makeItem(id: "watchlist-item-1", title: "The Matrix")
+        let item2 = makeItem(id: "watchlist-item-2", title: "Inception")
+        let viewModel = await loadedViewModel(items: [item1, item2])
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 204,
+                httpVersion: "HTTP/1.1",
+                headerFields: nil
+            )!
+            return (response, Data())
+        }
+
+        await viewModel.remove(item: item1)
+
+        XCTAssertEqual(viewModel.state, .loaded([item2]))
+        XCTAssertNil(viewModel.removalErrorMessage)
+    }
+
+    func testRemoveFailureRestoresItemAndSurfacesError() async {
+        let item1 = makeItem(id: "watchlist-item-1", title: "The Matrix")
+        let item2 = makeItem(id: "watchlist-item-2", title: "Inception")
+        let viewModel = await loadedViewModel(items: [item1, item2])
+
+        MockURLProtocol.requestHandler = { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+
+        await viewModel.remove(item: item1)
+
+        XCTAssertEqual(viewModel.state, .loaded([item1, item2]))
+        XCTAssertEqual(viewModel.removalErrorMessage, "Unable to remove \"The Matrix\". Please try again.")
+    }
+
+    func testRemove404IsTreatedAsSuccess() async {
+        let item1 = makeItem(id: "watchlist-item-1", title: "The Matrix")
+        let item2 = makeItem(id: "watchlist-item-2", title: "Inception")
+        let viewModel = await loadedViewModel(items: [item1, item2])
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 404,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let body = #"{ "error": "Watchlist item not found." }"#.data(using: .utf8)!
+            return (response, body)
+        }
+
+        await viewModel.remove(item: item1)
+
+        XCTAssertEqual(viewModel.state, .loaded([item2]))
+        XCTAssertNil(viewModel.removalErrorMessage)
+    }
+}
+
+private struct WatchlistListResponseBodyStub: Encodable {
+    let items: [WatchlistItem]
 }
 
 private struct StubTokenProvider: AuthTokenProviding {
