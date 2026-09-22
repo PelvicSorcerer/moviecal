@@ -88,7 +88,7 @@ every allowed class, denied class, and mixed diff. Adding a new allowed class
 later requires separate owner-approved governance work; an unrecognized path
 is denied.
 
-## Recorded baseline
+## Completed pilot baseline
 
 This table is the approved starting point. The live ledger and installed
 launchd configuration were rechecked on 2026-09-21.
@@ -96,13 +96,32 @@ launchd configuration were rechecked on 2026-09-21.
 | Evidence | Recorded result | Rollout meaning |
 |---|---|---|
 | [MOV-162](https://linear.app/moviecal/issue/MOV-162) / [PR #540](https://github.com/PelvicSorcerer/moviecal/pull/540) | Implementation and policy tests merged. | Mechanism implemented; neither automatic merge nor code autonomy accepted. |
-| `~/.config/moviecal/pr-autonomy-ledger.json` | Exactly one entry: `MOV-264:542:e04724f8109b7c5d6e6c556ab21ada9371c2f17f:ready`, outcome `applied`, completed `2026-09-18T18:45:47.666Z`. | Durable baseline count `B = 1`; automatic ready is proven once. |
-| [MOV-264](https://linear.app/moviecal/issue/MOV-264/mov-162-disposable-docs-only-pr-autonomy-rollout-fixture) | Linear records `ready` on PR #542 at the same SHA and metric `1/1`. | Ledger and Linear side effects agree. |
-| [PR #542](https://github.com/PelvicSorcerer/moviecal/pull/542) | The owner merged it manually at `2026-09-18T18:46:05Z`; no `merge` ledger entry exists. | Automatic merge is **unproven** and must not be credited to autonomy. |
+| `~/.config/moviecal/pr-autonomy-ledger.json` | Five explained, applied rows: the MOV-264 ready fixture (PR #542), then ready and merge for PR #555, then ready and merge for PR #576. | The supervised pilot is complete. Durable baseline count `B = 5`; never reset, delete, or edit these rows. |
+| [MOV-269](https://linear.app/moviecal/issue/MOV-269/run-the-bounded-supervised-pr-autonomy-pilot) | The five-action ledger and no-op replay were reviewed under continuous human supervision. | The policy controls worked; MOV-287 addresses the LaunchAgent health gap found during that exercise. |
 | Installed dispatcher launchd configuration | `MOVIECAL_PR_AUTONOMY` and `MOVIECAL_PR_AUTONOMY_MAX_ACTIONS` are absent. | Global autonomy was disabled after the exercise and remains disabled. |
 
 Any difference between this table and live state is an abort condition, not
 permission to adjust the cap in place.
+
+## MOV-287 operating activation
+
+MOV-287 is the explicit successor to the pilot's disabled configuration. Only
+after its launch-agent health checks and required human verification pass, set
+the installed (untracked) `~/Library/LaunchAgents/com.moviecal.dispatcher.plist`
+to:
+
+```
+MOVIECAL_PR_AUTONOMY=true
+MOVIECAL_PR_AUTONOMY_MAX_ACTIONS=7
+```
+
+Restart the LaunchAgent and confirm a healthy first poll with `npm run
+dispatcher:health`. The cap is a total durable action count, not an allowance
+per restart: preserving the five-row baseline leaves exactly two newly
+authorized actions. Do not change the ledger to make this arithmetic fit.
+If startup health reports `failed` or `overdue`, leave both variables absent,
+repair the classified `gh` prerequisite, and restart before enabling any
+autonomy.
 
 ## MOV-275 publication and state-stability recovery
 

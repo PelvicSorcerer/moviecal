@@ -43,14 +43,17 @@ const runContextSource = readFileSync(
 describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
   it("cmdRunOnce awaits reconcile -> propagate -> promote before reading Ready for Agent", () => {
     const body = bodyOf("cmdRunOnce");
+    const ghAuthAt = body.indexOf("checkGithubCliAuth()");
     const reconcileAt = body.indexOf("await reconcileWorktrees(");
     const propagateAt = body.indexOf("await propagatePass(");
     const promoteAt = body.indexOf("await promotePass(");
     const dispatchReadAt = body.indexOf("issuesInState(");
+    expect(ghAuthAt, "GitHub CLI auth gate missing from cmdRunOnce").toBeGreaterThan(-1);
     expect(reconcileAt, "reconcileWorktrees() not called in cmdRunOnce").toBeGreaterThan(-1);
     expect(propagateAt, "propagatePass() not called in cmdRunOnce").toBeGreaterThan(-1);
     expect(promoteAt, "promotePass() not called in cmdRunOnce").toBeGreaterThan(-1);
     expect(dispatchReadAt, "issuesInState() not called in cmdRunOnce").toBeGreaterThan(-1);
+    expect(ghAuthAt).toBeLessThan(reconcileAt);
     expect(reconcileAt).toBeLessThan(propagateAt);
     expect(propagateAt).toBeLessThan(promoteAt);
     expect(promoteAt).toBeLessThan(dispatchReadAt);
@@ -175,6 +178,7 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       // in dispatcher source (see the assertion below).
       "agentSessionEnvPath",
       "circuitBreakerStatePath",
+      "dispatcherLaunchHealthStatePath",
       "dispatcherLockPath",
       "envLocalPath",
       "linearAppEnvPath",
@@ -250,7 +254,7 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
 
   it("registers agent-signal as a read-only command that mutates nothing", () => {
     expect(source).toMatch(/case "agent-signal":/);
-    expect(source).toMatch(/dispatcher <doctor\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|reconcile-parents\|repair\|run>/);
+    expect(source).toMatch(/dispatcher <doctor\|health\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|reconcile-parents\|repair\|run>/);
     const body = source.slice(source.indexOf("function cmdAgentSignal("));
     const end = body.indexOf("\n}\n");
     const fn = body.slice(0, end);
@@ -259,6 +263,16 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       expect(fn.includes(forbidden), `cmdAgentSignal references ${forbidden}`).toBe(false);
     }
     expect(fn).toMatch(/wouldMutateLinear: false/);
+  });
+
+  it("records first-poll health and exposes a read-only health command (MOV-287)", () => {
+    const run = bodyOf("cmdRun");
+    expect(source).toMatch(/case "health":/);
+    expect(source).toMatch(/function cmdHealth\(\)/);
+    expect(run).toMatch(/new DispatcherLaunchHealthStore\(dispatcherLaunchHealthStatePath\(\)\)/);
+    expect(run).toMatch(/launchHealth\.beginFirstPoll\(\)/);
+    expect(run).toMatch(/launchHealth\.completeFirstPoll\(\)/);
+    expect(run).toMatch(/launchHealth\.failFirstPoll\(/);
   });
 });
 

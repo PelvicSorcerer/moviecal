@@ -628,6 +628,16 @@ The plist's own `StandardOutPath`/`StandardErrorPath` (`~/Library/Logs/moviecal-
 
 `dispatcher doctor` is a read-only command that asserts: Linear auth works, `gh` auth works, the worktree root is writable, `~/.config/moviecal/env.local` exists and is mode 600, `claude` and `codex` are on `PATH`, `origin/master` is fetchable, and the iOS self-hosted runner is reachable. It also prints the **local dispatch identity** — the delegate an issue must name to be claimed here (MOV-143) — and which **lifecycle publication surface** is configured (MOV-158), both informational rather than pass/fail gates. The Agent Session line reports configuration only: the sole way to test entitlement is `agentSessionCreateOnIssue`, which is a mutation, and `doctor` never mutates. If `~/.config/moviecal/linear-app.env` is present it additionally checks the file is mode 600 and that an app-actor token can be minted from it (MOV-122); if it is absent that check is a no-op pass. Run it after any environment change and before relying on the dispatcher for real work.
 
+### Launch-agent first-poll health (MOV-287)
+
+Before every run pass, the dispatcher checks `gh auth status`. If the non-interactive credential is absent, expired, or `gh` is missing from the LaunchAgent `PATH`, it exits before any PR observation or mutation and logs only a classified recovery instruction — never the CLI output or a token. Repair the credential as the launch-agent user with `gh auth login -h github.com`, then restart the service:
+
+```
+launchctl kickstart -k gui/$(id -u)/com.moviecal.dispatcher
+```
+
+At process start, the dispatcher writes a non-secret status record at `~/.config/moviecal/dispatcher-launch-health.json` with a two-minute first-poll deadline. `npm run dispatcher:health` is read-only and reports `healthy`, `failed`, or `overdue`; an `overdue` record means the daemon has not recorded a completed first poll in time. Inspect `dispatcher.stderr.log`, repair the indicated prerequisite, and use the restart command above. The record is an operator signal, not an authorization bypass.
+
 ## Known gaps / follow-ups
 
 - Dispatch remains deliberately poll-based (default 30s interval,
