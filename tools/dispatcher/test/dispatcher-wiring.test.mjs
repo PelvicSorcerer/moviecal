@@ -74,6 +74,13 @@ describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
     expect(emptyQueueAt).toBeLessThan(dispatchAt);
   });
 
+  it("keeps review CI observation polling while an implementation worker is awaited (MOV-298)", () => {
+    const run = bodyOf("cmdRun");
+    expect(run).toMatch(/const reviewCiMonitor = setInterval/);
+    expect(run).toMatch(/await reportReviewCi\(built\.client, built\.teamKey\)/);
+    expect(run).toMatch(/observation-only/);
+  });
+
   it("passes the held dispatcher lock into the live repair pass (MOV-191)", () => {
     const once = bodyOf("cmdRunOnce");
     const run = bodyOf("cmdRun");
