@@ -1216,6 +1216,20 @@ describe("runOnce", () => {
       fs.writeFileSync(path.join(logDir, "stdout.log"), "Exit code 71\nsandbox-exec: sandbox_apply: Operation not permitted\n");
     }
 
+    function writeCodexGracefulCrashLog(logDir) {
+      fs.mkdirSync(logDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(logDir, "stdout.log"),
+        `${JSON.stringify({
+          type: "item.completed",
+          item: {
+            type: "agent_message",
+            text: "Blocked before implementation: the sandbox rejected the initial file-read command with sandbox-exec: sandbox_apply: Operation not permitted.",
+          },
+        })}\n`,
+      );
+    }
+
     it("requeues to Ready for Agent with a distinct comment, and trips the breaker, on the confirmed signature", async () => {
       const circuitBreaker = fakeCircuitBreaker();
       const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
@@ -1241,6 +1255,51 @@ describe("runOnce", () => {
       expect(lastComment.body).toMatch(/every worker on this mac/i);
       expect(lastComment.body).toContain("Ready for Agent");
       expect(lastComment.body).toContain("launchctl bootout");
+    });
+
+    it("requeues and trips the breaker when Codex gracefully reports the signature before any tool action", async () => {
+      const circuitBreaker = fakeCircuitBreaker();
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      writeCodexGracefulCrashLog(logDir);
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        circuitBreaker,
+        auditWorkerResultFn: vi.fn(() => ({ ok: true, actions: [], violations: [] })),
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 0, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result).toMatchObject({ outcome: "nested-sandbox-crash", exitCode: 0 });
+      expect(circuitBreaker.calls.trip).toEqual([
+        { name: NESTED_SANDBOX_CRASH, reason: expect.stringContaining("sandbox_apply: Operation not permitted") },
+      ]);
+      const lastMove = ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1);
+      expect(lastMove.stateId).toBe("state-ready-for-agent");
+      const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
+      expect(lastComment.body).toContain("sandbox_apply: Operation not permitted");
+      expect(lastComment.body).toContain("worker exit 0");
+    });
+
+    it("does not reclassify a graceful Codex report after an audited tool action", async () => {
+      const circuitBreaker = fakeCircuitBreaker();
+      const logDir = path.join(tmpLogRoot, "MOV-1-fix-the-thing");
+      writeCodexGracefulCrashLog(logDir);
+      const ctx = baseCtx({
+        logRoot: tmpLogRoot,
+        circuitBreaker,
+        auditWorkerResultFn: vi.fn(() => ({
+          ok: true,
+          actions: [{ kind: "command", value: "rg --files", outcome: "executed" }],
+          violations: [],
+        })),
+        spawnWorkerFn: vi.fn(async () => ({ exitCode: 0, logDir })),
+      });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("in-review");
+      expect(circuitBreaker.calls.trip).toEqual([]);
     });
 
     it("does not requeue or trip the breaker for exit code 71 without the sandbox_apply text (not a false positive)", async () => {

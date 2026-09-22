@@ -42,6 +42,7 @@ import { RepairLedger } from "../src/repair-ledger.mjs";
 import { UsageLimitStore } from "../src/usage-limit.mjs";
 import { CircuitBreakerStore } from "../src/circuit-breaker.mjs";
 import { CREDENTIAL_FAILURE } from "../src/credential-failure.mjs";
+import { NESTED_SANDBOX_CRASH } from "../src/failure-classification.mjs";
 
 // MOV-179: the real diagnosis adapter makes a live Anthropic API call.
 // Nothing in this file wants that -- the point of the describe block below is
@@ -465,6 +466,48 @@ describe("dependency-gating -> promotion -> dispatch, one continuous run (MOV-19
     // fourth cycle would be an ordinary dispatch again.
     expect(ctx.usageLimitStore.resumption("MOV-RESUME", ctx.now())).toBeNull();
     expect(ctx.usageLimitStore.get("MOV-RESUME")).toBeNull();
+  });
+});
+
+describe("Codex sandbox-report lifecycle through the real run context (MOV-299)", () => {
+  beforeEach(() => {
+    fs.rmSync(TMP_ROOT, { recursive: true, force: true });
+  });
+
+  it("requeues a graceful Codex sandbox report and persists the host-wide breaker", async () => {
+    const issue = {
+      id: "id-codex-sandbox", identifier: "MOV-CODEX-SANDBOX", title: "Codex sandbox report",
+      description: READY_SECTIONS, url: "https://linear.app/moviecal/issue/MOV-CODEX-SANDBOX",
+      project: null, labels: ["execution:mac", "worker:codex"], delegate: DELEGATE, blockedByIds: [],
+    };
+    const linearClient = fakeLinearClient({ "id-codex-sandbox": issue });
+    const ctx = {
+      ...(await buildRunContext(linearClient, TEAM_KEY, [issue])),
+      ...fakeLeaves({ auditWorkerResultFn: vi.fn(() => ({ ok: true, actions: [], violations: [] })) }),
+    };
+    const logDir = path.join(ctx.logRoot, worktreeName(issue.identifier, issue.title));
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(logDir, "stdout.log"),
+      `${JSON.stringify({
+        type: "item.completed",
+        item: {
+          type: "agent_message",
+          text: "Blocked before implementation: sandbox-exec: sandbox_apply: Operation not permitted",
+        },
+      })}\n`,
+    );
+    ctx.spawnWorkerFn = vi.fn(async () => ({ exitCode: 0, logDir }));
+
+    const [result] = await runOnce([issue], ctx);
+
+    expect(result).toMatchObject({ outcome: "nested-sandbox-crash", exitCode: 0 });
+    expect(linearClient.calls.filter((c) => c.type === "moveToState").at(-1)).toMatchObject({
+      issueId: "id-codex-sandbox",
+      stateId: "state-ready",
+    });
+    expect(linearClient.calls.filter((c) => c.type === "addComment").at(-1).body).toContain("sandbox_apply: Operation not permitted");
+    expect(new CircuitBreakerStore(`${TMP_ROOT}/circuit-breaker.json`).isOpen(NESTED_SANDBOX_CRASH)).toBe(true);
   });
 });
 

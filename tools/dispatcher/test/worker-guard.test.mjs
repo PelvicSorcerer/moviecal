@@ -313,7 +313,12 @@ describe("worker guard", () => {
       logDir: tmpDir,
       mode: "implementation",
       runner,
-    })).toMatchObject({ ok: true, actualBranch: "agent/MOV-1-fix", committed: ["src/app/page.tsx"] });
+    })).toMatchObject({
+      ok: true,
+      actualBranch: "agent/MOV-1-fix",
+      committed: ["src/app/page.tsx"],
+      actions: [{ kind: "command", value: "npm run verify", outcome: "unknown" }],
+    });
   });
 
   it("writes a checksummed audit record outside the worktree", () => {
