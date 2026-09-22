@@ -100,7 +100,7 @@ A project reaching 100% means its defined outcome is complete. Do not keep a fin
 
 This state list is the supervision surface a human uses to answer: what's waiting on me, what's the agent doing right now, what shipped. It replaces the six-state GitHub Project `Status` field plus the `Agent Dispatch` boolean.
 
-**The readiness contract (MOV-129).** An issue in `Backlog` is auto-promoted to `Ready for Agent` when it is not labeled `human-only`, its description has a non-empty acceptance-criteria section (heading matching `/^#+\s*acceptance criteria/i`) and a non-empty Testing Expectations section (`/^#+\s*testing expectations/i`), and every issue that `blocks` it is in a completed/canceled state. `blocks` relations plus the dispatcher's preflight do all sequencing; the promoter only judges readiness. It runs as a phase of `dispatcher run` (and standalone as `dispatcher promote [--dry-run]`). See `docs/operators/local-execution.md` §Automated promotion.
+**The readiness contract (MOV-129).** An issue in `Backlog` is auto-promoted to `Ready for Agent` when it is not labeled `human-only`, its description has a non-empty acceptance-criteria section (heading matching `/^#+\s*acceptance criteria/i`) and a non-empty Testing Expectations section (`/^#+\s*testing expectations/i`), and every issue that `blocks` it is in a completed/canceled state. `blocks` relations plus the dispatcher's preflight do all sequencing; the promoter only judges readiness. It runs as a phase of `dispatcher run` (and standalone as `dispatcher promote [--dry-run]`). In `enforce` mode it additionally requires the issue to satisfy §Issue completeness contract below; that gate ships as `report`, so readiness is unchanged until the owner raises it. See `docs/operators/local-execution.md` §Automated promotion.
 
 ## Labels
 
@@ -115,6 +115,36 @@ This state list is the supervision surface a human uses to answer: what's waitin
 - `execution:{cloud,mac,none}` — mutually-exclusive execution adapter route, provisioned as one Linear label group by `tools/dispatcher/scripts/provision-linear-workspace.mjs`; `type:coordination` issues use `execution:none` and never auto-promote
 
 No separate `migration` label: the historical-import marker is Linear's own auto-applied `Migrated` label (added to every issue by the GitHub Issues import assistant), not a hand-rolled one. A `migration` label was created here in Stage 3 before that was known, then deleted once confirmed unused — see "GitHub Issues: migration and ongoing sync" below.
+
+## Issue completeness contract
+
+**Outside `Triage`, an issue is filed fully specced.** All applicable labels, a project, and a milestone — a milestone may be omitted only when one genuinely does not apply. This applies to every issue whose state is not `Triage`, `Done`, `Released`, `Canceled`, or `Duplicate`: `Backlog`, `Icebox`, `Spec Ready`, and every started state included.
+
+`tools/dispatcher/src/issue-spec.mjs` is the machine-checkable expression of everything below, and the only one. It is consumed by the promoter's gate (`promoter.mjs`) and the audit pass (`issue-spec-audit.mjs`); see `docs/operators/local-execution.md` §Automated promotion for how and when each runs.
+
+**Labels, by kind:**
+
+| Kind | Required |
+|---|---|
+| **Dispatchable** (not `human-only`, not `type:coordination`) | exactly one each of `execution:*`, `type:*`, `risk:*`, `worker:*`, `model:*`; at least one `area:*`; at least one `upgrade:*` when `model:strong` is set |
+| **`human-only`** | `execution:none`, one `type:*`, one `risk:*`, at least one `area:*`. No `worker:*` or `model:*` — nothing routes it. Precedent: [MOV-292](https://linear.app/moviecal/issue/MOV-292) |
+| **Coordination** (`type:coordination`) | `execution:none`, one `risk:*`, at least one `area:*`. Its type label is what identifies it, and it produces no implementation PR |
+
+The `model:strong` rule is not restated in the validator: it calls `resolveRouting()` (`worker-routing.mjs`) directly, so the intake check and the dispatch-time check cannot drift. Before this, `model:strong` without an `upgrade:*` label was caught only at routing time — after the issue had already been promoted — so it bounced at dispatch instead of at intake.
+
+**Project:** required, and it must not be a completed or canceled project. A finished project is not a maintenance bucket (see §Projects).
+
+**Milestone:** required when the issue's project defines at least one milestone. A project with no milestones cannot require one. The single exception is an explicit, reasoned opt-out line in the description:
+
+```
+Milestone: N/A — <reason>
+```
+
+The reason is mandatory: `Milestone: N/A` with nothing after it does not satisfy the rule, because an unexplained opt-out is indistinguishable from having forgotten the field. The line may be bulleted and/or bold, and an em dash, en dash, or plain hyphen all separate it.
+
+**Relations are required but are not machine-checked.** Genuine `blocks` / `blocked by` / parent relations are part of this contract (see §Relations for what "genuine" means). Their *completeness* is not mechanically decidable — nothing distinguishes "this issue has no prerequisites" from "its prerequisites were never recorded" — so the validator deliberately does not check it and the audit comment says so explicitly. This half of the contract is carried by documentation and review, not by code.
+
+**Nothing is ever auto-filled.** Neither the promoter nor the audit pass writes a label, project, milestone, or state. Choosing them is a human or authoring-agent decision, and a dispatcher-written guess would be indistinguishable from a real one the moment it landed.
 
 ## Estimates
 

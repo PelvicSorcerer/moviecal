@@ -95,6 +95,64 @@ describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
     expect(repair).not.toMatch(/runRepairPass/);
   });
 
+  // MOV-303: the issue-completeness audit is comment-only. Two things must
+  // stay true for it, and both are the kind that erode silently through later
+  // edits: it runs every cycle after promotion, and it cannot mutate an issue.
+  it("cmdRunOnce audits issue completeness after promotion, before the dispatch scan (MOV-303)", () => {
+    const body = bodyOf("cmdRunOnce");
+    const promoteAt = body.indexOf("await promotePass(");
+    const auditAt = body.indexOf("await auditIssuesPass(");
+    const dispatchReadAt = body.indexOf("issuesInState(");
+    expect(auditAt, "auditIssuesPass() not called in cmdRunOnce").toBeGreaterThan(-1);
+    expect(promoteAt).toBeLessThan(auditAt);
+    expect(auditAt).toBeLessThan(dispatchReadAt);
+  });
+
+  it("auditIssuesPass swallows errors and skips entirely when the mode is off (MOV-303)", () => {
+    const body = bodyOf("auditIssuesPass");
+    expect(body).toMatch(/resolveIssueSpecMode\(\)\s*===\s*"off"/);
+    expect(body).toMatch(/try\s*\{/);
+    expect(body).toMatch(/catch/);
+    expect(body).toMatch(/cmdAuditIssuesOnce/);
+  });
+
+  it("the standalone audit-issues command takes the dispatcher lock only when it may write (MOV-303)", () => {
+    const body = bodyOf("cmdAuditIssues");
+    expect(body).toMatch(/if\s*\(dryRun\)\s*return\s+cmdAuditIssuesOnce\(\{\s*dryRun:\s*true\s*\}\)/);
+    expect(body).toMatch(/new DispatcherLock\(dispatcherLockPath\(\)\)/);
+    expect(body).toMatch(/finally\s*\{\s*lock\.release\(\)/);
+    expect(source).toMatch(/case "audit-issues":[\s\S]*?cmdAuditIssues\(\{ dryRun/);
+  });
+
+  it("the issue-completeness audit can only ever comment — it never writes a field or a state (MOV-303)", () => {
+    const auditSource = readFileSync(
+      fileURLToPath(new URL("../src/issue-spec-audit.mjs", import.meta.url)),
+      "utf8",
+    );
+    expect(auditSource).toMatch(/linearClient\.addComment\(/);
+    // Filling in a label, project, milestone, or state is a human decision;
+    // a dispatcher-written guess would be indistinguishable from a real one.
+    for (const mutation of [
+      /linearClient\.moveToState\(/,
+      /linearClient\.updateIssuePriority\(/,
+      /issueUpdate/,
+      /labelIds/,
+      /projectMilestoneId/,
+    ]) {
+      expect(mutation.test(auditSource), String(mutation)).toBe(false);
+    }
+  });
+
+  it("keeps the issue-completeness contract at report unless an operator raises it (MOV-303)", () => {
+    const configText = readFileSync(fileURLToPath(new URL("../src/config.mjs", import.meta.url)), "utf8");
+    expect(configText).toMatch(/MOVIECAL_ISSUE_SPEC_MODE/);
+    // An unrecognized or unset value must read as `report`, never `enforce`:
+    // a typo that silently stalled the queue would be indistinguishable from
+    // the promoter being broken.
+    expect(configText).toMatch(/ISSUE_SPEC_MODES\.includes\(raw\)\s*\?\s*raw\s*:\s*DEFAULT_ISSUE_SPEC_MODE/);
+    expect(source).toMatch(/issueSpecMode:\s*resolveIssueSpecMode\(\)|const issueSpecMode = resolveIssueSpecMode\(\)/);
+  });
+
   it("promotePass swallows errors so a promote failure cannot abort dispatch", () => {
     const body = bodyOf("promotePass");
     expect(body).toMatch(/try\s*\{/);
@@ -261,7 +319,7 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
 
   it("registers agent-signal as a read-only command that mutates nothing", () => {
     expect(source).toMatch(/case "agent-signal":/);
-    expect(source).toMatch(/dispatcher <doctor\|health\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|reconcile-parents\|repair\|run>/);
+    expect(source).toMatch(/dispatcher <doctor\|health\|dry-run\|shadow\|agent-signal\|gc\|promote\|audit-issues\|priorities\|reconcile-parents\|repair\|run>/);
     const body = source.slice(source.indexOf("function cmdAgentSignal("));
     const end = body.indexOf("\n}\n");
     const fn = body.slice(0, end);

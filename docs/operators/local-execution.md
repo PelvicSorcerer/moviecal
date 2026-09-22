@@ -111,7 +111,8 @@ unchanged. Configuration and live stop/replay/offline evidence are recorded in
 2. `reconcileParents` (`dispatcher reconcile-parents [--dry-run]`) — derives parent completion from real Linear sub-issue state (MOV-172)
 3. `propagatePriorities` (`dispatcher priorities [--dry-run] [--once]`)
 4. `promotePass` (`dispatcher promote [--dry-run]`)
-5. dispatch scan over `Ready for Agent`
+5. `auditIssuesPass` (`dispatcher audit-issues [--dry-run]`) — issue-completeness audit (MOV-303)
+6. dispatch scan over `Ready for Agent`
 
 **Parent completion (MOV-172).** Never infer an issue is complete because a merged PR mentions its ID. A split must create one real Linear sub-issue per PR before those PRs open, and each PR's `Linear: MOV-NNN` reference must be sourced from that real issue object—not copied from PR text, a GitHub number, or a pattern. The reconciliation pass completes an active parent only when every child is terminal and at least one is `Done`/`Released`; `Canceled`/`Duplicate` children do not block but cannot independently drive completion. A completed parent with an open child is moved to `Needs Human Decision` with the child named. `assertParentCompletable()` also blocks the dispatcher's merged-PR backstop from directly completing such a parent.
 
@@ -129,11 +130,36 @@ After propagation, `dispatcher run` executes the promoter over every issue in `B
 - it is **not** labeled `human-only`;
 - its description has a non-empty **acceptance-criteria** section (heading matching `/^#+\s*acceptance criteria/i`);
 - its description has a non-empty **Testing Expectations** section (`/^#+\s*testing expectations/i`);
-- every issue that `blocks` it is in a completed/canceled state (`Done`, `Released`, `Canceled`, `Duplicate`), resolved via the same `inverseRelations` data the dependency gate uses.
+- every issue that `blocks` it is in a completed/canceled state (`Done`, `Released`, `Canceled`, `Duplicate`), resolved via the same `inverseRelations` data the dependency gate uses;
+- **in `enforce` mode only** (MOV-303), it satisfies the issue-completeness contract — labels, project, and milestone. In `report` mode, the shipped default, this clause does not apply and promotion behaves exactly as it did before.
 
 For a `Blocked` issue there is one extra condition: its most recent `**Dispatcher preflight failed:**` comment must name an unresolved-relation reason (now resolved). An issue blocked for any other reason — a missing secret, a worktree collision, a human's decision — is left alone.
 
 On promotion the promoter comments `Auto-promoted to Ready for Agent — …` (which, via the app-actor identity from MOV-122, notifies the repo owner). It is idempotent: a promoted issue is no longer in `Backlog`/`Blocked`, so a second pass does nothing.
+
+### Issue completeness (MOV-303)
+
+The contract itself — the per-kind label schema, the project rule, the milestone opt-out marker, and the fact that relations are required but not machine-checked — lives in `docs/governance/linear-information-architecture.md` §Issue completeness contract. `tools/dispatcher/src/issue-spec.mjs` is its only machine-checkable expression; two passes consume it.
+
+**Mode.** `MOVIECAL_ISSUE_SPEC_MODE` = `off` | `report` | `enforce`, resolved by `resolveIssueSpecMode()` and printed by `dispatcher doctor`. It defaults to **`report`**, and an unrecognized value reads as `report` rather than `enforce` — a typo must never silently stall the queue. Raising it to `enforce` is the owner's step, taken only once the existing backlog has been backfilled; merging the contract itself therefore changes no live promotion behavior.
+
+| Mode | Promoter | Audit pass |
+|---|---|---|
+| `off` | contract ignored | does not run at all (no Linear query) |
+| `report` (default) | promotes as before; violations are logged as `MOV-N: issue-spec violations (report mode, not enforced) — …` | comments |
+| `enforce` | an incomplete issue is **not** promoted; the skip reason is `incomplete issue spec (MOV-303): <every missing item>` | comments |
+
+**The audit pass** (`dispatcher audit-issues [--dry-run]`, and a phase of `dispatcher run`) is wider than the promoter by design: it scans every issue in an open workflow-state *type* (`backlog`, `unstarted`, `started`), so `human-only`, coordination, `Spec Ready`, `Icebox`, and started issues — none of which the promoter ever looks at — are covered. `Triage` and every terminal state are exempt.
+
+It posts **one** comment per non-compliant issue, headed `**Issue completeness contract — this issue is missing required fields (MOV-303).**`, listing exactly what is missing and naming which kind's rules were applied. The comment carries a hidden `<!-- dispatcher:issue-spec-audit v1 missing=… -->` marker recording the set it was written for, so:
+
+- an unchanged missing set on a later cycle posts **nothing** (the state lives on the issue, so a dispatcher restart cannot make it repeat itself);
+- a *changed* missing set posts one updated comment naming only what is still missing;
+- a compliant issue gets nothing at all — including no "resolved" comment, which would just be a second kind of noise.
+
+**It never mutates the issue.** No label, project, milestone, or state is written by either pass; `addComment` is the only Linear mutation the audit can perform, and `tools/dispatcher/test/dispatcher-wiring.test.mjs` asserts that structurally. Filling a missing field in is a human or authoring-agent decision. `dispatcher audit-issues --dry-run` prints every violation and writes nothing; so does the command in `off` mode. A mutating standalone run takes the dispatcher's singleton lock (like `priorities` and `reconcile-parents`), so a hand-run audit cannot race the daemon's own and double-post; `--dry-run` never contends for it.
+
+**Pending:** `AGENTS.md`'s "Planning-object changes" bullet still needs a one-line pointer to the contract for anyone filing an issue. `AGENTS.md` is a worker-protected path (§Security model), so a dispatched worker cannot write it — that line is an owner edit.
 
 **Execution routing.** `execution:{cloud,mac,none}` is a mutually-exclusive
 Linear label group, provisioned idempotently by

@@ -36,6 +36,7 @@ import path from "node:path";
 import { runOnce } from "../src/run-loop.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTION_COMMENT } from "../src/promoter.mjs";
+import { auditIssueSpecs, AUDIT_COMMENT_HEADLINE } from "../src/issue-spec-audit.mjs";
 import { branchName, worktreeName } from "../src/preflight.mjs";
 import { admitRepair } from "../src/repair-policy.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
@@ -297,7 +298,9 @@ describe("dependency-gating -> promotion -> dispatch, one continuous run (MOV-19
       readyForAgentStateId: "state-ready",
       isBlockerSatisfied: buildIsIssueSatisfied([blockedDescription]),
     });
-    expect(notYet).toEqual([{ issue: "MOV-DEP2", promoted: false, reason: expect.stringContaining("unresolved blocker") }]);
+    expect(notYet).toEqual([
+      { issue: "MOV-DEP2", promoted: false, reason: expect.stringContaining("unresolved blocker"), specViolations: expect.any(Array) },
+    ]);
     expect(linearClient.calls).toEqual([]);
 
     // Step 2: the blocker resolves. Same shape a fresh issuesForPromotion()
@@ -313,7 +316,9 @@ describe("dependency-gating -> promotion -> dispatch, one continuous run (MOV-19
       readyForAgentStateId: "state-ready",
       isBlockerSatisfied: buildIsIssueSatisfied([readyDescription]),
     });
-    expect(promoted).toEqual([{ issue: "MOV-DEP2", promoted: true, reason: expect.any(String) }]);
+    expect(promoted).toEqual([
+      { issue: "MOV-DEP2", promoted: true, reason: expect.any(String), specViolations: expect.any(Array) },
+    ]);
     expect(linearClient.calls).toEqual([
       { type: "moveToState", issueId: "id-dep2", stateId: "state-ready" },
       { type: "addComment", issueId: "id-dep2", body: PROMOTION_COMMENT },
@@ -615,7 +620,9 @@ describe("credential-failure circuit breaker, one continuous run across two poll
       readyForAgentStateId: "state-ready",
       isBlockerSatisfied: buildIsIssueSatisfied([backlogIssue]),
     });
-    expect(promotion).toEqual([{ issue: "MOV-BACKLOG", promoted: true, reason: expect.any(String) }]);
+    expect(promotion).toEqual([
+      { issue: "MOV-BACKLOG", promoted: true, reason: expect.any(String), specViolations: expect.any(Array) },
+    ]);
 
     // Cycle 2: issueA (requeued) and issueB (a second, independently eligible
     // issue) are both in "Ready for Agent". The breaker is open at the start
@@ -867,5 +874,120 @@ describe("CI-failure classification -> repair admission -> ledger budget -> repa
     expect(decision.action).toBe("ignore");
     expect(decision.reason).toMatch(/switched off/);
     expect(ledger.attempts(REPAIR_ENTRY.id)).toHaveLength(0);
+  });
+});
+
+// MOV-303: the promote pass and the issue-completeness audit run back-to-back
+// in every poll cycle (bin/dispatcher.mjs's cmdRunOnce), over overlapping sets
+// of issues, and one of them writes comments the other must read back on the
+// next cycle. Exercising them as one sequence against a single Linear fake --
+// rather than as two isolated unit tests -- is what shows the audit's "don't
+// repeat yourself" rule surviving the promoter's own comments landing on the
+// same issue in between.
+describe("promotion -> issue-completeness audit, one continuous run (MOV-303)", () => {
+  const SPEC_COMPLETE = {
+    labels: ["execution:mac", "type:feat", "risk:low", "worker:any", "model:default", "area:process"],
+    project: "Autonomous local-agent delivery",
+    projectStatus: "started",
+    projectMilestoneCount: 2,
+    milestone: "Local acceptance & controlled autonomy",
+  };
+
+  function specIssue(overrides = {}) {
+    return {
+      id: "id-spec",
+      identifier: "MOV-SPEC",
+      title: "Under-specced",
+      stateName: "Backlog",
+      description: READY_SECTIONS,
+      blockedByIds: [],
+      recentComments: [],
+      ...SPEC_COMPLETE,
+      ...overrides,
+    };
+  }
+
+  /**
+   * A Linear fake that accumulates comments onto the issue itself, the way the
+   * real `issuesForPromotion` / `issuesForSpecAudit` re-reads do between
+   * cycles.
+   */
+  function commentAccumulatingClient(issues) {
+    const byId = new Map(issues.map((i) => [i.id, i]));
+    return {
+      calls: [],
+      async moveToState(issueId, stateId) {
+        this.calls.push({ type: "moveToState", issueId, stateId });
+        byId.get(issueId).stateName = "Ready for Agent";
+      },
+      async addComment(issueId, body) {
+        this.calls.push({ type: "addComment", issueId, body });
+        byId.get(issueId).recentComments.push(body);
+      },
+    };
+  }
+
+  const auditComments = (client) =>
+    client.calls.filter((c) => c.type === "addComment" && c.body.includes(AUDIT_COMMENT_HEADLINE));
+
+  const promotePass = (issue, client, issueSpecMode) =>
+    promoteEligible([issue], {
+      linearClient: client,
+      readyForAgentStateId: "state-ready",
+      isBlockerSatisfied: buildIsIssueSatisfied([issue]),
+      issueSpecMode,
+    });
+
+  it("report mode: promotes the incomplete issue as before, and the audit names what is missing exactly once", async () => {
+    const issue = specIssue({ labels: ["execution:mac", "type:feat", "area:process"], milestone: null });
+    const client = commentAccumulatingClient([issue]);
+
+    // Cycle 1, in the order cmdRunOnce runs them: promote, then audit.
+    const promoted = await promotePass(issue, client, "report");
+    expect(promoted[0].promoted).toBe(true);
+    expect(promoted[0].specViolations.length).toBeGreaterThan(0);
+    expect(client.calls).toContainEqual({ type: "addComment", issueId: "id-spec", body: PROMOTION_COMMENT });
+
+    const audited = await auditIssueSpecs([issue], { linearClient: client, mode: "report" });
+    expect(audited[0].action).toBe("commented");
+    expect(auditComments(client)).toHaveLength(1);
+    expect(auditComments(client)[0].body).toContain("no `risk:*` label");
+    expect(auditComments(client)[0].body).toContain("no milestone");
+
+    // Cycle 2: the issue has left the promoter's states, and the audit has to
+    // read *past* the promotion comment it did not write to find its own
+    // marker. Nothing new is posted.
+    const secondAudit = await auditIssueSpecs([issue], { linearClient: client, mode: "report" });
+    expect(secondAudit[0].action).toBe("unchanged");
+    expect(auditComments(client)).toHaveLength(1);
+
+    // Cycle 3: a human fixes it -> silence, and the issue keeps the state the
+    // promoter gave it. The audit never wrote a state at all.
+    Object.assign(issue, SPEC_COMPLETE);
+    expect((await auditIssueSpecs([issue], { linearClient: client, mode: "report" }))[0].action).toBe("compliant");
+    expect(auditComments(client)).toHaveLength(1);
+    expect(client.calls.filter((c) => c.type === "moveToState")).toHaveLength(1);
+  });
+
+  it("enforce mode: the same issue is held out of Ready for Agent, and the audit still explains why", async () => {
+    const issue = specIssue({ labels: ["execution:mac", "type:feat", "area:process"], milestone: null });
+    const client = commentAccumulatingClient([issue]);
+
+    const promoted = await promotePass(issue, client, "enforce");
+    expect(promoted[0].promoted).toBe(false);
+    expect(promoted[0].reason).toMatch(/incomplete issue spec \(MOV-303\)/);
+    expect(issue.stateName).toBe("Backlog");
+    expect(client.calls.filter((c) => c.type === "moveToState")).toHaveLength(0);
+
+    const audited = await auditIssueSpecs([issue], { linearClient: client, mode: "enforce" });
+    expect(audited[0].action).toBe("commented");
+    expect(auditComments(client)).toHaveLength(1);
+
+    // Once it is complete the very next promote pass releases it: the gate
+    // holds nothing back beyond the contract itself.
+    Object.assign(issue, SPEC_COMPLETE);
+    const again = await promotePass(issue, client, "enforce");
+    expect(again[0].promoted).toBe(true);
+    expect(issue.stateName).toBe("Ready for Agent");
   });
 });

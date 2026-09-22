@@ -39,6 +39,39 @@ const ISSUE_FIELDS = `
   } }
 `;
 
+/**
+ * The extra selection the issue-completeness contract needs (MOV-303): the
+ * project's own status, how many milestones it defines, and which milestone
+ * (if any) this issue sits in.
+ *
+ * Deliberately a separate constant appended only to the two queries that
+ * consume it (`issuesForPromotion`, `issuesForSpecAudit`) rather than folded
+ * into `ISSUE_FIELDS`. The drift `ISSUE_FIELDS` exists to prevent is between
+ * the batch dispatch query and the single-issue re-read that gates the same
+ * decision — neither reads any of these fields. Keeping them out of that
+ * shared selection also bounds the blast radius: these are the only queries
+ * in the dispatcher that traverse a nested project connection per issue.
+ */
+const ISSUE_SPEC_FIELDS = `
+  projectMilestone { name }
+  project { state projectMilestones { nodes { id } } }
+`;
+
+/**
+ * Fold the spec fields into the normalized shape `issue-spec.mjs` expects. An
+ * issue with no project has no project status and no milestone count — not a
+ * zero-milestone project, which is a different (and compliant) thing.
+ */
+function withIssueSpecFields(node, normalized) {
+  const project = node.project || null;
+  return {
+    ...normalized,
+    projectStatus: project ? project.state || null : null,
+    projectMilestoneCount: project ? (project.projectMilestones?.nodes || []).length : 0,
+    milestone: node.projectMilestone ? node.projectMilestone.name : null,
+  };
+}
+
 export class LinearClient {
   /**
    * Either a personal `apiKey` (sent as-is, unprefixed — current/default
@@ -184,6 +217,7 @@ export class LinearClient {
         }) {
           nodes {
             ${ISSUE_FIELDS}
+            ${ISSUE_SPEC_FIELDS}
             state { name }
             comments(last: 20) { nodes { body } }
           }
@@ -192,10 +226,57 @@ export class LinearClient {
     `;
     const data = await this.request(query, { teamKey, stateNames });
     return data.issues.nodes.map((node) => ({
-      ...normalizeIssue(node),
+      ...withIssueSpecFields(node, normalizeIssue(node)),
       stateName: node.state ? node.state.name : null,
       recentComments: (node.comments ? node.comments.nodes : []).map((c) => c.body),
     }));
+  }
+
+  /**
+   * Every issue the issue-completeness audit examines (MOV-303): the same
+   * shape as `issuesForPromotion`, over whatever state names the caller
+   * resolved as open and non-`Triage` — which is a far wider set than the
+   * promoter's two, deliberately. `human-only`, coordination, `Spec Ready`,
+   * and `Icebox` issues are never promoted and so were never checked by
+   * anything before this.
+   *
+   * Paginated: this reads most of the open workspace, not a handful of queued
+   * issues.
+   */
+  async issuesForSpecAudit({ teamKey, stateNames }) {
+    const query = `
+      query($teamKey: String!, $stateNames: [String!]!, $after: String) {
+        issues(filter: {
+          team: { key: { eq: $teamKey } }
+          state: { name: { in: $stateNames } }
+        }, first: 100, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            ${ISSUE_FIELDS}
+            ${ISSUE_SPEC_FIELDS}
+            state { name }
+            comments(last: 20) { nodes { body } }
+          }
+        }
+      }
+    `;
+    const out = [];
+    let after = null;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const data = await this.request(query, { teamKey, stateNames, after });
+      const issues = data.issues || {};
+      out.push(
+        ...(issues.nodes || []).map((node) => ({
+          ...withIssueSpecFields(node, normalizeIssue(node)),
+          stateName: node.state ? node.state.name : null,
+          recentComments: (node.comments ? node.comments.nodes : []).map((c) => c.body),
+        })),
+      );
+      if (!issues.pageInfo?.hasNextPage || !issues.pageInfo.endCursor) break;
+      after = issues.pageInfo.endCursor;
+    }
+    return out;
   }
 
   async issuesForPriorityPropagation({ teamKey, stateNames }) {
