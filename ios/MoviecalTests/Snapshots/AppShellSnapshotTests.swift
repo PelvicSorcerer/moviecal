@@ -23,13 +23,50 @@ final class AppShellSnapshotTests: XCTestCase {
         assertSnapshot(of: SearchView(), named: "Search")
     }
 
+    private func makeAPIClient() -> APIClient {
+        APIClient(
+            environment: APIEnvironment(baseURL: URL(string: "https://api.moviecal.test")!),
+            tokenProvider: SnapshotStubTokenProvider(),
+            session: MockURLProtocol.makeSession()
+        )
+    }
+
     func testSettingsSnapshotWhenSignedIn() async {
         let mockClient = MockSupabaseAuthClient()
         let authStore = AuthStore(authClient: mockClient)
         mockClient.emit(.initialSession, session: MockSupabaseAuthClient.makeSession(email: "person@example.com"))
         await waitForSignedIn(authStore, email: "person@example.com")
 
-        assertSnapshot(of: SettingsView(authStore: authStore), named: "Settings")
+        // Rendering happens synchronously before the view's `.task` runs, so
+        // this captures the calendar section's idle/loading appearance
+        // regardless of whether a request handler is registered.
+        assertSnapshot(of: SettingsView(apiClient: makeAPIClient(), authStore: authStore), named: "Settings")
+    }
+
+    func testCalendarSubscriptionLoadingSnapshot() {
+        assertSnapshot(
+            of: Form { Section("Calendar Subscription") { CalendarSubscriptionSectionView(state: .loading, onRetry: {}) } },
+            named: "CalendarSubscription-Loading"
+        )
+    }
+
+    func testCalendarSubscriptionLoadedSnapshot() {
+        let url = URL(string: "https://moviecal.example/api/calendar/AbC123SecretToken")!
+        assertSnapshot(
+            of: Form { Section("Calendar Subscription") { CalendarSubscriptionSectionView(state: .loaded(url), onRetry: {}) } },
+            named: "CalendarSubscription-Loaded"
+        )
+    }
+
+    func testCalendarSubscriptionErrorSnapshot() {
+        assertSnapshot(
+            of: Form {
+                Section("Calendar Subscription") {
+                    CalendarSubscriptionSectionView(state: .failed("Unable to load your calendar subscription link. Try again."), onRetry: {})
+                }
+            },
+            named: "CalendarSubscription-Error"
+        )
     }
 
     func testWatchlistEmptySnapshot() {
@@ -50,5 +87,11 @@ final class AppShellSnapshotTests: XCTestCase {
             )
         )
         assertSnapshot(of: WatchlistContentView(state: .loaded([item]), onRetry: {}), named: "Watchlist-WithItems")
+    }
+}
+
+private struct SnapshotStubTokenProvider: AuthTokenProviding {
+    func currentAccessToken() async throws -> String {
+        "test-access-token"
     }
 }

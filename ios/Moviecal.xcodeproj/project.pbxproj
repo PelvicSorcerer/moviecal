@@ -49,6 +49,8 @@
 		CAFEF00D0000000000000091 /* SnapshotAssertion.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000090 /* SnapshotAssertion.swift */; };
 		CAFEF00D0000000000000093 /* AppShellSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000092 /* AppShellSnapshotTests.swift */; };
 		CAFEF00D0000000000000102 /* SignInToMainTabsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000101 /* SignInToMainTabsUITests.swift */; };
+		CAFEF00D0000000000000114 /* CalendarSubscriptionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000113 /* CalendarSubscriptionViewModel.swift */; };
+		CAFEF00D0000000000000116 /* CalendarSubscriptionViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000115 /* CalendarSubscriptionViewModelTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -113,6 +115,8 @@
 		CAFEF00D0000000000000092 /* AppShellSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellSnapshotTests.swift; sourceTree = "<group>"; };
 		CAFEF00D0000000000000100 /* MoviecalUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MoviecalUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CAFEF00D0000000000000101 /* SignInToMainTabsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInToMainTabsUITests.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000113 /* CalendarSubscriptionViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarSubscriptionViewModel.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000115 /* CalendarSubscriptionViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarSubscriptionViewModelTests.swift; sourceTree = "<group>"; };
 		CCB04380807D452BB0AE49D7 /* AuthStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthStore.swift; sourceTree = "<group>"; };
 		CF54F5821818C237F5BA7343 /* SupabaseAuthAPIClientIntegrationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SupabaseAuthAPIClientIntegrationTests.swift; sourceTree = "<group>"; };
 		F02A38E218F265D94A9740F2 /* MockSupabaseAuthClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MockSupabaseAuthClient.swift; sourceTree = "<group>"; };
@@ -258,6 +262,7 @@
 				E82B9F0E690D5137FE3A0EC7 /* Auth */,
 				CAFEF00D0000000000000098 /* Watchlist */,
 				CAFEF00D0000000000000099 /* Snapshots */,
+				CAFEF00D0000000000000117 /* Settings */,
 			);
 			path = MoviecalTests;
 			sourceTree = "<group>";
@@ -300,6 +305,7 @@
 			isa = PBXGroup;
 			children = (
 				CAFEF00D0000000000000080 /* SettingsView.swift */,
+				CAFEF00D0000000000000113 /* CalendarSubscriptionViewModel.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -328,6 +334,14 @@
 				CAFEF00D0000000000000092 /* AppShellSnapshotTests.swift */,
 			);
 			path = Snapshots;
+			sourceTree = "<group>";
+		};
+		CAFEF00D0000000000000117 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				CAFEF00D0000000000000115 /* CalendarSubscriptionViewModelTests.swift */,
+			);
+			path = Settings;
 			sourceTree = "<group>";
 		};
 		CAFEF00D0000000000000103 /* MoviecalUITests */ = {
@@ -516,6 +530,7 @@
 				CAFEF00D0000000000000083 /* WatchlistView.swift in Sources */,
 				CAFEF00D0000000000000085 /* WatchlistViewModel.swift in Sources */,
 				8E7B97AF40A85E8BE9274532 /* ConfigurationErrorView.swift in Sources */,
+				CAFEF00D0000000000000114 /* CalendarSubscriptionViewModel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -535,6 +550,7 @@
 				CAFEF00D0000000000000089 /* SignInViewModelTests.swift in Sources */,
 				CAFEF00D0000000000000091 /* SnapshotAssertion.swift in Sources */,
 				CAFEF00D0000000000000093 /* AppShellSnapshotTests.swift in Sources */,
+				CAFEF00D0000000000000116 /* CalendarSubscriptionViewModelTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
