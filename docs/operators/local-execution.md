@@ -198,7 +198,9 @@ the iOS Simulator, and the self-hosted `moviecal-ios-runner` are treated as a
 single scarce resource pool: do not run them concurrently with another local
 worker, and do not raise `MOVIECAL_CONCURRENCY` to bypass that policy. The
 runner's online status is a preflight gate, but it is not a second execution
-slot. If a future supervisor can queue and cancel process groups without
+slot. See [iOS manual testing](./ios-manual-testing.md) before an interactive
+build or simulator session. If a future supervisor can queue and cancel
+process groups without
 leaving `xcodebuild`, `simctl`, or npm descendants behind, this section and
 `DEFAULT_CONCURRENCY` may be revised together with tests proving the new
 semantics.

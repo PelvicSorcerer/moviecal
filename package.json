@@ -31,6 +31,7 @@
         "lane:smoke-external": "bash scripts/lane-smoke-external.sh",
         "lane:smoke-post-deploy": "bash scripts/lane-smoke-post-deploy.sh",
         "lane:all-fast": "npm run lane:baseline && npm run lane:unit && npm run lane:integration",
+        "ios:manual-test": "node scripts/ios-manual-test.mjs",
         "e2e:install": "npm run lane:browser:install",
         "e2e": "playwright test",
         "verify": "npm run lane:all-fast",
