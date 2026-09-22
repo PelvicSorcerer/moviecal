@@ -541,6 +541,7 @@ It ran informationally (not required) for its first several PRs before being pro
 | Linear API key | `~/.config/moviecal/linear.env` (mode 600) | scoped to team `MOV` |
 | Linear app-actor credential | `~/.config/moviecal/linear-app.env` (mode 600) | OAuth2 Client Credentials for the `moviecal-dispatcher` workspace identity (MOV-122); keys `LINEAR_APP_CLIENT_ID`, `LINEAR_APP_CLIENT_SECRET`, `LINEAR_APP_ACTOR_ID`, `LINEAR_APP_SCOPES` (`read,write,app:assignable,app:mentionable`). Optional during the transition — when absent the dispatcher falls back to the personal API key above. |
 | Test `.env.local` | `~/.config/moviecal/env.local` (mode 600) | disposable/dev Supabase + TMDb credentials only |
+| iOS manual-test Supabase account | `~/.config/moviecal/ios-manual-test.env` (mode 600) | `moviecal-ci-dev` project only, never production; a disposable auth account (URL, anon key, test email/password) for local "Human testing" checklists (MOV-106/MOV-107-style) that need a real iOS sign-in. Reuse it rather than creating a new account per session. |
 | `SUPABASE_DB_URL_PROD` | GitHub Actions secret | never available to a local worker |
 
 **Hard deny — the dispatcher refuses and escalates to `Needs Human Decision`:**
