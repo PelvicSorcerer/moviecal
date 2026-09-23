@@ -4,7 +4,7 @@ The local process that turns a Linear issue into a running agent against an isol
 
 ## Status
 
-`doctor`, `dry-run`, `shadow`, `promote`, `priorities`, `audit-issues`, `gc`, and `run` are implemented and unit-tested. **`dispatcher run` and non-dry-run `dispatcher priorities` / `dispatcher audit-issues` have real side effects** — they can mutate Linear state and local dispatcher state; `dispatcher run` also creates worktrees and spawns a real `claude`/`codex` process. The worker itself has no Git or GitHub mutation authority. The worker produces verified filesystem changes; the dispatcher audits its sandboxed structured transcript and diff, then creates the commit and performs the exact non-force branch push and draft-PR creation. The first live run after a dispatcher/security upgrade remains a deliberate, supervised operator action.
+`doctor`, `dry-run`, `shadow`, `promote`, `priorities`, `audit-issues`, `repair --dry-run`, `master-ci --dry-run`, `gc`, and `run` are implemented and unit-tested. **`dispatcher run` and non-dry-run `dispatcher priorities` / `dispatcher audit-issues` have real side effects** — they can mutate Linear state and local dispatcher state; `dispatcher run` also creates worktrees and spawns a real `claude`/`codex` process. The worker itself has no Git or GitHub mutation authority. The worker produces verified filesystem changes; the dispatcher audits its sandboxed structured transcript and diff, then creates the commit and performs the exact non-force branch push and draft-PR creation. The first live run after a dispatcher/security upgrade remains a deliberate, supervised operator action.
 
 A Claude worker is invoked in structured-output `dontAsk` mode and Codex in structured-output `workspace-write --ask-for-approval never` mode. Both are wrapped in the same inherited macOS sandbox; vendor-specific controls are defense in depth. Getting a headless Claude session to run without hanging still requires pre-trusting the repo's main checkout path in `~/.claude.json` (`claude-trust.mjs`, wired into `WorktreeManager.create()`).
 
@@ -20,6 +20,7 @@ node tools/dispatcher/bin/dispatcher.mjs promote [--dry-run]
 node tools/dispatcher/bin/dispatcher.mjs priorities [--dry-run]
 node tools/dispatcher/bin/dispatcher.mjs audit-issues [--dry-run]
 node tools/dispatcher/bin/dispatcher.mjs gc
+node tools/dispatcher/bin/dispatcher.mjs master-ci --dry-run   # read-only post-merge master-failure preview
 node tools/dispatcher/bin/dispatcher.mjs run --once            # one pass over eligible issues, then exit
 node tools/dispatcher/bin/dispatcher.mjs run [--interval ms]   # poll loop (default 30000ms)
 ```
@@ -39,6 +40,7 @@ not machine-control messages.
 - **`promote`** runs the automated Backlog/Blocked promotion rules; `--dry-run` reports what would move to `Ready for Agent`.
 - **`priorities`** runs dependency-aware priority propagation; `--dry-run` reports raise/relax/skip outcomes and writes nothing.
 - **`audit-issues`** comments on every open non-`Triage` issue that does not satisfy the issue-completeness contract (MOV-303/MOV-308), including the `human-only`, coordination, `Spec Ready`, `Icebox`, and started issues `promote` never looks at. A comment is its only write — it never changes a state, priority, label, project, or milestone — and a hidden fingerprint marker keeps it from repeating itself when nothing has changed. `--dry-run` writes nothing and does not take the singleton lock; `MOVIECAL_ISSUE_SPEC_MODE=off` skips it entirely without reading anything. See `docs/operators/local-execution.md` §Issue completeness.
+- **`master-ci --dry-run`** previews the post-merge master-failure observer (MOV-305): which completed failed `push` runs on `master` it would treat as incidents, how each is classified and attributed, and whether it would route one ordinary fix PR or stop for a human. It writes nothing to Linear or to its own ledger, and there is no non-`--dry-run` form — live observation runs only inside `dispatcher run`, and is off unless `MOVIECAL_MASTER_CI_OBSERVER` is set. See `docs/operators/local-execution.md` §Post-merge master CI failures.
 - **`gc`** prunes merged worktrees immediately and failed/abandoned worktrees older than the retention window, plus run logs older than 90 days.
 - **`run`** is the real loop: for each issue in `Ready for Agent`, runs preflight (§ below), provisions a worktree, spawns the guarded worker with the issue as its brief (piped via stdin), waits for it to exit, audits the transcript/diff, commits and publishes the accepted result through dispatcher-owned credentials, and reports every transition back to Linear. See `docs/operators/local-execution.md` for the full state-transition table.
 
@@ -68,6 +70,11 @@ tools/dispatcher/
     workflow-edit-apply.mjs  applies a staged .github/workflows/ proposal (MOV-121; see local-execution.md)
     issue-spec.mjs           the issue-completeness contract, as pure decision logic (MOV-303)
     issue-spec-audit.mjs     comment-only audit of open non-Triage issues against that contract (MOV-308)
+    master-ci-policy.mjs     post-merge master-failure eligibility/classification/attribution/decision, pure (MOV-305)
+    master-ci-github.mjs     read-only `gh` reads behind that observer — no rerun, push, or dispatch (MOV-305)
+    master-incident-ledger.mjs  durable, restart-idempotent record of every observed master failure (MOV-305)
+    master-incident-issue.mjs   renders the fully specced Linear remediation item and its comments (MOV-305)
+    master-ci-observer.mjs   the pass that ties those four together and reconciles closure (MOV-305)
     run-loop.mjs             ties all of the above together for `dispatcher run`
   test/                      Vitest unit tests for everything above
   launchd/
@@ -91,6 +98,7 @@ All runtime configuration lives outside the repository under `~/.config/moviecal
 | `~/.config/moviecal/env.local` | disposable/dev Supabase + TMDb credentials, symlinked into every worker worktree as `.env.local` |
 | `~/.config/moviecal/worktrees.json` | dispatcher's own bookkeeping of active/merged/failed worktrees (atomic writes with `.bak` recovery) |
 | `~/.config/moviecal/circuit-breakers.json` | host-wide failure-signature circuit breakers (MOV-180), keyed by reason; atomic writes with `.bak` recovery |
+| `~/.config/moviecal/master-incidents.json` | post-merge master-failure incident ledger (MOV-305), keyed by run id + attempt + tested SHA; atomic writes with `.bak` recovery |
 | `~/.config/moviecal/dispatcher.lock` | singleton lock; a second mutating dispatcher exits read-only |
 
 Override the worktree root or log directory for local testing with `MOVIECAL_WORKTREE_ROOT` / `MOVIECAL_LOG_ROOT`.

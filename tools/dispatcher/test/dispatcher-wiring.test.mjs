@@ -95,6 +95,85 @@ describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
     expect(repair).not.toMatch(/runRepairPass/);
   });
 
+  it("runs the post-merge master observer after review CI and before the dispatch read (MOV-305)", () => {
+    const body = bodyOf("cmdRunOnce");
+    const reviewCiAt = body.indexOf("await reportReviewCi(");
+    const masterAt = body.indexOf("await masterCiPass(");
+    const dispatchReadAt = body.indexOf("issuesInState(");
+    expect(masterAt, "masterCiPass() not called in cmdRunOnce").toBeGreaterThan(-1);
+    expect(reviewCiAt).toBeLessThan(masterAt);
+    expect(masterAt).toBeLessThan(dispatchReadAt);
+  });
+
+  it("reconciles master incidents before observing new ones, and cannot abort dispatch (MOV-305)", () => {
+    const pass = bodyOf("masterCiPass");
+    const reconcileAt = pass.indexOf("reconcileMasterIncidents(");
+    const observeAt = pass.indexOf("runMasterCiPass(");
+    expect(reconcileAt).toBeGreaterThan(-1);
+    expect(reconcileAt).toBeLessThan(observeAt);
+    expect(pass).toMatch(/catch \(err\)/);
+    expect(pass).toMatch(/continuing to dispatch/);
+    // Off is the default and a complete configuration: the pass returns
+    // before it builds a context, so nothing is read or written.
+    expect(pass).toMatch(/if \(!masterCiObserverEnabled\(\)\) return;/);
+  });
+
+  it("exposes a read-only master-ci preview but no standalone live observer command (MOV-305)", () => {
+    const cmd = bodyOf("cmdMasterCi");
+    expect(cmd).toMatch(/if \(!dryRun\)/);
+    expect(cmd).toMatch(/previewMasterCiPass/);
+    expect(cmd).not.toMatch(/\brunMasterCiPass\b/);
+  });
+
+  it("gives the master observer only read-only GitHub adapters — no rerun, push, or repair (MOV-305)", () => {
+    const ctx = bodyOf("buildMasterCiContext");
+    for (const readOnly of [
+      "listMasterRunsFn: listMasterRuns",
+      "describeMasterRunFn: describeMasterRun",
+      "pullRequestsForCommitFn: pullRequestsForCommit",
+      "masterCommitLineageFn: masterCommitLineage",
+      "findMergedFixPullRequestFn: findMergedFixPullRequest",
+      "latestSuccessfulMasterRunFn: latestSuccessfulMasterRun",
+    ]) {
+      expect(ctx).toContain(readOnly);
+    }
+    // Nothing that could act on a branch is in reach of this pass.
+    for (const forbidden of [/rerunFailedJobs/, /runRepairPass/, /publish/i, /spawnWorker/]) {
+      expect(forbidden.test(ctx), `buildMasterCiContext matches ${forbidden}`).toBe(false);
+    }
+  });
+
+  it("the master observer's own modules contain no master-mutating operation at all (MOV-305)", () => {
+    const srcDir = fileURLToPath(new URL("../src", import.meta.url));
+    const modules = [
+      "master-ci-policy.mjs",
+      "master-ci-github.mjs",
+      "master-ci-observer.mjs",
+      "master-incident-ledger.mjs",
+      "master-incident-issue.mjs",
+    ];
+    // Command-shaped mutations, not prose: these modules describe in their
+    // comments exactly what they refuse to do, so matching bare words would
+    // be vacuous. Every pattern below is an argv position or a call shape.
+    const forbidden = [
+      /\[\s*["']push["']/,
+      /["']pr["']\s*,\s*["']merge["']/,
+      /["']run["']\s*,\s*["']rerun["']/,
+      /["']workflow["']\s*,\s*["']run["']/,
+      /["']--method["']/,
+      /["']--force["']/,
+      /["']-f["']\s*,\s*["']master/,
+      /execFileSync\(\s*["']git["']/,
+      /runner\(\s*["']git["']/,
+    ];
+    for (const name of modules) {
+      const text = readFileSync(path.join(srcDir, name), "utf8");
+      for (const pattern of forbidden) {
+        expect(pattern.test(text), `${name} matches ${pattern}`).toBe(false);
+      }
+    }
+  });
+
   it("keeps the issue-completeness contract at report unless an operator raises it (MOV-303/MOV-307)", () => {
     const configText = readFileSync(fileURLToPath(new URL("../src/config.mjs", import.meta.url)), "utf8");
     expect(configText).toMatch(/MOVIECAL_ISSUE_SPEC_MODE/);
@@ -319,6 +398,9 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       "issueSpecAuditStatePath",
       "linearAppEnvPath",
       "linearEnvPath",
+      // MOV-305: dispatcher state, not a credential — it is what makes the
+      // post-merge master-failure observer idempotent across a restart.
+      "masterIncidentLedgerStatePath",
       "prAutonomyLedgerStatePath",
       "priorityPropagationStatePath",
       // MOV-189: dispatcher state, not a credential — it preserves the
@@ -340,6 +422,14 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
     expect(configText).toMatch(/MOVIECAL_AGENT_SESSIONS/);
     // An unset variable must read as off, never as on.
     expect(runContextSource).toMatch(/enabled:\s*agentSessionsEnabled\(\)/);
+  });
+
+  it("keeps the post-merge master observer off unless explicitly switched on (MOV-305)", () => {
+    const configText = readFileSync(fileURLToPath(new URL("../src/config.mjs", import.meta.url)), "utf8");
+    expect(configText).toMatch(/MOVIECAL_MASTER_CI_OBSERVER/);
+    // Same fail-closed shape as MOVIECAL_AUTO_REPAIR: an unset variable is
+    // off, and off is the shipped default.
+    expect(configText).toMatch(/export function masterCiObserverEnabled\(env = process\.env\) \{\s*return truthy\(env\.MOVIECAL_MASTER_CI_OBSERVER\);/);
   });
 
   it("keeps live worker steering off unless explicitly switched on, independently of the Agent Session layer (MOV-214/215)", () => {
@@ -390,7 +480,7 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
 
   it("registers agent-signal as a read-only command that mutates nothing", () => {
     expect(source).toMatch(/case "agent-signal":/);
-    expect(source).toMatch(/dispatcher <doctor\|health\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|audit-issues\|reconcile-parents\|repair\|run>/);
+    expect(source).toMatch(/dispatcher <doctor\|health\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|audit-issues\|reconcile-parents\|repair\|master-ci\|run>/);
     const body = source.slice(source.indexOf("function cmdAgentSignal("));
     const end = body.indexOf("\n}\n");
     const fn = body.slice(0, end);

@@ -268,6 +268,7 @@ At each transition the dispatcher writes to the Linear issue:
 | Sole provider usage limit, clean worktree (MOV-151/192) | State → `Ready for Agent`; comment naming the parsed reset and that exactly one retry is scheduled. Dispatch of that issue is held until the reset |
 | Provider usage limit after unpublished work (MOV-205) | State → `Ready for Agent`; comment naming the retained worktree, the unpublished paths, and that it will be **resumed in place** at the reset rather than reclaimed. On the resume: a distinct "resumed the retained worktree" activity before the worker starts. On a refused re-admission or a second consecutive limit: state → `Needs Human Decision` with the specific reason, worktree still untouched |
 | Stopped at a safe boundary (§Stop controls) | Comment explaining why — **and nothing else**; the state is left where whoever stopped it put it |
+| A completed failed `push` run on `master` (MOV-305, see §Post-merge master CI failures) | A **new** remediation issue is filed in `Backlog`, fully specced and linked to the failed run and source PR/issue; safe deterministic failures stay there for the ordinary promoter, everything else is moved to `Needs Human Decision` with the run URL, SHA, classification, and the next required human decision. The source issue gets one informational notice and nothing more |
 
 No agent conversation is a source of truth. Anything that matters must be written to Linear or to the repository before the session ends.
 
@@ -506,6 +507,8 @@ Repair mode is stricter: tests, test-runner configuration, dispatcher code, stag
 
 **Review-CI observations (MOV-298).** Observation records are keyed by the required-check snapshot as well as PR and head SHA. A pending required check is explicitly reported as **provisional**, never as a final “no actionable failure” result; once the same head becomes terminal, its changed snapshot receives one new observation while unchanged later polls remain silent. During a long-running implementation worker, `dispatcher run` keeps this read-only review-CI observation on its normal interval. It does not start a repair worker while that implementation worker occupies the single dispatch slot; the ordinary repair pass re-observes the terminal state when the slot is available.
 
+This whole path — observation and bounded repair alike — is scoped to **open** dispatcher-owned PRs and is unchanged by MOV-305. Once a PR merges it stops being a repair target, and a failed post-merge `master` run is owned instead by the separate observer in §Post-merge master CI failures below.
+
 **Preview and supervised first use (MOV-191).** Live repair is available only inside `dispatcher run` while its singleton dispatcher lock is held; a repair-pass failure is caught so normal issue dispatch continues. `npm run dispatcher:repair` runs the equivalent read-only admission preview (`dispatcher repair --dry-run`): it reads current PR observations, checkout guards, and the durable budget ledger, but never reserves an attempt, starts a worker, reruns CI, writes Linear/GitHub evidence, or changes a worktree. Before enabling `MOVIECAL_AUTO_REPAIR` unattended, an operator must: (1) create a disposable dispatcher-owned draft PR with a deliberately failing, supported test lane; (2) run the preview and confirm the exact branch, SHA, failure fingerprint, and proposed action; (3) enable the switch for one supervised poll and confirm the repair/rerun remains on that PR and records one Linear activity/comment plus one plain GitHub PR comment; (4) confirm its ledger attempt and the next poll's idempotent result; and (5) disable the switch, inspect the PR/worktree/log/audit record, and only then decide whether unattended use is appropriate. Never use a production-sensitive, forked, dirty, or human-owned PR for this exercise.
 
 **Risk-scoped PR readiness and merge (MOV-162).** This capability is off by
@@ -606,6 +609,151 @@ Separately: the worker previously had no `xcodebuild`/`xcrun simctl` in its Bash
 - Any production deploy or release
 - Any change to this governance system itself
 
+## Post-merge master CI failures (MOV-305)
+
+Everything above about CI observation and bounded repair concerns **open,
+dispatcher-owned PRs**. Once a PR merges, its review worktree stops being an
+eligible repair target and the old guidance ("investigate the failed lane")
+had no durable owner at all. This section covers the other half: a completed
+**failed `push` run on `master`**.
+
+**This is defence in depth, not a substitute for the pre-merge gate.**
+MOV-301 makes relevant PRs report `lane-ios` and MOV-302 makes
+`master-protection` require it. A post-merge run can still fail from a
+merge-only interaction, a runner/environment failure, or a defect an earlier
+run missed. A post-merge observer is never permission to bypass a required PR
+check, and nothing here changes the ruleset or the pre-merge lane gating.
+
+**The rule that outranks everything else in this flow: no handler commits to,
+merges into, re-runs blindly against, reverts, or rewrites `master`.** That is
+structural, not a policy the code checks at the end. `master-ci-policy.mjs`
+can only return `route-fix-pr` or `needs-human-decision`;
+`master-ci-github.mjs` contains only read-only `gh` calls (no rerun, no
+dispatch, no push, no `--method`); and `master-ci-observer.mjs`'s only
+mutations are Linear ones plus its own ledger file. `dispatcher-wiring.test.mjs`
+asserts each of those against the source text.
+
+### What is observed
+
+Completed workflow runs whose event is `push` and whose branch is `master`,
+from the configured verification workflows — `verify`, `ios-verify`,
+`browser-verify`, `supabase-verify` (`MOVIECAL_MASTER_CI_WORKFLOWS` narrows
+the list; an empty override falls back to the default rather than widening to
+every workflow). A failed `lane-ios` run is treated exactly as any other
+master lane.
+
+Everything else is explicitly **not** a master incident and produces no
+record: successful, skipped, still-running, **cancelled**, manually
+dispatched (`workflow_dispatch`), scheduled, `pull_request`, fork, and
+non-`master` runs.
+
+### Idempotency and evidence
+
+An incident's identity is `master-ci:<runId>:<attempt>:<testedSha>` — all
+three parts, because the run id alone would collapse a genuine second attempt
+into the first, and the SHA is what keeps the record answerable after `master`
+moves on. The ledger lives at `~/.config/moviecal/master-incidents.json`
+(`JsonStateStore`, same durability contract as the repair ledger).
+
+**The observation is persisted before any follow-up mutation.** A dispatcher
+that dies between observing a failed run and filing its remediation issue
+restarts holding a `recorded, nothing created yet` record and finishes the job
+— it never files a second issue and never loses the incident. Every Linear
+side effect is separately marked in the ledger before it counts as done, so a
+replay after a restart updates the original record rather than re-commenting.
+An incident that already has both a remediation item and a routing outcome is
+not re-decided at all: a re-observation refreshes its counter and nothing
+else. (Without that rule a routed incident would read *its own* spent budget
+as exhaustion and re-escalate itself on the next poll.)
+
+Recorded evidence: run URL, workflow and failed job/lane names, conclusion,
+attempt, tested SHA, observation and run timestamps, the source PR when GitHub
+can attribute one, the source Linear issue when its reference is unambiguous,
+the failure classification, and the incident key.
+
+### The decision boundary
+
+| Situation | Outcome |
+|---|---|
+| Deterministic source-level (`code-test`) failure, exactly one attributable source PR, tested commit still on current `master` lineage, budget available | **`route-fix-pr`** |
+| Runner/environment failure, `startup_failure`, or a failure with no failed job reported | `Needs Human Decision` |
+| Any production/migration/credential-shaped job (e.g. `lane-migrate-prod`) | `Needs Human Decision`, unconditionally |
+| GitHub attributes no PR, or several, or the one PR names several Linear issues | `Needs Human Decision` |
+| Tested commit is off `master` lineage or further behind the tip than `MOVIECAL_MASTER_CI_MAX_LINEAGE_DISTANCE` (default 10) | `Needs Human Decision` |
+| Automatic route budget spent (`MOVIECAL_MASTER_CI_ROUTE_BUDGET`, default 1 outstanding) | `Needs Human Decision` |
+| The remediation issue itself could not be created | `Needs Human Decision`; the observation survives and a later pass retries the creation |
+
+A PR that carries *no* Linear reference is not ambiguous — the evidence is
+complete, there is simply no upstream issue, and that is recorded as
+`Source issue: none referenced`.
+
+Every `Needs Human Decision` comment names four things by construction: the
+failed-run URL, the tested SHA, the failure classification, and the next
+required human decision.
+
+### How "routing a fix" actually works
+
+`route-fix-pr` does **not** start a repair worker or touch a branch. It files
+one fully specced Linear remediation issue in `Backlog`, carrying
+`execution:mac`, `type:fix`, `risk:high`, `worker:any`, `model:default`,
+`area:process`, `area:tests`, the active project and milestone, the evidence
+block, acceptance criteria, Testing Expectations, and a
+`Human testing: required` Manual Verification checklist. From there it is an
+ordinary issue: the promoter moves it to `Ready for Agent`, the **Moviecal
+local handoff** Loop (or a human) delegates it to `moviecal-dispatcher`, and
+the ordinary dispatch path branches from current `origin/master` and opens a
+draft PR. If that Loop is disabled, delegate the issue by hand exactly as for
+any other issue — the remediation item simply waits in the queue until then.
+
+`risk:high` is deliberate: MOV-162's risk-scoped PR autonomy requires
+`risk:low`, so a master-remediation PR can never be made ready or merged
+unattended.
+
+When the source Linear issue is known, it receives exactly one informational
+notice comment and a `related` (never `blocks`) link to the remediation item.
+The source issue's own state is never changed — it is normally already `Done`,
+and reopening finished work from a post-merge observation is a decision, not
+bookkeeping.
+
+### Closure
+
+A remediation item is completed only when **both** halves hold: its fix PR has
+merged, **and** the lane that originally failed has succeeded on a `master`
+commit strictly newer than the failing one, judged on lineage rather than on
+timestamps. A green re-run of the original SHA proves the run was flaky; a
+green run on an older commit proves nothing. Neither closes the incident. The
+original failure evidence and the whole ledger history are retained after
+reconciliation — nothing is deleted.
+
+Reconciliation is bounded to ten open incidents per poll cycle, since an
+escalated incident stays open until a human acts and each check costs two
+GitHub reads. The cap is not silent and does not starve anything: incidents
+are checked least-recently-first, and a pass that defers some says so in its
+output naming how many.
+
+### Operator handoff and disablement
+
+* `npm run dispatcher:master-ci` (`dispatcher master-ci --dry-run`) is the
+  read-only preview: it evaluates current master runs and open incidents and
+  reports what it *would* do, writing nothing to Linear or the ledger. Live
+  observation runs only inside `dispatcher run`, after the review-CI
+  observation and before the dispatch read, and is independently guarded so a
+  failure can never abort dispatch.
+* `dispatcher doctor` prints whether the observer is on, which workflows it
+  watches, where remediation is filed, the route budget, and the lineage
+  window.
+* **Disablement is the shipped default.** The observer is off unless
+  `MOVIECAL_MASTER_CI_OBSERVER` is explicitly truthy, and the pass returns
+  before it builds a context or reads anything while it is false. Unsetting
+  the variable is therefore a complete, safe disablement at any moment: no
+  half-finished incident can be left behind, because an already-filed
+  remediation issue is an ordinary Linear issue that is worked by hand from
+  that point on, and the ledger is only ever read by this pass.
+* Before enabling it unattended, run the preview against a disposable
+  fixture failure — never by deliberately failing a real production `master`
+  workflow — and confirm the exact run, SHA, classification, attribution, and
+  proposed outcome.
+
 ## Run-log locations
 
 Dispatcher and worker run logs are written to `~/Library/Logs/moviecal-dispatcher/<LINEAR-ID>-<slug>/`, one directory per worktree, containing redacted structured worker stdout/stderr, `manifest.json`, the applied `worker-sandbox.sb`, and the checksummed `security-audit.json`. Logs are retained for 90 days and then pruned by `dispatcher gc`. Given a Linear issue, the corresponding run log directory can always be found from the worktree/branch name recorded in the dispatcher's `Agent Working` comment on that issue (`<LINEAR-ID>-<slug>`).
@@ -658,6 +806,11 @@ The plist's own `StandardOutPath`/`StandardErrorPath` (`~/Library/Logs/moviecal-
 **PATH.** launchd runs jobs with a minimal `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), not the interactive shell's `PATH`. `ProgramArguments` invokes node via an absolute path so the daemon process itself starts, but every child process the dispatcher or its workers spawn — `gh`, `npm`, `codex` (`/usr/local/bin`), `claude` (`~/.local/bin`) — fails with `ENOENT` unless the plist sets `PATH` explicitly. The template's `EnvironmentVariables` dict does this (`__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`); keep it when filling in the installed copy. `dispatcher doctor` passing from an interactive shell does **not** prove the daemon's environment is correct — an interactive shell has a fuller `PATH` than launchd gives the job, so `doctor`'s `gh`/`claude`/`codex` checks can pass there while the running service still fails on the same lookups. After any `launchctl load`, confirm the service itself is working (check `dispatcher.stderr.log` and a run-log directory for a completed poll cycle), not just that `doctor` is clean in your terminal.
 
 ## Standing health check
+
+It also reports whether the post-merge master-failure observer is switched on
+(MOV-305, §Post-merge master CI failures) — informational, like the
+issue-completeness mode, since off is the shipped default and a fully
+supported configuration.
 
 `dispatcher doctor` is a read-only command that asserts: Linear auth works, `gh` auth works, the worktree root is writable, `~/.config/moviecal/env.local` exists and is mode 600, `claude` and `codex` are on `PATH`, `origin/master` is fetchable, and the iOS self-hosted runner is reachable. It also prints the **local dispatch identity** — the delegate an issue must name to be claimed here (MOV-143) — and which **lifecycle publication surface** is configured (MOV-158), both informational rather than pass/fail gates. The Agent Session line reports configuration only: the sole way to test entitlement is `agentSessionCreateOnIssue`, which is a mutation, and `doctor` never mutates. If `~/.config/moviecal/linear-app.env` is present it additionally checks the file is mode 600 and that an app-actor token can be minted from it (MOV-122); if it is absent that check is a no-op pass. Run it after any environment change and before relying on the dispatcher for real work.
 

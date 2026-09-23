@@ -47,6 +47,7 @@
         "dispatcher:dry-run": "node tools/dispatcher/bin/dispatcher.mjs dry-run",
         "dispatcher:audit-issues": "node tools/dispatcher/bin/dispatcher.mjs audit-issues",
         "dispatcher:repair": "node tools/dispatcher/bin/dispatcher.mjs repair --dry-run",
+        "dispatcher:master-ci": "node tools/dispatcher/bin/dispatcher.mjs master-ci --dry-run",
         "dispatcher:gc": "node tools/dispatcher/bin/dispatcher.mjs gc"
     },
     "keywords": [],

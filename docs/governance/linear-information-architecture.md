@@ -146,6 +146,8 @@ The reason is mandatory: `Milestone: N/A` with nothing after it does not satisfy
 
 **Nothing is ever auto-filled.** The promoter never writes a label, project, milestone, or state. Choosing them is a human or authoring-agent decision, and a dispatcher-written guess would be indistinguishable from a real one the moment it landed.
 
+**Authoring a new issue is not auto-filling an existing one.** The single exception to "the dispatcher does not choose labels" is the post-merge master-failure observer (MOV-305, `docs/operators/local-execution.md` §Post-merge master CI failures), which *authors* a new remediation issue from a failed `master` run. It acts as the authoring agent for that issue and therefore files it complete — labels, project, milestone, acceptance criteria, Testing Expectations, and Manual Verification — rather than guessing at fields on somebody else's issue. It still never writes a label, project, milestone, or state onto an issue it did not create; the source issue it attributes a failure to receives one informational comment and a `related` link, and nothing else.
+
 ## Estimates
 
 Issue estimates are deliberately not used. Agent routing and decomposition are governed by explicit acceptance criteria, Testing Expectations, risk, model tier, execution route, and dependency relations. An issue that is too broad should be split into parent/sub-issues rather than assigned an otherwise unused point value.

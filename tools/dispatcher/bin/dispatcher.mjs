@@ -65,6 +65,12 @@ import {
   agentSessionEnvPath,
   prAutonomyEnabled,
   resolvePrAutonomyMaxActions,
+  masterIncidentLedgerStatePath,
+  masterCiObserverEnabled,
+  resolveMasterVerificationWorkflows,
+  resolveMasterIncidentRouteBudget,
+  resolveMasterLineageMaxDistance,
+  resolveMasterIncidentProject,
   resolveIssueSpecMode,
   resolveIssueSpecAuditIntervalMs,
   checkSecretFileMode,
@@ -108,6 +114,20 @@ import { AgentStreamClient } from "../src/agent-stream-client.mjs";
 import { previewRepairPass, runRepairPass } from "../src/repair-run.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
 import { PrAutonomyLedger, runPrAutonomyPass } from "../src/pr-autonomy.mjs";
+import { MasterIncidentLedger } from "../src/master-incident-ledger.mjs";
+import {
+  previewMasterCiPass,
+  reconcileMasterIncidents,
+  runMasterCiPass,
+} from "../src/master-ci-observer.mjs";
+import {
+  describeMasterRun,
+  findMergedFixPullRequest,
+  latestSuccessfulMasterRun,
+  listMasterRuns,
+  masterCommitLineage,
+  pullRequestsForCommit,
+} from "../src/master-ci-github.mjs";
 import {
   checkGithubCliAuth,
   DispatcherLaunchHealthStore,
@@ -270,6 +290,21 @@ async function cmdDoctor() {
           : mode === "off"
             ? "off (MOVIECAL_ISSUE_SPEC_MODE=off) — neither the promoter/preflight gates nor the audit pass runs"
             : `report (default) — promotion and dispatch are unchanged; violations are logged and audited as issue comments at most every ${intervalHours}h. Switch to enforce once the backlog is backfilled`,
+    });
+  }
+
+  // Post-merge master-failure observer (MOV-305). Informational, like the
+  // contract line above: off is the shipped default and a fully supported
+  // configuration, so this never fails the check — it exists so an operator
+  // can see whether a red `master` lane would produce a remediation item.
+  {
+    const { projectName, milestoneName } = resolveMasterIncidentProject();
+    checks.push({
+      name: "master CI failure observer",
+      ok: true,
+      detail: masterCiObserverEnabled()
+        ? `on (MOVIECAL_MASTER_CI_OBSERVER) — watching ${resolveMasterVerificationWorkflows().join(", ")}; remediation filed in "${projectName}" / "${milestoneName}", route budget ${resolveMasterIncidentRouteBudget()}, lineage window ${resolveMasterLineageMaxDistance()} commits`
+        : "off (default) — a failed post-merge master run is not observed and files no remediation item; set MOVIECAL_MASTER_CI_OBSERVER=1 to enable",
     });
   }
 
@@ -912,6 +947,82 @@ async function reconcileParentsPass() {
   }
 }
 
+/**
+ * MOV-305: the post-merge master-failure observer's real dependencies.
+ *
+ * Every GitHub adapter wired here is one of `master-ci-github.mjs`'s
+ * read-only functions — there is deliberately no rerun, dispatch, push, or
+ * repair adapter available to this pass to call, so "it never acts on
+ * `master`" is a property of the wiring and not only of the policy.
+ */
+async function buildMasterCiContext(linearClient, teamKey, { dryRun = false } = {}) {
+  const states = await linearClient.workflowStates(teamKey);
+  const stateId = (name) => states.find((state) => state.name === name)?.id || null;
+  const { projectName, milestoneName } = resolveMasterIncidentProject();
+  return {
+    enabled: masterCiObserverEnabled(),
+    dryRun,
+    githubRepo: GITHUB_REPO,
+    linearClient,
+    teamKey,
+    ledger: new MasterIncidentLedger(masterIncidentLedgerStatePath()),
+    stateIds: {
+      backlog: stateId("Backlog"),
+      needsHumanDecision: stateId(RUN_STATE_NAMES.needsHumanDecision),
+      done: stateId(RUN_STATE_NAMES.done),
+    },
+    workflows: resolveMasterVerificationWorkflows(),
+    routeBudget: resolveMasterIncidentRouteBudget(),
+    maxLineageDistance: resolveMasterLineageMaxDistance(),
+    projectName,
+    milestoneName,
+    listMasterRunsFn: listMasterRuns,
+    describeMasterRunFn: describeMasterRun,
+    pullRequestsForCommitFn: pullRequestsForCommit,
+    masterCommitLineageFn: masterCommitLineage,
+    findMergedFixPullRequestFn: findMergedFixPullRequest,
+    latestSuccessfulMasterRunFn: latestSuccessfulMasterRun,
+  };
+}
+
+/**
+ * Reconcile first, then observe: a remediation item whose fix already merged
+ * releases its routing budget before this cycle decides whether a new
+ * incident may be routed. Independently guarded, exactly like every other
+ * in-loop pass — a master-observer failure must never keep ordinary dispatch
+ * from progressing.
+ */
+async function masterCiPass(linearClient, teamKey) {
+  if (!masterCiObserverEnabled()) return;
+  try {
+    const ctx = await buildMasterCiContext(linearClient, teamKey);
+    for (const result of await reconcileMasterIncidents(ctx)) {
+      if (result.outcome === "still-open") continue;
+      console.log(`master incident ${result.key || "(pass)"}: ${result.outcome} — ${result.reason}`);
+    }
+    for (const result of await runMasterCiPass(ctx)) {
+      if (result.outcome === "not-a-master-incident") continue;
+      console.log(`master incident ${result.key || result.runId}: ${result.outcome}${result.reason ? ` — ${result.reason}` : ""}`);
+    }
+  } catch (err) {
+    console.error("Master CI observation pass failed (continuing to dispatch):", err.message);
+  }
+}
+
+/** Read-only master-incident preview. Live observation runs only inside `run`. */
+async function cmdMasterCi({ dryRun = false } = {}) {
+  if (!dryRun) {
+    console.error("master-ci requires --dry-run; the live observer runs only inside `dispatcher run`");
+    return 1;
+  }
+  const built = buildLinearClient();
+  if (!built) return 1;
+  const ctx = await buildMasterCiContext(built.client, built.teamKey, { dryRun: true });
+  const results = await previewMasterCiPass(ctx);
+  console.log(JSON.stringify({ mode: "master-ci-preview", readOnly: true, enabled: ctx.enabled, ...results }, null, 2));
+  return 0;
+}
+
 async function cmdRunOnce({ repairLockHeld = false } = {}) {
   // buildLinearClient() must run first: reconcileWorktrees() below takes its
   // result (a possibly-undefined client/teamKey) as arguments, and degrades
@@ -951,6 +1062,12 @@ async function cmdRunOnce({ repairLockHeld = false } = {}) {
   } catch (err) {
     console.error("CI observation reporting failed (continuing to dispatch):", err.message);
   }
+
+  // MOV-305: the post-merge half of CI observation. Deliberately a separate
+  // pass from reportReviewCi above — that one observes *open* PRs and feeds
+  // bounded repair; this one owns runs whose PR has already merged, where no
+  // repair target exists any more.
+  await masterCiPass(linearClient, teamKey);
 
   const issues = await linearClient.issuesInState({
     teamKey,
@@ -1149,6 +1266,10 @@ async function main() {
       process.exitCode = await cmdRepair({ dryRun: rest.includes("--dry-run") });
       break;
     }
+    case "master-ci": {
+      process.exitCode = await cmdMasterCi({ dryRun: rest.includes("--dry-run") });
+      break;
+    }
     case "run": {
       const once = rest.includes("--once");
       const intervalFlagIdx = rest.indexOf("--interval");
@@ -1158,7 +1279,7 @@ async function main() {
     }
     default:
       console.error(
-        "Usage: dispatcher <doctor|health|dry-run|shadow|agent-signal|gc|promote|priorities|audit-issues|reconcile-parents|repair|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
+        "Usage: dispatcher <doctor|health|dry-run|shadow|agent-signal|gc|promote|priorities|audit-issues|reconcile-parents|repair|master-ci|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
       );
       process.exitCode = 1;
   }
