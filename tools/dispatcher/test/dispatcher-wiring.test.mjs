@@ -40,26 +40,54 @@ const runContextSource = readFileSync(
   "utf8",
 );
 
-describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
-  it("cmdRunOnce awaits reconcile -> propagate -> promote before reading Ready for Agent", () => {
+describe("dispatcher run-loop wiring (MOV-129/MOV-317/MOV-366)", () => {
+  it("cmdRunOnce awaits reconciliation -> master-CI -> propagate -> promote before reading Ready for Agent", () => {
     const body = bodyOf("cmdRunOnce");
     const ghAuthAt = body.indexOf("checkGithubCliAuth()");
     const reconcileAt = body.indexOf("await reconcileWorktrees(");
+    const masterCiAt = body.indexOf("await masterCiPass(");
     const propagateAt = body.indexOf("await propagatePass(");
     const promoteAt = body.indexOf("await promotePass(");
     const dispatchReadAt = body.indexOf("issuesInState(");
     expect(ghAuthAt, "GitHub CLI auth gate missing from cmdRunOnce").toBeGreaterThan(-1);
     expect(reconcileAt, "reconcileWorktrees() not called in cmdRunOnce").toBeGreaterThan(-1);
+    expect(masterCiAt, "masterCiPass() not called in cmdRunOnce").toBeGreaterThan(-1);
     expect(propagateAt, "propagatePass() not called in cmdRunOnce").toBeGreaterThan(-1);
     expect(promoteAt, "promotePass() not called in cmdRunOnce").toBeGreaterThan(-1);
     expect(dispatchReadAt, "issuesInState() not called in cmdRunOnce").toBeGreaterThan(-1);
     expect(ghAuthAt).toBeLessThan(reconcileAt);
+    expect(reconcileAt).toBeLessThan(masterCiAt);
+    expect(masterCiAt).toBeLessThan(propagateAt);
     expect(reconcileAt).toBeLessThan(propagateAt);
     expect(propagateAt).toBeLessThan(promoteAt);
     expect(promoteAt).toBeLessThan(dispatchReadAt);
     expect(body).toMatch(/await\s+reconcileWorktrees\(/);
+    expect(body).toMatch(/await\s+masterCiPass\(/);
     expect(body).toMatch(/await\s+propagatePass\(\)/);
     expect(body).toMatch(/await\s+promotePass\(\)/);
+  });
+
+  it("runs the opt-in master-CI reconciliation and observation behind a non-fatal boundary", () => {
+    const pass = bodyOf("masterCiPass");
+    expect(pass).toMatch(/if\s*\(!masterCiObserverEnabled\(\)\)\s*return/);
+    expect(pass).toMatch(/try\s*\{/);
+    expect(pass).toMatch(/catch/);
+    expect(pass).toMatch(/reconcileMasterIncidents\(/);
+    expect(pass).toMatch(/runMasterCiPass\(/);
+    expect(pass.indexOf("reconcileMasterIncidents(")).toBeLessThan(pass.indexOf("runMasterCiPass("));
+    expect(pass).toMatch(/continuing to dispatch/);
+  });
+
+  it("exposes only a read-only master-CI preview outside dispatcher run", () => {
+    const preview = bodyOf("cmdMasterCi");
+    expect(source).toMatch(/case "master-ci":/);
+    expect(source).toMatch(/dispatcher <doctor\|health\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|audit-issues\|reconcile-parents\|repair\|master-ci\|run>/);
+    expect(preview).toMatch(/if\s*\(!dryRun\)/);
+    expect(preview).toMatch(/previewMasterCiPass\(/);
+    expect(preview).toMatch(/readOnly:\s*true/);
+    for (const forbidden of ["DispatcherLock", "runMasterCiPass", "reconcileMasterIncidents", "MasterIncidentLedger"]) {
+      expect(preview.includes(forbidden), `cmdMasterCi references ${forbidden}`).toBe(false);
+    }
   });
 
   it("runs the bounded repair pass before returning for an empty dispatch queue (MOV-190)", () => {
@@ -392,7 +420,7 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
 
   it("registers agent-signal as a read-only command that mutates nothing", () => {
     expect(source).toMatch(/case "agent-signal":/);
-    expect(source).toMatch(/dispatcher <doctor\|health\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|audit-issues\|reconcile-parents\|repair\|run>/);
+    expect(source).toMatch(/dispatcher <doctor\|health\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|audit-issues\|reconcile-parents\|repair\|master-ci\|run>/);
     const body = source.slice(source.indexOf("function cmdAgentSignal("));
     const end = body.indexOf("\n}\n");
     const fn = body.slice(0, end);

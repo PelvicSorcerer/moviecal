@@ -30,6 +30,9 @@
 //                                     milestone. `--dry-run` writes nothing at all
 //   dispatcher repair --dry-run    - preview bounded repair admission without
 //                                     reserving, spawning, rerunning, or writing
+//   dispatcher master-ci --dry-run - preview post-merge master-CI incident
+//                                     observation without writing the ledger,
+//                                     Linear, GitHub, or a worktree
 //   dispatcher run --once          - process every currently-eligible Ready-for-Agent
 //                                     issue exactly once, then exit (real side effects:
 //                                     creates worktrees, spawns workers, opens PRs)
@@ -51,6 +54,7 @@ import {
   worktreesStatePath,
   usageLimitStatePath,
   repairLedgerStatePath,
+  masterIncidentLedgerStatePath,
   prAutonomyLedgerStatePath,
   dispatcherLaunchHealthStatePath,
   priorityPropagationStatePath,
@@ -65,6 +69,11 @@ import {
   agentSessionEnvPath,
   prAutonomyEnabled,
   resolvePrAutonomyMaxActions,
+  masterCiObserverEnabled,
+  resolveMasterVerificationWorkflows,
+  resolveMasterIncidentRouteBudget,
+  resolveMasterLineageMaxDistance,
+  resolveMasterIncidentProject,
   resolveIssueSpecMode,
   resolveIssueSpecAuditIntervalMs,
   checkSecretFileMode,
@@ -108,6 +117,16 @@ import { AgentStreamClient } from "../src/agent-stream-client.mjs";
 import { previewRepairPass, runRepairPass } from "../src/repair-run.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
 import { PrAutonomyLedger, runPrAutonomyPass } from "../src/pr-autonomy.mjs";
+import { MasterIncidentLedger } from "../src/master-incident-ledger.mjs";
+import { runMasterCiPass, reconcileMasterIncidents, previewMasterCiPass } from "../src/master-ci-observer.mjs";
+import {
+  listMasterRuns,
+  describeMasterRun,
+  pullRequestsForCommit,
+  masterCommitLineage,
+  findMergedFixPullRequest,
+  latestSuccessfulMasterRun,
+} from "../src/master-ci-github.mjs";
 import {
   checkGithubCliAuth,
   DispatcherLaunchHealthStore,
@@ -912,6 +931,62 @@ async function reconcileParentsPass() {
   }
 }
 
+/**
+ * Build the one master-CI observer context shared by the live in-loop pass
+ * and its read-only preview. Keeping the GitHub adapters here makes the
+ * observer module independently testable with fixtures while this CLI owns
+ * the only production wiring.
+ */
+async function buildMasterCiContext(linearClient, teamKey, { enabled } = {}) {
+  const states = await linearClient.workflowStates(teamKey);
+  const stateId = (name) => states.find((state) => state.name === name)?.id || null;
+  const { projectName, milestoneName } = resolveMasterIncidentProject();
+  return {
+    enabled,
+    githubRepo: GITHUB_REPO,
+    linearClient,
+    teamKey,
+    ledger: new MasterIncidentLedger(masterIncidentLedgerStatePath()),
+    stateIds: {
+      backlog: stateId("Backlog"),
+      needsHumanDecision: stateId(RUN_STATE_NAMES.needsHumanDecision),
+      done: stateId(RUN_STATE_NAMES.done),
+    },
+    workflows: resolveMasterVerificationWorkflows(),
+    routeBudget: resolveMasterIncidentRouteBudget(),
+    maxLineageDistance: resolveMasterLineageMaxDistance(),
+    projectName,
+    milestoneName,
+    listMasterRunsFn: listMasterRuns,
+    describeMasterRunFn: describeMasterRun,
+    pullRequestsForCommitFn: pullRequestsForCommit,
+    masterCommitLineageFn: masterCommitLineage,
+    findMergedFixPullRequestFn: findMergedFixPullRequest,
+    latestSuccessfulMasterRunFn: latestSuccessfulMasterRun,
+  };
+}
+
+/**
+ * Post-merge master observation belongs to the normal lifecycle, but must
+ * never make a healthy implementation queue unavailable. It is opt-in: an
+ * unset switch does not even construct the context or read the ledger.
+ */
+async function masterCiPass(linearClient, teamKey) {
+  if (!masterCiObserverEnabled()) return [];
+  try {
+    const ctx = await buildMasterCiContext(linearClient, teamKey, { enabled: true });
+    const reconciled = await reconcileMasterIncidents(ctx);
+    const observed = await runMasterCiPass(ctx);
+    for (const result of [...reconciled, ...observed]) {
+      console.log(`master-ci: ${result.issue || result.runId || result.key || "pass"}: ${result.outcome}${result.reason ? ` — ${result.reason}` : ""}`);
+    }
+    return { reconciled, observed };
+  } catch (err) {
+    console.error("Master CI observation pass failed (continuing to dispatch):", err.message);
+    return [];
+  }
+}
+
 async function cmdRunOnce({ repairLockHeld = false } = {}) {
   // buildLinearClient() must run first: reconcileWorktrees() below takes its
   // result (a possibly-undefined client/teamKey) as arguments, and degrades
@@ -936,6 +1011,11 @@ async function cmdRunOnce({ repairLockHeld = false } = {}) {
   // races the promote/dispatch pass. It is the only call to that function.
   await reconcileWorktrees(linearClient, teamKey);
   await reconcileParentsPass();
+  // Reconcile completed master remediations before observing fresh failures:
+  // a verified closure releases its bounded route capacity in this same poll.
+  // The pass owns its own error boundary so an unavailable GitHub/Linear
+  // observation can never prevent regular issue dispatch.
+  if (built) await masterCiPass(linearClient, teamKey);
   await propagatePass();
   await promotePass();
   // MOV-308: after the promoter (so an issue promoted this cycle is audited in
@@ -1093,6 +1173,29 @@ async function cmdRepair({ dryRun = false } = {}) {
   return 0;
 }
 
+/**
+ * Read-only master-CI observer preview. A real observation is intentionally
+ * available only inside `dispatcher run`, behind the explicit environment
+ * switch and the dispatcher's singleton lifecycle lock.
+ */
+async function cmdMasterCi({ dryRun = false } = {}) {
+  if (!dryRun) {
+    console.error("master-ci requires --dry-run; live observation runs only inside `dispatcher run` when MOVIECAL_MASTER_CI_OBSERVER is enabled");
+    return 1;
+  }
+  const built = buildLinearClient();
+  if (!built) return 1;
+  const ctx = await buildMasterCiContext(built.client, built.teamKey, { enabled: true });
+  const results = await previewMasterCiPass(ctx);
+  console.log(JSON.stringify({
+    mode: "master-ci-preview",
+    readOnly: true,
+    liveObservationEnabled: masterCiObserverEnabled(),
+    results,
+  }, null, 2));
+  return 0;
+}
+
 async function main() {
   const [, , cmd, ...rest] = process.argv;
   switch (cmd) {
@@ -1149,6 +1252,10 @@ async function main() {
       process.exitCode = await cmdRepair({ dryRun: rest.includes("--dry-run") });
       break;
     }
+    case "master-ci": {
+      process.exitCode = await cmdMasterCi({ dryRun: rest.includes("--dry-run") });
+      break;
+    }
     case "run": {
       const once = rest.includes("--once");
       const intervalFlagIdx = rest.indexOf("--interval");
@@ -1158,7 +1265,7 @@ async function main() {
     }
     default:
       console.error(
-        "Usage: dispatcher <doctor|health|dry-run|shadow|agent-signal|gc|promote|priorities|audit-issues|reconcile-parents|repair|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
+        "Usage: dispatcher <doctor|health|dry-run|shadow|agent-signal|gc|promote|priorities|audit-issues|reconcile-parents|repair|master-ci|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
       );
       process.exitCode = 1;
   }
