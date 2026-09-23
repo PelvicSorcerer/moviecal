@@ -164,6 +164,19 @@ describe("generateBrief", () => {
     expect(webBrief).not.toMatch(/Conditional iOS verification/);
   });
 
+  it("tells an iOS Companion App worker to use the moviecal-worker device and never touch another one (MOV-311)", () => {
+    const iosIssueBrief = generateBrief(
+      { ...issue, project: "iOS Companion App" },
+      { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" },
+    );
+    expect(iosIssueBrief).toMatch(/moviecal-worker/);
+    expect(iosIssueBrief).toMatch(/-destination/);
+    expect(iosIssueBrief).toMatch(/never/i);
+
+    const nonIosBrief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
+    expect(nonIosBrief).not.toMatch(/moviecal-worker/);
+  });
+
   it("omits workflow-edit-authorization instructions for an ordinary issue", () => {
     const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
     expect(brief).not.toContain("Workflow-edit authorization");

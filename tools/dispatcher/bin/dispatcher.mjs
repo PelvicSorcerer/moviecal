@@ -110,6 +110,7 @@ import { reconcileParents } from "../src/parent-completion-guard.mjs";
 import { defaultRunner as ghRunner } from "../src/pr-check.mjs";
 import { checkPrState, checkPrObservation, isCheckPrObservation, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
 import { reconcileStartupRecoveries } from "../src/startup-recovery.mjs";
+import { releaseIosWorkerLease } from "../src/ios-worker-lease.mjs";
 import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
 import { reportReviewCi as reportReviewCiPass } from "../src/review-ci-observer.mjs";
 import { SignalLedger, StopController, handleAgentSignal } from "../src/agent-signals.mjs";
@@ -626,6 +627,7 @@ async function reconcileWorktrees(linearClient, teamKey) {
     linearClient,
     readyForAgentStateId,
     needsHumanDecisionStateId,
+    releaseIosSimLeaseFn: releaseIosWorkerLease,
   });
 
   const changes = await reconcileReviewWorktrees(worktreeManager, {

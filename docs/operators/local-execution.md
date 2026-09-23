@@ -234,6 +234,37 @@ leaving `xcodebuild`, `simctl`, or npm descendants behind, this section and
 semantics.
 - Agents must not commit directly to `master`, and never operate outside their assigned worktree.
 
+### Dispatcher-held simulator lease for iOS Companion App issues (MOV-311)
+
+The runner-online preflight gate above (§Preflight gates, gate 5) answers "is
+the runner up"; it says nothing about the simulator itself, which the
+machine-wide lease (`scripts/ios-sim-lease.mjs`, MOV-309) separately owns. For
+an issue in the **iOS Companion App** project, the dispatcher acquires a
+`worker`-lane lease for the whole worker run — before the worktree exists,
+through every terminal outcome — and releases it exactly once no matter how
+the attempt ends: success, worker failure, timeout, a stop, or a dispatcher
+crash recovered by startup recovery. Acquisition never waits: if the lease is
+held by the `manual` or `ci` lane (or is otherwise unavailable — queued,
+unmanaged simulator state MOV-309 never tears down automatically), the issue
+is **deferred silently** — outcome `deferred-ios-sim-lease`, no `Blocked`
+comment, no worktree created — exactly like the sole-provider-usage-limit
+deferral above. It is retried on a later poll cycle once the lease frees. A
+non-iOS issue never touches this lease at all.
+
+The held lease's id is passed to the worker as `MOVIECAL_IOS_SIM_LEASE_ID` in
+its sanitized environment (`worker-guard.mjs`/`worker-spawn.mjs`), and the
+worker's brief tells it to use the `moviecal-worker` device by name and never
+boot or shut down any other simulator. `npm run ios:sim:run` recognizes a
+lease id it was handed this way and renews it in place instead of queueing
+behind its own dispatcher — the naive read (a second process trying to
+acquire a lease its own dispatcher already holds) would otherwise deadlock.
+
+If the dispatcher itself crashes mid-run, the held lease id is recorded on the
+worktree registry entry (`iosSimLeaseId`, set once acquired) precisely so
+startup recovery can release it explicitly, on the same idempotent
+per-abandonment progress record as the state-move/comment steps, rather than
+relying solely on the lease's own heartbeat going stale a few minutes later.
+
 ## Worker interface
 
 A worker is any binary satisfying: *given a repo path, a branch, and a brief on stdin, produce verified filesystem changes in that worktree and exit 0.* Concretely, `claude -p --model <id>` or `codex --sandbox workspace-write --ask-for-approval never exec`. For a linked Git worktree, the dispatcher adds its shared Git metadata directories to Codex with `--add-dir` so Codex can resolve the worktree's `.git` file (MOV-193). The shared outer `worker-guard.mjs` profile keeps those directories non-writable for both adapters; `--add-dir` does not grant an effective write capability. It also denies every non-`.git` top-level entry of the checkout containing that shared metadata rather than denying the checkout root, because macOS Seatbelt deny rules cannot make an exception for nested `.git` paths (MOV-194). Both adapters therefore remain unable to read sibling source and local files while the backing metadata remains available only as necessary. A worker cannot execute Git, push, open/edit a PR, or receive GitHub mutation authority. The dispatcher instead injects a bounded, read-only repository snapshot (branch/HEAD/base, initial status, recent commits, and changed paths) into each brief, so a worker has routine orientation context without invoking Git itself. After it exits, the dispatcher audits the structured tool transcript, assigned branch, base diff, and dirty paths; only a clean audit reaches `worker-publish.mjs`, which stages and commits the accepted changes, performs a non-force push of exactly the assigned branch, and finds or creates its draft PR. Adding a third worker means satisfying this same boundary, not writing a new operator guide or merge path.
