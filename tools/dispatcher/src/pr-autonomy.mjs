@@ -10,7 +10,7 @@ export const AUTONOMY_DISABLE_MARKER = /^\s*Autonomy:\s*disabled\s*$/im;
 // This is deliberately an allowlist. New roots or sensitive application
 // classes need explicit governance work before they can become eligible.
 export const AUTONOMY_SAFE_PATH_PREFIXES = Object.freeze(["docs/", "src/", "test/"]);
-export const AUTONOMY_REQUIRED_CHECKS = Object.freeze(["lane-baseline", "lane-unit", "lane-integration", "lane-browser", "lane-review"]);
+export const AUTONOMY_REQUIRED_CHECKS = Object.freeze(["lane-baseline", "lane-unit", "lane-integration", "lane-browser", "lane-review", "lane-ios"]);
 
 const BLOCKING_LABELS = new Set([
   "human-only",
@@ -70,6 +70,12 @@ function hasRequiredEvidence(body) {
     && hasDurablePassedVerification(body);
 }
 
+function hasPassingAutonomyCheck(name, check, headSha) {
+  if (check.sha !== headSha) return false;
+  const outcome = String(check.outcome || "").toLowerCase();
+  return outcome === "success" || (name === "lane-ios" && outcome === "skipped");
+}
+
 /** Decide whether one current PR observation may receive a narrow autonomy action. */
 export function evaluatePrAutonomy({ issue, observation, repo, repairAttempts = [], enabled = false } = {}) {
   if (!enabled) return deny("global PR autonomy switch is disabled");
@@ -93,7 +99,7 @@ export function evaluatePrAutonomy({ issue, observation, repo, repairAttempts = 
   const byName = new Map((checks.checks || checks.required || []).map((check) => [String(check.name).toLowerCase(), check]));
   const required = AUTONOMY_REQUIRED_CHECKS.map((name) => byName.get(name));
   if (required.some((check) => !check)) return deny("a documented required check is missing from the current observation");
-  if (required.some((check) => check.sha !== observation.headSha || check.outcome !== "success")) return deny("a required check did not pass on the latest SHA");
+  if (required.some((check, index) => !hasPassingAutonomyCheck(AUTONOMY_REQUIRED_CHECKS[index], check, observation.headSha))) return deny("a required check did not pass on the latest SHA");
   if (observation.review?.requestedChanges?.length || observation.review?.blockingRequiredChecks?.length || String(observation.review?.decision || "").toUpperCase() === "CHANGES_REQUESTED") return deny("PR has blocking review feedback");
   if (observation.isDraft) return { eligible: true, action: "ready", reason: "eligible low-risk draft has complete current evidence" };
   return { eligible: true, action: "merge", reason: "eligible ready PR has complete current review-check evidence" };

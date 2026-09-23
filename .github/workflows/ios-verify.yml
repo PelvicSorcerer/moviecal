@@ -7,23 +7,30 @@ on:
       - agent/**
       - docs/**
       - chore/**
-    paths:
-      - 'ios/**'
-      - '.github/workflows/ios-verify.yml'
-      - 'AGENTS.md'
-      - 'docs/operators/branch-and-ci-conventions.md'
-      - 'docs/operators/branch-prefixes.json'
-      - 'docs/planning/testing-lanes.md'
-      - 'docs/planning/native-ios-app-plan.md'
-      - 'docs/planning/issue-236-implementation-brief.md'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  changes:
+    name: iOS lane changes
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.detect.outputs.should_run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: detect
+        name: Detect iOS-relevant changes
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: node scripts/ios-lane-changes.mjs >> "$GITHUB_OUTPUT"
   lane-ios:
     name: lane-ios
+    needs: changes
+    if: always() && (github.event_name == 'workflow_dispatch' || needs.changes.result != 'success' || needs.changes.outputs.should_run == 'true')
     env:
       DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
     runs-on:

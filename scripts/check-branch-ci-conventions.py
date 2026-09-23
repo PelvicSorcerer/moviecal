@@ -206,7 +206,12 @@ def check_pr_branch_trust(data: dict) -> list[str]:
         if has_pull_request_trigger(workflow_path):
             continue
 
-        guarded_paths = extract_push_paths(workflow_path)
+        # Some self-hosted workflows always report a required job but use a
+        # separate detector to decide whether that expensive job runs. Their
+        # relevant paths live in the registry rather than in `on.push.paths`.
+        guarded_paths = data.get("conditionalSelfHostedPaths", {}).get(
+            workflow_rel, extract_push_paths(workflow_path)
+        )
         matched = [p for p in changed if any(fnmatch.fnmatch(p, g) for g in guarded_paths)]
         if matched:
             problems.append(

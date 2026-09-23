@@ -40,9 +40,10 @@ The dedicated iOS workflow is `.github/workflows/ios-verify.yml`.
   - `docs/**`
   - `chore/**`
 - It should trigger on trusted in-repo branch pushes and manual dispatch, not on `pull_request`.
-- Its push trigger paths should cover both:
+- Its conditional self-hosted path set in `docs/operators/branch-prefixes.json` should cover both:
   - `ios/**` changes
   - shared docs/config/workflow files that affect iOS dispatch, branch filtering, runner policy, or testing-lane policy
+- The workflow itself reports on every trusted branch push. Its Ubuntu change-detection job reads that path set, and only then schedules the self-hosted `lane-ios` job; a skipped `lane-ios` satisfies the required check without consuming the Mac runner.
 - Historically, before `ios/` existed, `ios-verify` ran as a successful no-op/config-validation workflow that proved runner routing plus basic toolchain presence, including `xcodebuild -version`.
 - `#237` / `MOV-104` switched `ios-verify` from bootstrap mode to real CI: its `lane-ios` job now runs `xcodebuild build` plus `xcodebuild test` (XCTest smoke coverage) against `ios/Moviecal.xcodeproj`.
 - `#240` / `MOV-107` is responsible for strengthening the lane to build + XCTest + XCUITest, with snapshot coverage mandatory there.

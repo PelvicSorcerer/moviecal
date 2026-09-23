@@ -20,6 +20,7 @@
 <!-- Commands run and their results. At minimum: `npm run verify` for code changes. -->
 
 - [ ] `npm run verify`
+- [ ] If `ios/**` changed: `xcodebuild test` passed locally; new or changed snapshot references were reviewed and committed
 - [ ] Other: <!-- e.g. manual checklist, db:lint, e2e -->
 
 ## Readiness Evidence

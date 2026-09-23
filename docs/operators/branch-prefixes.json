@@ -23,6 +23,19 @@
   "pathRestrictedPushWorkflows": [
     ".github/workflows/ios-verify.yml"
   ],
+  "conditionalSelfHostedPaths": {
+    ".github/workflows/ios-verify.yml": [
+      "ios/**",
+      ".github/workflows/ios-verify.yml",
+      "AGENTS.md",
+      "docs/operators/branch-and-ci-conventions.md",
+      "docs/operators/branch-prefixes.json",
+      "docs/planning/testing-lanes.md",
+      "docs/planning/native-ios-app-plan.md",
+      "docs/planning/issue-236-implementation-brief.md"
+    ]
+  },
+  "$comment_conditionalSelfHostedPaths": "The iOS workflow always reports, but schedules its self-hosted lane only for these paths. scripts/ios-lane-changes.mjs reads this list, and the per-PR branch-trust check uses it to detect otherwise-uncovered iOS changes.",
   "trustedSelfHostedExecutionGlobs": [
     "agent/**",
     "docs/**",
