@@ -68,6 +68,19 @@ function resumeLines(resume) {
   ];
 }
 
+function iosVerificationLines(issue, repositoryContext) {
+  const changedPaths = repositoryContext?.changedPaths || [];
+  const iOSPathIsInScope = changedPaths.some((path) => String(path).startsWith("ios/"));
+  const issueNamesIosPath = /(?:`|\b)ios\/\*\*(?:`|\b)/i.test(String(issue?.description || ""));
+  if (!iOSPathIsInScope && !issueNamesIosPath) return [];
+  return [
+    "## Conditional iOS verification",
+    "",
+    "This work touches `ios/**`: run `xcodebuild test` locally before opening the PR, then review and commit every new or changed snapshot reference.",
+    "",
+  ];
+}
+
 export function generateBrief(issue, { branch, worktreePath, worker, model, upgradeConditions = [], repositoryContext = null, resume = null } = {}) {
   const lines = [];
   lines.push(`# ${issue.identifier}: ${issue.title}`);
@@ -81,6 +94,7 @@ export function generateBrief(issue, { branch, worktreePath, worker, model, upgr
   lines.push("");
   lines.push(...resumeLines(resume));
   lines.push(...repositoryContextLines(repositoryContext));
+  lines.push(...iosVerificationLines(issue, repositoryContext));
   lines.push("## Instructions");
   lines.push("");
   lines.push(

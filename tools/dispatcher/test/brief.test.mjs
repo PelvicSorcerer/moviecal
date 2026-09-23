@@ -142,6 +142,28 @@ describe("generateBrief", () => {
     expect(brief).toMatch(/stop and report/i);
   });
 
+  it("requires local iOS verification and snapshot-reference review only when ios paths are in scope", () => {
+    const iosBrief = generateBrief(
+      { ...issue, description: "Change `ios/**` behavior." },
+      { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" },
+    );
+    expect(iosBrief).toMatch(/Conditional iOS verification/);
+    expect(iosBrief).toContain("xcodebuild test");
+    expect(iosBrief).toMatch(/snapshot reference/);
+
+    const changedIosBrief = generateBrief(issue, {
+      branch: "b",
+      worktreePath: "/tmp/wt",
+      worker: "claude",
+      model: "default",
+      repositoryContext: { changedPaths: ["ios/Moviecal/App.swift"] },
+    });
+    expect(changedIosBrief).toMatch(/Conditional iOS verification/);
+
+    const webBrief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
+    expect(webBrief).not.toMatch(/Conditional iOS verification/);
+  });
+
   it("omits workflow-edit-authorization instructions for an ordinary issue", () => {
     const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
     expect(brief).not.toContain("Workflow-edit authorization");

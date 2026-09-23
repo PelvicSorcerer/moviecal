@@ -16,7 +16,7 @@ function observation(isDraft) {
     changedFiles: ["docs/technical/architecture.md"],
     checks: {
       pending: false, timedOut: false, ignoredStale: 0, missingRequired: [],
-      checks: ["lane-baseline", "lane-unit", "lane-integration", "lane-browser", "lane-review"].map((name) => ({ name, sha: "sha-1", outcome: "success" })),
+      checks: ["lane-baseline", "lane-unit", "lane-integration", "lane-browser", "lane-review", "lane-ios"].map((name) => ({ name, sha: "sha-1", outcome: "success" })),
       required: [],
     },
     review: { decision: null, requestedChanges: [], blockingRequiredChecks: [] },

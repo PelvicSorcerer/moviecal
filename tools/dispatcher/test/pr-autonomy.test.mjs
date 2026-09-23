@@ -35,7 +35,7 @@ function observation(overrides = {}) {
       timedOut: false,
       ignoredStale: 0,
       missingRequired: [],
-      checks: ["lane-baseline", "lane-unit", "lane-integration", "lane-browser", "lane-review"].map((name) => ({ name, sha: "new-sha", outcome: "success" })),
+      checks: ["lane-baseline", "lane-unit", "lane-integration", "lane-browser", "lane-review", "lane-ios"].map((name) => ({ name, sha: "new-sha", outcome: "success" })),
       required: [{ name: "lane-unit", sha: "new-sha", outcome: "success" }],
     },
     review: { decision: null, requestedChanges: [], blockingRequiredChecks: [] },
@@ -87,6 +87,32 @@ describe("MOV-273 PR autonomy path policy", () => {
   it("uses the required review check policy and blocks requested changes before auto-merge", () => {
     expect(evaluatePrAutonomy({ issue, observation: observation({ isDraft: false }), repo, enabled: true })).toMatchObject({ eligible: true, action: "merge" });
     expect(evaluatePrAutonomy({ issue, observation: observation({ isDraft: false, review: { decision: "CHANGES_REQUESTED", requestedChanges: [], blockingRequiredChecks: [] } }), repo, enabled: true }).reason).toMatch(/blocking review/);
+  });
+
+  it("accepts a skipped lane-ios but no other skipped required check", () => {
+    const skippedIos = observation({
+      checks: { ...observation().checks, checks: observation().checks.checks.map((check) => check.name === "lane-ios" ? { ...check, outcome: "skipped" } : check) },
+    });
+    expect(evaluatePrAutonomy({ issue, observation: skippedIos, repo, enabled: true })).toMatchObject({ eligible: true });
+
+    const skippedUnit = observation({
+      checks: { ...observation().checks, checks: observation().checks.checks.map((check) => check.name === "lane-unit" ? { ...check, outcome: "skipped" } : check) },
+    });
+    expect(evaluatePrAutonomy({ issue, observation: skippedUnit, repo, enabled: true }).reason).toMatch(/did not pass/);
+  });
+
+  it.each(["failure", "pending"]) ("denies a %s lane-ios result", (outcome) => {
+    const failedIos = observation({
+      checks: { ...observation().checks, checks: observation().checks.checks.map((check) => check.name === "lane-ios" ? { ...check, outcome } : check) },
+    });
+    expect(evaluatePrAutonomy({ issue, observation: failedIos, repo, enabled: true }).reason).toMatch(/did not pass/);
+  });
+
+  it("denies an observation that is missing lane-ios", () => {
+    const missingIos = observation({
+      checks: { ...observation().checks, checks: observation().checks.checks.filter((check) => check.name !== "lane-ios") },
+    });
+    expect(evaluatePrAutonomy({ issue, observation: missingIos, repo, enabled: true }).reason).toMatch(/documented required check is missing/);
   });
 
   it.each([
