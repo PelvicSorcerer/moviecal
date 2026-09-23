@@ -210,6 +210,56 @@ describe("runOnce", () => {
     expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
   });
 
+  // MOV-303: preflight is the one gate every dispatched issue passes through
+  // regardless of how it reached Ready for Agent -- unlike the promoter's own
+  // gate, which only ever sees issues it promoted itself. `ISSUE` (just
+  // `execution:mac`, no project) is already incomplete under the contract, so
+  // it is exactly the fixture for this.
+  describe("issue-completeness gate (MOV-303)", () => {
+    it("dispatches ISSUE unchanged when issueSpecMode is unset (defaults to report)", async () => {
+      const ctx = baseCtx();
+      const [result] = await runOnce([ISSUE], ctx);
+      expect(result.outcome).toBe("in-review");
+      expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("dispatches ISSUE unchanged in report mode", async () => {
+      const ctx = baseCtx({ issueSpecMode: "report" });
+      const [result] = await runOnce([ISSUE], ctx);
+      expect(result.outcome).toBe("in-review");
+      expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("blocks an incomplete issue in enforce mode without touching the worktree manager or spawning a worker", async () => {
+      const ctx = baseCtx({ issueSpecMode: "enforce" });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("blocked");
+      expect(result.reason).toMatch(/incomplete issue spec \(MOV-303\)/);
+      expect(ctx.linearClient.calls).toEqual([
+        { type: "moveToState", issueId: "id-1", stateId: "state-blocked" },
+        { type: "addComment", issueId: "id-1", body: expect.stringContaining("incomplete issue spec (MOV-303)") },
+      ]);
+      expect(ctx.worktreeManager.createCalls).toHaveLength(0);
+      expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+    });
+
+    it("still dispatches a fully-specced issue in enforce mode", async () => {
+      const ctx = baseCtx({ issueSpecMode: "enforce" });
+      const complete = {
+        ...ISSUE,
+        labels: ["execution:mac", "type:fix", "risk:low", "worker:any", "model:default", "area:process"],
+        project: "Autonomous local-agent delivery",
+      };
+
+      const [result] = await runOnce([complete], ctx);
+
+      expect(result.outcome).toBe("in-review");
+      expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("moves an issue with an uncited model:strong to needs-human without spawning a worker", async () => {
     const ctx = baseCtx();
     const issue = { ...ISSUE, labels: [...ISSUE.labels, "model:strong"] };

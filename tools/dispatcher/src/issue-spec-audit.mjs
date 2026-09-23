@@ -35,11 +35,8 @@
 // docs/governance/linear-information-architecture.md §Issue completeness
 // contract.
 
-import {
-  evaluateIssueSpec,
-  issueSpecFingerprint,
-  ISSUE_SPEC_KIND_DESCRIPTIONS,
-} from "./issue-spec.mjs";
+import { evaluateIssueSpec, issueSpecFingerprint, ISSUE_SPEC_KIND_DESCRIPTIONS } from "./issue-spec.mjs";
+import { JsonStateStore } from "./state-store.mjs";
 
 /**
  * The first line of every audit comment. Named and exported so the tests, the
@@ -185,4 +182,43 @@ export async function auditIssueSpecs(issues = [], ctx = {}) {
   }
 
   return results;
+}
+
+/**
+ * Persisted `{ lastRunAt: <epoch ms> }` for the audit's cadence, at
+ * `config.mjs`'s `issueSpecAuditStatePath()`. Reuses `JsonStateStore`'s
+ * fsync+rename+backup durability (state-store.mjs) rather than a bespoke
+ * write, and only for the automatic in-loop scheduling decision -- the
+ * standalone `dispatcher audit-issues` command never reads or writes it, so
+ * a manual run is never gated by the interval.
+ */
+export class IssueSpecAuditScheduleStore extends JsonStateStore {
+  get label() {
+    return "issue-spec audit schedule";
+  }
+
+  /**
+   * A missing file reads as "never run" (empty object -> `lastRunAt`
+   * undefined). A corrupt file with no valid backup would otherwise make
+   * `JsonStateStore.load()` throw; treated here as "never run" too, rather
+   * than propagating, so a damaged schedule file causes one audit to run
+   * instead of silently skipping every cycle forever.
+   */
+  loadOrReset() {
+    try {
+      return this.load();
+    } catch {
+      return {};
+    }
+  }
+}
+
+/**
+ * Pure scheduling decision: is the automatic audit due? `lastRunAt` is
+ * whatever `IssueSpecAuditScheduleStore#loadOrReset().lastRunAt` returned --
+ * `undefined`/`null`/anything non-numeric all count as "never run" and are
+ * due immediately.
+ */
+export function isAuditDue(lastRunAt, nowMs, intervalMs) {
+  return typeof lastRunAt !== "number" || !Number.isFinite(lastRunAt) || nowMs - lastRunAt >= intervalMs;
 }

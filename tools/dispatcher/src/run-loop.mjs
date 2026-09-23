@@ -56,6 +56,7 @@ import { captureVerificationEvidence } from "./readiness-evidence.mjs";
  * @param {(issueIdentifier: string) => object|null} [ctx.readAgentSessionFn] - MOV-158: the prior attempt's persisted session record, used to decide attach-vs-new-linked-session; defaults to "no prior session"
  * @param {(issueIdentifier: string, snapshot: object) => void} [ctx.persistAgentSessionFn] - MOV-158: persist this attempt's session record for the next one; defaults to a no-op
  * @param {number} [ctx.stopPollIntervalMs] - MOV-158: how often to re-read the issue while a worker runs, so a de-delegation/cancellation is honoured at the next safe boundary instead of after a 45-minute worker; 0 (the default) disables the watcher entirely
+ * @param {"off"|"report"|"enforce"} [ctx.issueSpecMode] - MOV-303: forwarded to `evaluatePreflight()` (preflight.mjs); `enforce` moves an incomplete issue to Blocked instead of dispatching it, naming every missing item. This is the gate every dispatched issue passes through regardless of how it reached Ready for Agent -- the promoter's own gate (promoter.mjs) only covers the ones it promoted itself. Undefined defaults to `report`, same as the promoter
  * @param {{isOpen: (name: string) => boolean, trip: (name: string, reason: string) => void, clear: (name: string) => void}} [ctx.circuitBreaker] - MOV-180/MOV-177: shared, named host-wide failure-signature breaker store (circuit-breaker.mjs), gating two independent breakers -- NESTED_SANDBOX_CRASH and CREDENTIAL_FAILURE. While either is open, `runOnce` lets exactly one issue per batch through as a half-open probe and skips the rest with outcome "circuit-breaker-open" (also applied dynamically within a batch if a breaker trips mid-cycle from an earlier issue's own outcome); defaults to a permanently-closed no-op so existing callers are unaffected
  * @param {{get: Function, record: Function, clear: Function, deferral: Function}} [ctx.usageLimitStore] - MOV-151: per-issue dispatch-time provider usage-limit record (usage-limit.mjs). Defaults to a no-op store, so a caller that does not wire it keeps today's "every non-zero exit escalates" behaviour exactly
  * @param {(args: {exitCode: number, logTail: string, auditText: string}) => Promise<{ok: true, confident: boolean, diagnosis: string, evidence: string|null}|{ok: false, reason: string}>} [ctx.diagnoseFailureFn] - MOV-179: advisory-only, single bounded call that writes a grounded diagnosis into the residual "unrecognized failure" `Needs Human Decision` comment (worker-diagnosis.mjs). Never changes whether or how an issue escalates -- any failure, rejection, or missing wiring falls back to today's plain comment. Only called for failures with no dedicated classification of their own (not rate-limit, not credential-failure, not a security-policy block); defaults to a no-op that always reports no diagnosis
@@ -346,6 +347,7 @@ async function processIssue(issue, ctx) {
     steeringEnabled = false,
     now = () => new Date(),
     logger = console,
+    issueSpecMode,
   } = ctx;
 
   // MOV-143: before anything else, is this issue even ours? An issue routed to
@@ -401,6 +403,7 @@ async function processIssue(issue, ctx) {
     activeWorktreeCount: worktreeManager.activeCount(),
     concurrencyLimit,
     secretPresent,
+    issueSpecMode,
     // MOV-181: reclaims a retained worktree from this same issue's own
     // prior terminal (failed/abandoned/merged) attempt, so a requeued issue
     // isn't blocked by its own retention window. See

@@ -27,6 +27,7 @@ import {
   autoRepairEnabled,
   resolveTrustedReviewers,
   resolveRepairBudgets,
+  resolveIssueSpecMode,
   DEFAULT_CONCURRENCY,
   DEFAULT_WORKER_TIMEOUT_MS,
   DEFAULT_STOP_POLL_INTERVAL_MS,
@@ -138,6 +139,9 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     workerTimeoutMs: Number(process.env.MOVIECAL_WORKER_TIMEOUT_MS || DEFAULT_WORKER_TIMEOUT_MS),
     iosRunnerOnline: await checkIosRunnerOnline(),
     isIssueSatisfied: buildIsIssueSatisfied(issues),
+    // MOV-303: forwarded to evaluatePreflight() so an incomplete issue is
+    // caught at dispatch regardless of how it reached Ready for Agent.
+    issueSpecMode: resolveIssueSpecMode(),
     secretPresent: () => fs.existsSync(envLocalPath()),
     worktreeRoot: worktreeRoot(),
     envLocalSource: fs.existsSync(envLocalPath()) ? envLocalPath() : undefined,

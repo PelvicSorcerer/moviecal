@@ -120,7 +120,7 @@ No separate `migration` label: the historical-import marker is Linear's own auto
 
 **Outside `Triage`, an issue is filed fully specced.** All applicable labels, a project, and a milestone — a milestone may be omitted only when one genuinely does not apply. This applies to every issue whose state is not `Triage`, `Done`, `Released`, `Canceled`, or `Duplicate`: `Backlog`, `Icebox`, `Spec Ready`, and every started state included.
 
-`tools/dispatcher/src/issue-spec.mjs` is the machine-checkable expression of everything below, and the only one. It is consumed by the promoter's gate (`promoter.mjs`); see `docs/operators/local-execution.md` §Automated promotion for how and when it runs. Its second consumer is the audit pass (`issue-spec-audit.mjs`, MOV-308), which comments on — and only ever comments on — every open non-`Triage` issue the promoter never looks at: `human-only`, coordination, `Spec Ready`, `Icebox`, and every started state.
+`tools/dispatcher/src/issue-spec.mjs` is the machine-checkable expression of everything below, and the only one. It is consumed by the promoter's gate, dispatch preflight, and the audit pass. The promoter and preflight are separate checkpoints: a human or Loop can move an issue to `Ready for Agent` without the promoter, but preflight always runs before dispatch. The audit covers the remaining open non-`Triage` issues. It runs at most once per `MOVIECAL_ISSUE_SPEC_AUDIT_INTERVAL_MS` (24 hours by default), or immediately on demand via `dispatcher audit-issues`.
 
 **Labels, by kind:**
 
