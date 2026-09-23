@@ -595,6 +595,136 @@ describe("LinearClient", () => {
     });
   });
 
+  describe("master-failure remediation writes (MOV-305)", () => {
+    it("creates a `related` link, never a blocking one, between remediation and source", async () => {
+      const fetchImpl = mockFetch({ issueRelationCreate: { success: true } });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      await client.addRelatedRelation({ issueId: "remediation-1", relatedIssueId: "source-2" });
+
+      const { variables, query } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+      // A `blocks` edge from an already-`Done` source issue would corrupt the
+      // promoter's readiness gate and priority propagation alike.
+      expect(variables).toEqual({ issueId: "remediation-1", relatedIssueId: "source-2", type: "related" });
+      expect(query).toMatch(/\$type:\s*IssueRelationType!/);
+    });
+
+    it("rejects missing ids and self-relation", async () => {
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl: mockFetch({}) });
+      await expect(client.addRelatedRelation({ issueId: "a" })).rejects.toThrow(/relatedIssueId/);
+      await expect(client.addRelatedRelation({ issueId: "a", relatedIssueId: "a" })).rejects.toThrow(/cannot relate to itself/);
+    });
+
+    it("reports which requested labels do not exist rather than dropping them silently", async () => {
+      const fetchImpl = mockFetch({
+        issueLabels: {
+          nodes: [
+            { id: "workspace-exec", name: "execution:mac", team: null },
+            { id: "team-exec", name: "execution:mac", team: { key: "MOV" } },
+            { id: "type-fix", name: "type:fix", team: { key: "MOV" } },
+          ],
+        },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const result = await client.issueLabelIds("MOV", ["execution:mac", "type:fix", "type:invented"]);
+      // A team-scoped label wins over a same-named workspace one.
+      expect(result.ids).toEqual({ "execution:mac": "team-exec", "type:fix": "type-fix" });
+      expect(result.missing).toEqual(["type:invented"]);
+    });
+
+    it("returns a project with its status and milestones so a terminal project can be refused", async () => {
+      const fetchImpl = mockFetch({
+        projects: {
+          nodes: [
+            {
+              id: "project-1",
+              name: "Autonomous local-agent delivery",
+              state: "started",
+              projectMilestones: { nodes: [{ id: "m1", name: "Local acceptance & controlled autonomy" }] },
+            },
+          ],
+        },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      expect(await client.projectByName("Autonomous local-agent delivery")).toEqual({
+        id: "project-1",
+        name: "Autonomous local-agent delivery",
+        status: "started",
+        milestones: [{ id: "m1", name: "Local acceptance & controlled autonomy" }],
+      });
+      expect(await client.projectByName("")).toBeNull();
+    });
+
+    it("looks an issue up by its human identifier", async () => {
+      const fetchImpl = mockFetch({
+        issues: { nodes: [{ id: "id-293", identifier: "MOV-293", url: "https://linear.test/MOV-293", state: { name: "Done", type: "completed" } }] },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      expect(await client.issueByIdentifier("mov-293")).toEqual({
+        id: "id-293",
+        identifier: "MOV-293",
+        url: "https://linear.test/MOV-293",
+        stateName: "Done",
+        stateType: "completed",
+      });
+      const { variables } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+      expect(variables).toEqual({ teamKey: "MOV", number: 293 });
+      expect(await client.issueByIdentifier("not-an-identifier")).toBeNull();
+    });
+
+    it("creates an issue with its labels, project, milestone, and initial state", async () => {
+      const fetchImpl = mockFetch({
+        issueCreate: { success: true, issue: { id: "id-900", identifier: "MOV-900", url: "https://linear.test/MOV-900" } },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const created = await client.createIssue({
+        teamId: "team-1",
+        title: "Fix failed lane-ios on master",
+        description: "## Acceptance Criteria\n\n* fix it",
+        labelIds: ["l1", "l2"],
+        projectId: "project-1",
+        projectMilestoneId: "m1",
+        stateId: "state-backlog",
+        priority: 1,
+      });
+
+      expect(created).toEqual({ id: "id-900", identifier: "MOV-900", url: "https://linear.test/MOV-900" });
+      const { variables } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+      expect(variables.input).toEqual({
+        teamId: "team-1",
+        title: "Fix failed lane-ios on master",
+        description: "## Acceptance Criteria\n\n* fix it",
+        labelIds: ["l1", "l2"],
+        projectId: "project-1",
+        projectMilestoneId: "m1",
+        stateId: "state-backlog",
+        priority: 1,
+      });
+    });
+
+    it("omits optional fields entirely rather than sending nulls Linear would reject", async () => {
+      const fetchImpl = mockFetch({
+        issueCreate: { success: true, issue: { id: "id-901", identifier: "MOV-901", url: "u" } },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      await client.createIssue({ teamId: "team-1", title: "t" });
+
+      const { variables } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+      expect(Object.keys(variables.input).sort()).toEqual(["description", "labelIds", "teamId", "title"]);
+    });
+
+    it("throws when the create did not produce an issue, rather than returning a half-record", async () => {
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl: mockFetch({ issueCreate: { success: false, issue: null } }) });
+      await expect(client.createIssue({ teamId: "team-1", title: "t" })).rejects.toThrow(/no issue/);
+      await expect(client.createIssue({ title: "t" })).rejects.toThrow(/teamId and title/);
+    });
+  });
+
   describe("linkBlockingChain", () => {
     it("creates each-blocks-the-next relations in order", async () => {
       const fetchImpl = mockFetch({ issueRelationCreate: { success: true } });

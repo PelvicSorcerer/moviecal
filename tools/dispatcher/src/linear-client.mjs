@@ -478,6 +478,137 @@ export class LinearClient {
   }
 
   /**
+   * Create a related (non-blocking) link between two issues.
+   *
+   * Used by the master-failure observer (MOV-305) to tie a remediation item
+   * to the source issue whose merged change the failed run is attributed to.
+   * `related` is deliberately not `blocks`: the source issue is normally
+   * already `Done`, and a blocking edge from finished work would corrupt both
+   * the promoter's readiness gate and priority propagation.
+   */
+  async addRelatedRelation({ issueId, relatedIssueId }) {
+    if (!issueId || !relatedIssueId) throw new Error("addRelatedRelation requires issueId and relatedIssueId");
+    if (issueId === relatedIssueId) throw new Error("addRelatedRelation: an issue cannot relate to itself");
+    const mutation = `
+      mutation($issueId: String!, $relatedIssueId: String!, $type: IssueRelationType!) {
+        issueRelationCreate(input: {
+          issueId: $issueId
+          relatedIssueId: $relatedIssueId
+          type: $type
+        }) { success }
+      }
+    `;
+    const data = await this.request(mutation, { issueId, relatedIssueId, type: "related" });
+    return data.issueRelationCreate.success;
+  }
+
+  /** The team's own id, needed by every create mutation. */
+  async teamId(teamKey) {
+    const query = `
+      query($teamKey: String!) {
+        teams(filter: { key: { eq: $teamKey } }) { nodes { id key } }
+      }
+    `;
+    const data = await this.request(query, { teamKey });
+    return data.teams?.nodes?.[0]?.id || null;
+  }
+
+  /**
+   * Resolve label names to ids.
+   *
+   * A label group in this workspace may be team-scoped or workspace-level, so
+   * both are read and a team-scoped match wins. Names that do not resolve are
+   * returned in `missing` rather than skipped: the master-failure observer
+   * refuses to file a partially-labeled remediation issue, because an issue
+   * missing `execution:mac` would sit in `Ready for Agent` forever.
+   */
+  async issueLabelIds(teamKey, names = []) {
+    const query = `
+      query {
+        issueLabels(first: 250) { nodes { id name team { key } } }
+      }
+    `;
+    const data = await this.request(query);
+    const nodes = data.issueLabels?.nodes || [];
+    const ids = {};
+    const missing = [];
+    for (const name of names) {
+      const matches = nodes.filter((node) => node.name === name);
+      const scoped = matches.find((node) => node.team?.key === teamKey) || matches[0];
+      if (scoped) ids[name] = scoped.id;
+      else missing.push(name);
+    }
+    return { ids, missing };
+  }
+
+  /** One project by exact name, with its milestones, or null. */
+  async projectByName(name) {
+    if (!name) return null;
+    const query = `
+      query($name: String!) {
+        projects(filter: { name: { eq: $name } }, first: 5) {
+          nodes { id name state projectMilestones { nodes { id name } } }
+        }
+      }
+    `;
+    const data = await this.request(query, { name });
+    const node = data.projects?.nodes?.[0];
+    if (!node) return null;
+    return {
+      id: node.id,
+      name: node.name,
+      status: node.state || null,
+      milestones: (node.projectMilestones?.nodes || []).map((milestone) => ({ id: milestone.id, name: milestone.name })),
+    };
+  }
+
+  /** One issue by its human identifier (`MOV-123`), or null. */
+  async issueByIdentifier(identifier) {
+    const match = /^([A-Z]+)-(\d+)$/i.exec(String(identifier || "").trim());
+    if (!match) return null;
+    const query = `
+      query($teamKey: String!, $number: Float!) {
+        issues(filter: { team: { key: { eq: $teamKey } }, number: { eq: $number } }, first: 1) {
+          nodes { id identifier url state { name type } }
+        }
+      }
+    `;
+    const data = await this.request(query, { teamKey: match[1].toUpperCase(), number: Number(match[2]) });
+    const node = data.issues?.nodes?.[0];
+    if (!node) return null;
+    return {
+      id: node.id,
+      identifier: node.identifier,
+      url: node.url,
+      stateName: node.state?.name || null,
+      stateType: node.state?.type || null,
+    };
+  }
+
+  /**
+   * Create one issue. The only issue-creating mutation in the dispatcher, and
+   * its sole caller is the master-failure observer (MOV-305): everything else
+   * the dispatcher does reacts to issues a human or an authoring agent filed.
+   */
+  async createIssue({ teamId, title, description, labelIds = [], projectId = null, projectMilestoneId = null, stateId = null, priority = null }) {
+    if (!teamId || !title) throw new Error("createIssue requires teamId and title");
+    const mutation = `
+      mutation($input: IssueCreateInput!) {
+        issueCreate(input: $input) { success issue { id identifier url } }
+      }
+    `;
+    const input = { teamId, title, description: description || "", labelIds };
+    if (projectId) input.projectId = projectId;
+    if (projectMilestoneId) input.projectMilestoneId = projectMilestoneId;
+    if (stateId) input.stateId = stateId;
+    if (priority !== null && priority !== undefined) input.priority = priority;
+    const data = await this.request(mutation, { input });
+    const issue = data.issueCreate?.issue;
+    if (!data.issueCreate?.success || !issue?.id) throw new Error("issueCreate returned no issue");
+    return { id: issue.id, identifier: issue.identifier, url: issue.url };
+  }
+
+  /**
    * Open an Agent Session on an issue under this app's own identity (MOV-167).
    *
    * **Developer Preview, and unverified against this workspace.** MOV-141's
