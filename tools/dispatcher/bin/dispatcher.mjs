@@ -21,6 +21,13 @@
 //                                     (MOV-129); the run loop does this each cycle
 //   dispatcher priorities [--dry-run] [--once] - dependency-aware priority
 //                                     propagation across incomplete issues
+//   dispatcher audit-issues [--dry-run]
+//                                  - comment on every open non-Triage issue that does
+//                                     not satisfy the issue-completeness contract
+//                                     (MOV-303/MOV-308); the run loop does this each
+//                                     cycle. Comments are its only write — it never
+//                                     changes a state, priority, label, project, or
+//                                     milestone. `--dry-run` writes nothing at all
 //   dispatcher repair --dry-run    - preview bounded repair admission without
 //                                     reserving, spawning, rerunning, or writing
 //   dispatcher run --once          - process every currently-eligible Ready-for-Agent
@@ -85,6 +92,8 @@ import {
 } from "../src/run-context.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
+import { AUDITED_SPEC_STATE_TYPES } from "../src/issue-spec.mjs";
+import { auditIssueSpecs } from "../src/issue-spec-audit.mjs";
 import { propagatePriorities, TERMINAL_PRIORITY_STATE_TYPES } from "../src/priority-propagation.mjs";
 import { reconcileParents } from "../src/parent-completion-guard.mjs";
 import { defaultRunner as ghRunner } from "../src/pr-check.mjs";
@@ -698,6 +707,77 @@ async function cmdPromoteOnce({ dryRun = false } = {}) {
   return 0;
 }
 
+/**
+ * Issue-completeness audit pass (MOV-308): comment on every open non-`Triage`
+ * issue that does not satisfy the contract — including the `human-only`,
+ * coordination, `Spec Ready`, `Icebox`, and started issues the promoter never
+ * looks at.
+ *
+ * `off` returns before a Linear client is even built, so the read-only
+ * guarantee for that mode is structural rather than a promise made by the
+ * pass's own logic. `report` and `enforce` behave identically here: the audit
+ * only ever reports, whatever the mode — the promoter is the pass that can
+ * actually withhold dispatch, and duplicating enforcement in a comment-only
+ * pass would mean nothing.
+ */
+async function cmdAuditIssuesOnce({ dryRun = false } = {}) {
+  const issueSpecMode = resolveIssueSpecMode();
+  if (issueSpecMode === "off") {
+    console.log("Issue-completeness audit skipped (MOVIECAL_ISSUE_SPEC_MODE=off) — nothing read, nothing written.");
+    return 0;
+  }
+
+  const built = buildLinearClient();
+  if (!built) return 1;
+  const { client: linearClient, teamKey } = built;
+
+  // Selected by workflow-state *type*, never by a hardcoded name list: a state
+  // added to this workspace later is audited automatically, while `triage`,
+  // `completed`, and `canceled` stay out by construction.
+  const states = await linearClient.workflowStates(teamKey);
+  const stateNames = states
+    .filter((state) => AUDITED_SPEC_STATE_TYPES.has(String(state.type || "").toLowerCase()))
+    .map((state) => state.name);
+  if (stateNames.length === 0) {
+    console.error("no auditable workflow states found (provision the workspace)");
+    return 1;
+  }
+
+  const issues = await linearClient.issuesForSpecAudit({ teamKey, stateNames });
+  const results = await auditIssueSpecs(issues, { linearClient, dryRun });
+
+  let wrote = 0;
+  for (const result of results) {
+    if (result.action === "commented" || result.action === "updated") {
+      wrote++;
+      const verb = dryRun ? `would ${result.action === "updated" ? "update" : "comment"}` : result.action;
+      console.log(`${result.issue}: issue-spec audit ${verb} — ${result.missing.join("; ")}`);
+    } else if (result.action === "unchanged") {
+      console.log(`${result.issue}: issue-spec audit unchanged (already commented) — ${result.missing.join("; ")}`);
+    }
+  }
+  console.log(
+    dryRun
+      ? `Dry run — ${wrote} issue-completeness comment(s) would be posted across ${results.length} issue(s), nothing written.`
+      : `Issue-completeness audit posted ${wrote} comment(s) across ${results.length} issue(s).`,
+  );
+  return 0;
+}
+
+async function cmdAuditIssues({ dryRun = false } = {}) {
+  // A dry run is read-only, so it must never contend for the singleton lock —
+  // previewing the audit while the daemon is running is a normal thing to do.
+  if (dryRun) return cmdAuditIssuesOnce({ dryRun: true });
+  const lock = new DispatcherLock(dispatcherLockPath());
+  try { lock.acquire(); } catch (err) { console.error(err.message); return 2; }
+  process.once("exit", () => lock.release());
+  try {
+    return await cmdAuditIssuesOnce({ dryRun: false });
+  } finally {
+    lock.release();
+  }
+}
+
 async function cmdPrioritiesOnce({ dryRun = false } = {}) {
   const built = buildLinearClient();
   if (!built) return 1;
@@ -754,6 +834,15 @@ async function promotePass() {
     await cmdPromoteOnce({ dryRun: false });
   } catch (err) {
     console.error("Promote pass failed (continuing to dispatch):", err.message);
+  }
+}
+
+/** Run the issue-completeness audit inside the poll loop; never abort dispatch. */
+async function auditIssuesPass() {
+  try {
+    await cmdAuditIssuesOnce({ dryRun: false });
+  } catch (err) {
+    console.error("Issue-completeness audit pass failed (continuing to dispatch):", err.message);
   }
 }
 
@@ -835,6 +924,11 @@ async function cmdRunOnce({ repairLockHeld = false } = {}) {
   await reconcileParentsPass();
   await propagatePass();
   await promotePass();
+  // MOV-308: after the promoter (so an issue promoted this cycle is audited in
+  // the state it landed in) and before the dispatch read below. It is
+  // comment-only and independently guarded, so it can never keep dispatch from
+  // progressing.
+  await auditIssuesPass();
 
   if (!built) return { exitCode: 1, startupFailure: { kind: "linear-auth-unavailable", diagnostic: "Linear authentication is unavailable; run dispatcher doctor and repair the configured credential." } };
 
@@ -1022,6 +1116,10 @@ async function main() {
       process.exitCode = await cmdPriorities({ dryRun });
       break;
     }
+    case "audit-issues": {
+      process.exitCode = await cmdAuditIssues({ dryRun: rest.includes("--dry-run") });
+      break;
+    }
     case "reconcile-parents": {
       process.exitCode = await cmdReconcileParents({ dryRun: rest.includes("--dry-run") });
       break;
@@ -1039,7 +1137,7 @@ async function main() {
     }
     default:
       console.error(
-        "Usage: dispatcher <doctor|health|dry-run|shadow|agent-signal|gc|promote|priorities|reconcile-parents|repair|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
+        "Usage: dispatcher <doctor|health|dry-run|shadow|agent-signal|gc|promote|priorities|audit-issues|reconcile-parents|repair|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
       );
       process.exitCode = 1;
   }

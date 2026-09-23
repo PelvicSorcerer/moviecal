@@ -4,7 +4,7 @@ The local process that turns a Linear issue into a running agent against an isol
 
 ## Status
 
-`doctor`, `dry-run`, `shadow`, `promote`, `priorities`, `gc`, and `run` are implemented and unit-tested. **`dispatcher run` and non-dry-run `dispatcher priorities` have real side effects** — they can mutate Linear state and local dispatcher state; `dispatcher run` also creates worktrees and spawns a real `claude`/`codex` process. The worker itself has no Git or GitHub mutation authority. The worker produces verified filesystem changes; the dispatcher audits its sandboxed structured transcript and diff, then creates the commit and performs the exact non-force branch push and draft-PR creation. The first live run after a dispatcher/security upgrade remains a deliberate, supervised operator action.
+`doctor`, `dry-run`, `shadow`, `promote`, `priorities`, `audit-issues`, `gc`, and `run` are implemented and unit-tested. **`dispatcher run` and non-dry-run `dispatcher priorities` / `dispatcher audit-issues` have real side effects** — they can mutate Linear state and local dispatcher state; `dispatcher run` also creates worktrees and spawns a real `claude`/`codex` process. The worker itself has no Git or GitHub mutation authority. The worker produces verified filesystem changes; the dispatcher audits its sandboxed structured transcript and diff, then creates the commit and performs the exact non-force branch push and draft-PR creation. The first live run after a dispatcher/security upgrade remains a deliberate, supervised operator action.
 
 A Claude worker is invoked in structured-output `dontAsk` mode and Codex in structured-output `workspace-write --ask-for-approval never` mode. Both are wrapped in the same inherited macOS sandbox; vendor-specific controls are defense in depth. Getting a headless Claude session to run without hanging still requires pre-trusting the repo's main checkout path in `~/.claude.json` (`claude-trust.mjs`, wired into `WorktreeManager.create()`).
 
@@ -18,12 +18,13 @@ node tools/dispatcher/bin/dispatcher.mjs dry-run [--fixture path/to/issues.json]
 node tools/dispatcher/bin/dispatcher.mjs shadow --pr <number> [--fixture path/to/observation.json]
 node tools/dispatcher/bin/dispatcher.mjs promote [--dry-run]
 node tools/dispatcher/bin/dispatcher.mjs priorities [--dry-run]
+node tools/dispatcher/bin/dispatcher.mjs audit-issues [--dry-run]
 node tools/dispatcher/bin/dispatcher.mjs gc
 node tools/dispatcher/bin/dispatcher.mjs run --once            # one pass over eligible issues, then exit
 node tools/dispatcher/bin/dispatcher.mjs run [--interval ms]   # poll loop (default 30000ms)
 ```
 
-Also available as npm scripts: `npm run dispatcher:doctor`, `npm run dispatcher:dry-run`, `npm run dispatcher:gc`.
+Also available as npm scripts: `npm run dispatcher:doctor`, `npm run dispatcher:dry-run`, `npm run dispatcher:audit-issues`, `npm run dispatcher:gc`.
 
 `shadow --pr` reads the PR and required checks, classifies the current head,
 deduplicates observations, and prints the proposed decision as JSON. It never
@@ -37,6 +38,7 @@ not machine-control messages.
 - **`dry-run`** fetches issues in the `Ready for Agent` Linear state (or reads a fixture JSON file with `--fixture`, for testing without a live Linear connection) and prints the worktree path, branch name, worker/model routing decision, and preflight verdict for each — without creating anything.
 - **`promote`** runs the automated Backlog/Blocked promotion rules; `--dry-run` reports what would move to `Ready for Agent`.
 - **`priorities`** runs dependency-aware priority propagation; `--dry-run` reports raise/relax/skip outcomes and writes nothing.
+- **`audit-issues`** comments on every open non-`Triage` issue that does not satisfy the issue-completeness contract (MOV-303/MOV-308), including the `human-only`, coordination, `Spec Ready`, `Icebox`, and started issues `promote` never looks at. A comment is its only write — it never changes a state, priority, label, project, or milestone — and a hidden fingerprint marker keeps it from repeating itself when nothing has changed. `--dry-run` writes nothing and does not take the singleton lock; `MOVIECAL_ISSUE_SPEC_MODE=off` skips it entirely without reading anything. See `docs/operators/local-execution.md` §Issue completeness.
 - **`gc`** prunes merged worktrees immediately and failed/abandoned worktrees older than the retention window, plus run logs older than 90 days.
 - **`run`** is the real loop: for each issue in `Ready for Agent`, runs preflight (§ below), provisions a worktree, spawns the guarded worker with the issue as its brief (piped via stdin), waits for it to exit, audits the transcript/diff, commits and publishes the accepted result through dispatcher-owned credentials, and reports every transition back to Linear. See `docs/operators/local-execution.md` for the full state-transition table.
 
@@ -64,6 +66,8 @@ tools/dispatcher/
     pr-check.mjs             finds the PR attached to an audited branch
     pr-reconcile.mjs         observes PR head/check/review state and reconciles merged/closed worktrees
     workflow-edit-apply.mjs  applies a staged .github/workflows/ proposal (MOV-121; see local-execution.md)
+    issue-spec.mjs           the issue-completeness contract, as pure decision logic (MOV-303)
+    issue-spec-audit.mjs     comment-only audit of open non-Triage issues against that contract (MOV-308)
     run-loop.mjs             ties all of the above together for `dispatcher run`
   test/                      Vitest unit tests for everything above
   launchd/

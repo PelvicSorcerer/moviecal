@@ -233,6 +233,55 @@ export class LinearClient {
     }));
   }
 
+  /**
+   * Every issue the issue-completeness audit pass scans (MOV-308): the same
+   * spec fields `issuesForPromotion` reads, plus recent comment bodies so the
+   * audit can recognize its own previous comment's fingerprint marker and stay
+   * silent when nothing has changed.
+   *
+   * `stateNames` is resolved by the caller from workflow-state *type*, not
+   * from a hardcoded list, so a state added to the workspace later is audited
+   * without a code change. Unlike `issuesForPromotion` this one paginates: the
+   * promoter reads two states, while this reads every open state in the team
+   * and will routinely exceed a single page.
+   */
+  async issuesForSpecAudit({ teamKey, stateNames }) {
+    const query = `
+      query($teamKey: String!, $stateNames: [String!]!, $after: String) {
+        issues(filter: {
+          team: { key: { eq: $teamKey } }
+          state: { name: { in: $stateNames } }
+        }, first: 100, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            ${ISSUE_FIELDS}
+            ${ISSUE_SPEC_FIELDS}
+            state { name type }
+            comments(last: 20) { nodes { body } }
+          }
+        }
+      }
+    `;
+    const out = [];
+    let after = null;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const data = await this.request(query, { teamKey, stateNames, after });
+      const issues = data.issues || {};
+      out.push(
+        ...(issues.nodes || []).map((node) => ({
+          ...withIssueSpecFields(node, normalizeIssue(node)),
+          stateName: node.state ? node.state.name : null,
+          stateType: node.state ? node.state.type : null,
+          recentComments: (node.comments ? node.comments.nodes : []).map((c) => c.body),
+        })),
+      );
+      if (!issues.pageInfo?.hasNextPage || !issues.pageInfo.endCursor) break;
+      after = issues.pageInfo.endCursor;
+    }
+    return out;
+  }
+
   async issuesForPriorityPropagation({ teamKey, stateNames }) {
     const query = `
       query($teamKey: String!, $stateNames: [String!]!, $after: String) {

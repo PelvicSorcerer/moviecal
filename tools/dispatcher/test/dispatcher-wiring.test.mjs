@@ -105,6 +105,88 @@ describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
     expect(source).toMatch(/issueSpecMode:\s*resolveIssueSpecMode\(\)|const issueSpecMode = resolveIssueSpecMode\(\)/);
   });
 
+  it("cmdRunOnce runs the issue-completeness audit after promote and before the dispatch read (MOV-308)", () => {
+    const body = bodyOf("cmdRunOnce");
+    const promoteAt = body.indexOf("await promotePass(");
+    const auditAt = body.indexOf("await auditIssuesPass(");
+    const dispatchReadAt = body.indexOf("issuesInState(");
+    expect(auditAt, "auditIssuesPass() not called in cmdRunOnce").toBeGreaterThan(-1);
+    expect(promoteAt).toBeLessThan(auditAt);
+    expect(auditAt).toBeLessThan(dispatchReadAt);
+    // Every cycle, not behind a conditional: MOV-306 is where a cadence gate
+    // lands, and until then the pass being unconditional is the contract.
+    expect(body).toMatch(/await promotePass\(\);\s*(?:\/\/[^\n]*\n\s*)*await auditIssuesPass\(\);/);
+  });
+
+  it("auditIssuesPass swallows errors so an audit failure cannot abort dispatch (MOV-308)", () => {
+    const body = bodyOf("auditIssuesPass");
+    expect(body).toMatch(/try\s*\{/);
+    expect(body).toMatch(/catch/);
+    expect(body).toMatch(/cmdAuditIssuesOnce/);
+  });
+
+  it("reads and writes nothing at all in off mode (MOV-308)", () => {
+    const body = bodyOf("cmdAuditIssuesOnce");
+    const modeAt = body.indexOf("resolveIssueSpecMode()");
+    const offReturnAt = body.indexOf('issueSpecMode === "off"');
+    const clientAt = body.indexOf("buildLinearClient()");
+    expect(modeAt).toBeGreaterThan(-1);
+    expect(offReturnAt).toBeGreaterThan(modeAt);
+    // The `off` guard returns before a Linear client even exists, so "nothing
+    // is read" is structural rather than a promise the pass makes about its
+    // own later branches.
+    expect(clientAt).toBeGreaterThan(offReturnAt);
+    expect(body).toMatch(/return 0;/);
+    // The audited state list comes from workflow-state *type*, never a
+    // hardcoded name list -- a state added to the workspace later is audited
+    // without a code change.
+    expect(body).toMatch(/AUDITED_SPEC_STATE_TYPES\.has\(/);
+    expect(body).not.toMatch(/"Spec Ready"|"Icebox"/);
+    expect(body).toMatch(/issuesForSpecAudit\(\{ teamKey, stateNames \}\)/);
+    expect(body).toMatch(/auditIssueSpecs\(issues, \{ linearClient, dryRun \}\)/);
+  });
+
+  it("standalone audit-issues acquires the dispatcher lock only for a mutating run (MOV-308)", () => {
+    const body = bodyOf("cmdAuditIssues");
+    expect(source).toMatch(/case "audit-issues":/);
+    expect(body).toMatch(/if\s*\(dryRun\)\s*return\s+cmdAuditIssuesOnce\(\{\s*dryRun:\s*true\s*\}\)/);
+    expect(body).toMatch(/new DispatcherLock\(dispatcherLockPath\(\)\)/);
+    expect(body).toMatch(/lock\.acquire\(\)/);
+    expect(body).toMatch(/cmdAuditIssuesOnce\(\{\s*dryRun:\s*false\s*\}\)/);
+    expect(body).toMatch(/finally\s*\{\s*lock\.release\(\)/);
+    // The dry-run early return is before the lock is constructed, so a preview
+    // can never contend with the running daemon.
+    expect(body.indexOf("if (dryRun)")).toBeLessThan(body.indexOf("new DispatcherLock"));
+  });
+
+  it("the audit pass's only Linear mutation is addComment (MOV-308)", () => {
+    const auditSource = readFileSync(
+      fileURLToPath(new URL("../src/issue-spec-audit.mjs", import.meta.url)),
+      "utf8",
+    );
+    // Call-shaped, so the module's own header comment explaining *why* it
+    // never moves an issue does not satisfy the guard it describes.
+    for (const mutating of [
+      /\.moveToState\s*\(/,
+      /\.updateIssuePriority\s*\(/,
+      /\.addBlocksRelation\s*\(/,
+      /\.linkBlockingChain\s*\(/,
+      /issueUpdate/,
+      /labelIds/,
+      /projectId/,
+      /projectMilestoneId/,
+      /issueLabel/,
+    ]) {
+      expect(mutating.test(auditSource), `issue-spec-audit.mjs matches ${mutating}`).toBe(false);
+    }
+    expect(auditSource).toMatch(/linearClient\.addComment\(/);
+    // And the pass's caller adds no second mutation of its own on top of it.
+    const body = bodyOf("cmdAuditIssuesOnce");
+    for (const mutating of [/moveToState\s*\(/, /updateIssuePriority\s*\(/, /addComment\s*\(/]) {
+      expect(mutating.test(body), `cmdAuditIssuesOnce calls ${mutating}`).toBe(false);
+    }
+  });
+
   it("promotePass swallows errors so a promote failure cannot abort dispatch", () => {
     const body = bodyOf("promotePass");
     expect(body).toMatch(/try\s*\{/);
@@ -271,7 +353,7 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
 
   it("registers agent-signal as a read-only command that mutates nothing", () => {
     expect(source).toMatch(/case "agent-signal":/);
-    expect(source).toMatch(/dispatcher <doctor\|health\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|reconcile-parents\|repair\|run>/);
+    expect(source).toMatch(/dispatcher <doctor\|health\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|audit-issues\|reconcile-parents\|repair\|run>/);
     const body = source.slice(source.indexOf("function cmdAgentSignal("));
     const end = body.indexOf("\n}\n");
     const fn = body.slice(0, end);

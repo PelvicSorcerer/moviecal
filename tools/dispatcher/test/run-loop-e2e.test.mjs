@@ -36,6 +36,7 @@ import path from "node:path";
 import { runOnce } from "../src/run-loop.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTION_COMMENT } from "../src/promoter.mjs";
+import { auditIssueSpecs, AUDIT_COMMENT_HEADLINE } from "../src/issue-spec-audit.mjs";
 import { branchName, worktreeName } from "../src/preflight.mjs";
 import { admitRepair } from "../src/repair-policy.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
@@ -873,5 +874,177 @@ describe("CI-failure classification -> repair admission -> ledger budget -> repa
     expect(decision.action).toBe("ignore");
     expect(decision.reason).toMatch(/switched off/);
     expect(ledger.attempts(REPAIR_ENTRY.id)).toHaveLength(0);
+  });
+});
+
+// MOV-308. The promoter and the audit pass run back-to-back in every poll
+// cycle, against the same issues, writing comments to the same Linear issue.
+// Their unit tests each use their own isolated fake, which is exactly the gap
+// this block closes: the audit's "don't repeat yourself" rule depends on
+// reading comment bodies back, and the promoter is writing its own comments
+// into that same stream in between. Nothing short of running both against one
+// client, across cycles, proves that still works.
+describe("promotion -> issue-completeness audit, one continuous run (MOV-308)", () => {
+  const AUDIT_LABELS = ["execution:mac", "type:fix", "worker:any", "model:default", "area:process"];
+
+  /** A Backlog issue that is *promotable* but not *complete*: no risk label, no project. */
+  function incompleteButReady(overrides = {}) {
+    return {
+      id: "id-audit-e2e",
+      identifier: "MOV-AUDIT",
+      title: "Ready to promote, not fully specced",
+      stateName: "Backlog",
+      description: READY_SECTIONS,
+      labels: [...AUDIT_LABELS],
+      project: null,
+      projectStatus: null,
+      projectMilestoneCount: 0,
+      milestone: null,
+      blockedByIds: [],
+      inverseRelations: [],
+      recentComments: [],
+      ...overrides,
+    };
+  }
+
+  /** Every comment body written to `issueId` so far, oldest-to-newest — the
+   *  same thing `issuesForSpecAudit`'s `recentComments` hands the next pass. */
+  function commentsSoFar(linearClient, issueId) {
+    return linearClient.calls.filter((c) => c.type === "addComment" && c.issueId === issueId).map((c) => c.body);
+  }
+
+  /** One poll cycle: the real promoter, then the real audit, one client. */
+  async function pollCycle(linearClient, issue, { issueSpecMode }) {
+    const promotion = await promoteEligible([issue], {
+      linearClient,
+      readyForAgentStateId: "state-ready",
+      isBlockerSatisfied: buildIsIssueSatisfied([issue]),
+      issueSpecMode,
+    });
+    const audit = await auditIssueSpecs(
+      [{ ...issue, recentComments: commentsSoFar(linearClient, issue.id) }],
+      { linearClient },
+    );
+    return { promotion: promotion[0], audit: audit[0] };
+  }
+
+  it("promotes in report mode, comments once on the same issue, then stays silent for the rest of the run", async () => {
+    const linearClient = fakeLinearClient();
+    const issue = incompleteButReady();
+
+    const first = await pollCycle(linearClient, issue, { issueSpecMode: "report" });
+
+    // `report` mode: it still promotes, and the audit is what surfaces the gap.
+    expect(first.promotion).toMatchObject({ issue: "MOV-AUDIT", promoted: true });
+    expect(first.audit.action).toBe("commented");
+    expect(linearClient.calls).toEqual([
+      { type: "moveToState", issueId: "id-audit-e2e", stateId: "state-ready" },
+      { type: "addComment", issueId: "id-audit-e2e", body: PROMOTION_COMMENT },
+      { type: "addComment", issueId: "id-audit-e2e", body: expect.stringContaining(AUDIT_COMMENT_HEADLINE) },
+    ]);
+    const auditBody = linearClient.calls[2].body;
+    expect(auditBody).toContain("no `risk:*` label");
+    expect(auditBody).toContain("no project");
+
+    // Cycle two: the issue has left Backlog (so the promoter skips it), and
+    // the audit reads back its own marker past the promoter's comment and
+    // writes nothing. This is the shape that would otherwise bury a live issue
+    // under one identical comment every 30 seconds.
+    const promoted = { ...issue, stateName: "Ready for Agent" };
+    const second = await pollCycle(linearClient, promoted, { issueSpecMode: "report" });
+    expect(second.promotion).toBeUndefined();
+    expect(second.audit.action).toBe("unchanged");
+    expect(linearClient.calls).toHaveLength(3);
+
+    // Cycle three: a human adds the risk label but no project. One new comment,
+    // naming only what is still missing.
+    const partlyFixed = { ...promoted, labels: [...AUDIT_LABELS, "risk:low"] };
+    const third = await pollCycle(linearClient, partlyFixed, { issueSpecMode: "report" });
+    expect(third.audit.action).toBe("updated");
+    expect(linearClient.calls).toHaveLength(4);
+    expect(linearClient.calls[3].body).toContain("no project");
+    expect(linearClient.calls[3].body).not.toContain("no `risk:*` label");
+
+    // Cycle four: the project is assigned. The issue goes quiet — no comment,
+    // and deliberately no "resolved" comment either.
+    const fixed = { ...partlyFixed, project: "Autonomous local-agent delivery", projectStatus: "started" };
+    const fourth = await pollCycle(linearClient, fixed, { issueSpecMode: "report" });
+    expect(fourth.audit.action).toBe("compliant");
+    expect(linearClient.calls).toHaveLength(4);
+  });
+
+  it("withholds promotion in enforce mode while the audit comments exactly as it does in report mode", async () => {
+    const reportClient = fakeLinearClient();
+    const enforceClient = fakeLinearClient();
+    const issue = incompleteButReady();
+
+    const report = await pollCycle(reportClient, issue, { issueSpecMode: "report" });
+    const enforce = await pollCycle(enforceClient, issue, { issueSpecMode: "enforce" });
+
+    // The promoter is the half that changes with the mode.
+    expect(report.promotion.promoted).toBe(true);
+    expect(enforce.promotion).toMatchObject({
+      promoted: false,
+      reason: expect.stringContaining("incomplete issue spec (MOV-303)"),
+    });
+    expect(enforceClient.calls.some((c) => c.type === "moveToState")).toBe(false);
+
+    // The audit is not: commenting is everything it can do, so `enforce` and
+    // `report` produce byte-identical output. A difference here would mean it
+    // had quietly grown a second behaviour to keep in step with the promoter.
+    const auditBody = (client) =>
+      client.calls.find((c) => c.type === "addComment" && c.body.includes(AUDIT_COMMENT_HEADLINE)).body;
+    expect(report.audit.action).toBe("commented");
+    expect(enforce.audit.action).toBe("commented");
+    expect(auditBody(enforceClient)).toBe(auditBody(reportClient));
+
+    // And in enforce mode the audit is still the only thing that wrote at all.
+    expect(enforceClient.calls).toEqual([
+      { type: "addComment", issueId: "id-audit-e2e", body: expect.stringContaining(AUDIT_COMMENT_HEADLINE) },
+    ]);
+
+    // Repeat the enforce cycle: the promoter keeps refusing, the audit keeps quiet.
+    const again = await pollCycle(enforceClient, issue, { issueSpecMode: "enforce" });
+    expect(again.promotion.promoted).toBe(false);
+    expect(again.audit.action).toBe("unchanged");
+    expect(enforceClient.calls).toHaveLength(1);
+  });
+
+  it("audits the states the promoter never looks at, and never writes anything but a comment", async () => {
+    const linearClient = fakeLinearClient();
+    // Exactly the cohort MOV-308 exists for: none of these is in Backlog or
+    // Blocked, so promoteEligible never evaluates any of them.
+    const issues = [
+      incompleteButReady({ id: "id-spec-ready", identifier: "MOV-SR", stateName: "Spec Ready" }),
+      incompleteButReady({ id: "id-icebox", identifier: "MOV-ICE", stateName: "Icebox" }),
+      incompleteButReady({ id: "id-working", identifier: "MOV-WORK", stateName: "Agent Working" }),
+      incompleteButReady({
+        id: "id-human",
+        identifier: "MOV-HUMAN",
+        stateName: "Spec Ready",
+        labels: ["human-only", "type:chore", "risk:low", "area:process"],
+      }),
+      incompleteButReady({ id: "id-triage", identifier: "MOV-TRIAGE", stateName: "Triage", labels: [] }),
+    ];
+
+    const promotion = await promoteEligible(issues, {
+      linearClient,
+      readyForAgentStateId: "state-ready",
+      isBlockerSatisfied: buildIsIssueSatisfied(issues),
+      issueSpecMode: "report",
+    });
+    expect(promotion.every((r) => !r.promoted)).toBe(true);
+    expect(linearClient.calls).toEqual([]);
+
+    const audit = await auditIssueSpecs(issues, { linearClient });
+
+    expect(audit.map((r) => r.action)).toEqual(["commented", "commented", "commented", "commented", "exempt"]);
+    expect(linearClient.calls.map((c) => c.type)).toEqual(Array(4).fill("addComment"));
+    expect(linearClient.calls.map((c) => c.issueId)).toEqual([
+      "id-spec-ready",
+      "id-icebox",
+      "id-working",
+      "id-human",
+    ]);
   });
 });
