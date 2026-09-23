@@ -226,12 +226,58 @@ the iOS Simulator, and the self-hosted `moviecal-ios-runner` are treated as a
 single scarce resource pool: do not run them concurrently with another local
 worker, and do not raise `MOVIECAL_CONCURRENCY` to bypass that policy. The
 runner's online status is a preflight gate, but it is not a second execution
-slot. See [iOS manual testing](./ios-manual-testing.md) before an interactive
-build or simulator session. If a future supervisor can queue and cancel
-process groups without
+slot. If a future supervisor can queue and cancel process groups without
 leaving `xcodebuild`, `simctl`, or npm descendants behind, this section and
 `DEFAULT_CONCURRENCY` may be revised together with tests proving the new
 semantics.
+
+**The simulator half of that pool is enforced, not advised (MOV-309).** The
+binding resource is RAM, not CPU: with 8 GB, one idle booted simulator already
+pushes ~1.9 GB into swap, and a second one (or a cold `xcodebuild` beside it)
+puts the machine into heavy swap. `scripts/ios-sim-lease.mjs` gives each lane
+its own device — `moviecal-ci`, `moviecal-worker`, `moviecal-manual`, created
+once by `npm run ios:sim:setup`, with the shared `iPhone 17` never created,
+modified, or deleted — so installed binaries, app data, and Keychain state stop
+clobbering each other. It then keeps at most one of them booted behind a
+machine-wide lease (`~/.config/moviecal/ios-sim-lease.json`, same fsync +
+rename + `.bak` durability as `state-store.mjs`, serialized by an `O_EXCL`
+mutex). The lease covers booted-simulator work **and** heavy `xcodebuild` work.
+
+- **The lane is derived from the environment, never a flag:**
+  `GITHUB_ACTIONS=true` → `ci`; `MOVIECAL_WORKER_SANDBOX=1` → `worker`;
+  anything else → `manual`, deliberately including an interactive Claude/Codex
+  session working for a human. It is a policy label, not a security identity.
+- **Expiry.** `ci`/`worker` leases expire by holder pid + start-time liveness
+  plus a 30 s heartbeat (stale after 3 min). A `manual` lease is time-based only
+  — closing the terminal must not free a simulator someone is still testing on:
+  20 minutes, renewable with `ios:sim:extend`, never past a 60-minute hard cap.
+  After the cap the holder must release; a re-acquire queues behind any waiters.
+- **Lazy takeover.** An expired manual lease stays in place until someone is
+  actually waiting; that waiter takes over and shuts the previous device down.
+- **Waiting.** Waiters queue FIFO on the lease, so `ios:sim:status` reports who
+  is waiting and for how long. A waiter that gives up exits **75** with
+  `SIMULATOR_LEASE_UNAVAILABLE` — an infrastructure wait, not a test failure.
+
+**Ownership rule — read before any global simulator command.** A booted
+simulator or running `xcodebuild` that no live lease accounts for is *unmanaged
+manual use*: an acquirer waits on it, then fails with the labeled exit code, and
+**never shuts it down automatically**. Apply the same rule by hand — never run
+`xcrun simctl shutdown all`, `xcrun simctl erase all`, or kill the CoreSimulator
+services without first running `npm run ios:sim:status` and confirming there is
+no live lease and no running `xcodebuild` (killing CoreSimulator took everyone's
+device down on 2026-09-22). Record your own already-booted session with
+`npm run ios:sim:adopt` instead of leaving it unmanaged;
+`--force-shutdown-unmanaged` is an explicit, human-typed override, never an
+automated step.
+
+Wrap simulator or build work with `npm run ios:sim:run -- <command…>` (acquire,
+run, always release — on success, on failure, and on SIGINT/SIGTERM), or hold it
+explicitly with `ios:sim:acquire` / `ios:sim:release`; see
+[iOS manual testing](./ios-manual-testing.md) for the agent-assisted procedure.
+Adopting the lease inside `ios:manual-test` and the dispatcher, the Claude Code
+hook that blocks ungated simulator commands, creating the devices on the runner
+Mac, and the `ios-verify.yml` changes are each their own follow-up issue.
+
 - Agents must not commit directly to `master`, and never operate outside their assigned worktree.
 
 ## Worker interface
