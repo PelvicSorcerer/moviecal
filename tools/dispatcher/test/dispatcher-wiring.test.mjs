@@ -319,6 +319,8 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       "issueSpecAuditStatePath",
       "linearAppEnvPath",
       "linearEnvPath",
+      // MOV-314: durable incident state for master-CI observations, not a credential.
+      "masterIncidentLedgerStatePath",
       "prAutonomyLedgerStatePath",
       "priorityPropagationStatePath",
       // MOV-189: dispatcher state, not a credential — it preserves the
