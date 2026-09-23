@@ -132,6 +132,10 @@ struct CalendarSubscriptionSectionView: View {
                             .disabled(isRotating)
                             .accessibilityIdentifier("settings.calendarSubscription.rotate.confirm")
                         }
+                        // Buttons in a Form row inherit the automatic style,
+                        // which can route one row tap to every sibling button.
+                        // Keep Cancel and Rotate as independent controls.
+                        .buttonStyle(.borderless)
                     }
                     .accessibilityIdentifier("settings.calendarSubscription.rotate.confirmation")
                 } else {
