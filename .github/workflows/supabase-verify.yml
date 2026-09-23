@@ -79,7 +79,19 @@ jobs:
       - run: npm ci --no-audit --no-fund
 
       - name: Start local Supabase stack
-        run: supabase start
+        run: |
+          for attempt in 1 2 3; do
+            if supabase start; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+
+            supabase stop || true
+            sleep "$((attempt * 30))"
+          done
 
       - name: Export local Supabase credentials for real-stack tests
         run: |
