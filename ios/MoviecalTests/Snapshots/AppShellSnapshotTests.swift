@@ -98,6 +98,34 @@ final class AppShellSnapshotTests: XCTestCase {
         )
     }
 
+    func testCalendarSubscriptionRotateConfirmationSnapshot() {
+        let url = URL(string: "https://calendar.example.test/")!
+        assertSnapshot(
+            of: Form {
+                Section("Calendar Subscription") {
+                    CalendarSubscriptionSectionView(
+                        state: .loaded(url),
+                        isConfirmingRotation: true,
+                        onRetry: {}
+                    )
+                }
+            },
+            named: "CalendarSubscription-RotateConfirm"
+        )
+    }
+
+    func testCalendarSubscriptionRotatedSnapshot() {
+        let url = URL(string: "https://calendar.example.test/rotated")!
+        assertSnapshot(
+            of: Form {
+                Section("Calendar Subscription") {
+                    CalendarSubscriptionSectionView(state: .loaded(url), onRetry: {})
+                }
+            },
+            named: "CalendarSubscription-Rotated"
+        )
+    }
+
     func testCalendarSubscriptionErrorSnapshot() {
         assertSnapshot(
             of: Form {
