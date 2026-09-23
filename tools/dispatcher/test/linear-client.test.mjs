@@ -303,6 +303,116 @@ describe("LinearClient", () => {
     });
   });
 
+  // MOV-308: the audit pass reads every open state in the team, not the
+  // promoter's two, so unlike issuesForPromotion this query paginates — and it
+  // needs recent comment bodies to recognize its own fingerprint marker.
+  describe("issuesForSpecAudit (MOV-308)", () => {
+    const auditNode = (overrides = {}) => ({
+      id: "id-308",
+      identifier: "MOV-308",
+      title: "Spec audit subject",
+      description: "## Acceptance criteria\n- x",
+      url: "https://linear.app/moviecal/issue/MOV-308",
+      state: { name: "Spec Ready", type: "unstarted" },
+      project: {
+        name: "Autonomous local-agent delivery",
+        state: "started",
+        projectMilestones: { nodes: [{ id: "ms-1" }] },
+      },
+      projectMilestone: { name: "Local acceptance & controlled autonomy" },
+      labels: { nodes: [{ name: "type:fix" }] },
+      relations: { nodes: [] },
+      inverseRelations: { nodes: [] },
+      comments: { nodes: [{ body: "a human comment" }, { body: "<!-- moviecal-issue-spec-audit:risk-missing -->" }] },
+      ...overrides,
+    });
+
+    it("normalizes the spec fields, state type, and recent comments the audit reads back", async () => {
+      const fetchImpl = mockFetch({
+        issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [auditNode()] },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const [issue] = await client.issuesForSpecAudit({
+        teamKey: "MOV",
+        stateNames: ["Backlog", "Spec Ready", "Icebox", "In Review"],
+      });
+
+      expect(issue).toMatchObject({
+        identifier: "MOV-308",
+        stateName: "Spec Ready",
+        stateType: "unstarted",
+        project: "Autonomous local-agent delivery",
+        projectStatus: "started",
+        projectMilestoneCount: 1,
+        milestone: "Local acceptance & controlled autonomy",
+        labels: ["type:fix"],
+        recentComments: ["a human comment", "<!-- moviecal-issue-spec-audit:risk-missing -->"],
+      });
+
+      const { query, variables } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+      expect(query).toMatch(/projectMilestone \{ name \}/);
+      expect(query).toMatch(/projectMilestones \{ nodes \{ id \} \}/);
+      expect(query).toMatch(/comments\(last: 20\) \{ nodes \{ body \} \}/);
+      expect(query).toMatch(/pageInfo\s*\{\s*hasNextPage\s+endCursor\s*\}/);
+      // The state list is the caller's, resolved from workflow-state type.
+      expect(query).toMatch(/state:\s*\{\s*name:\s*\{\s*in:\s*\$stateNames\s*\}\s*\}/);
+      expect(variables.stateNames).toEqual(["Backlog", "Spec Ready", "Icebox", "In Review"]);
+      expect(variables.after).toBeNull();
+    });
+
+    it("reports no project status or milestone count for an issue with no project", async () => {
+      const fetchImpl = mockFetch({
+        issues: {
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [auditNode({ project: null, projectMilestone: null })],
+        },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const [issue] = await client.issuesForSpecAudit({ teamKey: "MOV", stateNames: ["Icebox"] });
+
+      // "no project at all", not "a project with zero milestones" — the second
+      // is compliant and the first is exactly what the audit exists to report.
+      expect(issue).toMatchObject({ project: null, projectStatus: null, projectMilestoneCount: 0, milestone: null });
+    });
+
+    it("paginates through every page, so a large open backlog is audited whole", async () => {
+      const fetchImpl = vi.fn().mockImplementation(async (_url, init) => {
+        const { variables } = JSON.parse(init.body);
+        if (!variables.after) {
+          return {
+            json: async () => ({
+              data: {
+                issues: {
+                  pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+                  nodes: [auditNode()],
+                },
+              },
+            }),
+          };
+        }
+        return {
+          json: async () => ({
+            data: {
+              issues: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [auditNode({ id: "id-309", identifier: "MOV-309" })],
+              },
+            },
+          }),
+        };
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const issues = await client.issuesForSpecAudit({ teamKey: "MOV", stateNames: ["Backlog"] });
+
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(issues.map((x) => x.identifier)).toEqual(["MOV-308", "MOV-309"]);
+      expect(JSON.parse(fetchImpl.mock.calls[1][1].body).variables.after).toBe("cursor-1");
+    });
+  });
+
   it("issuesForPriorityPropagation includes state type and priority for non-terminal scans", async () => {
     const fetchImpl = mockFetch({
       issues: {

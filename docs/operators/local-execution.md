@@ -111,7 +111,8 @@ unchanged. Configuration and live stop/replay/offline evidence are recorded in
 2. `reconcileParents` (`dispatcher reconcile-parents [--dry-run]`) — derives parent completion from real Linear sub-issue state (MOV-172)
 3. `propagatePriorities` (`dispatcher priorities [--dry-run] [--once]`)
 4. `promotePass` (`dispatcher promote [--dry-run]`)
-5. dispatch scan over `Ready for Agent`
+5. `auditIssuesPass` (`dispatcher audit-issues [--dry-run]`) — the issue-completeness audit (MOV-308), comment-only
+6. dispatch scan over `Ready for Agent`
 
 **Parent completion (MOV-172).** Never infer an issue is complete because a merged PR mentions its ID. A split must create one real Linear sub-issue per PR before those PRs open, and each PR's `Linear: MOV-NNN` reference must be sourced from that real issue object—not copied from PR text, a GitHub number, or a pattern. The reconciliation pass completes an active parent only when every child is terminal and at least one is `Done`/`Released`; `Canceled`/`Duplicate` children do not block but cannot independently drive completion. A completed parent with an open child is moved to `Needs Human Decision` with the child named. `assertParentCompletable()` also blocks the dispatcher's merged-PR backstop from directly completing such a parent.
 
@@ -136,19 +137,28 @@ For a `Blocked` issue there is one extra condition: its most recent `**Dispatche
 
 On promotion the promoter comments `Auto-promoted to Ready for Agent — …` (which, via the app-actor identity from MOV-122, notifies the repo owner). It is idempotent: a promoted issue is no longer in `Backlog`/`Blocked`, so a second pass does nothing.
 
-### Issue completeness (MOV-303/MOV-307)
+### Issue completeness (MOV-303/MOV-307/MOV-308)
 
-The contract itself — the per-kind label schema, the project rule, the milestone opt-out marker, and the fact that relations are required but not machine-checked — lives in `docs/governance/linear-information-architecture.md` §Issue completeness contract. `tools/dispatcher/src/issue-spec.mjs` is its only machine-checkable expression; the promoter's gate is its first consumer.
+The contract itself — the per-kind label schema, the project rule, the milestone opt-out marker, and the fact that relations are required but not machine-checked — lives in `docs/governance/linear-information-architecture.md` §Issue completeness contract. `tools/dispatcher/src/issue-spec.mjs` is its only machine-checkable expression. It has exactly two consumers: the promoter's gate above, and the **audit pass** (`issue-spec-audit.mjs`) described below.
 
 **Mode.** `MOVIECAL_ISSUE_SPEC_MODE` = `off` | `report` | `enforce`, resolved by `resolveIssueSpecMode()` and printed by `dispatcher doctor`. It defaults to **`report`**, and an unrecognized value reads as `report` rather than `enforce` — a typo must never silently stall the queue. Raising it to `enforce` is the owner's step, taken only once the existing backlog has been backfilled; merging the contract itself therefore changes no live promotion behavior.
 
-| Mode | Promoter |
-|---|---|
-| `off` | contract ignored |
-| `report` (default) | promotes as before; violations are logged as `MOV-N: issue-spec violations (report mode, not enforced) — …` |
-| `enforce` | an incomplete issue is **not** promoted; the skip reason is `incomplete issue spec (MOV-303): <every missing item>` |
+| Mode | Promoter | Audit pass |
+|---|---|---|
+| `off` | contract ignored | does not run — nothing read, nothing written |
+| `report` (default) | promotes as before; violations are logged as `MOV-N: issue-spec violations (report mode, not enforced) — …` | comments on each non-compliant issue |
+| `enforce` | an incomplete issue is **not** promoted; the skip reason is `incomplete issue spec (MOV-303): <every missing item>` | comments on each non-compliant issue — **identical** to `report` |
 
-**Planned follow-up (MOV-308):** a wider audit pass that comments on every open non-`Triage` issue — `human-only`, coordination, `Spec Ready`, `Icebox`, and started issues — none of which the promoter ever looks at. Not yet implemented; this table gains an Audit pass column once it lands.
+The audit's two non-`off` columns are the same on purpose. Commenting *is* everything this pass can do; enforcement belongs to the promoter, the only pass that can actually withhold dispatch. An audit that behaved differently under `enforce` would either be blocking something (it isn't) or writing different words for the same violation (pure churn).
+
+**The audit pass (MOV-308).** The promoter only ever looks at `Backlog` and `Blocked`. The audit covers everything else that is open — `human-only`, coordination, `Spec Ready`, `Icebox`, and every started state — which is most of the workspace. It runs every poll cycle (step 5 above), and standalone as `dispatcher audit-issues [--dry-run]` / `npm run dispatcher:audit-issues`.
+
+- **Which issues.** The caller resolves the state list from workflow-state *type* (`backlog`, `unstarted`, `started`), never from a hardcoded name list, so a state added to this workspace later is audited automatically while `triage`, `completed`, and `canceled` stay out by construction.
+- **What it writes.** Exactly one comment per non-compliant issue, headed `**Issue completeness contract — this issue is missing required fields (MOV-303).**`, naming which kind's rules were applied and every missing item. `addComment` is its **only** write: it never calls `moveToState` or `updateIssuePriority`, and never touches a label, project, or milestone. That is asserted structurally in `dispatcher-wiring.test.mjs`, not just by review — and it matches the contract's own "nothing is ever auto-filled" rule, since a dispatcher-written guess at a label or project would be indistinguishable from a real one the moment it landed.
+- **Don't repeat yourself.** Each comment carries a hidden fingerprint marker (`<!-- moviecal-issue-spec-audit:<codes> -->`) naming the *set* of missing items by code rather than by message wording. A later pass over an unchanged set writes nothing at all; a changed set gets exactly one new comment; and an issue that becomes compliant goes quiet — there is deliberately no "resolved" comment, because silence is the normal state of a healthy workspace. The marker is read from the issue's most recent audit comment, so the promoter's own comments landing on the same issue in between change nothing.
+- **Read-only guarantees.** `dispatcher audit-issues --dry-run` evaluates and reports but writes nothing, and `MOVIECAL_ISSUE_SPEC_MODE=off` returns before a Linear client is even built — that mode reads nothing either.
+- **Locking.** A mutating standalone `dispatcher audit-issues` takes the dispatcher's singleton lock (exit 2 if the daemon already holds it), exactly as `priorities` and `reconcile-parents` do. `--dry-run` never contends for it, so previewing the audit against a running daemon is always safe.
+- **Cadence.** Today the in-loop pass runs every cycle. Gating it to a cadence, and dispatch preflight's own gate, are MOV-306.
 
 **Pending:** `AGENTS.md`'s "Planning-object changes" bullet still needs a one-line pointer to the contract for anyone filing an issue. `AGENTS.md` is a worker-protected path (§Security model), so a dispatched worker cannot write it — that line is an owner edit.
 
