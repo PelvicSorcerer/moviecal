@@ -21,7 +21,6 @@
     }
   ],
   "pathRestrictedPushWorkflows": [
-    ".github/workflows/supabase-verify.yml",
     ".github/workflows/ios-verify.yml"
   ],
   "trustedSelfHostedExecutionGlobs": [

@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - master
-      - agent/**
     paths:
       - 'supabase/**'
       - 'scripts/supabase-db-lint.sh'
