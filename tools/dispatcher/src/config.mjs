@@ -9,6 +9,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { LOCAL_DISPATCHER_DELEGATE } from "./dispatch-eligibility.mjs";
 import { DEFAULT_REPAIR_BUDGETS } from "./ci-outcomes.mjs";
+import { DEFAULT_MASTER_VERIFICATION_WORKFLOWS } from "./master-ci-policy.mjs";
 import { ISSUE_SPEC_MODES, DEFAULT_ISSUE_SPEC_MODE } from "./issue-spec.mjs";
 
 export const REPO_ROOT = path.resolve(
@@ -71,6 +72,16 @@ export function usageLimitStatePath() {
  */
 export function repairLedgerStatePath() {
   return path.join(configDir(), "repair-ledger.json");
+}
+
+/**
+ * MOV-305: the durable record of every observed post-merge `master` failure
+ * (master-incident-ledger.mjs). Not a credential — it is what makes the
+ * observer idempotent across a daemon restart, so a replayed run updates the
+ * original remediation item instead of filing a second one.
+ */
+export function masterIncidentLedgerStatePath() {
+  return path.join(configDir(), "master-incidents.json");
 }
 
 /** Durable staged-rollout reservations for MOV-162 PR readiness/merge actions. */
@@ -246,6 +257,79 @@ export function agentSessionSteeringEnabled(env = process.env) {
  */
 export function autoRepairEnabled(env = process.env) {
   return truthy(env.MOVIECAL_AUTO_REPAIR);
+}
+
+/**
+ * Is the post-merge `master` failure observer switched on? (MOV-305.)
+ *
+ * Off unless `MOVIECAL_MASTER_CI_OBSERVER` is explicitly truthy, and off is
+ * the shipped default for the same reason `MOVIECAL_AUTO_REPAIR` is: this is
+ * a pass that files new Linear issues with nobody watching. Unsetting the
+ * variable is also how an operator disables it — the observer reads nothing
+ * and writes nothing at all while it is false, so disabling it can never
+ * leave a half-finished incident behind (an already-filed remediation issue
+ * simply stays where it is and is worked by hand).
+ */
+export function masterCiObserverEnabled(env = process.env) {
+  return truthy(env.MOVIECAL_MASTER_CI_OBSERVER);
+}
+
+/**
+ * Which workflows' `push`-on-`master` runs count as verification (MOV-305).
+ * Defaults to the four workflows that can actually produce one; a
+ * comma-separated override lets an operator narrow it (e.g. to `verify`
+ * alone) during a supervised first cycle. An override that parses to nothing
+ * falls back to the default rather than to "every workflow".
+ */
+export function resolveMasterVerificationWorkflows(env = process.env) {
+  const configured = String(env.MOVIECAL_MASTER_CI_WORKFLOWS ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  return configured.length ? configured : [...DEFAULT_MASTER_VERIFICATION_WORKFLOWS];
+}
+
+/**
+ * How many master incidents may be routed for an automatic fix PR at once
+ * (MOV-305). Counted across open incidents, not per incident: the thing worth
+ * bounding is how many unreviewed remediation branches can exist, not how
+ * many times one run was looked at. A non-integer or negative value reads as
+ * the default rather than as "unbounded".
+ */
+export const DEFAULT_MASTER_INCIDENT_ROUTE_BUDGET = 1;
+
+export function resolveMasterIncidentRouteBudget(env = process.env) {
+  const value = Number(env.MOVIECAL_MASTER_CI_ROUTE_BUDGET);
+  return Number.isInteger(value) && value >= 0 ? value : DEFAULT_MASTER_INCIDENT_ROUTE_BUDGET;
+}
+
+/**
+ * How far behind the `master` tip a failed commit may be and still be treated
+ * as current, trusted lineage (MOV-305). Beyond it — or off the lineage
+ * entirely — the incident stops for a human, because a fix branched from
+ * current `master` would no longer be repairing the code that failed.
+ */
+export const DEFAULT_MASTER_LINEAGE_MAX_DISTANCE = 10;
+
+export function resolveMasterLineageMaxDistance(env = process.env) {
+  const value = Number(env.MOVIECAL_MASTER_CI_MAX_LINEAGE_DISTANCE);
+  return Number.isInteger(value) && value >= 0 ? value : DEFAULT_MASTER_LINEAGE_MAX_DISTANCE;
+}
+
+/**
+ * Where a master-failure remediation issue is filed (MOV-305). It must be an
+ * open project, because the issue-completeness contract refuses a completed
+ * or canceled one — the observer surfaces that as a failed creation and a
+ * human decision rather than filing an unroutable issue.
+ */
+export const DEFAULT_MASTER_INCIDENT_PROJECT = "Autonomous local-agent delivery";
+export const DEFAULT_MASTER_INCIDENT_MILESTONE = "Local acceptance & controlled autonomy";
+
+export function resolveMasterIncidentProject(env = process.env) {
+  return {
+    projectName: String(env.MOVIECAL_MASTER_CI_PROJECT ?? "").trim() || DEFAULT_MASTER_INCIDENT_PROJECT,
+    milestoneName: String(env.MOVIECAL_MASTER_CI_MILESTONE ?? "").trim() || DEFAULT_MASTER_INCIDENT_MILESTONE,
+  };
 }
 
 /**

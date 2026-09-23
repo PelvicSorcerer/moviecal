@@ -17,8 +17,17 @@ import {
   DEFAULT_ISSUE_SPEC_AUDIT_INTERVAL_MS,
   issueSpecAuditStatePath,
   configDir,
+  masterCiObserverEnabled,
+  masterIncidentLedgerStatePath,
+  resolveMasterVerificationWorkflows,
+  resolveMasterIncidentRouteBudget,
+  resolveMasterLineageMaxDistance,
+  resolveMasterIncidentProject,
+  DEFAULT_MASTER_INCIDENT_ROUTE_BUDGET,
+  DEFAULT_MASTER_LINEAGE_MAX_DISTANCE,
 } from "../src/config.mjs";
 import { DEFAULT_REPAIR_BUDGETS } from "../src/ci-outcomes.mjs";
+import { DEFAULT_MASTER_VERIFICATION_WORKFLOWS } from "../src/master-ci-policy.mjs";
 
 describe("parseEnvFile", () => {
   let tmpFile;
@@ -280,5 +289,63 @@ describe("issue-completeness audit cadence (MOV-303)", () => {
 
   it("stores the schedule under the shared config directory", () => {
     expect(issueSpecAuditStatePath()).toBe(path.join(configDir(), "issue-spec-audit-state.json"));
+  });
+});
+
+describe("post-merge master CI observer configuration (MOV-305)", () => {
+  it("is off unless explicitly switched on, exactly like automatic repair", () => {
+    expect(masterCiObserverEnabled({})).toBe(false);
+    expect(masterCiObserverEnabled({ MOVIECAL_MASTER_CI_OBSERVER: "" })).toBe(false);
+    expect(masterCiObserverEnabled({ MOVIECAL_MASTER_CI_OBSERVER: "no" })).toBe(false);
+    expect(masterCiObserverEnabled({ MOVIECAL_MASTER_CI_OBSERVER: "1" })).toBe(true);
+    expect(masterCiObserverEnabled({ MOVIECAL_MASTER_CI_OBSERVER: "true" })).toBe(true);
+  });
+
+  it("defaults to the four push-capable verification workflows", () => {
+    expect(resolveMasterVerificationWorkflows({})).toEqual([...DEFAULT_MASTER_VERIFICATION_WORKFLOWS]);
+  });
+
+  it("honours a narrowing override but never reads an empty one as every workflow", () => {
+    expect(resolveMasterVerificationWorkflows({ MOVIECAL_MASTER_CI_WORKFLOWS: "verify, ios-verify" })).toEqual([
+      "verify",
+      "ios-verify",
+    ]);
+    expect(resolveMasterVerificationWorkflows({ MOVIECAL_MASTER_CI_WORKFLOWS: " , " })).toEqual([
+      ...DEFAULT_MASTER_VERIFICATION_WORKFLOWS,
+    ]);
+  });
+
+  it("bounds the automatic route budget, and a malformed value never widens it", () => {
+    expect(resolveMasterIncidentRouteBudget({})).toBe(DEFAULT_MASTER_INCIDENT_ROUTE_BUDGET);
+    expect(resolveMasterIncidentRouteBudget({ MOVIECAL_MASTER_CI_ROUTE_BUDGET: "0" })).toBe(0);
+    expect(resolveMasterIncidentRouteBudget({ MOVIECAL_MASTER_CI_ROUTE_BUDGET: "3" })).toBe(3);
+    expect(resolveMasterIncidentRouteBudget({ MOVIECAL_MASTER_CI_ROUTE_BUDGET: "-1" })).toBe(
+      DEFAULT_MASTER_INCIDENT_ROUTE_BUDGET,
+    );
+    expect(resolveMasterIncidentRouteBudget({ MOVIECAL_MASTER_CI_ROUTE_BUDGET: "lots" })).toBe(
+      DEFAULT_MASTER_INCIDENT_ROUTE_BUDGET,
+    );
+  });
+
+  it("bounds the lineage window the same way", () => {
+    expect(resolveMasterLineageMaxDistance({})).toBe(DEFAULT_MASTER_LINEAGE_MAX_DISTANCE);
+    expect(resolveMasterLineageMaxDistance({ MOVIECAL_MASTER_CI_MAX_LINEAGE_DISTANCE: "2" })).toBe(2);
+    expect(resolveMasterLineageMaxDistance({ MOVIECAL_MASTER_CI_MAX_LINEAGE_DISTANCE: "all" })).toBe(
+      DEFAULT_MASTER_LINEAGE_MAX_DISTANCE,
+    );
+  });
+
+  it("files remediation in the active local-delivery project by default", () => {
+    expect(resolveMasterIncidentProject({})).toEqual({
+      projectName: "Autonomous local-agent delivery",
+      milestoneName: "Local acceptance & controlled autonomy",
+    });
+    expect(resolveMasterIncidentProject({ MOVIECAL_MASTER_CI_PROJECT: "Platform & Infrastructure" }).projectName).toBe(
+      "Platform & Infrastructure",
+    );
+  });
+
+  it("stores the incident ledger under the shared config directory", () => {
+    expect(masterIncidentLedgerStatePath()).toBe(path.join(configDir(), "master-incidents.json"));
   });
 });
