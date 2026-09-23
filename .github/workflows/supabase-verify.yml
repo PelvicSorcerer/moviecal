@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - master
-      - agent/**
     paths:
       - 'supabase/**'
       - 'scripts/supabase-db-lint.sh'
@@ -56,6 +55,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   lane-real-stack:
@@ -79,8 +79,30 @@ jobs:
 
       - run: npm ci --no-audit --no-fund
 
+      # supabase/setup-cli routes local stack images through GHCR on GitHub
+      # runners. Authenticate the pull so the shared anonymous quota cannot
+      # throttle this real-stack lane.
+      - name: Authenticate GHCR image pulls
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Start local Supabase stack
-        run: supabase start
+        run: |
+          for attempt in 1 2 3; do
+            if supabase start; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+
+            supabase stop || true
+            sleep "$((attempt * 30))"
+          done
 
       - name: Export local Supabase credentials for real-stack tests
         run: |
