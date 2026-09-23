@@ -55,6 +55,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   lane-real-stack:
@@ -77,6 +78,16 @@ jobs:
       - run: node --version && npm --version && supabase --version
 
       - run: npm ci --no-audit --no-fund
+
+      # supabase/setup-cli routes local stack images through GHCR on GitHub
+      # runners. Authenticate the pull so the shared anonymous quota cannot
+      # throttle this real-stack lane.
+      - name: Authenticate GHCR image pulls
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Start local Supabase stack
         run: |
