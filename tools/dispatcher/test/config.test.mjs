@@ -13,6 +13,10 @@ import {
   resolveTrustedReviewers,
   resolveRepairBudgets,
   resolveIssueSpecMode,
+  resolveIssueSpecAuditIntervalMs,
+  DEFAULT_ISSUE_SPEC_AUDIT_INTERVAL_MS,
+  issueSpecAuditStatePath,
+  configDir,
 } from "../src/config.mjs";
 import { DEFAULT_REPAIR_BUDGETS } from "../src/ci-outcomes.mjs";
 
@@ -249,5 +253,32 @@ describe("issue-completeness mode (MOV-303)", () => {
     // indistinguishable from the promoter itself being broken.
     expect(resolveIssueSpecMode({ MOVIECAL_ISSUE_SPEC_MODE: "enforced" })).toBe("report");
     expect(resolveIssueSpecMode({ MOVIECAL_ISSUE_SPEC_MODE: "strict" })).toBe("report");
+  });
+});
+
+describe("issue-completeness audit cadence (MOV-303)", () => {
+  it("defaults to 24 hours", () => {
+    expect(DEFAULT_ISSUE_SPEC_AUDIT_INTERVAL_MS).toBe(24 * 60 * 60 * 1000);
+    expect(resolveIssueSpecAuditIntervalMs({})).toBe(DEFAULT_ISSUE_SPEC_AUDIT_INTERVAL_MS);
+  });
+
+  it("honours a positive override", () => {
+    expect(resolveIssueSpecAuditIntervalMs({ MOVIECAL_ISSUE_SPEC_AUDIT_INTERVAL_MS: "60000" })).toBe(60000);
+  });
+
+  it("falls back to the default for zero, negative, or non-numeric values, rather than disabling the interval", () => {
+    expect(resolveIssueSpecAuditIntervalMs({ MOVIECAL_ISSUE_SPEC_AUDIT_INTERVAL_MS: "0" })).toBe(
+      DEFAULT_ISSUE_SPEC_AUDIT_INTERVAL_MS,
+    );
+    expect(resolveIssueSpecAuditIntervalMs({ MOVIECAL_ISSUE_SPEC_AUDIT_INTERVAL_MS: "-1" })).toBe(
+      DEFAULT_ISSUE_SPEC_AUDIT_INTERVAL_MS,
+    );
+    expect(resolveIssueSpecAuditIntervalMs({ MOVIECAL_ISSUE_SPEC_AUDIT_INTERVAL_MS: "never" })).toBe(
+      DEFAULT_ISSUE_SPEC_AUDIT_INTERVAL_MS,
+    );
+  });
+
+  it("stores the schedule under the shared config directory", () => {
+    expect(issueSpecAuditStatePath()).toBe(path.join(configDir(), "issue-spec-audit-state.json"));
   });
 });

@@ -264,6 +264,29 @@ export function resolveIssueSpecMode(env = process.env) {
   return ISSUE_SPEC_MODES.includes(raw) ? raw : DEFAULT_ISSUE_SPEC_MODE;
 }
 
+/**
+ * How often the in-loop issue-completeness audit (issue-spec-audit.mjs) may
+ * run automatically, in milliseconds. It does not run every 30-second poll
+ * cycle -- only once this many milliseconds have elapsed since the last
+ * *completed* run, persisted at `issueSpecAuditStatePath()` so a daemon
+ * restart does not trigger an immediate re-scan. Defaults to 24 hours;
+ * zero, negative, or non-numeric values fall back to the default rather than
+ * disabling the interval (`MOVIECAL_ISSUE_SPEC_MODE=off` is the switch for
+ * disabling the audit entirely). `dispatcher audit-issues` (the standalone
+ * command) is never gated by this -- only the automatic in-loop call is.
+ */
+export const DEFAULT_ISSUE_SPEC_AUDIT_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+export function resolveIssueSpecAuditIntervalMs(env = process.env) {
+  const raw = Number(env.MOVIECAL_ISSUE_SPEC_AUDIT_INTERVAL_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_ISSUE_SPEC_AUDIT_INTERVAL_MS;
+}
+
+/** Persisted `{ lastRunAt }` for the in-loop issue-spec audit's cadence (MOV-303). */
+export function issueSpecAuditStatePath() {
+  return path.join(configDir(), "issue-spec-audit-state.json");
+}
+
 /** Off unless explicitly enabled; removing this switch immediately restores manual PR control. */
 export function prAutonomyEnabled(env = process.env) {
   return truthy(env.MOVIECAL_PR_AUTONOMY);

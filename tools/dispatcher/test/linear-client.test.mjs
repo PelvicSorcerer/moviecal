@@ -301,6 +301,33 @@ describe("LinearClient", () => {
       // compliant) thing — there is no project at all.
       expect(issue).toMatchObject({ project: null, projectStatus: null, projectMilestoneCount: 0, milestone: null });
     });
+
+    it("includes spec fields only when dispatch preflight asks for them", async () => {
+      const defaultFetch = mockFetch({ issues: { nodes: [specNode()] } });
+      const defaultClient = new LinearClient({ apiKey: "lin_api_abc", fetchImpl: defaultFetch });
+      const [defaultIssue] = await defaultClient.issuesInState({ teamKey: "MOV", stateName: "In Review" });
+
+      expect(defaultIssue.projectStatus).toBeUndefined();
+      expect(JSON.parse(defaultFetch.mock.calls[0][1].body).query).not.toMatch(/projectMilestones \{ nodes \{ id \} \}/);
+
+      const specFetch = mockFetch({ issues: { nodes: [specNode()] } });
+      const specClient = new LinearClient({ apiKey: "lin_api_abc", fetchImpl: specFetch });
+      const [specIssue] = await specClient.issuesInState({
+        teamKey: "MOV",
+        stateName: "Ready for Agent",
+        includeSpecFields: true,
+      });
+
+      expect(specIssue).toMatchObject({
+        projectStatus: "started",
+        projectMilestoneCount: 2,
+        milestone: "Local acceptance & controlled autonomy",
+      });
+      const { query, variables } = JSON.parse(specFetch.mock.calls[0][1].body);
+      expect(query).toMatch(/projectMilestone \{ name \}/);
+      expect(query).toMatch(/projectMilestones \{ nodes \{ id \} \}/);
+      expect(variables.stateName).toBe("Ready for Agent");
+    });
   });
 
   // MOV-308: the audit pass reads every open state in the team, not the

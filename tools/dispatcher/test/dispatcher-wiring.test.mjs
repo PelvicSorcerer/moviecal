@@ -187,6 +187,40 @@ describe("dispatcher run-loop wiring (MOV-129/MOV-366)", () => {
     }
   });
 
+  // MOV-303: preflight is the gate nothing can bypass -- an issue reaches
+  // "Ready for Agent" by the promoter, a human, or a Loop, but every one of
+  // them is dispatched (or not) through processIssue's evaluatePreflight
+  // call. That call needs the issue-spec fields to make that decision, and
+  // run-context.mjs is what wires issueSpecMode into it for the real daemon.
+  it("fetches the dispatch batch with spec fields, so preflight's issue-completeness gate has what it needs", () => {
+    const body = bodyOf("cmdRunOnce");
+    expect(body).toMatch(/issuesInState\(\{[\s\S]{0,400}includeSpecFields:\s*true/);
+  });
+
+  it("run-context.mjs forwards issueSpecMode to the real runOnce context, so preflight's gate is live outside dry-run", () => {
+    expect(runContextSource).toMatch(/issueSpecMode:\s*resolveIssueSpecMode\(\)/);
+  });
+
+  it("the in-loop audit pass is gated by cadence, not run every 30-second cycle", () => {
+    const body = bodyOf("auditIssuesPass");
+    expect(body).toMatch(/IssueSpecAuditScheduleStore/);
+    expect(body).toMatch(/isAuditDue\(/);
+    expect(body).toMatch(/resolveIssueSpecAuditIntervalMs\(\)/);
+    // Only a successful pass should reset the clock -- a failure must be
+    // retried next cycle rather than waiting out the rest of the interval.
+    const auditCallAt = body.indexOf("cmdAuditIssuesOnce");
+    const recordAt = body.indexOf("recordIssueSpecAuditCompleted");
+    const catchAt = body.indexOf("catch");
+    expect(auditCallAt).toBeGreaterThan(-1);
+    expect(recordAt).toBeGreaterThan(auditCallAt);
+    expect(recordAt).toBeLessThan(catchAt);
+  });
+
+  it("a manual audit-issues run (not --dry-run) resets the automatic pass's clock", () => {
+    const body = bodyOf("cmdAuditIssues");
+    expect(body).toMatch(/recordIssueSpecAuditCompleted\(\)/);
+  });
+
   it("promotePass swallows errors so a promote failure cannot abort dispatch", () => {
     const body = bodyOf("promotePass");
     expect(body).toMatch(/try\s*\{/);
@@ -280,6 +314,9 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       "dispatcherLaunchHealthStatePath",
       "dispatcherLockPath",
       "envLocalPath",
+      // MOV-303: persists only { lastRunAt } for the issue-completeness
+      // audit's cadence -- not a credential.
+      "issueSpecAuditStatePath",
       "linearAppEnvPath",
       "linearEnvPath",
       "prAutonomyLedgerStatePath",

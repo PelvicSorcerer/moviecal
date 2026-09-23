@@ -152,8 +152,17 @@ export class LinearClient {
    * — in `dispatcher dry-run` — exactly which queued issues it is declining
    * and why. Filtering server-side would make an issue it should have claimed
    * indistinguishable from one that does not exist.
+   *
+   * @param {boolean} [includeSpecFields] - MOV-303: also select the issue-spec
+   *   fields (`ISSUE_SPEC_FIELDS`) and fold them in via `withIssueSpecFields`,
+   *   the same as `issuesForPromotion`/`issuesForSpecAudit`. Off by default:
+   *   this query backs both the real "Ready for Agent" dispatch batch (which
+   *   needs these fields for preflight's issue-completeness gate) and the
+   *   "In Review" CI-observation batch (which does not), and the nested
+   *   project-milestone traversal these fields add should not be paid by a
+   *   caller that has no use for it.
    */
-  async issuesInState({ teamKey, stateName }) {
+  async issuesInState({ teamKey, stateName, includeSpecFields = false }) {
     const query = `
       query($teamKey: String!, $stateName: String!) {
         issues(filter: {
@@ -162,12 +171,15 @@ export class LinearClient {
         }) {
           nodes {
             ${ISSUE_FIELDS}
+            ${includeSpecFields ? ISSUE_SPEC_FIELDS : ""}
           }
         }
       }
     `;
     const data = await this.request(query, { teamKey, stateName });
-    return data.issues.nodes.map(normalizeIssue);
+    return data.issues.nodes.map((node) =>
+      includeSpecFields ? withIssueSpecFields(node, normalizeIssue(node)) : normalizeIssue(node),
+    );
   }
 
   /**

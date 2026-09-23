@@ -16,7 +16,10 @@
 // but they run against one fake Linear client whose comment log feeds the next
 // pass — the same way the real `issuesForSpecAudit` query feeds it.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   auditIssueSpecs,
   auditCommentBody,
@@ -25,6 +28,8 @@ import {
   parseAuditCommentMarker,
   lastAuditFingerprint,
   AUDIT_COMMENT_HEADLINE,
+  IssueSpecAuditScheduleStore,
+  isAuditDue,
 } from "../src/issue-spec-audit.mjs";
 import { evaluateIssueSpec, issueSpecFingerprint } from "../src/issue-spec.mjs";
 import { PROMOTION_COMMENT } from "../src/promoter.mjs";
@@ -268,5 +273,68 @@ describe("auditIssueSpecs across cycles", () => {
     for (const name of ["moveToState", "updateIssuePriority", "addBlocksRelation", "linkBlockingChain"]) {
       expect(linearClient[name], name).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe("isAuditDue", () => {
+  it("is due when never run", () => {
+    expect(isAuditDue(undefined, 1_000_000, 60_000)).toBe(true);
+    expect(isAuditDue(null, 1_000_000, 60_000)).toBe(true);
+  });
+
+  it("is due when non-numeric, so a corrupt record never wedges the schedule shut", () => {
+    expect(isAuditDue("not a number", 1_000_000, 60_000)).toBe(true);
+    expect(isAuditDue(NaN, 1_000_000, 60_000)).toBe(true);
+  });
+
+  it("is not due before the interval elapses, and due exactly at and after it", () => {
+    const lastRunAt = 1_000_000;
+    const intervalMs = 60_000;
+    expect(isAuditDue(lastRunAt, lastRunAt + intervalMs - 1, intervalMs)).toBe(false);
+    expect(isAuditDue(lastRunAt, lastRunAt + intervalMs, intervalMs)).toBe(true);
+    expect(isAuditDue(lastRunAt, lastRunAt + intervalMs + 1, intervalMs)).toBe(true);
+  });
+});
+
+describe("IssueSpecAuditScheduleStore", () => {
+  let statePath;
+
+  afterEach(() => {
+    if (statePath) fs.rmSync(path.dirname(statePath), { recursive: true, force: true });
+    statePath = undefined;
+  });
+
+  function freshStatePath() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-issue-spec-audit-"));
+    statePath = path.join(dir, "issue-spec-audit-state.json");
+    return statePath;
+  }
+
+  it("reads {} (never run) when the file does not exist, so a fresh install audits once rather than never", () => {
+    const store = new IssueSpecAuditScheduleStore(freshStatePath());
+    expect(store.loadOrReset()).toEqual({});
+  });
+
+  it("round-trips a saved lastRunAt", () => {
+    const store = new IssueSpecAuditScheduleStore(freshStatePath());
+    store.save({ lastRunAt: 1_700_000_000_000 });
+    expect(store.loadOrReset()).toEqual({ lastRunAt: 1_700_000_000_000 });
+  });
+
+  it("reads {} instead of throwing when the primary file is corrupt and no backup exists (AC: one audit, not a crash)", () => {
+    const target = freshStatePath();
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "{ this is not valid json", "utf8");
+    const store = new IssueSpecAuditScheduleStore(target);
+    expect(store.loadOrReset()).toEqual({});
+  });
+
+  it("recovers from the .bak written by a previous save, ahead of throwing (JsonStateStore's own durability contract)", () => {
+    const target = freshStatePath();
+    const store = new IssueSpecAuditScheduleStore(target);
+    store.save({ lastRunAt: 111 });
+    store.save({ lastRunAt: 222 });
+    fs.writeFileSync(target, "not json at all", "utf8");
+    expect(store.loadOrReset()).toEqual({ lastRunAt: 111 });
   });
 });

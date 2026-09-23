@@ -54,6 +54,7 @@ import {
   prAutonomyLedgerStatePath,
   dispatcherLaunchHealthStatePath,
   priorityPropagationStatePath,
+  issueSpecAuditStatePath,
   loadLinearConfig,
   loadLinearAppConfig,
   resolveLinearAuth,
@@ -65,6 +66,7 @@ import {
   prAutonomyEnabled,
   resolvePrAutonomyMaxActions,
   resolveIssueSpecMode,
+  resolveIssueSpecAuditIntervalMs,
   checkSecretFileMode,
   DEFAULT_CONCURRENCY,
   RUN_LOG_RETENTION_DAYS,
@@ -92,8 +94,8 @@ import {
 } from "../src/run-context.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
-import { AUDITED_SPEC_STATE_TYPES } from "../src/issue-spec.mjs";
-import { auditIssueSpecs } from "../src/issue-spec-audit.mjs";
+import { AUDITED_SPEC_STATE_TYPES, evaluateIssueSpec, formatIssueSpecMissing } from "../src/issue-spec.mjs";
+import { auditIssueSpecs, IssueSpecAuditScheduleStore, isAuditDue } from "../src/issue-spec-audit.mjs";
 import { propagatePriorities, TERMINAL_PRIORITY_STATE_TYPES } from "../src/priority-propagation.mjs";
 import { reconcileParents } from "../src/parent-completion-guard.mjs";
 import { defaultRunner as ghRunner } from "../src/pr-check.mjs";
@@ -258,15 +260,16 @@ async function cmdDoctor() {
   // wondering why an incomplete issue did (or did not) promote.
   {
     const mode = resolveIssueSpecMode();
+    const intervalHours = Math.round((resolveIssueSpecAuditIntervalMs() / (60 * 60 * 1000)) * 10) / 10;
     checks.push({
       name: "issue completeness contract",
       ok: true,
       detail:
         mode === "enforce"
-          ? "enforce — an incomplete issue is not promoted"
+          ? `enforce — an incomplete issue is neither promoted nor dispatched (fails preflight to Blocked), and every open non-Triage issue is audited automatically at most every ${intervalHours}h`
           : mode === "off"
-            ? "off (MOVIECAL_ISSUE_SPEC_MODE=off) — the promoter gate does not run"
-            : "report (default) — promotion is unchanged; violations are logged. Switch to enforce once the backlog is backfilled",
+            ? "off (MOVIECAL_ISSUE_SPEC_MODE=off) — neither the promoter/preflight gates nor the audit pass runs"
+            : `report (default) — promotion and dispatch are unchanged; violations are logged and audited as issue comments at most every ${intervalHours}h. Switch to enforce once the backlog is backfilled`,
     });
   }
 
@@ -354,7 +357,7 @@ async function cmdDryRun({ fixturePath } = {}) {
   } else {
     const built = buildLinearClient();
     if (!built) return 1;
-    issues = await built.client.issuesInState({ teamKey: built.teamKey, stateName: "Ready for Agent" });
+    issues = await built.client.issuesInState({ teamKey: built.teamKey, stateName: "Ready for Agent", includeSpecFields: true });
   }
 
   const manager = new WorktreeManager({
@@ -772,7 +775,9 @@ async function cmdAuditIssues({ dryRun = false } = {}) {
   try { lock.acquire(); } catch (err) { console.error(err.message); return 2; }
   process.once("exit", () => lock.release());
   try {
-    return await cmdAuditIssuesOnce({ dryRun: false });
+    const exitCode = await cmdAuditIssuesOnce({ dryRun: false });
+    if (exitCode === 0) recordIssueSpecAuditCompleted();
+    return exitCode;
   } finally {
     lock.release();
   }
@@ -837,10 +842,19 @@ async function promotePass() {
   }
 }
 
+/** Persist a successful audit so restarts respect the configured cadence. */
+function recordIssueSpecAuditCompleted() {
+  new IssueSpecAuditScheduleStore(issueSpecAuditStatePath()).save({ lastRunAt: Date.now() });
+}
+
 /** Run the issue-completeness audit inside the poll loop; never abort dispatch. */
 async function auditIssuesPass() {
+  if (resolveIssueSpecMode() === "off") return;
+  const scheduleStore = new IssueSpecAuditScheduleStore(issueSpecAuditStatePath());
+  if (!isAuditDue(scheduleStore.loadOrReset().lastRunAt, Date.now(), resolveIssueSpecAuditIntervalMs())) return;
   try {
     await cmdAuditIssuesOnce({ dryRun: false });
+    recordIssueSpecAuditCompleted();
   } catch (err) {
     console.error("Issue-completeness audit pass failed (continuing to dispatch):", err.message);
   }
@@ -941,7 +955,14 @@ async function cmdRunOnce({ repairLockHeld = false } = {}) {
   const issues = await linearClient.issuesInState({
     teamKey,
     stateName: RUN_STATE_NAMES.readyForAgent,
+    includeSpecFields: true,
   });
+  if (resolveIssueSpecMode() === "report") {
+    for (const issue of issues) {
+      const missing = formatIssueSpecMissing(evaluateIssueSpec(issue));
+      if (missing.length > 0) console.log(`${issue.identifier}: issue-spec violations (report mode, not enforced) — ${missing.join("; ")}`);
+    }
+  }
 
   const ctx = await buildRunContext(linearClient, teamKey, issues, { repairLockHeld });
   // MOV-190: repair targets are retained review worktrees, not new Ready for

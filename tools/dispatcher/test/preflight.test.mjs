@@ -108,6 +108,84 @@ describe("evaluatePreflight", () => {
   });
 });
 
+describe("evaluatePreflight issue-completeness gate (MOV-303)", () => {
+  // Satisfies the dispatchable-kind contract from issue-spec.mjs with no
+  // project-milestone data at all, since a project with zero (i.e. omitted)
+  // milestones never requires one.
+  const completeIssue = {
+    labels: ["execution:mac", "type:fix", "risk:low", "worker:any", "model:default", "area:process"],
+    blockedByIds: [],
+    project: "Autonomous local-agent delivery",
+  };
+  const incompleteIssue = { labels: [], blockedByIds: [] };
+
+  it("off mode never fails preflight and never reports a violation", () => {
+    const result = evaluatePreflight(incompleteIssue, baseContext({ issueSpecMode: "off" }));
+    expect(result.ok).toBe(true);
+    expect(result.specViolations).toEqual([]);
+  });
+
+  it("report mode (the default) does not fail preflight but does report violations", () => {
+    const result = evaluatePreflight(incompleteIssue, baseContext());
+    expect(result.ok).toBe(true);
+    expect(result.specViolations.length).toBeGreaterThan(0);
+  });
+
+  it("report mode explicitly behaves like the default", () => {
+    const withoutMode = evaluatePreflight(incompleteIssue, baseContext());
+    const withReport = evaluatePreflight(incompleteIssue, baseContext({ issueSpecMode: "report" }));
+    expect(withReport).toEqual(withoutMode);
+  });
+
+  it("enforce mode fails preflight for an incomplete issue and names every missing item", () => {
+    const result = evaluatePreflight(incompleteIssue, baseContext({ issueSpecMode: "enforce" }));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/incomplete issue spec \(MOV-303\)/);
+    for (const violation of result.specViolations) {
+      expect(result.reason).toContain(violation);
+    }
+  });
+
+  it("enforce mode passes a complete issue through to the rest of preflight", () => {
+    const result = evaluatePreflight(completeIssue, baseContext({ issueSpecMode: "enforce" }));
+    expect(result.ok).toBe(true);
+    expect(result.specViolations).toEqual([]);
+  });
+
+  it("enforce mode still reports the real reason for a complete-but-otherwise-blocked issue", () => {
+    const result = evaluatePreflight(completeIssue, baseContext({ issueSpecMode: "enforce", worktreePathFree: () => false }));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/already in use/);
+    expect(result.specViolations).toEqual([]);
+  });
+
+  it("specViolations rides along on every branch, including the earliest (human-only)", () => {
+    const result = evaluatePreflight(
+      { labels: ["human-only"], blockedByIds: [] },
+      baseContext({ issueSpecMode: "report" }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/human-only/);
+    // human-only issues are exempt from the dispatchable label rules but
+    // still require execution:none/risk:*/area:* — an ordinary human-only
+    // fixture with no labels at all is still incomplete.
+    expect(result.specViolations.length).toBeGreaterThan(0);
+  });
+
+  it("enforce mode checks the spec before the operational gates (concurrency, worktree path)", () => {
+    // Both would fail on their own; the spec violation must win so the
+    // reason names what to actually fix first.
+    const context = baseContext({
+      issueSpecMode: "enforce",
+      activeWorktreeCount: 2,
+      concurrencyLimit: 2,
+    });
+    const result = evaluatePreflight(incompleteIssue, context);
+    expect(result.reason).toMatch(/incomplete issue spec/);
+    expect(result.reason).not.toMatch(/concurrency/);
+  });
+});
+
 describe("slugify / worktreeName / branchName", () => {
   it("slugifies a title into a branch-safe fragment", () => {
     expect(slugify("Wire up TMDB_API_KEY and SMOKE_URL secrets")).toBe(
