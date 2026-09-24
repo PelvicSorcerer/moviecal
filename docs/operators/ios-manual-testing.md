@@ -6,11 +6,29 @@ currently installed com.moviecal.ios binary. Installing a build from another
 checkout replaces that binary, while the simulator's app container and
 Keychain state can remain.
 
+## The simulator lease (MOV-309/MOV-311)
+
+`npm run ios:manual-test` always targets the `moviecal-manual` device and holds
+a manual-lane lease (20 minutes, renewable to a 60-minute cap) after install
+and launch, so closing the build terminal does not free the simulator mid-test.
+It prints the lease id, expiry, and cap. Full semantics and the `ios:sim:*`
+commands are in `scripts/ios-sim-lease.mjs`.
+
+**Agent procedure:** if you set up the simulator for a user's manual testing,
+run `npm run ios:sim:release` as soon as they say they are finished; an idle
+lease blocks CI, the worker lane, and the next manual session.
+
+Sessions guarded by the `scripts/ios-sim-guard.mjs` hook (wired into
+`.claude/settings.json` by a human) block simulator mutations and `xcodebuild`
+until a live lease covers the lane; the message says to run
+`npm run ios:sim:acquire`. Read-only commands and `--dry-run` always pass.
+
 ## Prepare the checkout and API
 
 Run the command from an interactive worktree outside the dispatcher's managed
 worktree root. Do not run it while a local worker, CI runner, or another Xcode
-build is using the simulator.
+build is using the simulator -- the lease above is exactly what prevents that
+collision if you try anyway.
 
 For native API testing, start a separate local API server in the same checkout:
 
@@ -23,19 +41,21 @@ or passes test email/password values to the build.
 
 ## Build and install
 
-With exactly one booted simulator:
+    npm run ios:manual-test
 
-    npm run ios:manual-test -- --device booted
+This acquires the manual lease and builds against `moviecal-manual`
+(`--device booted` means that device), validates configuration before invoking
+Xcode, writes build settings to a private temporary .xcconfig, verifies the
+built app's embedded settings without displaying them, installs, and launches.
 
-To select a particular simulator, substitute its UDID for booted. The command
-validates its configuration before invoking Xcode, writes the required
-build settings to a private temporary .xcconfig, verifies the built app's
-embedded settings without displaying them, installs the app, and launches it.
+Pass `--device <udid-or-name>` to target another simulator (`moviecal-ci`
+and `moviecal-worker` are rejected).
 
 Use --dry-run to confirm configuration and identify the current branch and
-commit without running simulator or build commands:
+commit without running simulator or build commands, and without acquiring a
+lease or writing anything:
 
-    npm run ios:manual-test -- --device booted --dry-run
+    npm run ios:manual-test -- --dry-run
 
 For an intentionally separate disposable configuration file, add
 --env-file /absolute/path/to/ios-manual-test.env. The file is parsed as data,
@@ -52,3 +72,8 @@ guarantee a clean session. Signing out, erasing app data, or erasing the
 simulator are destructive manual actions. Do them only when the test case calls
 for a clean state, and record that reset in the issue's manual-verification
 evidence.
+
+## When you are finished
+
+Run `npm run ios:sim:release` to free the simulator (`ios:sim:status` shows
+the current lease).

@@ -12,6 +12,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { commandAcquire, createEnvironment as createLeaseEnvironment } from "./ios-sim-lease.mjs";
+import { LANE_DEVICES, agentGuidance } from "./lib/ios-sim-lease-core.mjs";
+
 const DEFAULT_ENV_FILE = path.join(
   os.homedir(),
   ".config",
@@ -26,7 +29,7 @@ const BUNDLE_IDENTIFIER = "com.moviecal.ios";
 
 export function parseArguments(argv) {
   const options = {
-    device: null,
+    device: "booted",
     dryRun: false,
     envFile: DEFAULT_ENV_FILE,
   };
@@ -53,7 +56,7 @@ export function parseArguments(argv) {
   }
 
   if (!options.device) {
-    throw new Error("A simulator device is required: pass --device booted or a UDID.");
+    throw new Error("--device requires a value: booted or a UDID.");
   }
 
   if (!options.envFile) {
@@ -196,25 +199,38 @@ function sourceIdentity(cwd) {
   return { branch, sha };
 }
 
-function resolveDevice(device, command, cwd) {
-  if (device !== "booted") {
-    return device;
-  }
-
+/**
+ * `--device booted` means the manual-lane device (MOV-311), never "whatever
+ * happens to be booted" — the lease, not simctl state, decides the target.
+ * An explicit UDID or name is resolved and rejected if it names the CI or
+ * worker lane's own device; those are never valid manual-test targets.
+ */
+function resolveExplicitDevice(device, command, cwd) {
   const output = command(
     "xcrun",
-    ["simctl", "list", "devices", "booted", "-j"],
+    ["simctl", "list", "devices", "-j"],
     { cwd, capture: true, timeout: 30_000 },
   );
-  const devices = Object.values(JSON.parse(output).devices)
-    .flat()
-    .filter((candidate) => candidate.state === "Booted");
+  const devices = Object.values(JSON.parse(output).devices).flat();
+  const match = devices.find((candidate) => candidate.udid === device || candidate.name === device);
+  const name = match?.name ?? device;
 
-  if (devices.length !== 1) {
-    throw new Error("Exactly one booted simulator is required.");
+  if (name === LANE_DEVICES.ci || name === LANE_DEVICES.worker) {
+    throw new Error(
+      `--device ${device} names the ${name} simulator, which is reserved for its own lane. ` +
+        `Use --device booted for the ${LANE_DEVICES.manual} device, or pass a different simulator.`,
+    );
   }
 
-  return devices[0].udid;
+  return match ? match.udid : device;
+}
+
+function defaultAcquireLease(purpose, ref) {
+  // Internal chatter (mutex waits, takeover notices) is silenced here; the
+  // caller prints the one thing that matters -- the agent-guidance block --
+  // through its own injected `log`.
+  const environment = createLeaseEnvironment({ log: () => {}, warn: () => {} });
+  return commandAcquire({ purpose, ref }, environment);
 }
 
 function assertBuiltConfiguration(appPath, config, command, cwd) {
@@ -241,6 +257,7 @@ export function runManualTestBuild(
     command = runCommand,
     getSourceIdentity = sourceIdentity,
     log = console.log,
+    acquireLease = defaultAcquireLease,
   } = {},
 ) {
   const config = readManualTestConfiguration(options.envFile);
@@ -251,7 +268,15 @@ export function runManualTestBuild(
     return;
   }
 
-  const device = resolveDevice(options.device, command, cwd);
+  const ref = `${source.branch}@${source.sha}`;
+  const explicitDevice = options.device === "booted" ? null : resolveExplicitDevice(options.device, command, cwd);
+
+  // MOV-311: acquired before the clean build and held after install/launch —
+  // this is a manual-lane, time-based lease (MOV-309), so it outlives this
+  // one-shot process on purpose. Release it with `npm run ios:sim:release`
+  // once the user says they are finished testing.
+  const lease = acquireLease(`ios:manual-test (${ref})`, ref);
+  const device = explicitDevice ?? lease.device.udid;
   const derivedDataPath = path.join(os.tmpdir(), `moviecal-ios-manual-${source.sha}`);
   const appPath = path.join(
     derivedDataPath,
@@ -290,7 +315,8 @@ export function runManualTestBuild(
     temporaryConfig.dispose();
   }
 
-  log(`Installed ${BUNDLE_IDENTIFIER} from ${source.branch}@${source.sha} on simulator ${device}.`);
+  log(agentGuidance(lease));
+  log(`Installed ${BUNDLE_IDENTIFIER} from ${ref} on simulator ${device}.`);
 }
 
 function main() {

@@ -28,9 +28,24 @@ afterEach(() => {
   }
 });
 
+function fakeLease(overrides = {}) {
+  return {
+    id: "lease-1",
+    lane: "manual",
+    device: { name: "moviecal-manual", udid: "manual-udid" },
+    expiresAt: "2026-09-23T10:20:00.000Z",
+    hardCapAt: "2026-09-23T11:00:00.000Z",
+    ...overrides,
+  };
+}
+
 describe("ios manual-test command", () => {
-  it("requires an explicit simulator device", () => {
-    expect(() => parseArguments([])).toThrow(/simulator device/i);
+  it("defaults to the manual-lane device when --device is omitted", () => {
+    expect(parseArguments([]).device).toBe("booted");
+  });
+
+  it("rejects an empty --device value", () => {
+    expect(() => parseArguments(["--device", ""])).toThrow(/--device/i);
   });
 
   it("reads only the two build configuration values", () => {
@@ -97,9 +112,10 @@ describe("ios manual-test command", () => {
     expect(() => readFileSync(temporaryConfig.file, "utf8")).toThrow();
   });
 
-  it("validates configuration without running commands in dry-run mode", () => {
+  it("validates configuration without running commands or acquiring a lease in dry-run mode", () => {
     const command = vi.fn();
     const log = vi.fn();
+    const acquireLease = vi.fn();
     const key = "sb_publishable_test_value";
 
     runManualTestBuild(
@@ -118,13 +134,105 @@ describe("ios manual-test command", () => {
         command,
         getSourceIdentity: () => ({ branch: "test", sha: "abcdef0" }),
         log,
+        acquireLease,
       },
     );
 
     expect(command).not.toHaveBeenCalled();
+    expect(acquireLease).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(
       expect.stringMatching(/configuration validated/i),
     );
     expect(log.mock.calls.flat().join("\\n")).not.toContain(key);
+  });
+
+  describe("lease and device resolution (MOV-311)", () => {
+    function configFile() {
+      return createEnvFile(
+        [
+          "MOVIECAL_SUPABASE_URL=https://manual-test.supabase.co",
+          "MOVIECAL_SUPABASE_ANON_KEY=sb_publishable_test_value",
+          "",
+        ].join("\n"),
+      );
+    }
+
+    function fakeCommand(bootedDevices = []) {
+      return vi.fn((command, args) => {
+        if (command === "xcrun" && args[0] === "simctl" && args[1] === "list") {
+          const devices = {
+            "com.apple.CoreSimulator.SimRuntime.iOS-26-0": [
+              { name: "moviecal-ci", udid: "ci-udid", state: "Shutdown" },
+              { name: "moviecal-worker", udid: "worker-udid", state: "Shutdown" },
+              { name: "moviecal-manual", udid: "manual-udid", state: "Shutdown" },
+              ...bootedDevices,
+            ],
+          };
+          return JSON.stringify({ devices });
+        }
+        if (command === "plutil") {
+          return args.includes("MoviecalSupabaseURL") ? "https://manual-test.supabase.co/" : "sb_publishable_test_value";
+        }
+        return "";
+      });
+    }
+
+    it("acquires a manual-lane lease before the clean build and uses its device by default", () => {
+      const command = fakeCommand();
+      const log = vi.fn();
+      const acquireLease = vi.fn(() => fakeLease());
+
+      runManualTestBuild(
+        { device: "booted", dryRun: false, envFile: configFile() },
+        { command, getSourceIdentity: () => ({ branch: "feature", sha: "abc1234" }), log, acquireLease },
+      );
+
+      expect(acquireLease).toHaveBeenCalledTimes(1);
+      const buildDestination = command.mock.calls.find(([cmd]) => cmd === "xcodebuild")[1];
+      expect(buildDestination).toContain("platform=iOS Simulator,id=manual-udid");
+      expect(command).toHaveBeenCalledWith("xcrun", ["simctl", "install", "manual-udid", expect.any(String)], expect.anything());
+    });
+
+    it("prints the agent-guidance block on success", () => {
+      const command = fakeCommand();
+      const log = vi.fn();
+      const acquireLease = vi.fn(() => fakeLease());
+
+      runManualTestBuild(
+        { device: "booted", dryRun: false, envFile: configFile() },
+        { command, getSourceIdentity: () => ({ branch: "feature", sha: "abc1234" }), log, acquireLease },
+      );
+
+      const printed = log.mock.calls.flat().join("\n");
+      expect(printed).toMatch(/lease id lease-1/);
+      expect(printed).toMatch(/npm run ios:sim:release/);
+    });
+
+    it("refuses an explicit --device naming the CI or worker lane device without acquiring a lease", () => {
+      const command = fakeCommand();
+      const acquireLease = vi.fn();
+
+      expect(() =>
+        runManualTestBuild(
+          { device: "moviecal-worker", dryRun: false, envFile: configFile() },
+          { command, getSourceIdentity: () => ({ branch: "feature", sha: "abc1234" }), log: vi.fn(), acquireLease },
+        ),
+      ).toThrow(/reserved for its own lane/i);
+      expect(acquireLease).not.toHaveBeenCalled();
+    });
+
+    it("still acquires a manual lease when an explicit non-reserved device is given, but builds on that device", () => {
+      const command = fakeCommand([{ name: "iPhone 17", udid: "shared-udid", state: "Shutdown" }]);
+      const acquireLease = vi.fn(() => fakeLease());
+
+      runManualTestBuild(
+        { device: "shared-udid", dryRun: false, envFile: configFile() },
+        { command, getSourceIdentity: () => ({ branch: "feature", sha: "abc1234" }), log: vi.fn(), acquireLease },
+      );
+
+      expect(acquireLease).toHaveBeenCalledTimes(1);
+      const buildDestination = command.mock.calls.find(([cmd]) => cmd === "xcodebuild")[1];
+      expect(buildDestination).toContain("platform=iOS Simulator,id=shared-udid");
+    });
   });
 });
