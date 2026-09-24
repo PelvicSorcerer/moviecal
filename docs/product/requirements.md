@@ -5,12 +5,12 @@ Functional requirements
 - Search movies using TMDb and display results.
 - Add and remove movies from the user's personal watchlist.
 - Create shared watchlists and view or manage movies in personal/shared watchlists when authorized.
-- Provide a web watchlist experience for personal and shared lists without representing it as a complete social or membership-management product.
+- Provide a web watchlist experience for personal and shared lists without representing it as a complete social product. The current collaboration slice includes owner-generated/rotated secret links, signed-in recipient acceptance as an editor, and owner removal of members.
 - Provide a private calendar subscription URL per user that returns an iCalendar feed (.ics).
 - Allow a user to rotate their calendar subscription URL; the prior URL must no longer grant feed access.
 - Calendar feed must return a single all-day event per known-release movie across the user's accessible watchlists, deduplicated by movie identity.
 - Scheduled refresh of release dates (Vercel Cron).
-- Provide an additive, versioned v1 API for native/mobile clients while retaining the cookie-session web API for the web app.
+- Provide an additive, versioned v1 API for native/mobile clients while retaining the cookie-session web API for the web app. The current v1 watchlist endpoints address only the user's personal list; shared-list endpoints are planned additions.
 
 Non-functional requirements
 - Use TypeScript strict mode.
@@ -33,7 +33,7 @@ Security constraints
 - Use Supabase Row Level Security for watchlist data.
 - Service role keys only server-side; public anon key only where appropriate.
 - Never commit secrets or .env files to the public repo.
-- Do not promise invitation acceptance or shared-list member management beyond the behavior specified in the technical contracts.
+- Invite links are bearer credentials: store their hashes rather than raw tokens and avoid logging or exposing the URL after generation. Current web acceptance and owner member removal must follow the permissions in the [API design](../technical/api-design.md). Seven-day expiry, standalone revoke, editor leave, shared rename, and list deletion are planned rather than current requirements of the shipped slice.
 
 Authoritative detail
 - [API design](../technical/api-design.md) is authoritative for web API behavior and authorization.

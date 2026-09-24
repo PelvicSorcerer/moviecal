@@ -15,13 +15,15 @@ Value proposition
 
 Success metrics
 - User can manage movies in a personal watchlist and in authorized shared watchlists from the web experience
+- A shared-list owner can generate or rotate a secret invite link, a signed-in recipient can accept it and edit the shared list's movies, and the owner can remove that member
 - User can subscribe to a feed and see one event for each known-release movie across their accessible watchlists
 - Feed updates if a release date changes
 - User can rotate a compromised subscription URL and use the replacement URL
 
 Current product boundaries
 - The web app uses its established signed-in browser experience. The versioned mobile API is additive for native/mobile clients; it does not replace the web routes or change their session model.
-- Shared-watchlist collaboration is deliberately narrower than a full social product. Do not promise invite acceptance or member-management flows beyond the behavior explicitly documented in the technical contracts.
+- Shared-watchlist collaboration is deliberately narrower than a full social product. The current web app supports secret-link acceptance and owner removal of members. Seven-day invite expiration, standalone invite revocation, editor self-leave, shared-list rename, and permanent list deletion are planned work, not shipped behavior. See the [web API design](../technical/api-design.md) for the current endpoint boundary.
+- The current `v1` watchlist API serves the authenticated user's personal list. Shared-list `v1` endpoints and the native iOS collaboration UI are planned fast follows; Android remains a possible later client of the same API.
 - The calendar subscription URL is a bearer credential: anyone who obtains it can fetch the feed. Users must not share it, and the product must not log or display full URLs in unsafe contexts.
 
 Authoritative technical contracts

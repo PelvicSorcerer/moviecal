@@ -57,7 +57,7 @@ calendar_tokens
 - created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
 
 Notes
-- `watchlists` is the durable ownership boundary. Personal and shared watchlists use the same table so later shared-watchlist work can stay app-layer unless a schema gap is discovered.
+- `watchlists` is the durable ownership boundary. Personal and shared watchlists use the same table; current sharing uses memberships and hashed invite links, while further collaboration work may add schema constraints where needed.
 - Every user can own exactly one `personal` watchlist. Shared watchlists use the same owner field, but they do not inherit any friend or contact model assumptions.
 - `watchlist_memberships` is the authorization primitive for access. Accepted membership rows unlock read/write access through RLS; this is intentionally separate from any future social graph.
 - `watchlist_invite_links` stores hashed invite tokens, not raw tokens. Invite links are bearer credentials and must not expose broader user or watchlist discovery.

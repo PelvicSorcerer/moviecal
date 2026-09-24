@@ -21,9 +21,13 @@ Use Supabase auth for all interactive user-scoped endpoints. Frontend code may u
 - `POST /api/watchlist` with `{ tmdb_id, watchlist_id? }` — adds a movie to the authenticated user's personal watchlist by default, or to a specific authorized personal/shared watchlist when `watchlist_id` is supplied. Duplicate adds remain a no-op only within the targeted watchlist.
 - `POST /api/watchlist/shared` with `{ name }` — creates a shared watchlist owned by the authenticated user and returns the new watchlist summary.
 - `DELETE /api/watchlist/[id]?watchlist_id=` — removes one item from the explicitly targeted authorized watchlist, or from the authenticated user's personal watchlist when no target is provided. Deleting from one watchlist must not remove the same movie from any other watchlist.
+- `POST /api/watchlist/shared/[watchlistId]/invite` — owner-only invitation creation. It revokes existing unrevoked links and returns a newly generated secret URL once; only its token hash is stored. The current operation is sequential rather than atomic, and the current link has no expiration (`expires_at` is null). Seven-day expiry, atomic rotation, and standalone revoke are planned in the Shared Watchlists project.
+- `POST /api/watchlist/invite/accept` with `{ token }` — an authenticated recipient accepts a valid secret link and gains editor membership. An existing owner or accepted member receives `joined: false`; an invalid, revoked, or expired link fails. The current lookup and join are separate operations, so revoke/accept race hardening is planned.
+- `DELETE /api/watchlist/shared/[watchlistId]/members/[membershipId]` — owner-only removal of one membership from that shared list. Editor self-leave and owner-membership invariants need the planned hardening work.
 - `/watchlist` remains the authenticated overview entry point for personal plus shared watchlists.
 - `/watchlist/[watchlistId]` is the authenticated detail route for any authorized watchlist. Unauthorized, stale, and missing watchlist ids should fail closed without leaking additional watchlist metadata.
-- Invite acceptance and membership-management endpoints remain deferred even though shared-watchlist detail now exists.
+- `/watchlist/invite/[token]` is the authenticated invitation preview/acceptance page; it shows minimal shared-list context before the recipient joins.
+- Shared-list rename, list deletion, and editor self-leave are planned, not current endpoints. The additive `v1` API currently serves only personal watchlist operations; its shared-list expansion is tracked separately in Linear and documented in `docs/api/v1-contract.md` when shipped.
 
 ## Server-only/protected endpoints
 

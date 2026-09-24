@@ -6,17 +6,13 @@ for shipping a native iOS app to the App Store.
 
 ## How to use this document (important)
 
-- This file is a strategy and decision artifact. It is **not** the active
-  implementation queue and must not override live GitHub Project or issue state.
-- Agents continue to start from the single open issue whose `moviecal Delivery`
-  project item has `Agent Dispatch = Yes` and `Status = Ready` (dispatch-slot
-  work) or from a direct assignment.
-- When this plan conflicts with active queue scope, the GitHub Project and issue
-  state win.
-- Governance and testing policy for the iOS track is now ratified through issue
-  #236 and the operator docs it updates. This plan should stay aligned with
-  `docs/operators/multi-platform-dispatch-policy.md`,
-  `docs/operators/branch-and-ci-conventions.md`, and
+- This file records product strategy and decisions. It is **not** the active
+  implementation queue; Linear issues, projects, and native blocking relations
+  own live scope and status. See `AGENTS.md` and
+  `docs/governance/linear-information-architecture.md`.
+- The governance proposals and original next actions later in this document
+  record the Phase 0 plan. Current execution rules are in
+  `docs/operators/local-execution.md` and current verification lanes are in
   `docs/planning/testing-lanes.md`.
 
 ## Goal
@@ -32,9 +28,11 @@ The backend refactor deliberately prepared for a native client. The app is a
 client over an API that already exists — not a rewrite:
 
 - **Versioned bearer-token API surface** (`docs/api/v1-contract.md`, issue #211):
-  `Authorization: Bearer <JWT>` only, no cookies, RLS-aware, no service-role
-  exposure. Auth plumbing already exists (`src/lib/auth/bearer.ts`,
-  `src/lib/auth/identity.ts`).
+  `Authorization: Bearer <JWT>` only, no cookies, and no service-role key in the
+  app. The current personal-watchlist route uses server-only service-role data
+  access after bearer validation and actor-scoped domain checks; calendar-token
+  operations use the user-scoped RLS path. Auth plumbing already exists
+  (`src/lib/auth/bearer.ts`, `src/lib/auth/identity.ts`).
 - **Target-state mobile slice map** (`docs/planning/target-state-mobile-backend-slice-map.md`)
   already decomposed the backend for a mobile-first direction.
 - **Auth and security model** (`docs/technical/auth-and-security.md`) already
@@ -58,7 +56,7 @@ is a second (later third) presentation surface over one shared contract.
 | D3 | Calendar integration | **Hybrid, sequenced: subscribed `.ics` feed in App Store v1; EventKit as a fast follow** | Subscribed feed is the most resilient path (survives app deletion, iOS-managed refresh, auto-reflects cron release-date changes, no event-writing code) and reuses 100% of existing feed work. EventKit adds features (per-event alerts, custom calendar, offline, immediate updates) but is less resilient on its own. Hybrid maximizes both; sequencing keeps the first submission small. |
 | D4 | App authentication | **Email/password now (existing Supabase auth); Sign in with Apple before App Store launch** | Reuses existing Supabase email/password immediately. The client obtains the Supabase JWT via `supabase-swift` and passes it as the `v1` bearer token — no new backend auth endpoint. SIWA is added before launch to satisfy App Review expectations and first-party feel. |
 | D5 | iOS build/test CI | **Self-hosted GitHub Actions runner on the user's Mac** for the iOS verification lane | Runs iOS build + XCTest + XCUITest as a native GitHub Actions workflow, so iOS results appear as normal PR status checks alongside the Linux lanes and are covered by the existing `check:branch-ci` drift mechanism — one unified CI and governance model, which resolves the "integrate GitHub Actions and Xcode Cloud" goal in Actions' favor. Trade-offs: the Mac must be online to service the queue, and self-hosted runners require hardening against untrusted fork-PR code (see security note). Release signing / TestFlight upload is a separate Phase 5 concern (fastlane or Xcode Cloud), independent of this CI choice. |
-| D6 | First App Store version scope | **Personal-watchlist parity** (search, add/remove, calendar subscribe for the personal list) | Smallest `v1` gap, fastest to TestFlight. Shared watchlists are a fast follow, not part of v1. |
+| D6 | First App Store version scope | **Personal-watchlist parity** (search, add/remove, calendar subscribe for the personal list) | Smallest initial API gap, fastest to TestFlight. Shared watchlists are a fast follow after the first App Store build; their future endpoints can extend the additive `/api/v1` contract. |
 
 ## Human-only prerequisites (start now — they have lead time)
 
@@ -114,12 +112,17 @@ against the code as of this document:
 4. *(Optional/deferrable)* `v1` movie-details endpoint.
 
 Each must carry the standard issue contract: acceptance criteria, verification
-steps, **Testing Expectations**, security notes (bearer-only, RLS boundary, no
-service-role exposure, no token logging), and a **Test Impact** section on the PR.
+steps, **Testing Expectations**, security notes (bearer-only, the actual
+RLS/application authorization boundary, no service-role key in clients, no token
+logging), and a **Test Impact** section on the PR.
 All are additive under the `v1` stability boundary — breaking shape changes would
 require a `v2` prefix.
 
-## Governance and testing
+## Original governance and testing proposal (historical)
+
+The following section records the Phase 0 proposal. The Linear workflow and
+current iOS verification lane are defined by `AGENTS.md`,
+`docs/operators/local-execution.md`, and `docs/planning/testing-lanes.md`.
 
 The repo now treats iOS as a first-class delivery track with a dedicated
 self-hosted macOS runner lane and a repo-wide dependency-field contract.
@@ -165,7 +168,7 @@ self-hosted macOS runner lane and a repo-wide dependency-field contract.
   other lanes. This closes the "integrate GitHub Actions and Xcode Cloud"
   question — there is no separate external check provider to reconcile.
 
-## Open investigation items
+## Original open investigation items (historical)
 
 1. **Self-hosted macOS runner setup and security (D5):** register the runner and
    scope it to this repo. **Critical security note:** self-hosted runners must
@@ -184,7 +187,11 @@ self-hosted macOS runner lane and a repo-wide dependency-field contract.
 5. **Movie-details endpoint necessity:** decide whether the detail screen needs
    more than the search payload before building endpoint #4.
 
-## Next actions
+## Original next actions (historical)
+
+This was the Phase 0 handoff list. Use Linear for current work state; the iOS
+Companion App's personal feature parity is complete, release engineering remains
+open, and the separate iOS Shared Watchlists project owns the fast follow.
 
 1. Keep the operator docs and queue tooling aligned with the ratified iOS policy (ongoing).
 2. Complete Phase 2 iOS skeleton:

@@ -9,7 +9,9 @@ The `v1` surface is a thin, versioned API for native/mobile clients. It is **add
 - **Scheme:** `Authorization: Bearer <access-token>` only. The `v1` routes never read cookies.
 - The bearer token is a Supabase access token (JWT). It is validated on every request; an invalid, expired, or missing token yields `401`.
 - **No silent refresh.** Bearer tokens have a shorter lifetime than cookie sessions. When a token is expired the API returns `401` and the mobile client is responsible for refreshing and retrying. The server never extends or refreshes the supplied token.
-- **Access control is enforced by Postgres RLS.** The request is served through a user-scoped Supabase client built from the bearer token. The `v1` routes never use the service-role key and perform no application-level ownership checks.
+- **Authorization depends on the operation.** The personal-watchlist route uses a user-scoped client to validate identity and call `ensure_personal_watchlist_for_user`, then uses a server-only service-role client for watchlist, item, movie, and membership data access. Its domain operations check the authenticated actor's access through `getWatchlistAccess`; those service-role queries do not rely on RLS for isolation. Direct authenticated database calls remain subject to RLS. The service-role key is never sent to a client.
+- Calendar-token `GET` and `POST` use the user-scoped, RLS-enforced client for their interactive token reads and writes. The repository also receives a server-only service-role client, but those operations do not use it for the caller's token access.
+- Movie search requires a valid bearer token but does not read user-owned data.
 - Tokens are never logged or echoed in responses.
 
 ## Error shape
@@ -29,7 +31,7 @@ All errors use `{ "error": string }` with an appropriate HTTP status:
 
 ### Watchlist
 
-Base path: `/api/v1/watchlist`. All watchlist endpoints operate on the authenticated user's **personal** watchlist.
+Base path: `/api/v1/watchlist`. All currently implemented `v1` watchlist endpoints operate on the authenticated user's **personal** watchlist. Shared-list `v1` endpoints are planned separately; the moviecal web app currently uses its cookie-session routes for shared lists.
 
 ### `GET /api/v1/watchlist`
 
