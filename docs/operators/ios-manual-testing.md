@@ -8,38 +8,20 @@ Keychain state can remain.
 
 ## The simulator lease (MOV-309/MOV-311)
 
-The iOS simulator is a machine-wide shared resource with three lane devices:
-`moviecal-ci`, `moviecal-worker`, and `moviecal-manual`. `npm run
-ios:manual-test` always targets `moviecal-manual` and acquires a manual-lane
-lease before it builds, holding it after install and launch so a human can
-keep testing. The lease is time-based (20 minutes by default, renewable up to
-a 60-minute hard cap from first acquisition) rather than tied to the command's
-own process, because closing the terminal that ran the build must not free the
-simulator out from under whoever is still testing on it.
+`npm run ios:manual-test` always targets the `moviecal-manual` device and holds
+a manual-lane lease (20 minutes, renewable to a 60-minute cap) after install
+and launch, so closing the build terminal does not free the simulator mid-test.
+It prints the lease id, expiry, and cap. Full semantics and the `ios:sim:*`
+commands are in `scripts/ios-sim-lease.mjs`.
 
-On success the command prints an agent-guidance block naming the lease id,
-its expiry, and its hard cap. Full lease semantics -- lane detection, lazy
-takeover of a stale lease, unmanaged-state detection, and the complete
-`ios:sim:*` command surface (`setup`, `acquire`, `release`, `extend`,
-`status`, `adopt`, `run`) -- are specified in `scripts/ios-sim-lease.mjs` and
-the MOV-309 issue; this document only covers what a human or agent running
-manual tests needs day to day.
+**Agent procedure:** if you set up the simulator for a user's manual testing,
+run `npm run ios:sim:release` as soon as they say they are finished; an idle
+lease blocks CI, the worker lane, and the next manual session.
 
-**Agent procedure:** if you (an agent) set the simulator up for a user's
-manual testing -- ran `npm run ios:manual-test` or otherwise acquired a
-manual-lane lease on their behalf -- run `npm run ios:sim:release` as soon as
-the user says they are finished testing. Do not leave a live lease sitting
-idle after that point: it blocks CI, the dispatcher's worker lane, and the
-next person's manual session until it expires on its own.
-
-If your session is guarded by the `scripts/ios-sim-guard.mjs` hook (wiring it
-into `.claude/settings.json` is a separate, human-only step), any Bash command
-or iOS Simulator MCP action that boots, installs to, launches on, shuts down,
-or erases a simulator -- or runs `xcodebuild`, or opens Simulator.app -- is
-blocked until a live lease covers your lane. The block message tells you to
-run `npm run ios:sim:acquire`. Read-only commands (`simctl list`,
-`npm run ios:sim:status`, anything with `--dry-run`) always pass regardless of
-lease state.
+Sessions guarded by the `scripts/ios-sim-guard.mjs` hook (wired into
+`.claude/settings.json` by a human) block simulator mutations and `xcodebuild`
+until a live lease covers the lane; the message says to run
+`npm run ios:sim:acquire`. Read-only commands and `--dry-run` always pass.
 
 ## Prepare the checkout and API
 
@@ -61,22 +43,14 @@ or passes test email/password values to the build.
 
     npm run ios:manual-test
 
-This acquires the manual lease, builds against the `moviecal-manual` device
-(`--device booted` means this device, not "whatever single simulator happens
-to be booted"), validates its configuration before invoking Xcode, writes the
-required build settings to a private temporary .xcconfig, verifies the built
-app's embedded settings without displaying them, installs the app, launches
-it, and prints the agent-guidance block.
+This acquires the manual lease and builds against `moviecal-manual`
+(`--device booted` means that device), validates configuration before invoking
+Xcode, writes build settings to a private temporary .xcconfig, verifies the
+built app's embedded settings without displaying them, installs, and launches.
 
-To target a different simulator instead, pass an explicit UDID or name:
-
-    npm run ios:manual-test -- --device <udid-or-name>
-
-An explicit device is rejected if it names `moviecal-ci` or `moviecal-worker`
--- those are the CI and dispatcher-worker lanes' own devices and are never
-valid manual-test targets. The manual lease is still acquired even when
-targeting a different device, since the lease is what reserves the lane, not
-the device itself.
+To target another simulator, pass an explicit UDID or name
+(`--device <udid-or-name>`). `moviecal-ci` and `moviecal-worker` are rejected;
+the manual lease is still acquired.
 
 Use --dry-run to confirm configuration and identify the current branch and
 commit without running simulator or build commands, and without acquiring a

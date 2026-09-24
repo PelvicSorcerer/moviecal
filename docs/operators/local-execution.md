@@ -236,34 +236,20 @@ semantics.
 
 ### Dispatcher-held simulator lease for iOS Companion App issues (MOV-311)
 
-The runner-online preflight gate above (§Preflight gates, gate 5) answers "is
-the runner up"; it says nothing about the simulator itself, which the
-machine-wide lease (`scripts/ios-sim-lease.mjs`, MOV-309) separately owns. For
-an issue in the **iOS Companion App** project, the dispatcher acquires a
-`worker`-lane lease for the whole worker run — before the worktree exists,
-through every terminal outcome — and releases it exactly once no matter how
-the attempt ends: success, worker failure, timeout, a stop, or a dispatcher
-crash recovered by startup recovery. Acquisition never waits: if the lease is
-held by the `manual` or `ci` lane (or is otherwise unavailable — queued,
-unmanaged simulator state MOV-309 never tears down automatically), the issue
-is **deferred silently** — outcome `deferred-ios-sim-lease`, no `Blocked`
-comment, no worktree created — exactly like the sole-provider-usage-limit
-deferral above. It is retried on a later poll cycle once the lease frees. A
-non-iOS issue never touches this lease at all.
+For an issue in the **iOS Companion App** project, the dispatcher acquires a
+`worker`-lane lease (`scripts/ios-sim-lease.mjs`, MOV-309) for the whole worker
+run, before the worktree exists, and releases it exactly once on every outcome
+(success, failure, timeout, stop, or crash recovered by startup recovery).
+Acquisition never waits: if another lane holds it or simulator state is
+unmanaged, the issue is **deferred silently** (`deferred-ios-sim-lease`, no
+`Blocked` comment, no worktree) and retried next poll. Non-iOS issues never
+touch the lease.
 
-The held lease's id is passed to the worker as `MOVIECAL_IOS_SIM_LEASE_ID` in
-its sanitized environment (`worker-guard.mjs`/`worker-spawn.mjs`), and the
-worker's brief tells it to use the `moviecal-worker` device by name and never
-boot or shut down any other simulator. `npm run ios:sim:run` recognizes a
-lease id it was handed this way and renews it in place instead of queueing
-behind its own dispatcher — the naive read (a second process trying to
-acquire a lease its own dispatcher already holds) would otherwise deadlock.
-
-If the dispatcher itself crashes mid-run, the held lease id is recorded on the
-worktree registry entry (`iosSimLeaseId`, set once acquired) precisely so
-startup recovery can release it explicitly, on the same idempotent
-per-abandonment progress record as the state-move/comment steps, rather than
-relying solely on the lease's own heartbeat going stale a few minutes later.
+The lease id reaches the worker as `MOVIECAL_IOS_SIM_LEASE_ID`; the brief tells
+it to use the `moviecal-worker` device only. `npm run ios:sim:run` renews a
+handed-in lease instead of queueing behind its own dispatcher. The id is also
+recorded on the worktree registry entry (`iosSimLeaseId`) so startup recovery
+releases it explicitly rather than waiting for the heartbeat to go stale.
 
 ## Worker interface
 
