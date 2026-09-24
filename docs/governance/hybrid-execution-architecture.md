@@ -133,8 +133,9 @@ consequential mutation so a mid-flight change becomes a safe stop/no-op.
 
 Current project defaults are deliberately local-first:
 
-- **Mac:** Shared Watchlists, Calendar Feed, Platform & Infrastructure, iOS
-  Companion App, Autonomous local-agent delivery, and any Xcode, simulator,
+- **Mac:** Shared Watchlists Core & API, Web Shared Watchlists, iOS Shared
+  Watchlists, Calendar Feed, Platform & Infrastructure, iOS Companion App,
+  Autonomous local-agent delivery, and any Xcode, simulator,
   self-hosted-runner, or local-secret work.
 - **Cloud:** Deferred Linear cloud execution option only. Its implementation
   issues stay in `Icebox` until authorized.

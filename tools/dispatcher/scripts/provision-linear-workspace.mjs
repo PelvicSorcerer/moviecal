@@ -202,7 +202,7 @@ async function main() {
   const projectsData = await gql(`query { projects { nodes { id name } } }`);
   const projByName = (n) => projectsData.projects.nodes.find((p) => p.name === n);
 
-  async function ensureProject(name, initiative) {
+  async function ensureProject(name, initiatives) {
     let proj = projByName(name);
     if (!proj) {
       const data = await gql(
@@ -218,8 +218,9 @@ async function main() {
       `query($projId: String!) { project(id: $projId) { initiatives { nodes { id } } } }`,
       { projId: proj.id },
     );
-    const alreadyLinked = linkCheck.project.initiatives.nodes.some((i) => i.id === initiative.id);
-    if (!alreadyLinked) {
+    const linkedIds = new Set(linkCheck.project.initiatives.nodes.map((i) => i.id));
+    for (const initiative of initiatives) {
+      if (linkedIds.has(initiative.id)) continue;
       await gql(
         `mutation($input: InitiativeToProjectCreateInput!) { initiativeToProjectCreate(input: $input) { success } }`,
         { input: { projectId: proj.id, initiativeId: initiative.id } },
@@ -229,12 +230,15 @@ async function main() {
     return proj;
   }
 
-  await ensureProject("Shared Watchlists", webAppInit);
-  await ensureProject("Calendar Feed", webAppInit);
-  await ensureProject("Platform & Infrastructure", webAppInit);
-  const iosProject = await ensureProject("iOS Companion App", iosInit);
-  const localDeliveryProject = await ensureProject("Autonomous local-agent delivery", automationInit);
-  const deferredCloudProject = await ensureProject("Deferred Linear cloud execution option", automationInit);
+  const sharedCoreProject = await ensureProject("Shared Watchlists Core & API", [webAppInit, iosInit]);
+  const sharedWebProject = await ensureProject("Web Shared Watchlists", [webAppInit]);
+  const sharedIosProject = await ensureProject("iOS Shared Watchlists", [iosInit]);
+  await ensureProject("Calendar Feed", [webAppInit, iosInit]);
+  await ensureProject("Platform & Infrastructure", [webAppInit]);
+  const iosProject = await ensureProject("iOS Companion App", [iosInit]);
+  await ensureProject("Documentation aligned with shipped product", []);
+  const localDeliveryProject = await ensureProject("Autonomous local-agent delivery", [automationInit]);
+  const deferredCloudProject = await ensureProject("Deferred Linear cloud execution option", [automationInit]);
 
   // The canceled "Developer Governance & Agent Infrastructure" project and
   // the completed local-stabilization / hybrid-foundation projects are
@@ -265,6 +269,9 @@ async function main() {
     }
   }
 
+  await ensureMilestones(sharedCoreProject, ["Access and invitation safety", "Cross-client shared API"]);
+  await ensureMilestones(sharedWebProject, ["Complete web collaboration"]);
+  await ensureMilestones(sharedIosProject, ["Native experience"]);
   await ensureMilestones(iosProject, ["Skeleton", "Auth + API client", "Navigation shell"]);
   await ensureMilestones(localDeliveryProject, [
     "Automated intake & local kickoff",
