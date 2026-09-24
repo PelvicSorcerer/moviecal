@@ -17,6 +17,9 @@
 
 import { evaluateIssueSpec, formatIssueSpecMissing, DEFAULT_ISSUE_SPEC_MODE } from "./issue-spec.mjs";
 
+/** The one Linear project name that gates the runner-online preflight check and the MOV-311 worker-lane simulator lease. */
+export const IOS_COMPANION_APP_PROJECT = "iOS Companion App";
+
 const WORKFLOW_EDIT_LABEL = "ci:workflow-edit-authorized";
 const WORKFLOW_EDIT_MARKER_RE = /^Workflow-edit:\s*(\S+)\s*$/gim;
 const WORKFLOW_EDIT_PATH_RE = /^\.github\/workflows\/[A-Za-z0-9_.-]+\.ya?ml$/;
@@ -160,7 +163,7 @@ export function evaluatePreflight(issue, context) {
     }
   }
 
-  if (issue.project === "iOS Companion App" && !context.iosRunnerOnline) {
+  if (issue.project === IOS_COMPANION_APP_PROJECT && !context.iosRunnerOnline) {
     return {
       ok: false,
       reason: "iOS Companion App project requires the self-hosted macOS runner (moviecal-ios-runner) to be online",

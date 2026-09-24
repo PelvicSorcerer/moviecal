@@ -7,9 +7,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   HardCapError, LANE_DEVICES, LeaseStore, LeaseUnavailableError, MANUAL_HARD_CAP_MS, MANUAL_LEASE_MS,
   SHARED_DEVICE_NAME, UNAVAILABLE_EXIT_CODE, UNAVAILABLE_MESSAGE, agentGuidance, commandAcquire, commandAdopt,
-  commandExtend, commandRelease, commandSetup, commandStatus, commandWatch, createEnvironment, createLease, detectLane,
-  emptyRecord, enqueueWaiter, isHeadWaiter, laneDevice, leaseLiveness, leasePath, parseArguments, pruneWaiters,
-  renewLease, resolveSetupPlan, unmanagedState, waiterPosition, withMutex,
+  commandExtend, commandRelease, commandRun, commandSetup, commandStatus, commandWatch, createEnvironment, createLease,
+  detectLane, emptyRecord, enqueueWaiter, isHeadWaiter, laneDevice, leaseLiveness, leasePath, parseArguments,
+  pruneWaiters, renewLease, resolveSetupPlan, unmanagedState, waiterPosition, withMutex,
 } from "../scripts/ios-sim-lease.mjs";
 
 const START = Date.parse("2026-09-23T10:00:00.000Z");
@@ -401,6 +401,65 @@ describe("ios:sim:acquire", () => {
     const again = harness({ world: holder, pid: 90_006 });
     expect(() => commandAcquire({ purpose: "back again", waitMs: 30_000 }, again.environment))
       .toThrow(/waiter\(s\) ahead of this one in the queue/u);
+  });
+
+  it("renews a lease id handed via MOVIECAL_IOS_SIM_LEASE_ID instead of queueing behind it (MOV-311)", () => {
+    const dispatcher = harness({ env: { MOVIECAL_WORKER_SANDBOX: "1" }, devices: laneDevices(), pid: 90_007 });
+    const held = commandAcquire({ purpose: "dispatcher worker run" }, dispatcher.environment);
+
+    const worker = harness({
+      world: dispatcher, pid: 90_008,
+      env: { MOVIECAL_WORKER_SANDBOX: "1", MOVIECAL_IOS_SIM_LEASE_ID: held.id },
+    });
+    const observedSleep = [];
+    worker.environment.sleep = (ms) => observedSleep.push(ms);
+
+    const reentered = commandAcquire({ purpose: "nested ios:sim:run" }, worker.environment);
+
+    expect(reentered.id).toBe(held.id);
+    expect(observedSleep).toEqual([]); // acquired on the first attempt, no FIFO wait
+    expect(worker.environment.store.load().waiters).toEqual([]);
+  });
+
+  it("does not treat an unrelated env value as a reentrant match", () => {
+    const dispatcher = harness({ env: { MOVIECAL_WORKER_SANDBOX: "1" }, devices: laneDevices(), pid: 90_009 });
+    commandAcquire({ purpose: "dispatcher worker run" }, dispatcher.environment);
+
+    const other = harness({ world: dispatcher, pid: 90_010, env: { MOVIECAL_WORKER_SANDBOX: "1", MOVIECAL_IOS_SIM_LEASE_ID: "not-the-held-lease" } });
+    expect(() => commandAcquire({ purpose: "unrelated", waitMs: 0 }, other.environment)).toThrow(LeaseUnavailableError);
+  });
+});
+
+describe("ios:sim:run (MOV-311 reentrancy)", () => {
+  const trivialCommand = [process.execPath, "-e", "process.exit(0)"];
+
+  it("runs the wrapped command, releases its own originated lease, and shuts the device down", async () => {
+    const session = harness({ devices: laneDevices() });
+    const exitCode = await commandRun({ commandArgs: trivialCommand }, session.environment);
+
+    expect(exitCode).toBe(0);
+    expect(session.environment.store.load().lease).toBeNull();
+    expect(session.booted()).toEqual([]);
+  });
+
+  it("never waits on a lease id it was handed, and does not release it on exit", async () => {
+    const dispatcher = harness({ env: { MOVIECAL_WORKER_SANDBOX: "1" }, devices: laneDevices(), pid: 90_020 });
+    const held = commandAcquire({ purpose: "dispatcher worker run" }, dispatcher.environment);
+
+    const worker = harness({
+      world: dispatcher, pid: 90_021,
+      env: { MOVIECAL_WORKER_SANDBOX: "1", MOVIECAL_IOS_SIM_LEASE_ID: held.id },
+    });
+    worker.environment.sleep = () => {
+      throw new Error("must never wait when reentering a handed-down lease id");
+    };
+
+    const exitCode = await commandRun({ commandArgs: trivialCommand }, worker.environment);
+
+    expect(exitCode).toBe(0);
+    // The dispatcher's own lease is still live -- the reentrant run did not tear it down.
+    expect(dispatcher.environment.store.load().lease?.id).toBe(held.id);
+    expect(dispatcher.booted()).toEqual([LANE_DEVICES.worker]);
   });
 });
 

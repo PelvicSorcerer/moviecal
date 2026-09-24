@@ -50,6 +50,7 @@ import { applyStagedWorkflowEdit } from "./workflow-edit-apply.mjs";
 import { AgentSessionBridge, createAgentSessionCapability } from "./agent-session.mjs";
 import { diagnoseUnrecognizedFailure } from "./worker-diagnosis.mjs";
 import { captureVerificationEvidence } from "./readiness-evidence.mjs";
+import { acquireIosWorkerLease, releaseIosWorkerLease } from "./ios-worker-lease.mjs";
 
 export const IOS_RUNNER_NAME = "moviecal-ios-runner";
 export const GITHUB_REPO = "PelvicSorcerer/moviecal";
@@ -148,6 +149,11 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     ghRepo: GITHUB_REPO,
     logRoot: logRoot(),
     spawnWorkerFn: spawnWorker,
+    // MOV-311: the machine-wide iOS simulator worker-lane lease, held for the
+    // whole worker run of an "iOS Companion App" issue only (run-loop.mjs
+    // gates on issue.project before ever calling these).
+    acquireIosSimLeaseFn: acquireIosWorkerLease,
+    releaseIosSimLeaseFn: releaseIosWorkerLease,
     auditWorkerResultFn: auditWorkerResult,
     writeWorkerAuditFn: writeWorkerAudit,
     captureVerificationEvidenceFn: captureVerificationEvidence,

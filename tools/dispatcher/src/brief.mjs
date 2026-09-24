@@ -6,7 +6,7 @@
 // path, a branch, and a brief on stdin, produce verified filesystem changes
 // and exit 0. The trusted dispatcher audits, commits, and publishes them.
 
-import { resolveWorkflowEditAuthorization } from "./preflight.mjs";
+import { resolveWorkflowEditAuthorization, IOS_COMPANION_APP_PROJECT } from "./preflight.mjs";
 
 function repositoryContextLines(context) {
   if (!context) return [];
@@ -68,6 +68,22 @@ function resumeLines(resume) {
   ];
 }
 
+/**
+ * MOV-311: this dispatcher already holds the machine-wide `worker`-lane
+ * simulator lease (MOV-309) for this whole run, so ordinary Bash/MCP
+ * simulator use inside the worker is already covered -- this section exists
+ * to point the worker at the one device that lease actually covers.
+ */
+function iosWorkerLeaseLines(issue) {
+  if (issue.project !== IOS_COMPANION_APP_PROJECT) return [];
+  return [
+    "## iOS simulator device (MOV-311)",
+    "",
+    "This dispatcher already holds a live `worker`-lane iOS simulator lease for this whole run. Use the `moviecal-worker` simulator only -- pass it to `xcodebuild` by name (`-destination 'platform=iOS Simulator,name=moviecal-worker'`), never by booting or shutting down any other simulator. Never run `xcrun simctl boot|shutdown|erase` against any device other than `moviecal-worker`, and never open Simulator.app.",
+    "",
+  ];
+}
+
 function iosVerificationLines(issue, repositoryContext) {
   const changedPaths = repositoryContext?.changedPaths || [];
   const iOSPathIsInScope = changedPaths.some((path) => String(path).startsWith("ios/"));
@@ -94,6 +110,7 @@ export function generateBrief(issue, { branch, worktreePath, worker, model, upgr
   lines.push("");
   lines.push(...resumeLines(resume));
   lines.push(...repositoryContextLines(repositoryContext));
+  lines.push(...iosWorkerLeaseLines(issue));
   lines.push(...iosVerificationLines(issue, repositoryContext));
   lines.push("## Instructions");
   lines.push("");
