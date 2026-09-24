@@ -236,6 +236,14 @@ semantics.
 
 ### Dispatcher-held simulator lease for iOS Companion App issues (MOV-311)
 
+Interactive Claude Code and Codex sessions use the shared
+`scripts/ios-sim-guard.mjs` `PreToolUse` policy through `.claude/settings.json`
+and `.codex/hooks.json` respectively (MOV-312). Codex requires a one-time
+project hook trust review with `/hooks`; until trusted, follow the acquire-first
+procedure in [iOS manual testing](./ios-manual-testing.md). These hooks cover
+supported Bash and simulator MCP calls; `worker-guard.mjs` remains the worker
+enforcement boundary.
+
 For an issue in the **iOS Companion App** project, the dispatcher acquires a
 `worker`-lane lease (`scripts/ios-sim-lease.mjs`, MOV-309) for the whole worker
 run, before the worktree exists, and releases it exactly once on every outcome

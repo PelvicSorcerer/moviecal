@@ -1,0 +1,18 @@
+{
+  "description": "Require a live simulator lease before Codex mutates iOS simulator state.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$|^mcp__Claude_Code_iOS_Simulator__control$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/ios-sim-guard.mjs\"",
+            "timeout": 10,
+            "statusMessage": "Checking iOS simulator lease"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -18,10 +18,14 @@ commands are in `scripts/ios-sim-lease.mjs`.
 run `npm run ios:sim:release` as soon as they say they are finished; an idle
 lease blocks CI, the worker lane, and the next manual session.
 
-Sessions guarded by the `scripts/ios-sim-guard.mjs` hook (wired into
-`.claude/settings.json` by a human) block simulator mutations and `xcodebuild`
-until a live lease covers the lane; the message says to run
-`npm run ios:sim:acquire`. Read-only commands and `--dry-run` always pass.
+Claude Code's `.claude/settings.json` and Codex's `.codex/hooks.json` run
+`scripts/ios-sim-guard.mjs` before simulator-mutating Bash and iOS Simulator MCP
+actions. They block those actions and `xcodebuild` until a live lease covers
+the lane; the message says to run `npm run ios:sim:acquire`. Read-only commands
+and `--dry-run` pass. Codex project hooks must be trusted once through `/hooks`
+in the CLI after the project `.codex/` layer is trusted. Hook coverage is a
+guardrail for supported tool calls; use the acquire-first procedure for other
+tool paths.
 
 ## Prepare the checkout and API
 
