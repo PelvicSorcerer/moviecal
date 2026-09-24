@@ -188,6 +188,15 @@ The iOS lane is a separate GitHub Actions workflow, `ios-verify` (job `lane-ios`
 
 For every change touching `ios/**`, run `xcodebuild test` locally before opening the PR and review and commit all new or changed snapshot references.
 
+### Simulator lease and memory-aware bounds (MOV-313)
+
+The runner Mac has 8 GB of RAM and one simulator's worth of capacity, shared with manual testing and dispatcher workers. `lane-ios` therefore runs both `xcodebuild` invocations under the machine-wide lease from [iOS simulator lease](../operators/ios-manual-testing.md) (`npm run ios:sim:run -- xcodebuild …`, MOV-309), on the CI lane's own `moviecal-ci` device with its runtime pinned — never the shared `iPhone 17`. The runner service needs `node` on its own PATH, not just in a login shell; a dedicated step fails early and says so if it does not.
+
+- **Waiting is not failing.** If another lane holds the lease, the step logs who holds it and waits up to 30 minutes, then exits `75` with `SIMULATOR_LEASE_UNAVAILABLE` and a GitHub error annotation saying it is an infrastructure wait and safe to re-run. A release step runs `if: always()` so a cancelled job cannot leak the lease; MOV-309's stale-holder takeover is the backstop behind that.
+- **Timeouts are sized for a swapping machine, and extend rather than tighten.** `-collect-test-diagnostics never` removes the 10-minute sysdiagnose tail that twice turned a test failure into a 600 s hang. `-parallel-testing-enabled NO` keeps parallel testing from cloning simulators past the one-booted rule. `-test-timeouts-enabled YES` with a 120 s default and 300 s maximum per-test allowance gives a slow simulator grace while failing a wedged one in minutes. The job cap is 40 minutes: above the worst observed passing run plus the lease-wait budget.
+- **Element waits.** `SignInToMainTabsUITests` waits 45 s for its elements. They resolve in about a second on an idle machine; the margin exists so swap pressure cannot produce a false red.
+- **Concurrency.** A new push to a PR branch cancels that branch's in-progress `ios-verify` run so it stops holding the runner. A push to `master` never cancels an in-progress `master` run.
+
 ### Bootstrap state (historical, before `ios/` existed)
 
 - `ios-verify` ran as a successful no-op/config-validation workflow.

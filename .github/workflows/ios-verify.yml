@@ -12,6 +12,14 @@ on:
 permissions:
   contents: read
 
+# The Mac runner and its simulator are a single scarce resource (one machine,
+# 8 GB of RAM), so a superseded push must not leave an older run holding the
+# lease. `master` is deliberately excluded: its runs are the record of what
+# landed, and cancelling one would leave a commit unverified.
+concurrency:
+  group: ios-verify-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 jobs:
   changes:
     name: iOS lane changes
@@ -40,27 +48,78 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || (needs.changes.result == 'success' && needs.changes.outputs.should_run == 'true')
     env:
       DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      # The CI lane's own device (MOV-309/MOV-310), never the shared
+      # `iPhone 17` that manual testing and dispatcher workers use. The runtime
+      # is pinned so an unavailable same-named device from an older runtime can
+      # never be selected; a runtime upgrade is meant to fail here loudly and be
+      # updated deliberately.
+      IOS_DESTINATION: platform=iOS Simulator,name=moviecal-ci,OS=27.0
     runs-on:
       - self-hosted
       - macOS
       - ios
+    # Sized above the worst observed passing run (~12 min) plus the 30-minute
+    # lease-wait budget, so a genuinely wedged job still fails in bounded time.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - name: Show host and toolchain
         run: |
           sw_vers
           xcodebuild -version
+      - name: Check the runner service can run the simulator lease tool
+        run: |
+          if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+            echo "::error title=node is not on the runner PATH::lane-ios runs xcodebuild under \`npm run ios:sim:run\` (the machine-wide simulator lease, MOV-309), so the self-hosted runner *service* needs node and npm on its PATH — a login-shell-only nvm/Homebrew setup is not enough. Add node to the runner service's environment (for example via the runner's \`.env\` file) and restart the service."
+            exit 1
+          fi
+          node --version
+          npm --version
+      # Both xcodebuild steps run under the machine-wide simulator lease
+      # (MOV-309) so CI never overlaps with manual testing or a dispatcher
+      # worker. `ios:sim:run` acquires the lease, boots only `moviecal-ci`,
+      # renews it for the length of the command, and releases it (shutting the
+      # simulator down) on success, failure, or interrupt.
       - name: lane-ios (xcodebuild build)
-        working-directory: ios
-        run: >
-          xcodebuild build
-          -project Moviecal.xcodeproj
-          -scheme Moviecal
-          -destination 'platform=iOS Simulator,name=iPhone 17'
+        # The lease wait budget is 30 minutes and ends in the labeled exit 75
+        # below; this step timeout is only a backstop above it, so the labeled
+        # failure always wins over an unexplained cancellation.
+        timeout-minutes: 35
+        run: |
+          status=0
+          npm run ios:sim:run -- \
+            xcodebuild build \
+            -project ios/Moviecal.xcodeproj \
+            -scheme Moviecal \
+            -destination "$IOS_DESTINATION" || status=$?
+          if [ "$status" -eq 75 ]; then
+            echo "::error title=SIMULATOR_LEASE_UNAVAILABLE::lane-ios never started xcodebuild: another lane held the moviecal-ci simulator for the whole wait budget. This is an infrastructure wait, not a test failure — release the lease (\`npm run ios:sim:release\`) or wait for it to expire, then re-run this job."
+          fi
+          exit "$status"
       - name: lane-ios (xcodebuild test)
-        working-directory: ios
-        run: >
-          xcodebuild test
-          -project Moviecal.xcodeproj
-          -scheme Moviecal
-          -destination 'platform=iOS Simulator,name=iPhone 17'
+        timeout-minutes: 35
+        run: |
+          status=0
+          npm run ios:sim:run -- \
+            xcodebuild test \
+            -project ios/Moviecal.xcodeproj \
+            -scheme Moviecal \
+            -destination "$IOS_DESTINATION" \
+            -collect-test-diagnostics never \
+            -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 \
+            -maximum-test-execution-time-allowance 300 || status=$?
+          if [ "$status" -eq 75 ]; then
+            echo "::error title=SIMULATOR_LEASE_UNAVAILABLE::lane-ios never started xcodebuild: another lane held the moviecal-ci simulator for the whole wait budget. This is an infrastructure wait, not a test failure — release the lease (\`npm run ios:sim:release\`) or wait for it to expire, then re-run this job."
+          fi
+          exit "$status"
+      # `ios:sim:run` already releases its own lease, including on SIGINT and
+      # SIGTERM. This backstop exists for a cancelled or hard-killed job, which
+      # never gets to run that handler. Releasing nothing is a success, and a
+      # lease belonging to another lane is deliberately left alone.
+      - name: Release the simulator lease
+        if: always()
+        run: |
+          npm run ios:sim:release \
+            || echo "::warning title=Simulator lease not released here::A lease held by another lane was left alone. MOV-309's stale-holder takeover is the backstop."
