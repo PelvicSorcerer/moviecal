@@ -19,7 +19,7 @@ For the environment contract behind each lane, including disposable credential r
 | Full-stack runtime | `npm run lane:full-stack` | `supabase-verify` → `lane-full-stack-runtime` | Heavy | Conditional — path-filtered |
 | External smoke | `npm run lane:smoke-external` | `smoke-external` → `lane-smoke-external` | Heavy | No — scheduled/manual |
 | Post-deploy smoke | `npm run lane:smoke-post-deploy` | `smoke-post-deploy` → `lane-smoke-post-deploy` | Heavy | No — post-deploy/scheduled |
-| iOS | `xcodebuild build`/`test` in `ios/` (see [iOS lane](#ios-lane)) | `ios-verify` → `lane-ios` | Medium | Required when the owner enables the ruleset check; always reports, runs only for iOS-relevant changes |
+| iOS | `xcodebuild build`/`test` in `ios/` (see [iOS lane](#ios-lane)) | `ios-verify` → `lane-ios` | Medium | Required; always reports, runs only for iOS-relevant changes |
 
 The default fast pull-request gate is `npm run verify`, which runs the **baseline**, **unit**, and **integration** lanes in sequence. Browser, real-stack, and smoke lanes stay separate so failures are attributable to the lane that owns the behavior.
 
@@ -184,7 +184,7 @@ For the CI-dev secret source, recovery procedure, and production-boundary rules,
 
 ## iOS lane
 
-The iOS lane is a separate GitHub Actions workflow, `ios-verify` (job `lane-ios`), that always reports on trusted branch pushes. Its lightweight Ubuntu change-detection job runs for every push; `lane-ios` itself runs on the self-hosted macOS runner only when the change set touches `ios/**` or an iOS-lane workflow/policy file. On web-only changes `lane-ios` is skipped, which satisfies the required check without scheduling the Mac runner. The `master-protection` ruleset change that makes this check mandatory remains a separate human-only follow-up.
+The iOS lane is a separate GitHub Actions workflow, `ios-verify` (job `lane-ios`), that always reports on trusted branch pushes. Its lightweight Ubuntu change-detection job runs for every push; `lane-ios` itself runs on the self-hosted macOS runner only when the change set touches `ios/**` or an iOS-lane workflow/policy file. On web-only changes `lane-ios` is skipped, which satisfies the required check without scheduling the Mac runner. `lane-ios` is a required status check in the `master-protection` ruleset.
 
 For every change touching `ios/**`, run `xcodebuild test` locally before opening the PR and review and commit all new or changed snapshot references.
 
