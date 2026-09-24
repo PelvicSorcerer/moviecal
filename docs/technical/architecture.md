@@ -16,12 +16,12 @@ Calendar feed
 
 API surfaces
 - Browser: cookie-session routes under `/api/*` (e.g. `/api/watchlist`), backed by a server-side Supabase Auth session in HTTP-only cookies. This remains the web app's only surface.
-- Mobile/native: an additive, versioned `v1` surface under `/api/v1/*`, authenticated by `Authorization: Bearer <access-token>` only — it never reads cookies and access control is enforced entirely through Postgres RLS via a user-scoped Supabase client, with no service-role key and no application-level ownership checks. Full contract: `docs/api/v1-contract.md`.
+- Mobile/native: an additive, versioned `v1` surface under `/api/v1/*`, authenticated by `Authorization: Bearer <access-token>` only — it never reads cookies. The current personal-watchlist route validates the bearer identity with a user-scoped client, then uses a server-only service-role client and actor-scoped domain checks for watchlist data. Calendar-token reads and writes use the user-scoped RLS path; movie search has no user-owned data. Full contract: `docs/api/v1-contract.md`.
 - The two surfaces coexist; `v1` is additive and does not change or replace the cookie-session routes.
 
 Security boundaries
-- Supabase enforces Row Level Security scoped to ownership and accepted watchlist membership, not only per-user data. Full authorization model: `docs/technical/auth-and-security.md`.
-- TMDb API key and Supabase service_role key remain server-side only (never checked into repo, and never used by the `v1` surface).
+- Supabase enforces Row Level Security for direct authenticated database access, scoped to ownership and accepted watchlist membership. Routes that query through a server-only service-role client must enforce actor authorization in the application domain. Full authorization model: `docs/technical/auth-and-security.md` and `docs/api/v1-contract.md`.
+- TMDb API key and Supabase service-role key remain server-side only and are never checked into the repo or sent to web/native clients.
 - Calendar tokens and watchlist invite links are bearer credentials; invite tokens are stored hashed, not raw.
 
 Scalability
