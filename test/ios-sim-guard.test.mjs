@@ -28,6 +28,8 @@ describe("ios-sim-guard command classification", () => {
     ["xcrun simctl erase ABCD-1234", "mutating"],
     ["xcodebuild -project ios/Moviecal.xcodeproj -scheme Moviecal build", "mutating"],
     ["open -a Simulator.app", "mutating"],
+    ["xcrun simctl list; xcrun simctl boot ABCD-1234", "mutating"],
+    ["xcodebuild --dry-run; xcrun simctl boot ABCD-1234", "mutating"],
   ])("classifies %s as mutating", (command) => {
     expect(classifyBashCommand(command)).toBe("mutating");
   });
@@ -44,6 +46,7 @@ describe("ios-sim-guard command classification", () => {
 
   it("classifies an unrelated command as not-simulator", () => {
     expect(classifyBashCommand("npm run verify")).toBe("not-simulator");
+    expect(classifyBashCommand("npm run ios:sim:run -- xcodebuild test")).toBe("not-simulator");
   });
 
   it.each([
@@ -66,6 +69,14 @@ describe("ios-sim-guard command classification", () => {
 
   it("classifies an unrelated MCP tool as not-simulator", () => {
     expect(classifyMcpTool("mcp__playwright__click")).toBe("not-simulator");
+  });
+
+  it("classifies generic simulator control by its action argument", () => {
+    const control = "mcp__Claude_Code_iOS_Simulator__control";
+    expect(classifyMcpTool(control, { action: "launch" })).toBe("mutating");
+    expect(classifyMcpTool(control, { action: "list" })).toBe("read-only");
+    expect(classifyMcpTool(control, { action: "get_booted_sim_id" })).toBe("read-only");
+    expect(classifyToolCall({ tool_name: control, tool_input: { action: "launch" } })).toBe("mutating");
   });
 
   it("classifyToolCall dispatches Bash and MCP tool names, and passes through anything else", () => {
@@ -190,9 +201,7 @@ describe("formatHookOutput", () => {
     });
   });
 
-  it("formats an allow with no reason field", () => {
-    expect(formatHookOutput({ decision: "allow", reason: null })).toEqual({
-      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
-    });
+  it("leaves normal permissions in place for an allowed command", () => {
+    expect(formatHookOutput({ decision: "allow", reason: null })).toEqual({});
   });
 });

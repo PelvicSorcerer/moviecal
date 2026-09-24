@@ -18,10 +18,20 @@ commands are in `scripts/ios-sim-lease.mjs`.
 run `npm run ios:sim:release` as soon as they say they are finished; an idle
 lease blocks CI, the worker lane, and the next manual session.
 
-Sessions guarded by the `scripts/ios-sim-guard.mjs` hook (wired into
-`.claude/settings.json` by a human) block simulator mutations and `xcodebuild`
-until a live lease covers the lane; the message says to run
-`npm run ios:sim:acquire`. Read-only commands and `--dry-run` always pass.
+Claude Code's `.claude/settings.json` runs `scripts/ios-sim-guard.mjs` before
+simulator-mutating Bash and iOS Simulator MCP actions. It blocks those actions
+and `xcodebuild` until a live lease covers the lane; the message says to run
+`npm run ios:sim:acquire`. Read-only commands and `--dry-run` pass.
+
+Codex has an equivalent `.codex/hooks.json` configuration, but Codex CLI
+0.153.4 does not discover project hooks in linked Git worktrees: `/hooks` shows
+zero installed even after trusting this worktree. This matches the open
+[Codex worktree hook issue](https://github.com/openai/codex/issues/27133).
+Treat Codex worktree sessions as unguarded: acquire the lease before simulator
+work, check `npm run ios:sim:status`, and rely on MOV-309's unmanaged-state
+detection when acquiring. When Codex does load the hook (for example, in a
+regular checkout), review and trust its definition through `/hooks` before
+relying on it. Use the acquire-first procedure for other tool paths too.
 
 ## Prepare the checkout and API
 

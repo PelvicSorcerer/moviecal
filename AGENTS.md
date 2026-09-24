@@ -46,6 +46,7 @@ This repository is prepared for issue-by-issue agent execution. Read this file f
 - Real-stack database validation: `npm run lane:real-stack` (alias: `npm run db:lint`; authoritative CI gate: `supabase-verify` workflow)
 - Production build: `npm run build` (included in `lane:baseline`)
 - For a change touching `ios/**`, run `xcodebuild test` locally and review and commit every new or changed snapshot reference before opening the PR.
+- Run simulator and Xcode work through the `npm run ios:sim:*` lease commands (see `docs/operators/ios-manual-testing.md`). If you set up the simulator for a user's manual testing, run `npm run ios:sim:release` as soon as the user says they are finished testing.
 - Human local testing should happen on the pushed issue branch before the PR is promoted from draft or work-in-progress to ready for review.
 - Each local implementation issue must declare `Human testing: required` or `Human testing: not-required` under **Manual Verification**. Missing markers never waive testing. Required issues need an explicit classified checklist with setup assumptions, happy-path steps, edge cases, regression checks, and expected results; not-required issues need a rationale showing automated/local-agent evidence covers every acceptance criterion and no mandatory human gate applies.
 - Each implementation issue must include a **Testing Expectations** section that states the expected automated coverage (unit, integration, browser E2E) up front, using `docs/planning/repository-testing-strategy.md` as the capability-to-layer guide.

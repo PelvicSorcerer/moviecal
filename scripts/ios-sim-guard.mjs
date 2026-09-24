@@ -42,23 +42,33 @@ export function isDryRun(command) {
 /** Pure classification of a Bash command string: "mutating" | "read-only" | "not-simulator". */
 export function classifyBashCommand(command) {
   const text = String(command || "");
-  if (isDryRun(text)) return "read-only";
-  if (READ_ONLY_BASH_PATTERNS.some((re) => re.test(text))) return "read-only";
+  // A compound shell command can hide a mutation after a read-only command.
+  // Only treat the managed run and dry-run forms as safe when they are alone.
+  const isCompound = /[\n;|&`]|\$\(/u.test(text);
+  if (!isCompound && /^\s*npm\s+run\s+ios:sim:run\b/u.test(text)) return "not-simulator";
+  if (!isCompound && isDryRun(text)) return "read-only";
+  if (!isCompound && READ_ONLY_BASH_PATTERNS.some((re) => re.test(text))) return "read-only";
   return MUTATING_BASH_PATTERNS.some((re) => re.test(text)) ? "mutating" : "not-simulator";
 }
 
 /** Pure classification of an MCP tool name, e.g. "mcp__ios-simulator__boot_simulator". */
-export function classifyMcpTool(toolName) {
+export function classifyMcpTool(toolName, toolInput = {}) {
   const name = String(toolName || "");
   if (!name.startsWith("mcp__") || !/simulator/iu.test(name)) return "not-simulator";
   const action = name.split("__").at(-1) || name;
+  if (action === "control") {
+    const requestedAction = String(toolInput?.action || "");
+    // A generic control tool can mutate simulator state through its action
+    // argument. Unknown actions are gated until classified as read-only.
+    return /^(list|status|screenshot|get(?:_[a-z0-9]+)+)$/iu.test(requestedAction) ? "read-only" : "mutating";
+  }
   return MUTATING_MCP_ACTION_RE.test(action) ? "mutating" : "read-only";
 }
 
 export function classifyToolCall(payload) {
   const toolName = payload?.tool_name;
   if (toolName === "Bash") return classifyBashCommand(payload?.tool_input?.command);
-  if (typeof toolName === "string" && toolName.startsWith("mcp__")) return classifyMcpTool(toolName);
+  if (typeof toolName === "string" && toolName.startsWith("mcp__")) return classifyMcpTool(toolName, payload?.tool_input);
   return "not-simulator";
 }
 
@@ -94,10 +104,13 @@ export function runGuard(input, environment = createEnvironment()) {
 }
 
 export function formatHookOutput({ decision, reason }) {
+  // A neutral result preserves the host's normal permission flow. Returning
+  // "allow" here would approve unrelated Bash commands matched by this hook.
+  if (decision !== "block") return {};
   return {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
-      permissionDecision: decision === "block" ? "deny" : "allow",
+      permissionDecision: "deny",
       ...(reason ? { permissionDecisionReason: reason } : {}),
     },
   };

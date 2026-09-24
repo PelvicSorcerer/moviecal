@@ -17,5 +17,18 @@
       "Bash(xcodebuild *)",
       "Bash(xcrun simctl *)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|mcp__Claude_Code_iOS_Simulator__control",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/ios-sim-guard.mjs\""
+          }
+        ]
+      }
+    ]
   }
 }
