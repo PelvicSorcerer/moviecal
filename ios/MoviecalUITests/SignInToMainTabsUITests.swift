@@ -39,3 +39,5 @@ final class SignInToMainTabsUITests: XCTestCase {
         XCTAssertTrue(tabBar.buttons["Settings"].exists)
     }
 }
+
+#error("MOV-302 disposable fixture: expected lane-ios failure")
