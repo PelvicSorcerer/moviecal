@@ -159,10 +159,6 @@ function reapProcessGroup(pid, { graceMs, killImpl }) {
  *   closing it, and return `{promise, writeTurn, requestClose, nextTurnBoundary}` instead of a bare `Promise` --
  *   `promise` still resolves exactly as it does today. Off by default: every existing caller and every non-Claude
  *   worker gets today's exact bare-Promise behavior with stdin closed after the brief, byte-for-byte.
- * @param {string} [opts.iosSimLeaseId] - MOV-311: the dispatcher's already-held worker-lane iOS simulator lease id
- *   (an "iOS Companion App" issue only), added to the sanitized worker environment as MOVIECAL_IOS_SIM_LEASE_ID so
- *   a nested `ios:sim:run` inside the worker recognizes and renews it instead of queueing behind its own dispatcher.
- *   Only ever applied inside the sandboxed (securityContext) branch -- there is no unsandboxed production path.
  * @returns {Promise<{exitCode: number, logDir: string, pid: number|null}>|{promise: Promise<{exitCode: number, logDir: string, pid: number|null}>, writeTurn: (text: string) => void, requestClose: () => void, nextTurnBoundary: () => Promise<{ended: boolean}>}}
  */
 export function spawnWorker({
@@ -179,7 +175,6 @@ export function spawnWorker({
   platform = process.platform,
   repositoryGuardPathsFn = repositoryGuardPaths,
   steering = false,
-  iosSimLeaseId = null,
 }) {
   fs.mkdirSync(logDir, { recursive: true });
   const stdoutPath = path.join(logDir, "stdout.log");
@@ -229,7 +224,6 @@ export function spawnWorker({
       workerEnv = sanitizedWorkerEnvironment(process.env, {
         worker: path.basename(invocation.command),
       });
-      if (iosSimLeaseId) workerEnv.MOVIECAL_IOS_SIM_LEASE_ID = iosSimLeaseId;
     }
     // detached: true (POSIX) makes the child the leader of its own process
     // group via setsid(), so its own pid doubles as the group id we reap on

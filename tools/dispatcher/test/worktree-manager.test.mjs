@@ -508,26 +508,6 @@ describe("WorktreeManager", () => {
     expect(() => manager.loadState()).toThrow(/corrupt and no valid backup/);
   });
 
-  it("records and surfaces the iOS simulator worker-lane lease id on an abandoned entry (MOV-311)", () => {
-    manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix", linearIssueId: "linear-1" });
-    manager.setWorkerPid("MOV-1", 1234);
-    manager.setIosSimLeaseId("MOV-1", "lease-abc");
-
-    const changes = manager.reconcileStartup({ isPidAlive: () => false });
-
-    expect(changes[0]).toMatchObject({ id: "MOV-1", iosSimLeaseId: "lease-abc" });
-    expect(manager.loadState()["MOV-1"].startupRecovery).toMatchObject({ leaseReleased: false });
-  });
-
-  it("carries a null iosSimLeaseId for a non-iOS attempt", () => {
-    manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix", linearIssueId: "linear-1" });
-    manager.setWorkerPid("MOV-1", 1234);
-
-    const changes = manager.reconcileStartup({ isPidAlive: () => false });
-
-    expect(changes[0].iosSimLeaseId).toBeNull();
-  });
-
   it("recovers active assignments with missing workers or worktrees", () => {
     manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix", linearIssueId: "linear-1" });
     manager.setWorkerPid("MOV-1", 1234);
