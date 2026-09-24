@@ -493,6 +493,11 @@ export class WorktreeManager {
       },
       status: "active",
       pid: process.pid,
+      // MOV-311: the "iOS Companion App" worker-lane simulator lease this
+      // attempt holds, if any -- set via setIosSimLeaseId() once acquired.
+      // Startup recovery reads it back off an abandoned entry to release a
+      // lease a crashed dispatcher can otherwise only lose track of.
+      iosSimLeaseId: null,
       workerPid: null,
       // Set immediately before spawnWorker() is called. If the dispatcher
       // dies in the tiny interval between starting a child and recording its
@@ -575,6 +580,14 @@ export class WorktreeManager {
     this.saveState(state);
   }
 
+  /** MOV-311: record the iOS simulator worker-lane lease this attempt holds, for crash-recovery release. */
+  setIosSimLeaseId(id, leaseId) {
+    const state = this.loadState();
+    if (!state[id]) throw new Error(`no worktree record for ${id}`);
+    state[id].iosSimLeaseId = leaseId || null;
+    this.saveState(state);
+  }
+
   /** Mark the narrow, durable handoff window before a worker is spawned (MOV-254). */
   prepareWorkerSpawn(id) {
     const state = this.loadState();
@@ -604,6 +617,9 @@ export class WorktreeManager {
       dirty: recovery.dirty,
       uncommittedPaths: recovery.uncommittedPaths || [],
       hasUnpushedCommits: Boolean(recovery.hasUnpushedCommits),
+      // MOV-311: null for every non-iOS attempt, so reconcileStartupRecoveries()'s
+      // release step is a no-op for the common case.
+      iosSimLeaseId: entry.iosSimLeaseId || null,
     };
   }
 
@@ -640,6 +656,10 @@ export class WorktreeManager {
       hasUnpushedCommits,
       stateMoved: false,
       commentPosted: false,
+      // MOV-311: tracked independently of stateMoved/commentPosted so a
+      // Linear-side failure never blocks the (unrelated) machine-wide lease
+      // from being freed, and a retried recovery pass never releases twice.
+      leaseReleased: false,
     };
     return this._startupRecoveryChange(id, state[id]);
   }

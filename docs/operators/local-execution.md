@@ -234,6 +234,22 @@ leaving `xcodebuild`, `simctl`, or npm descendants behind, this section and
 semantics.
 - Agents must not commit directly to `master`, and never operate outside their assigned worktree.
 
+### Dispatcher-held simulator lease for iOS Companion App issues (MOV-311)
+
+For an issue in the **iOS Companion App** project, the dispatcher acquires a
+`worker`-lane lease (`scripts/ios-sim-lease.mjs`, MOV-309) for the whole worker
+run, before the worktree exists, and releases it exactly once on every outcome
+(success, failure, timeout, stop, or crash recovered by startup recovery).
+Acquisition never waits: if another lane holds it or simulator state is
+unmanaged, the issue is **deferred silently** (`deferred-ios-sim-lease`, no
+`Blocked` comment, no worktree) and retried next poll. Non-iOS issues never
+touch the lease.
+
+The worker receives the lease id as `MOVIECAL_IOS_SIM_LEASE_ID` and must use
+only the `moviecal-worker` device; `npm run ios:sim:run` renews it rather than
+queueing behind its own dispatcher. The id is recorded on the worktree registry
+entry (`iosSimLeaseId`) so startup recovery releases it explicitly.
+
 ## Worker interface
 
 A worker is any binary satisfying: *given a repo path, a branch, and a brief on stdin, produce verified filesystem changes in that worktree and exit 0.* Concretely, `claude -p --model <id>` or `codex --sandbox workspace-write --ask-for-approval never exec`. For a linked Git worktree, the dispatcher adds its shared Git metadata directories to Codex with `--add-dir` so Codex can resolve the worktree's `.git` file (MOV-193). The shared outer `worker-guard.mjs` profile keeps those directories non-writable for both adapters; `--add-dir` does not grant an effective write capability. It also denies every non-`.git` top-level entry of the checkout containing that shared metadata rather than denying the checkout root, because macOS Seatbelt deny rules cannot make an exception for nested `.git` paths (MOV-194). Both adapters therefore remain unable to read sibling source and local files while the backing metadata remains available only as necessary. A worker cannot execute Git, push, open/edit a PR, or receive GitHub mutation authority. The dispatcher instead injects a bounded, read-only repository snapshot (branch/HEAD/base, initial status, recent commits, and changed paths) into each brief, so a worker has routine orientation context without invoking Git itself. After it exits, the dispatcher audits the structured tool transcript, assigned branch, base diff, and dirty paths; only a clean audit reaches `worker-publish.mjs`, which stages and commits the accepted changes, performs a non-force push of exactly the assigned branch, and finds or creates its draft PR. Adding a third worker means satisfying this same boundary, not writing a new operator guide or merge path.

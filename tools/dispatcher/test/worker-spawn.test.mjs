@@ -205,6 +205,40 @@ describe("spawnWorker", () => {
     expect(calls[1].opts.env).not.toHaveProperty("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB");
   });
 
+  it("adds MOVIECAL_IOS_SIM_LEASE_ID to the sandboxed worker environment when given a lease id (MOV-311)", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
+    const calls = [];
+    const spawnImpl = (command, args, opts) => {
+      calls.push({ command, args, opts });
+      return fakeChildProcess({ exitCode: 0 });
+    };
+
+    await spawnWorker({
+      invocation: { command: "claude", args: ["exec"] },
+      cwd: "/tmp/some-worktree",
+      brief: "brief",
+      logDir: path.join(tmpDir, "with-lease"),
+      spawnImpl,
+      securityContext: { mode: "implementation" },
+      platform: "darwin",
+      repositoryGuardPathsFn: () => ({ protectedRepositoryPaths: [], gitMetadataPaths: [] }),
+      iosSimLeaseId: "lease-abc123",
+    });
+    await spawnWorker({
+      invocation: { command: "claude", args: ["exec"] },
+      cwd: "/tmp/some-worktree",
+      brief: "brief",
+      logDir: path.join(tmpDir, "without-lease"),
+      spawnImpl,
+      securityContext: { mode: "implementation" },
+      platform: "darwin",
+      repositoryGuardPathsFn: () => ({ protectedRepositoryPaths: [], gitMetadataPaths: [] }),
+    });
+
+    expect(calls[0].opts.env.MOVIECAL_IOS_SIM_LEASE_ID).toBe("lease-abc123");
+    expect(calls[1].opts.env).not.toHaveProperty("MOVIECAL_IOS_SIM_LEASE_ID");
+  });
+
   it("gives only Codex linked-worktree metadata while both adapters retain sibling-source isolation", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
     const calls = [];

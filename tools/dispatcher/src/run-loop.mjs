@@ -8,7 +8,7 @@
 // with fakes. See bin/dispatcher.mjs for how real dependencies are wired up.
 
 import path from "node:path";
-import { evaluatePreflight, worktreeName, branchName, resolveWorkflowEditAuthorization } from "./preflight.mjs";
+import { evaluatePreflight, worktreeName, branchName, resolveWorkflowEditAuthorization, IOS_COMPANION_APP_PROJECT } from "./preflight.mjs";
 import { resolveRouting, workerInvocation } from "./worker-routing.mjs";
 import { confirmStillClaimable, evaluateLocalDispatch } from "./dispatch-eligibility.mjs";
 import { generateBrief } from "./brief.mjs";
@@ -59,6 +59,8 @@ import { captureVerificationEvidence } from "./readiness-evidence.mjs";
  * @param {"off"|"report"|"enforce"} [ctx.issueSpecMode] - MOV-303: forwarded to `evaluatePreflight()` (preflight.mjs); `enforce` moves an incomplete issue to Blocked instead of dispatching it, naming every missing item. This is the gate every dispatched issue passes through regardless of how it reached Ready for Agent -- the promoter's own gate (promoter.mjs) only covers the ones it promoted itself. Undefined defaults to `report`, same as the promoter
  * @param {{isOpen: (name: string) => boolean, trip: (name: string, reason: string) => void, clear: (name: string) => void}} [ctx.circuitBreaker] - MOV-180/MOV-177: shared, named host-wide failure-signature breaker store (circuit-breaker.mjs), gating two independent breakers -- NESTED_SANDBOX_CRASH and CREDENTIAL_FAILURE. While either is open, `runOnce` lets exactly one issue per batch through as a half-open probe and skips the rest with outcome "circuit-breaker-open" (also applied dynamically within a batch if a breaker trips mid-cycle from an earlier issue's own outcome); defaults to a permanently-closed no-op so existing callers are unaffected
  * @param {{get: Function, record: Function, clear: Function, deferral: Function}} [ctx.usageLimitStore] - MOV-151: per-issue dispatch-time provider usage-limit record (usage-limit.mjs). Defaults to a no-op store, so a caller that does not wire it keeps today's "every non-zero exit escalates" behaviour exactly
+ * @param {(issue: object) => Promise<{acquired: true, lease: object}|{acquired: false, reason: string}>} [ctx.acquireIosSimLeaseFn] - MOV-311: for an "iOS Companion App" issue only, acquire the machine-wide worker-lane simulator lease (scripts/ios-sim-lease.mjs, MOV-309) for the whole worker run. Never waits -- `acquired: false` (held by another lane, queued, or unmanaged simulator state) defers the issue silently, exactly like the usage-limit deferral above. Defaults to always-acquired-with-no-lease, so a caller that does not wire it (every non-iOS issue) is unaffected
+ * @param {(leaseId: string) => Promise<void>} [ctx.releaseIosSimLeaseFn] - MOV-311: releases the lease `acquireIosSimLeaseFn` returned, called from the one `processIssue` chokepoint that wraps every terminal path of `dispatchIssue`. Defaults to a no-op
  * @param {(args: {exitCode: number, logTail: string, auditText: string}) => Promise<{ok: true, confident: boolean, diagnosis: string, evidence: string|null}|{ok: false, reason: string}>} [ctx.diagnoseFailureFn] - MOV-179: advisory-only, single bounded call that writes a grounded diagnosis into the residual "unrecognized failure" `Needs Human Decision` comment (worker-diagnosis.mjs). Never changes whether or how an issue escalates -- any failure, rejection, or missing wiring falls back to today's plain comment. Only called for failures with no dedicated classification of their own (not rate-limit, not credential-failure, not a security-policy block); defaults to a no-op that always reports no diagnosis
  * @returns {Promise<Array<{issue: string, outcome: string, [key: string]: unknown}>>}
  */
@@ -312,7 +314,45 @@ async function runSteeringTurnLoop(spawned, promptQueue, signal) {
   }
 }
 
+/**
+ * MOV-311: an "iOS Companion App" issue needs the machine-wide worker-lane
+ * simulator lease (MOV-309) for its whole worker run. Acquisition never
+ * waits (see ctx.acquireIosSimLeaseFn) -- a lease unavailable right now,
+ * whatever the reason, is ordinary infrastructure contention, not a dispatch
+ * failure: the issue is deferred silently, exactly like the usage-limit
+ * deferral above, and a later poll cycle retries once it frees. Wrapping
+ * `dispatchIssue` here (rather than threading acquire/release through its
+ * many existing early-return paths) is what makes "released on every
+ * terminal path" a single chokepoint instead of N call sites.
+ */
 async function processIssue(issue, ctx) {
+  const {
+    acquireIosSimLeaseFn = async () => ({ acquired: true, lease: null }),
+    releaseIosSimLeaseFn = async () => {},
+    logger = console,
+  } = ctx;
+
+  if (issue.project !== IOS_COMPANION_APP_PROJECT) {
+    return dispatchIssue(issue, ctx);
+  }
+
+  const attempt = await acquireIosSimLeaseFn(issue);
+  if (!attempt.acquired) {
+    return { issue: issue.identifier, outcome: "deferred-ios-sim-lease", reason: attempt.reason };
+  }
+
+  try {
+    return await dispatchIssue(issue, { ...ctx, iosSimLeaseId: attempt.lease.id });
+  } finally {
+    try {
+      await releaseIosSimLeaseFn(attempt.lease.id);
+    } catch (error) {
+      logger.error(`Could not release iOS simulator worker lease ${attempt.lease.id} for ${issue.identifier}: ${error.message}`);
+    }
+  }
+}
+
+async function dispatchIssue(issue, ctx) {
   const {
     linearClient,
     stateIds,
@@ -348,6 +388,7 @@ async function processIssue(issue, ctx) {
     now = () => new Date(),
     logger = console,
     issueSpecMode,
+    iosSimLeaseId = null,
   } = ctx;
 
   // MOV-143: before anything else, is this issue even ours? An issue routed to
@@ -583,6 +624,13 @@ async function processIssue(issue, ctx) {
     });
   }
 
+  // MOV-311: persisted on the registry entry (not just held in this closure)
+  // so a dispatcher crash mid-run can still release it — startup recovery
+  // reads it back off the abandoned entry (worktree-manager.mjs, startup-recovery.mjs).
+  if (iosSimLeaseId && typeof worktreeManager.setIosSimLeaseId === "function") {
+    worktreeManager.setIosSimLeaseId(issue.identifier, iosSimLeaseId);
+  }
+
   // Everything from here on is published through one lifecycle surface
   // (MOV-158): a first-class Agent Activity when sessions are available, and
   // the same app-actor comment the dispatcher has always written when they are
@@ -637,6 +685,7 @@ async function processIssue(issue, ctx) {
         refreshIssueFn,
         stopPollIntervalMs,
         circuitBreaker,
+        iosSimLeaseId,
         usageLimitStore,
         diagnoseFailureFn,
         steeringEnabled,
@@ -743,6 +792,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     steeringEnabled = false,
     now,
     logger,
+    iosSimLeaseId = null,
   } = ctx;
 
   await publisher.publish("acknowledged", {
@@ -827,6 +877,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
       signal: abortController.signal,
       securityContext: { mode: workerMode },
       steering: steeringActive,
+      iosSimLeaseId,
       // `spawnWorker()` invokes this before the brief can start work. The
       // stored pid is also the detached process-group id, allowing a
       // replacement dispatcher to terminate the complete worker tree before

@@ -236,7 +236,13 @@ function claimLease({ environment, lane, id, holder, options }) {
 
   // A holder re-entering its own live lease renews it instead of deadlocking
   // behind itself (nested `ios:sim:run`, a second acquire in the same job).
-  if (liveness.live && record.lease.lane === lane && sameHolder(record.lease.holder, holder)) {
+  // A dispatcher-held worker lease is a second, explicit form of the same
+  // reentrancy: the lease id is handed to the worker as
+  // MOVIECAL_IOS_SIM_LEASE_ID, so `ios:sim:run` inside that worker's own
+  // (different) process recognizes and renews the lease it was handed rather
+  // than queueing behind its own dispatcher (MOV-311).
+  const reentrant = sameHolder(record.lease?.holder, holder) || (options.reentrantLeaseId && record.lease?.id === options.reentrantLeaseId);
+  if (liveness.live && record.lease.lane === lane && reentrant) {
     record.lease = renewLease(record.lease, nowMs);
     removeWaiter(record, id);
     return save({ acquired: true, lease: record.lease, shutdown: [], reused: true });
@@ -323,12 +329,17 @@ export function commandAcquire(options, environment) {
   const waitMs = options.waitMs ?? DEFAULT_WAIT_MS[lane];
   const pollMs = Number(environment.env.MOVIECAL_IOS_SIM_POLL_MS ?? DEFAULT_POLL_MS);
   const deadline = environment.now() + waitMs;
+  // MOV-311: a lease id handed down via the environment (the dispatcher to
+  // its own worker) is this process's to renew, even though its holder
+  // pid/startedAt cannot match the dispatcher's -- see claimLease().
+  const reentrantLeaseId = environment.env.MOVIECAL_IOS_SIM_LEASE_ID || null;
+  const claimOptions = { ...options, reentrantLeaseId };
   let announced = null;
 
   for (;;) {
     let attempt;
     try {
-      attempt = withMutex(environment, () => claimLease({ environment, lane, id, holder, options }));
+      attempt = withMutex(environment, () => claimLease({ environment, lane, id, holder, options: claimOptions }));
     } catch (error) {
       forgetWaiter(environment, id);
       throw error;
@@ -541,10 +552,15 @@ function renewHeldLease(environment, id) {
 export async function commandRun(options, environment) {
   if (options.commandArgs.length === 0) throw new Error("`ios:sim:run` needs a command: npm run ios:sim:run -- <command…>");
   const lease = commandAcquire({ ...options, purpose: options.purpose ?? options.commandArgs.join(" ") }, environment);
+  // MOV-311: a lease this process was handed (not one it originated) is being
+  // renewed, not owned -- releasing it here would tear down a dispatcher's
+  // still-running worker lease out from under it. Only the process that
+  // actually created a lease id, by acquiring it itself, ever releases it.
+  const reentrant = Boolean(environment.env.MOVIECAL_IOS_SIM_LEASE_ID) && environment.env.MOVIECAL_IOS_SIM_LEASE_ID === lease.id;
 
   let released = false;
   const release = () => {
-    if (released) return;
+    if (released || reentrant) return;
     released = true;
     try {
       commandRelease({ id: lease.id, force: true, keepBooted: options.keepBooted }, environment);

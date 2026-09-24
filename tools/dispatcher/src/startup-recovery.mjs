@@ -14,9 +14,22 @@ export async function reconcileStartupRecoveries(changes, {
   linearClient,
   readyForAgentStateId,
   needsHumanDecisionStateId,
+  releaseIosSimLeaseFn = async () => {},
   logger = console,
 } = {}) {
   for (const change of changes) {
+    // MOV-311: independent of, and unblocked by, the Linear reconciliation
+    // below -- a dispatcher-held simulator lease must free even when there is
+    // no Linear issue id to report back to (e.g. a legacy or orphan-sweep
+    // record). Progress is tracked in the same idempotent `startupRecovery`
+    // object so a retried pass never releases twice.
+    if (change.iosSimLeaseId && change.id) {
+      const progress = worktreeManager.loadState()[change.id]?.startupRecovery;
+      if (progress && !progress.leaseReleased) {
+        await releaseIosSimLeaseFn(change.iosSimLeaseId);
+        worktreeManager.markStartupRecoveryProgress(change.id, { leaseReleased: true });
+      }
+    }
     if (!change.id || !change.linearIssueId) {
       logger.warn(`${change.id ?? change.path}: startup recovery has no Linear issue id; local record remains pending for manual reconciliation`);
       continue;
