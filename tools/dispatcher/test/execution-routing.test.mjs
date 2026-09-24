@@ -22,7 +22,10 @@ describe("execution routing", () => {
   it("defaults active product, local-delivery, and Mac-only work to Mac", () => {
     expect(inferExecutionRoute({ project: "iOS Companion App" })).toBe("mac");
     expect(inferExecutionRoute({ project: "Platform & Infrastructure", title: "Update xcodebuild lane" })).toBe("mac");
-    expect(inferExecutionRoute({ project: "Shared Watchlists" })).toBe("mac");
+    for (const project of ["Shared Watchlists Core & API", "Web Shared Watchlists", "iOS Shared Watchlists"]) {
+      expect(inferExecutionRoute({ project })).toBe("mac");
+      expect(resolveExecutionRoute({ project, labels: ["execution:mac"] })).toMatchObject({ ok: true, route: "mac" });
+    }
     expect(inferExecutionRoute({ project: "Calendar Feed" })).toBe("mac");
     expect(inferExecutionRoute({ project: "Autonomous local-agent delivery" })).toBe("mac");
     expect(inferExecutionRoute({ project: "Local development workflow stabilization and governance" })).toBe("mac");
@@ -82,17 +85,19 @@ describe("execution routing", () => {
   });
 
   it("rejects execution:none on an executable issue", () => {
-    expect(resolveExecutionRoute({ project: "Shared Watchlists", labels: ["execution:none"] })).toMatchObject({
+    expect(resolveExecutionRoute({ project: "Shared Watchlists Core & API", labels: ["execution:none"] })).toMatchObject({
       ok: false,
       reason: expect.stringMatching(/reserved/),
     });
   });
 
   it("rejects crossing the active local and deferred-cloud project boundaries", () => {
-    expect(resolveExecutionRoute({ project: "Shared Watchlists", labels: ["execution:cloud"] })).toMatchObject({
-      ok: false,
-      reason: expect.stringMatching(/cannot use execution:cloud/),
-    });
+    for (const project of ["Shared Watchlists Core & API", "Web Shared Watchlists", "iOS Shared Watchlists"]) {
+      expect(resolveExecutionRoute({ project, labels: ["execution:cloud"] })).toMatchObject({
+        ok: false,
+        reason: expect.stringMatching(/cannot use execution:cloud/),
+      });
+    }
     expect(
       resolveExecutionRoute({ project: "Deferred Linear cloud execution option", labels: ["execution:mac"] }),
     ).toMatchObject({

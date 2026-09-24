@@ -30,8 +30,8 @@ One workspace (`moviecal`), one team (`MOV`). GitHub Issues Sync is one-repo-to-
 
 Three initiatives group the active product and development-system outcomes:
 
-- **Web App** — outcomes that ship to or directly support the Next.js application: Shared Watchlists, Calendar Feed, and Platform & Infrastructure. The canceled Developer Governance & Agent Infrastructure project retains a historical association.
-- **Native iOS App** — the future companion app: iOS Companion App.
+- **Web App** — outcomes that ship to or directly support the Next.js application: Shared Watchlists Core & API, Web Shared Watchlists, Calendar Feed, and the completed Platform & Infrastructure project.
+- **Native iOS App** — native product outcomes and their shared prerequisites: iOS Companion App, Shared Watchlists Core & API, iOS Shared Watchlists, and Calendar Feed.
 - **Automate moviecal Development and Delivery** — cross-cutting development infrastructure that supports every current and future product initiative. Its active projects are Autonomous local-agent delivery and Deferred Linear cloud execution option; completed/canceled predecessor projects remain associated for history.
 
 (A first attempt at provisioning these hit `FEATURE_NOT_ACCESSIBLE` — initiatives were originally plan-gated on this workspace, so this doc briefly shipped a "skip initiatives, projects stand alone" design. The repo owner then enabled the feature directly in Linear, and the initiatives + links above were created and verified live. The `leadTeamId` sub-feature remains gated, see "Plan" above — irrelevant here with one team.)
@@ -40,19 +40,24 @@ Three initiatives group the active product and development-system outcomes:
 
 | Linear project | Initiative | Role |
 |---|---|---|
-| Shared Watchlists | Web App | Finite watchlist product outcome |
-| Calendar Feed | Web App | Finite calendar-feed product outcome |
-| Platform & Infrastructure | Web App | Finite platform outcome |
+| Shared Watchlists Core & API | Web App + Native iOS App | Shared watchlist data, authorization, invitations, calendar behavior, and versioned API used by both clients |
+| Web Shared Watchlists | Web App | Finite browser collaboration experience using the shared core |
+| iOS Shared Watchlists | Native iOS App | Finite native collaboration experience using the shared API |
+| Calendar Feed | Web App + Native iOS App | Finite calendar-feed product outcome shared by both clients |
+| Platform & Infrastructure | Web App | **Completed.** Finite platform outcome |
 | iOS Companion App | Native iOS App | Finite native-app outcome |
+| Documentation aligned with shipped product | None | Finite product documentation reconciliation; deliberately not an ongoing documentation bucket |
 | Autonomous local-agent delivery | Automate moviecal Development and Delivery | **Active.** Finish bounded local intake, handoff, acceptance, and controlled autonomy |
 | Deferred Linear cloud execution option | Automate moviecal Development and Delivery | **Deferred.** Keep cloud environment/kickoff/pilots independently authorizable and out of the local critical path |
 | Local development workflow stabilization and governance | Automate moviecal Development and Delivery | **Completed history.** Finite Mac/local stabilization and handoff |
 | Hybrid workflow foundations (completed) | Automate moviecal Development and Delivery | **Completed history.** Architecture, routing, CI/review, and Agent Session foundations |
-| Developer Governance & Agent Infrastructure | Web App + Automate moviecal Development and Delivery | **Canceled audit history.** Do not assign new issues |
+| Developer Governance & Agent Infrastructure | Automate moviecal Development and Delivery | **Canceled audit history.** Do not assign new issues |
 
 `Docs` and `Migration` are not projects — they are work *types*, represented as labels. `Future` is not a project — it is the `Icebox` backlog state.
 
-The legacy Developer Governance & Agent Infrastructure project is deliberately retained so its former organization remains auditable. Its old milestones remain empty; all issues were moved to finite successors. Do not delete or repopulate it. Its dual initiative association is historical, not a rule for new automation projects. The provisioner leaves it and the completed predecessor projects untouched and never performs issue migration.
+The legacy Developer Governance & Agent Infrastructure project is deliberately retained so its former organization remains auditable. Its old milestones remain empty; all issues were moved to finite successors. Do not delete or repopulate it. The provisioner leaves it and the completed predecessor projects untouched and never performs issue migration. Documentation aligned with shipped product has no initiative because it is a bounded reconciliation task spanning product surfaces, not an initiative outcome on its own.
+
+Shared Watchlists Core & API appears in both product initiatives because each client depends on the same shared capability. Its progress is counted in both initiative views; initiative percentages therefore overlap and must not be added together as a portfolio total. Web and iOS delivery remain separate projects, so each initiative's status can be read alongside the core project's status. New feature work belongs to the project that owns its capability, regardless of which client is scheduled to ship first. Use issue-level blocking relations for actual API-to-client prerequisites; project membership and milestone order do not impose sequencing. A future Android app can gain its own initiative and feature project without moving shared-core issues.
 
 ## Planning-object semantics
 
@@ -71,6 +76,8 @@ Classify an issue by its actual scope, parent/child role, and dependency graph�
 Used only where a real multi-issue phase exists. Every milestone is local to one project, has a recognizable exit condition, and may omit a target date when dependency order rather than calendar time is the useful boundary. Milestone display order communicates the intended project narrative; it does **not** gate issue execution.
 
 **iOS Companion App** uses `Skeleton` → `Auth + API client` → `Navigation shell`, matching the dependency chain that was GitHub issues #237 → #238/#239 → #240.
+
+**Shared Watchlists Core & API** uses `Access and invitation safety` and `Cross-client shared API`. The first exits when ownership, invitation concurrency, and acceptance safety are proven; the second exits when the bearer-authenticated API and cross-client authorization parity are verified. **Web Shared Watchlists** uses `Complete web collaboration` for the browser flows and two-account journey. **iOS Shared Watchlists** uses `Native experience` for accessible SwiftUI flows and web/iOS parity. Each milestone belongs only to its own project; genuine issue-level prerequisites cross those project boundaries.
 
 **Autonomous local-agent delivery** uses `Automated intake & local kickoff` → `Local acceptance & controlled autonomy`. The first phase records the architecture, configures bounded intake enrichment, and proves the separate Loop-to-Mac handoff. The second resolves local testing policy, runs local acceptance/recovery drills, and only then permits risk-scoped automatic readiness/merge. The project ends at that local outcome; cloud execution is not an exit criterion.
 
