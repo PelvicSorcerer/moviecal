@@ -4,11 +4,8 @@
 // payload on stdin and decides allow/deny: any Bash command or iOS Simulator
 // MCP action that mutates simulator state is denied unless a live machine-wide
 // lease (scripts/ios-sim-lease.mjs, MOV-309) already covers the caller's lane.
-//
-// Wiring this into .claude/settings.json as a PreToolUse hook (matching the
-// Bash tool and the iOS Simulator MCP server) is a separate, human-only step:
-// .claude/** is edit-denied for dispatcher workers (AGENTS.md §Security
-// model). This file only implements and unit-tests the decision itself.
+// Wiring it into .claude/settings.json is a separate, human-only step
+// (.claude/** is edit-denied for workers; AGENTS.md §Security model).
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";

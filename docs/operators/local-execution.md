@@ -245,11 +245,10 @@ unmanaged, the issue is **deferred silently** (`deferred-ios-sim-lease`, no
 `Blocked` comment, no worktree) and retried next poll. Non-iOS issues never
 touch the lease.
 
-The lease id reaches the worker as `MOVIECAL_IOS_SIM_LEASE_ID`; the brief tells
-it to use the `moviecal-worker` device only. `npm run ios:sim:run` renews a
-handed-in lease instead of queueing behind its own dispatcher. The id is also
-recorded on the worktree registry entry (`iosSimLeaseId`) so startup recovery
-releases it explicitly rather than waiting for the heartbeat to go stale.
+The worker receives the lease id as `MOVIECAL_IOS_SIM_LEASE_ID` and must use
+only the `moviecal-worker` device; `npm run ios:sim:run` renews it rather than
+queueing behind its own dispatcher. The id is recorded on the worktree registry
+entry (`iosSimLeaseId`) so startup recovery releases it explicitly.
 
 ## Worker interface
 

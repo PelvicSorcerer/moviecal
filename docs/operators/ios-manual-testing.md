@@ -48,9 +48,8 @@ This acquires the manual lease and builds against `moviecal-manual`
 Xcode, writes build settings to a private temporary .xcconfig, verifies the
 built app's embedded settings without displaying them, installs, and launches.
 
-To target another simulator, pass an explicit UDID or name
-(`--device <udid-or-name>`). `moviecal-ci` and `moviecal-worker` are rejected;
-the manual lease is still acquired.
+Pass `--device <udid-or-name>` to target another simulator (`moviecal-ci`
+and `moviecal-worker` are rejected).
 
 Use --dry-run to confirm configuration and identify the current branch and
 commit without running simulator or build commands, and without acquiring a
@@ -76,10 +75,5 @@ evidence.
 
 ## When you are finished
 
-Release the lease so the next lane -- CI, a dispatcher worker, or another
-human -- can take the simulator:
-
-    npm run ios:sim:release
-
-This shuts the `moviecal-manual` device down. `npm run ios:sim:status` shows
-the current lease, its expiry, and anyone waiting on it.
+Run `npm run ios:sim:release` to free the simulator (`ios:sim:status` shows
+the current lease).
