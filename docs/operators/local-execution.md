@@ -236,11 +236,15 @@ semantics.
 
 ### Dispatcher-held simulator lease for iOS Companion App issues (MOV-311)
 
-Interactive Claude Code and Codex sessions use the shared
-`scripts/ios-sim-guard.mjs` `PreToolUse` policy through `.claude/settings.json`
-and `.codex/hooks.json` respectively (MOV-312). Codex requires a one-time
-project hook trust review with `/hooks`; until trusted, follow the acquire-first
-procedure in [iOS manual testing](./ios-manual-testing.md). These hooks cover
+Interactive Claude Code sessions use the shared `scripts/ios-sim-guard.mjs`
+`PreToolUse` policy through `.claude/settings.json` (MOV-312). Codex has the
+same policy in `.codex/hooks.json`, but CLI 0.153.4 does not discover project
+hooks in linked Git worktrees, even after the worktree is trusted
+([upstream issue](https://github.com/openai/codex/issues/27133)). Codex
+worktree sessions must follow the acquire-first procedure in
+[iOS manual testing](./ios-manual-testing.md) and MOV-309's unmanaged-state
+detection; do not assume the hook is active unless `/hooks` shows it. When
+loaded, the hook requires a trust review in `/hooks`. These hooks cover
 supported Bash and simulator MCP calls; `worker-guard.mjs` remains the worker
 enforcement boundary.
 
