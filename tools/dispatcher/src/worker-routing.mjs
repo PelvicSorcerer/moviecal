@@ -221,7 +221,7 @@ export function modelIdForTier(worker, tier) {
   const table = {
     cheap: process.env.MOVIECAL_MODEL_CHEAP || "claude-haiku-4-5",
     default: process.env.MOVIECAL_MODEL_DEFAULT || "claude-sonnet-5",
-    strong: process.env.MOVIECAL_MODEL_STRONG || "claude-opus-5",
+    strong: process.env.MOVIECAL_MODEL_STRONG || "claude-opus-5-5",
   };
   const id = table[tier];
   if (!id) throw new Error(`unknown model tier: ${tier}`);
