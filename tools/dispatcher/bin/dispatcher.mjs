@@ -90,7 +90,7 @@ import {
 import { LinearClient } from "../src/linear-client.mjs";
 import { getAppToken } from "../src/linear-app-auth.mjs";
 import { evaluatePreflight, worktreeName, branchName } from "../src/preflight.mjs";
-import { resolveRouting } from "../src/worker-routing.mjs";
+import { resolveRouting, workerInvocation, modelIdForTier, claudeEffortForTier, claudeModelDoesNotSupportEffort } from "../src/worker-routing.mjs";
 import { inferExecutionRoute, resolveExecutionRoute } from "../src/execution-routing.mjs";
 import {
   describeDelegate,
@@ -306,6 +306,19 @@ async function cmdDoctor() {
     checks.push({ name: `${bin} on PATH`, ok: which.ok, detail: which.ok ? which.value : `not found (required for the ${bin} worker adapter)` });
   }
 
+  for (const tier of ["cheap", "default", "strong"]) {
+    const modelId = modelIdForTier("claude", tier);
+    const effort = tryRun(() => claudeEffortForTier(tier, modelId));
+    const requested = process.env[`MOVIECAL_CLAUDE_EFFORT_${tier.toUpperCase()}`] ?? { cheap: "none", default: "medium", strong: "high" }[tier];
+    checks.push({
+      name: `Claude ${tier} effort`,
+      ok: effort.ok,
+      detail: !effort.ok ? effort.error : claudeModelDoesNotSupportEffort(modelId) && requested !== "none"
+        ? `omitted: ${modelId} does not support --effort (requested ${requested})`
+        : effort.value ?? `omitted for ${modelId}`,
+    });
+  }
+
   // MOV-145: both adapters depend on the same inherited macOS Seatbelt
   // boundary. A missing/disabled sandbox is a hard health-check failure; the
   // dispatcher must not silently fall back to prompt-only permissions.
@@ -402,6 +415,7 @@ async function cmdDryRun({ fixturePath } = {}) {
   const dispatcherDelegate = resolveDispatcherDelegate();
 
   console.log(`${issues.length} issue(s) in Ready for Agent:\n`);
+  let routingError = false;
   for (const issue of issues) {
     const routing = resolveRouting(issue);
     const execution = resolveExecutionRoute(issue);
@@ -427,6 +441,19 @@ async function cmdDryRun({ fixturePath } = {}) {
     console.log(`  worktree: ${path.join(worktreeRoot(), name)}`);
     console.log(`  branch:   ${branch}`);
     console.log(`  worker:   ${routing.worker} (model: ${routing.model})${routing.ok ? "" : `  [ROUTING BLOCKED: ${routing.reason}]`}`);
+    if (routing.ok) {
+      const planned = tryRun(() => workerInvocation(routing.worker, routing.model));
+      if (planned.ok) {
+        const args = planned.value.args;
+        const shown = routing.worker === "claude"
+          ? ["-p", "--model", args[args.indexOf("--model") + 1], ...(planned.value.reasoningEffort ? ["--effort", planned.value.reasoningEffort] : [])]
+          : args;
+        console.log(`  planned invocation: ${planned.value.command} ${shown.join(" ")}`);
+      } else {
+        routingError = true;
+        console.log(`  routing error: ${planned.error}`);
+      }
+    }
     console.log(`  execution: ${execution.ok ? execution.route : `INVALID — ${execution.reason}`} (inferred ${inferExecutionRoute(issue)})`);
     console.log(`  delegate: ${describeDelegate(issue.delegate)}`);
     console.log(
@@ -460,7 +487,7 @@ async function cmdDryRun({ fixturePath } = {}) {
     `Cloud-routed (not executable here; the cloud adapter is not enabled): ${cloud.length}${cloud.length ? ` (${cloud.map((i) => i.identifier).join(", ")})` : ""}`,
   );
   console.log("Dry run only — no worktree, branch, or Linear state was changed.");
-  return 0;
+  return routingError ? 1 : 0;
 }
 
 function cmdGc() {

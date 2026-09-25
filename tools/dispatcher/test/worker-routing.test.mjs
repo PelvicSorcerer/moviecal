@@ -8,6 +8,7 @@ import {
   modelIdForTier,
   codexReasoningEffortForTier,
   codexModelIdForTier,
+  claudeEffortForTier,
 } from "../src/worker-routing.mjs";
 
 const CODEX_ENV_VARS = [
@@ -81,6 +82,8 @@ describe("workerInvocation", () => {
       "-p",
       "--model",
       modelIdForTier("claude", "default"),
+      "--effort",
+      "medium",
       "--permission-mode",
       "dontAsk",
       "--setting-sources",
@@ -282,6 +285,39 @@ describe("workerInvocation", () => {
         "model_reasoning_effort=medium",
       ]);
     });
+  });
+});
+
+describe("Claude effort routing (MOV-364)", () => {
+  const names = ["CHEAP", "DEFAULT", "STRONG"].map((tier) => `MOVIECAL_CLAUDE_EFFORT_${tier}`);
+  afterEach(() => names.forEach((name) => delete process.env[name]));
+
+  it("uses no flag for cheap, medium for default and high for strong", () => {
+    expect(workerInvocation("claude", "cheap").args).not.toContain("--effort");
+    for (const [tier, value] of [["default", "medium"], ["strong", "high"]]) {
+      const args = workerInvocation("claude", tier).args;
+      expect(args.slice(args.indexOf("--effort"), args.indexOf("--effort") + 2)).toEqual(["--effort", value]);
+    }
+  });
+
+  it("honors each override and none, and rejects invalid values", () => {
+    process.env.MOVIECAL_CLAUDE_EFFORT_CHEAP = "low";
+    process.env.MOVIECAL_MODEL_CHEAP = "claude-sonnet-5";
+    expect(claudeEffortForTier("cheap")).toBe("low");
+    process.env.MOVIECAL_CLAUDE_EFFORT_DEFAULT = "none";
+    expect(workerInvocation("claude", "default").args).not.toContain("--effort");
+    process.env.MOVIECAL_CLAUDE_EFFORT_STRONG = "xhigh";
+    expect(claudeEffortForTier("strong")).toBe("xhigh");
+    process.env.MOVIECAL_CLAUDE_EFFORT_DEFAULT = "bogus";
+    expect(() => workerInvocation("claude", "default")).toThrow(/invalid Claude effort "bogus"/);
+    delete process.env.MOVIECAL_MODEL_CHEAP;
+  });
+
+  it("omits effort for Haiku 4.5 even when a tier override requests it", () => {
+    process.env.MOVIECAL_MODEL_DEFAULT = "claude-haiku-4-5-20251001";
+    process.env.MOVIECAL_CLAUDE_EFFORT_DEFAULT = "high";
+    expect(workerInvocation("claude", "default").args).not.toContain("--effort");
+    delete process.env.MOVIECAL_MODEL_DEFAULT;
   });
 });
 

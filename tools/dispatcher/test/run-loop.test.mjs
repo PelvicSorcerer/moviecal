@@ -1006,6 +1006,35 @@ describe("runOnce", () => {
   });
 
   describe("lifecycle publication and stop controls (MOV-158)", () => {
+    it("rejects an invalid Claude effort before claiming a worktree or spawning a worker", async () => {
+      process.env.MOVIECAL_CLAUDE_EFFORT_DEFAULT = "bogus";
+      try {
+        const ctx = baseCtx();
+        const [result] = await runOnce([ISSUE], ctx);
+        expect(result.outcome).toBe("needs-human");
+        expect(result.reason).toMatch(/invalid Claude effort "bogus"/);
+        expect(ctx.worktreeManager.createCalls).toHaveLength(0);
+        expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.MOVIECAL_CLAUDE_EFFORT_DEFAULT;
+      }
+    });
+
+    it("spawns Claude with the tier effort and reports the same effort in each start comment (MOV-364)", async () => {
+      const cases = [
+        { tier: "default", labels: ["execution:mac"], effort: "medium" },
+        { tier: "strong", labels: ["execution:mac", "model:strong", "upgrade:architecture"], effort: "high" },
+      ];
+      for (const { tier, labels, effort } of cases) {
+        const ctx = baseCtx();
+        const [result] = await runOnce([{ ...ISSUE, identifier: `MOV-${tier}`, labels }], ctx);
+        expect(result.outcome).toBe("in-review");
+        const args = ctx.spawnWorkerFn.mock.calls[0][0].invocation.args;
+        expect(args.slice(args.indexOf("--effort"), args.indexOf("--effort") + 2)).toEqual(["--effort", effort]);
+        const start = ctx.linearClient.calls.find((call) => call.type === "addComment").body;
+        expect(start).toContain(`Worker: claude (model: ${tier}, effort: ${effort})`);
+      }
+    });
     /** A Linear client that also speaks the Agent Session surface. */
     function sessionCapableClient() {
       const client = fakeLinearClient();

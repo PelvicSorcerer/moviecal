@@ -152,12 +152,16 @@ export function resolveRouting(issue) {
  */
 export function workerInvocation(worker, model, { steering = false } = {}) {
   if (worker === "claude") {
+    const modelId = modelIdForTier("claude", model);
+    const effort = claudeEffortForTier(model, modelId);
     return {
       command: "claude",
+      reasoningEffort: effort, // MOV-363 usage record can persist the effective flag value.
       args: [
         "-p",
         "--model",
-        modelIdForTier("claude", model),
+        modelId,
+        ...(effort ? ["--effort", effort] : []),
         "--permission-mode",
         "dontAsk",
         "--setting-sources",
@@ -208,6 +212,26 @@ export function workerInvocation(worker, model, { steering = false } = {}) {
     return { command: "codex", args };
   }
   throw new Error(`unknown worker: ${worker}`);
+}
+
+/** Haiku 4.5 rejects the effort parameter, including dated model IDs. */
+export function claudeModelDoesNotSupportEffort(modelId) {
+  return /^claude-haiku-4-5(?:$|-)/.test(modelId);
+}
+
+/** Return the effective CLI effort, or null when the flag must be omitted. */
+export function claudeEffortForTier(tier, modelId = modelIdForTier("claude", tier)) {
+  const table = {
+    cheap: process.env.MOVIECAL_CLAUDE_EFFORT_CHEAP ?? "none",
+    default: process.env.MOVIECAL_CLAUDE_EFFORT_DEFAULT ?? "medium",
+    strong: process.env.MOVIECAL_CLAUDE_EFFORT_STRONG ?? "high",
+  };
+  if (!(tier in table)) throw new Error(`unknown model tier: ${tier}`);
+  const effort = table[tier];
+  if (!["none", "low", "medium", "high", "xhigh", "max"].includes(effort)) {
+    throw new Error(`invalid Claude effort ${JSON.stringify(effort)} for ${tier} tier; expected none, low, medium, high, xhigh, or max`);
+  }
+  return effort === "none" || claudeModelDoesNotSupportEffort(modelId) ? null : effort;
 }
 
 /**
