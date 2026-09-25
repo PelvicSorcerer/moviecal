@@ -90,6 +90,31 @@ function makeTurnBoundaryParser(onTurnComplete) {
   };
 }
 
+/** Count live model responses without a CLI turn-limit flag or transcript reread. */
+export function makeAssistantTurnCounter(worker, onTurn) {
+  let carry = "";
+  let turns = 0;
+  const seen = new Set();
+  return (chunk) => {
+    carry += chunk.toString("utf8");
+    const lines = carry.split("\n");
+    carry = lines.pop() ?? "";
+    for (const line of lines) {
+      let event;
+      try { event = JSON.parse(line); } catch { continue; }
+      if (worker === "claude" && event?.type === "assistant" && event.message?.role === "assistant") {
+        const id = event.message.id;
+        if (id && seen.has(id)) continue;
+        if (id) seen.add(id);
+      } else if (!(worker === "codex" && event?.type === "turn.completed")) {
+        continue;
+      }
+      turns += 1;
+      onTurn(turns);
+    }
+  };
+}
+
 function redactionStream(env) {
   let carry = "";
   return new Transform({
@@ -180,6 +205,7 @@ export function spawnWorker({
   repositoryGuardPathsFn = repositoryGuardPaths,
   steering = false,
   iosSimLeaseId = null,
+  onAssistantTurn = null,
 }) {
   fs.mkdirSync(logDir, { recursive: true });
   const stdoutPath = path.join(logDir, "stdout.log");
@@ -266,6 +292,9 @@ export function spawnWorker({
     stderrStream.on("error", () => {});
     child.stdout?.pipe(redactionStream(process.env)).pipe(stdoutStream);
     child.stderr?.pipe(redactionStream(process.env)).pipe(stderrStream);
+    if (onAssistantTurn) {
+      child.stdout?.on("data", makeAssistantTurnCounter(path.basename(invocation.command), onAssistantTurn));
+    }
     if (steering) {
       // A second, independent listener on the same readable -- Node
       // broadcasts every chunk to all attached 'data' listeners, so this

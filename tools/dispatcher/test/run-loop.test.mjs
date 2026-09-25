@@ -2704,6 +2704,134 @@ describe("steering turn-loop wiring", () => {
   });
 });
 
+describe("MOV-367 turn budget continuation", () => {
+  function budgetContext({ steeringEnabled = false, secondStops = false, secondExit = 0, failAdmission = false, missingProgress = false } = {}) {
+    const worktreeManager = fakeWorktreeManager();
+    let registryEntry;
+    const originalCreate = worktreeManager.create.bind(worktreeManager);
+    worktreeManager.create = (args) => {
+      const created = originalCreate(args);
+      registryEntry = { ...created, status: "active", provenance: { executor: "moviecal-dispatcher", repository: "owner/repo" } };
+      return created;
+    };
+    const originalMarkStatus = worktreeManager.markStatus.bind(worktreeManager);
+    worktreeManager.markStatus = (id, status, extra) => {
+      originalMarkStatus(id, status, extra);
+      registryEntry.status = status;
+    };
+    worktreeManager.loadState = () => ({ "MOV-1": registryEntry });
+    worktreeManager.isDispatcherOwnedWorktree = () => !failAdmission;
+    worktreeManager.worktreeIntegrity = () => ({ intact: true, branch: registryEntry.branch });
+    worktreeManager.resumeEntry = vi.fn(() => {
+      registryEntry.status = "active";
+      return registryEntry;
+    });
+    const writeTurns = [];
+    let starts = 0;
+    const spawnWorkerFn = vi.fn((args) => {
+      starts += 1;
+      const limit = starts === 1 || secondStops ? 8 : 3;
+      const promise = new Promise((resolve) => {
+        args.signal.addEventListener("abort", () => resolve({ exitCode: 143, logDir: args.logDir }), { once: true });
+        queueMicrotask(() => {
+          for (let turn = 1; turn <= limit; turn += 1) {
+            if (args.signal.aborted) break;
+            args.onAssistantTurn(turn);
+          }
+          if (!args.signal.aborted) resolve({ exitCode: starts === 1 ? 0 : secondExit, logDir: args.logDir });
+        });
+      });
+      return args.steering ? { promise, writeTurn: (text) => writeTurns.push(text), requestClose: () => {}, nextTurnBoundary: async () => ({ ended: true }) } : promise;
+    });
+    const ctx = baseCtx({
+      worktreeManager, spawnWorkerFn, steeringEnabled, turnBudgetFn: () => 8,
+      readWorkerProgressFn: () => missingProgress ? "Progress file missing." : "Done: implementation. Left: verify.",
+      removeWorkerProgressFn: vi.fn(),
+      diffSummaryFn: () => " src/a.ts | 2 ++",
+      uncommittedChangesFn: () => ["src/a.ts", "WORKER_PROGRESS.md"],
+      captureVerificationEvidenceFn: () => ({ status: "failed" }),
+      captureWorkerUsageFn: (_logDir, context) => ({ worker: "claude", tier: "default", turns: context.attemptKind === "implementation" ? 8 : 3, verifyRuns: 1 }),
+    });
+    return { ctx, writeTurns };
+  }
+
+  it("leaves an under-budget run on the ordinary publish path", async () => {
+    const { ctx, writeTurns } = budgetContext();
+    ctx.spawnWorkerFn = vi.fn(async (args) => {
+      for (let turn = 1; turn <= 3; turn += 1) args.onAssistantTurn(turn);
+      return { exitCode: 0, logDir: args.logDir };
+    });
+    const [result] = await runOnce([ISSUE], ctx);
+    expect(result.outcome).toBe("in-review");
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+    expect(writeTurns).toEqual([]);
+  });
+
+  it.each([true, false])("stops once, continues in place, and publishes only after success (steering %s)", async (steeringEnabled) => {
+    const { ctx, writeTurns } = budgetContext({ steeringEnabled });
+    const [result] = await runOnce([ISSUE], ctx);
+    expect(result.outcome).toBe("in-review");
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(2);
+    expect(ctx.worktreeManager.resumeEntry).toHaveBeenCalledTimes(1);
+    const [first, second] = ctx.spawnWorkerFn.mock.calls.map(([args]) => args);
+    expect(second.cwd).toBe(first.cwd);
+    expect(second.invocation).toEqual(first.invocation);
+    expect(second.brief).toContain("Done: implementation");
+    expect(second.brief).toContain("src/a.ts | 2 ++");
+    expect(ctx.publishWorkerResultFn).toHaveBeenCalledTimes(1);
+    expect(ctx.removeWorkerProgressFn).toHaveBeenCalledTimes(1);
+    expect(writeTurns.filter((text) => text.includes("WORKER_PROGRESS.md"))).toHaveLength(steeringEnabled ? 1 : 0);
+  });
+
+  it("continues from the diff when the progress file is absent", async () => {
+    const { ctx } = budgetContext({ missingProgress: true });
+    const [result] = await runOnce([ISSUE], ctx);
+    expect(result.outcome).toBe("in-review");
+    expect(ctx.spawnWorkerFn.mock.calls[1][0].brief).toContain("Progress file missing.");
+  });
+
+  it("hands off after the second budget stop without a third spawn or publish", async () => {
+    const { ctx } = budgetContext({ secondStops: true });
+    const [result] = await runOnce([ISSUE], ctx);
+    expect(result.outcome).toBe("budget-handoff");
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(2);
+    expect(ctx.publishWorkerResultFn).not.toHaveBeenCalled();
+    const handoffs = ctx.linearClient.calls.filter((call) => call.type === "addComment" && call.body.includes("human review required"));
+    expect(handoffs).toHaveLength(1);
+    expect(handoffs[0].body).toContain("Latest exact verify: failed");
+    expect(handoffs[0].body).toContain("src/a.ts");
+  });
+
+  it("hands off once when retained worktree ownership cannot be proved", async () => {
+    const { ctx } = budgetContext({ failAdmission: true });
+    const [result] = await runOnce([ISSUE], ctx);
+    expect(result.outcome).toBe("budget-handoff");
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+    expect(ctx.publishWorkerResultFn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["credential", "OAuth access token has expired", "credential-failure"],
+    ["usage limit", `Claude usage limit reached · reset|${Math.floor((Date.now() + 3600_000) / 1000)}`, "worker-failed"],
+  ])("keeps %s classification ahead of a simultaneous budget event", async (_name, signature, expected) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mov367-precedence-"));
+    try {
+      const { ctx } = budgetContext();
+      ctx.logRoot = root;
+      ctx.spawnWorkerFn = vi.fn(async (args) => {
+        fs.mkdirSync(args.logDir, { recursive: true });
+        fs.writeFileSync(path.join(args.logDir, "stdout.log"), `${signature}\n`);
+        for (let turn = 1; turn <= 8; turn += 1) args.onAssistantTurn(turn);
+        return { exitCode: 1, logDir: args.logDir };
+      });
+      const [result] = await runOnce([ISSUE], ctx);
+      expect(result.outcome).toBe(expected);
+      expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+      expect(ctx.publishWorkerResultFn).not.toHaveBeenCalled();
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
 describe("iOS Companion App worker-lane simulator lease (MOV-311)", () => {
   const IOS_ISSUE = { ...ISSUE, project: "iOS Companion App" };
 
