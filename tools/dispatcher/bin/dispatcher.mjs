@@ -3,6 +3,7 @@
 //
 // Usage:
 //   dispatcher doctor              - read-only health check of every dependency
+//   dispatcher usage               - read-only recent worker usage and aggregates
 //   dispatcher dry-run             - fetch Ready-for-Agent issues and print the plan
 //                                     without touching any worktree, branch, or Linear
 //                                     state (safe to run with a live or missing key)
@@ -55,6 +56,7 @@ import {
   logRoot,
   worktreesStatePath,
   usageLimitStatePath,
+  workerUsageStatePath,
   repairLedgerStatePath,
   masterIncidentLedgerStatePath,
   prAutonomyLedgerStatePath,
@@ -121,6 +123,7 @@ import { SignalLedger, StopController, handleAgentSignal } from "../src/agent-si
 import { AgentStreamClient } from "../src/agent-stream-client.mjs";
 import { previewRepairPass, runRepairPass } from "../src/repair-run.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
+import { WorkerUsageStore, aggregateUsage } from "../src/worker-usage.mjs";
 import { PrAutonomyLedger, runPrAutonomyPass } from "../src/pr-autonomy.mjs";
 import { MasterIncidentLedger } from "../src/master-incident-ledger.mjs";
 import { runMasterCiPass, reconcileMasterIncidents, previewMasterCiPass } from "../src/master-ci-observer.mjs";
@@ -1221,6 +1224,11 @@ async function cmdMasterCi({ dryRun = false } = {}) {
 async function main() {
   const [, , cmd, ...rest] = process.argv;
   switch (cmd) {
+    case "usage": {
+      const runs = new WorkerUsageStore(workerUsageStatePath()).recent();
+      console.log(JSON.stringify({ readOnly: true, recentRuns: runs.slice(-20).reverse(), byTier: aggregateUsage(runs, "tier"), byModel: aggregateUsage(runs, "modelId") }, null, 2));
+      break;
+    }
     case "doctor":
       process.exitCode = await cmdDoctor();
       break;
@@ -1287,7 +1295,7 @@ async function main() {
     }
     default:
       console.error(
-        "Usage: dispatcher <doctor|health|dry-run|shadow|agent-signal|gc|promote|priorities|audit-issues|reconcile-parents|repair|master-ci|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
+        "Usage: dispatcher <doctor|health|usage|dry-run|shadow|agent-signal|gc|promote|priorities|audit-issues|reconcile-parents|repair|master-ci|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
       );
       process.exitCode = 1;
   }

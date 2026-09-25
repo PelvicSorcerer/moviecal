@@ -70,6 +70,14 @@ built.
 
 Dispatcher code lives in `tools/dispatcher/` in this repository (TypeScript, using the repo's existing Node 24 + Vitest toolchain). Runtime config lives outside the repo at `~/.config/moviecal/` (mode 700) — API keys and `.env.local` must never be committed. Run logs live at `~/Library/Logs/moviecal-dispatcher/`, retained 90 days.
 
+### Worker usage accounting
+
+After each implementation or code-repair worker exits, the dispatcher parses its structured stdout and writes `usage.json` beside that run's `stdout.log`. It also appends the numeric summary to `~/.config/moviecal/worker-usage.json`. Both files stay outside the repository. A failed or truncated transcript produces explicit `null` values and `partial: true`; accounting errors never block publication. The existing Linear PR-opened comment includes one compact `Usage:` line. Repair publication includes the same line.
+
+The summary records the issue, attempt kind, worker, model ID, model tier, reasoning effort when passed, turns, duration in milliseconds, cost in USD, input and output tokens, cache-read and cache-write tokens, thinking tokens when reported, exit outcome, exact `npm run verify` invocation count, calls per tool, and approximate tool-result characters per tool. Tool and model names are bounded identifiers; command text, prompts, tool results, and secrets are never copied. Claude fields come from the final structured `result` event. Codex uses only the usage events it emits, so unsupported fields remain `null`. Claude Code's cost is an **API-equivalent estimate**, not an invoice: workers bill against the subscription.
+
+Run `node tools/dispatcher/bin/dispatcher.mjs usage` for a read-only JSON report of the 20 most recent recorded runs plus per-tier and per-model medians and totals. This command reads only the usage state file; it does not contact Linear, GitHub, or a worker.
+
 ## Dispatch trigger
 
 The dispatcher polls Linear for issues in workflow state `Ready for Agent`, then claims only the ones that satisfy **both** halves of the boundary below (MOV-143, `tools/dispatcher/src/dispatch-eligibility.mjs`). (A future phase may register a Linear Agent App for webhook-driven dispatch instead of polling; both share the same downstream pipeline.)

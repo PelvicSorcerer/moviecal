@@ -40,6 +40,7 @@ import { DEFAULT_REPAIR_BUDGETS } from "./ci-outcomes.mjs";
 import { admitRepair, guardRepairTarget } from "./repair-policy.mjs";
 import { repairJobKey } from "./repair-ledger.mjs";
 import { workerInvocation } from "./worker-routing.mjs";
+import { formatUsageLine } from "./worker-usage.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
@@ -404,6 +405,7 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
     workerInvocationFn = workerInvocation,
     now = () => new Date(),
     logger = console,
+    captureWorkerUsageFn = () => null,
   } = ctx;
 
   ledger.reserve(entry.id, {
@@ -476,9 +478,11 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
   // exactly as run-loop.mjs does for a dispatch worker.
   const abortController = new AbortController();
   let spawnResult;
+  let usagePromise = Promise.resolve(null);
   try {
+    const invocation = workerInvocationFn(entry.worker || "claude", entry.model || "default");
     const workerPromise = spawnWorkerFn({
-      invocation: workerInvocationFn(entry.worker || "claude", entry.model || "default"),
+      invocation,
       cwd: entry.path,
       brief,
       logDir,
@@ -488,6 +492,15 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
     // The race below owns this rejection; this no-op handler only stops Node
     // reporting the loser of the race as an unhandled rejection.
     Promise.resolve(workerPromise).catch(() => {});
+    usagePromise = Promise.resolve(workerPromise).then((result) => captureWorkerUsageFn(logDir, {
+      issue: entry.id,
+      attemptKind: "repair",
+      worker: entry.worker || "claude",
+      modelId: invocation.args[invocation.args.indexOf("--model") + 1] || null,
+      tier: entry.model || "default",
+      reasoningEffort: (entry.worker || "claude") === "codex" ? invocation.args.find((arg) => arg.startsWith("model_reasoning_effort="))?.split("=")[1] || null : null,
+      exitOutcome: result.exitCode === 0 ? "exited-0" : `exited-${result.exitCode}`,
+    })).catch((error) => { logger.error(`Could not capture repair usage for ${entry.id}: ${error.message}`); return null; });
     spawnResult = await raceRepairTimeout(workerPromise, workerTimeoutMs);
   } catch (error) {
     try {
@@ -523,6 +536,8 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
       logDir,
     });
   }
+
+  const usage = await usagePromise;
 
   if (spawnResult?.exitCode !== 0) {
     return failCodeRepair({
@@ -633,6 +648,7 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
     `Reason: ${decision.reason}`,
     `Repair attempt: ${attempt} of ${budgets.codeRepair} for this pull request.`,
     `Pushed to the same branch \`${entry.branch}\`; new head \`${pr.headSha || "unknown"}\` (was \`${decision.headSha}\`).`,
+    formatUsageLine(usage),
     "",
     "No branch and no pull request were created. GitHub CI is authoritative for whether the repair worked.",
     ...(logDir ? ["", `Full run log: \`${logDir}\``] : []),
