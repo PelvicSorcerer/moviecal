@@ -349,6 +349,26 @@ export function resolveIssueSpecMode(env = process.env) {
 }
 
 /**
+ * The workspace member the promoter assigns to an eligible issue that has no
+ * assignee, before it moves into Ready for Agent (MOV-359). Linear refuses to
+ * delegate an unowned issue to `moviecal-dispatcher`
+ * ("moviecal-dispatcher works on behalf of a person. Assign a workspace
+ * member to the issue first, then delegate."), so an issue an authoring
+ * agent or human left unassigned would otherwise reach Ready for Agent and
+ * then stall at the handoff Loop.
+ *
+ * Unset by default: an unassigned issue then fails closed
+ * (`owner-assignment.mjs`) rather than falling back to a hardcoded person, so
+ * a workspace change (the owner leaving, a new default) is a one-line config
+ * edit here, never a code change. The initial operator value is Adam Moore's
+ * workspace email, set in this Mac's own environment — never committed to
+ * the repo.
+ */
+export function resolveDefaultOwnerEmail(env = process.env) {
+  return String(env.MOVIECAL_DEFAULT_OWNER_EMAIL ?? "").trim() || null;
+}
+
+/**
  * How often the in-loop issue-completeness audit (issue-spec-audit.mjs) may
  * run automatically, in milliseconds. It does not run every 30-second poll
  * cycle -- only once this many milliseconds have elapsed since the last

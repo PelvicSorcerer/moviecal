@@ -312,4 +312,109 @@ describe("promoteEligible", () => {
     expect(client.moveToState).toHaveBeenCalledTimes(1); // unchanged from the first pass
     expect(results).toEqual([]);
   });
+
+  // MOV-359: the configured-human-owner gate.
+  describe("owner assignment (MOV-359)", () => {
+    function fakeOwnerAssignment(ensureOwnerImpl) {
+      return { ensureOwner: vi.fn(ensureOwnerImpl) };
+    }
+    const OK_ASSIGNED = { ok: true, assigned: true, wouldAssign: false, member: { id: "user-adam", name: "Adam Moore" } };
+    const OK_PLANNED = { ok: true, assigned: false, wouldAssign: true, member: { id: "user-adam", name: "Adam Moore" } };
+    const NOT_CONFIGURED = { ok: false, reason: "no default owner configured (MOVIECAL_DEFAULT_OWNER_EMAIL is unset)" };
+
+    it("assigns the owner before moving to Ready for Agent, then promotes", async () => {
+      const client = fakeClient();
+      const calls = [];
+      client.moveToState.mockImplementation(async (...args) => { calls.push(["moveToState", ...args]); });
+      const ownerAssignment = fakeOwnerAssignment(async (issueArg) => { calls.push(["ensureOwner", issueArg.id]); return OK_ASSIGNED; });
+
+      const results = await promoteEligible([issue({ id: "id-1", identifier: "MOV-1" })], ctxBase(client, { ownerAssignment }));
+
+      expect(calls).toEqual([["ensureOwner", "id-1"], ["moveToState", "id-1", "state-ready"]]);
+      expect(results).toEqual([
+        {
+          issue: "MOV-1",
+          promoted: true,
+          reason: expect.any(String),
+          specViolations: expect.any(Array),
+          ownerAssigned: true,
+          ownerPlanned: false,
+          ownerName: "Adam Moore",
+        },
+      ]);
+    });
+
+    it("never calls ensureOwner when the issue already has an assignee", async () => {
+      const client = fakeClient();
+      const ownerAssignment = fakeOwnerAssignment(async () => OK_ASSIGNED);
+      const results = await promoteEligible(
+        [issue({ id: "id-1", identifier: "MOV-1", assignee: { id: "user-existing", name: "Someone Else" } })],
+        ctxBase(client, { ownerAssignment }),
+      );
+      expect(ownerAssignment.ensureOwner).not.toHaveBeenCalled();
+      expect(client.moveToState).toHaveBeenCalledWith("id-1", "state-ready");
+      expect(results[0]).toMatchObject({ promoted: true });
+      expect(results[0].ownerAssigned).toBeUndefined();
+    });
+
+    it("never calls ensureOwner for an issue that is not otherwise promotable", async () => {
+      const client = fakeClient();
+      const ownerAssignment = fakeOwnerAssignment(async () => OK_ASSIGNED);
+      const results = await promoteEligible(
+        [issue({ id: "id-1", identifier: "MOV-1", labels: ["human-only"] })],
+        ctxBase(client, { ownerAssignment }),
+      );
+      expect(ownerAssignment.ensureOwner).not.toHaveBeenCalled();
+      expect(client.moveToState).not.toHaveBeenCalled();
+      expect(results[0].promoted).toBe(false);
+    });
+
+    it("withholds promotion when owner assignment fails, and never comments", async () => {
+      const client = fakeClient();
+      const ownerAssignment = fakeOwnerAssignment(async () => NOT_CONFIGURED);
+      const results = await promoteEligible([issue({ id: "id-1", identifier: "MOV-1" })], ctxBase(client, { ownerAssignment }));
+
+      expect(client.moveToState).not.toHaveBeenCalled();
+      expect(client.addComment).not.toHaveBeenCalled();
+      expect(results[0]).toMatchObject({
+        promoted: false,
+        reason: expect.stringMatching(/^owner assignment: no default owner configured/),
+      });
+    });
+
+    it("dry-run reports the planned owner assignment without assigning or promoting", async () => {
+      const client = fakeClient();
+      const ownerAssignment = fakeOwnerAssignment(async (_issue, opts) => {
+        expect(opts).toMatchObject({ dryRun: true });
+        return OK_PLANNED;
+      });
+      const results = await promoteEligible(
+        [issue({ id: "id-1", identifier: "MOV-1" })],
+        ctxBase(client, { ownerAssignment, dryRun: true }),
+      );
+      expect(client.moveToState).not.toHaveBeenCalled();
+      expect(results[0]).toMatchObject({ promoted: true, ownerAssigned: false, ownerPlanned: true, ownerName: "Adam Moore" });
+    });
+
+    it("repeated runs do not re-assign or duplicate writes once the issue carries the owner", async () => {
+      const client = fakeClient();
+      const ownerAssignment = fakeOwnerAssignment(async () => OK_ASSIGNED);
+
+      await promoteEligible([issue({ id: "id-1", identifier: "MOV-1" })], ctxBase(client, { ownerAssignment }));
+      expect(ownerAssignment.ensureOwner).toHaveBeenCalledTimes(1);
+      expect(client.moveToState).toHaveBeenCalledTimes(1);
+
+      // A fresh promote pass reads the issue back with the assignee now set
+      // (as a real issuesForPromotion() re-fetch would) and in "Ready for
+      // Agent" (so the idempotency guard also applies) -- neither write repeats.
+      const results = await promoteEligible(
+        [issue({ id: "id-1", identifier: "MOV-1", stateName: "Ready for Agent", assignee: { id: "user-adam" } })],
+        ctxBase(client, { ownerAssignment }),
+      );
+      expect(results).toEqual([]);
+      expect(ownerAssignment.ensureOwner).toHaveBeenCalledTimes(1);
+      expect(client.moveToState).toHaveBeenCalledTimes(1);
+      expect(client.addComment).toHaveBeenCalledTimes(1);
+    });
+  });
 });
