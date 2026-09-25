@@ -392,7 +392,7 @@ describe.skipIf(!supabaseReachable || !credentialsPresent)(
         },
       );
 
-      it('does not reveal another user's ownership or membership through RPCs', async () => {
+      it("does not reveal another user's ownership or membership through RPCs", async () => {
         const probes = await Promise.all([
           clients.outsider.rpc('is_watchlist_owner', {
             target_user_id: userIds.owner,
