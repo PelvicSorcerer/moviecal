@@ -18,6 +18,7 @@ import {
   worktreesStatePath,
   circuitBreakerStatePath,
   usageLimitStatePath,
+  workerUsageStatePath,
   repairLedgerStatePath,
   envLocalPath,
   logRoot,
@@ -36,6 +37,7 @@ import {
 import { WorktreeManager } from "./worktree-manager.mjs";
 import { CircuitBreakerStore } from "./circuit-breaker.mjs";
 import { UsageLimitStore } from "./usage-limit.mjs";
+import { WorkerUsageStore, captureWorkerUsage } from "./worker-usage.mjs";
 import { RepairLedger } from "./repair-ledger.mjs";
 import { buildIsIssueSatisfied } from "./dependency-gate.mjs";
 import { spawnWorker } from "./worker-spawn.mjs";
@@ -118,6 +120,7 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     // MOV-192: this durable store turns a sole, reset-bearing provider refusal
     // into one deferred retry instead of the no-op fallback's escalation.
     usageLimitStore: new UsageLimitStore(usageLimitStatePath()),
+    captureWorkerUsageFn: (logDir, context) => captureWorkerUsage(logDir, context, { store: new WorkerUsageStore(workerUsageStatePath()) }),
     // MOV-179: advisory-only diagnosis for the residual "unrecognized
     // failure" escalation bucket. diagnoseUnrecognizedFailure itself already
     // fails safe (missing ANTHROPIC_API_KEY, network error, timeout, bad

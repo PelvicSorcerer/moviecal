@@ -9,6 +9,7 @@ import { AgentSessionBridge } from "../src/agent-session.mjs";
 import { NESTED_SANDBOX_CRASH } from "../src/failure-classification.mjs";
 import { CREDENTIAL_FAILURE } from "../src/credential-failure.mjs";
 import { UsageLimitStore } from "../src/usage-limit.mjs";
+import { captureWorkerUsage, WorkerUsageStore } from "../src/worker-usage.mjs";
 
 const STATE_IDS = {
   blocked: "state-blocked",
@@ -195,6 +196,29 @@ const ISSUE = {
 };
 
 describe("runOnce", () => {
+  it("records fixture worker usage and adds one line to the existing completion comment", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mov363-run-loop-"));
+    try {
+      const store = new WorkerUsageStore(path.join(root, "usage-state.json"));
+      const ctx = baseCtx({
+        logRoot: root,
+        spawnWorkerFn: vi.fn(async ({ logDir }) => {
+          fs.mkdirSync(logDir, { recursive: true });
+          fs.writeFileSync(path.join(logDir, "stdout.log"), JSON.stringify({ type: "result", num_turns: 3, duration_ms: 120000, total_cost_usd: 0.25, usage: { input_tokens: 10, output_tokens: 5 }, modelUsage: { "claude-sonnet-5": {} } }) + "\n");
+          return { exitCode: 0, logDir };
+        }),
+        captureWorkerUsageFn: (logDir, context) => captureWorkerUsage(logDir, context, { store }),
+      });
+      const [result] = await runOnce([ISSUE], ctx);
+      expect(result.outcome).toBe("in-review");
+      const summary = store.recent()[0];
+      expect(summary).toMatchObject({ issue: "MOV-1", turns: 3, costUsd: 0.25, partial: false });
+      expect(JSON.parse(fs.readFileSync(path.join(root, ctx.worktreeManager.createCalls[0].name, "usage.json"), "utf8"))).toMatchObject({ issue: "MOV-1", turns: 3 });
+      const completion = ctx.linearClient.calls.filter((call) => call.type === "addComment" && call.body.includes("Pull request opened:"));
+      expect(completion).toHaveLength(1);
+      expect(completion[0].body.match(/Usage:/g)).toHaveLength(1);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
   it("moves a human-only issue to blocked without touching the worktree manager", async () => {
     const ctx = baseCtx();
     const issue = { ...ISSUE, labels: [...ISSUE.labels, "human-only"] };

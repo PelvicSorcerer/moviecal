@@ -24,6 +24,7 @@ import { nullAgentSessionBridge } from "./agent-session.mjs";
 import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-signals.mjs";
 import { registerActiveAttempt, unregisterActiveAttempt, updateActiveAttempt } from "./active-attempt-registry.mjs";
 import { captureVerificationEvidence } from "./readiness-evidence.mjs";
+import { formatUsageLine } from "./worker-usage.mjs";
 
 /**
  * @param {object[]} issues - from LinearClient.issuesInState()
@@ -389,6 +390,7 @@ async function dispatchIssue(issue, ctx) {
     logger = console,
     issueSpecMode,
     iosSimLeaseId = null,
+    captureWorkerUsageFn = () => null,
   } = ctx;
 
   // MOV-143: before anything else, is this issue even ours? An issue routed to
@@ -680,6 +682,7 @@ async function dispatchIssue(issue, ctx) {
         repositoryContextFn,
         writeWorkerAuditFn,
         captureVerificationEvidenceFn,
+        captureWorkerUsageFn,
         publishWorkerResultFn,
         dispatcherDelegate,
         refreshIssueFn,
@@ -793,6 +796,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     now,
     logger,
     iosSimLeaseId = null,
+    captureWorkerUsageFn = () => null,
   } = ctx;
 
   await publisher.publish("acknowledged", {
@@ -864,6 +868,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
   const abortController = new AbortController();
   const watcherAbort = new AbortController();
   let spawnResult;
+  let usagePromise = Promise.resolve(null);
   try {
     // Real WorktreeManager instances always provide this durable handoff.
     // Keep dependency-injected legacy test doubles compatible; they never
@@ -892,6 +897,15 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     // requestClose, nextTurnBoundary} -- workerPromise is the one thing every
     // path below still races/awaits identically either way.
     const workerPromise = steeringActive ? spawned.promise : spawned;
+    usagePromise = Promise.resolve(workerPromise).then((result) => captureWorkerUsageFn(logDir, {
+      issue: issue.identifier,
+      attemptKind: "implementation",
+      worker: routing.worker,
+      modelId: invocation.args[invocation.args.indexOf("--model") + 1] || null,
+      tier: routing.model,
+      reasoningEffort: routing.worker === "codex" ? invocation.args.find((arg) => arg.startsWith("model_reasoning_effort="))?.split("=")[1] || null : null,
+      exitOutcome: result.exitCode === 0 ? "exited-0" : `exited-${result.exitCode}`,
+    })).catch((error) => { logger.error(`Could not capture usage for ${issue.identifier}: ${error.message}`); return null; });
     if (steeringActive) {
       // A single-slot queue: `agent-stream-client.mjs` only ever calls
       // `queuePrompt`, never the real writeTurn directly, so a prompt can
@@ -989,6 +1003,8 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
   if (stopController.checkpoint("after-worker").halt) {
     return reportStop(stopController.stopRequest, { issue, publisher, worktreeManager });
   }
+
+  const usage = await usagePromise;
 
   let securityReport;
   let auditRecord;
@@ -1509,6 +1525,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     stateId: stateIds.inReview,
     summary: `Pull request opened: ${pr.url}${pr.isDraft ? " (draft)" : ""}`,
     headline: `**Pull request opened:** ${pr.url}${pr.isDraft ? " (draft)" : ""}`,
+    sections: [formatUsageLine(usage)],
   });
   return { issue: issue.identifier, outcome: "in-review", pr: pr.url };
 }
