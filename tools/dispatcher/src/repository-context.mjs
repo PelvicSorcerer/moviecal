@@ -6,10 +6,58 @@
 // mutable repository metadata.
 
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
 export const MAX_RECENT_COMMITS = 12;
 export const MAX_CHANGED_PATHS = 40;
+export const MAX_STARTING_POINTS = 15;
+export const LARGE_FILE_LINES = 400;
 const CREDENTIAL_VALUE_RE = /((?:token|secret|password|api[_-]?key|private[_-]?key)\s*[=:]\s*)[^\s,;]+/gi;
+const MAX_ORIENTATION_BYTES = 2 * 1024 * 1024;
+
+function redact(value) {
+  return String(value).replace(CREDENTIAL_VALUE_RE, "$1[REDACTED]");
+}
+
+/** Extract plausible repository-relative file paths, never arbitrary issue prose. */
+export function issuePathCandidates(description) {
+  const found = new Set();
+  for (const match of String(description || "").matchAll(/(?:^|[\s`"'(])((?:[\w@.=-]+\/)*[\w@.=-]+\.[\w-]+)(?=$|[\s`"'),.:;!?])/gm)) {
+    const candidate = match[1];
+    if (candidate.startsWith(".") && !candidate.startsWith(".github/") && !candidate.startsWith(".claude/")) continue;
+    if (candidate.split("/").some((part) => part === ".." || part === ".")) continue;
+    found.add(candidate);
+  }
+  return [...found];
+}
+
+/** Best-effort orientation only: a missing or unreadable file yields no entry. */
+export function collectLikelyStartingPoints({ worktreePath, description, fsApi = fs } = {}) {
+  try {
+    if (!worktreePath) return [];
+    const root = fsApi.realpathSync(worktreePath);
+    const points = [];
+    for (const candidate of issuePathCandidates(description)) {
+      if (points.length >= MAX_STARTING_POINTS) break;
+      try {
+        const file = path.resolve(root, candidate);
+        if (!file.startsWith(`${root}${path.sep}`)) continue;
+        const actual = fsApi.realpathSync(file);
+        if (!actual.startsWith(`${root}${path.sep}`)) continue;
+        const stat = fsApi.statSync(actual);
+        if (!stat.isFile() || stat.size > MAX_ORIENTATION_BYTES) continue;
+        const content = fsApi.readFileSync(actual, "utf8");
+        if (content.includes("\0")) continue;
+        const lines = content === "" ? 0 : content.split("\n").length - (content.endsWith("\n") ? 1 : 0);
+        points.push({ path: redact(candidate), lines, readByRange: lines > LARGE_FILE_LINES });
+      } catch { /* one path should not suppress another */ }
+    }
+    return points;
+  } catch {
+    return [];
+  }
+}
 
 function defaultRunner(command, args, opts = {}) {
   return execFileSync(command, args, { encoding: "utf8", ...opts });
@@ -21,7 +69,7 @@ function boundedLines(value, max) {
     .map((line) => line.trim())
     .filter(Boolean)
     .slice(0, max)
-    .map((line) => line.replace(CREDENTIAL_VALUE_RE, "$1[REDACTED]"));
+    .map(redact);
 }
 
 function read(runner, worktreePath, args, fallback = null) {
@@ -37,7 +85,7 @@ function read(runner, worktreePath, args, fallback = null) {
  * for initial orientation. Individual unavailable values remain explicit so a
  * worker never mistakes a missing fact for a permission grant to invoke Git.
  */
-export function collectRepositoryContext({ worktreePath, branch, baseRef = "origin/master", runner = defaultRunner } = {}) {
+export function collectRepositoryContext({ worktreePath, branch, baseRef = "origin/master", issueDescription = "", runner = defaultRunner } = {}) {
   const headSha = read(runner, worktreePath, ["rev-parse", "HEAD"]);
   const baseSha = read(runner, worktreePath, ["rev-parse", baseRef]);
   const statusLines = boundedLines(read(runner, worktreePath, ["status", "--porcelain=v1"], ""), MAX_CHANGED_PATHS);
@@ -53,5 +101,6 @@ export function collectRepositoryContext({ worktreePath, branch, baseRef = "orig
     statusLines,
     recentCommits,
     changedPaths,
+    likelyStartingPoints: collectLikelyStartingPoints({ worktreePath, description: issueDescription }),
   };
 }

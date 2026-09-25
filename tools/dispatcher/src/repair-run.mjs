@@ -438,7 +438,7 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
   let repositoryContext = null;
   if (typeof repositoryContextFn === "function") {
     try {
-      repositoryContext = repositoryContextFn({ worktreePath: entry.path, branch: entry.branch });
+      repositoryContext = repositoryContextFn({ worktreePath: entry.path, branch: entry.branch, issueDescription: issue.description });
     } catch (error) {
       logger.error(`${entry.id}: could not collect repository context (continuing): ${error.message}`);
     }

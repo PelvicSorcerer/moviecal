@@ -341,18 +341,27 @@ describe("dependency-gating -> promotion -> dispatch, one continuous run (MOV-19
     // would return it, goes through the real buildRunContext -> runOnce path.
     const dispatchIssue = {
       id: "id-dep2", identifier: "MOV-DEP2", title: "Depends on the blocker",
-      description: READY_SECTIONS, url: "https://linear.app/moviecal/issue/MOV-DEP2",
+      description: `${READY_SECTIONS}\n\nStart at \`src/feature/example.ts\`.`, url: "https://linear.app/moviecal/issue/MOV-DEP2",
       project: null, labels: ["execution:mac"], delegate: DELEGATE,
       blockedByIds: ["id-blocker2"],
       inverseRelations: readyDescription.inverseRelations,
     };
     linearClient.issueSnapshot = async () => dispatchIssue;
-    const ctx = { ...(await buildRunContext(linearClient, TEAM_KEY, [dispatchIssue])), ...fakeLeaves() };
+    const leaves = fakeLeaves();
+    const create = leaves.worktreeManager.create.bind(leaves.worktreeManager);
+    leaves.worktreeManager.create = (args) => {
+      const entry = create(args);
+      fs.mkdirSync(path.join(entry.path, "src/feature"), { recursive: true });
+      fs.writeFileSync(path.join(entry.path, "src/feature/example.ts"), "first\nsecond\n");
+      return entry;
+    };
+    const ctx = { ...(await buildRunContext(linearClient, TEAM_KEY, [dispatchIssue])), ...leaves };
 
     const [result] = await runOnce([dispatchIssue], ctx);
 
     expect(result.outcome).toBe("in-review");
     expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+    expect(ctx.spawnWorkerFn.mock.calls[0][0].brief).toContain("`src/feature/example.ts` — 2 lines");
     expect(ctx.worktreeManager.createCalls).toHaveLength(1);
     expect(ctx.worktreeManager.createCalls[0]).toMatchObject({ id: "MOV-DEP2" });
   });

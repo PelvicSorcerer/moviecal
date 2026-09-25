@@ -318,6 +318,7 @@ describe("runOnce", () => {
     expect(ctx.repositoryContextFn).toHaveBeenCalledWith({
       worktreePath: "/fake/worktrees/MOV-1-fix-the-thing",
       branch: "agent/MOV-1-fix-the-thing",
+      issueDescription: ISSUE.description,
     });
     expect(spawnArg.securityContext).toEqual({ mode: "implementation" });
 
