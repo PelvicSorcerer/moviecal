@@ -190,18 +190,21 @@ export async function listSharedWatchlistMembers(args: {
   const members = await args.repository.listMembersForWatchlist(watchlist.id);
   const dedupedMembers = new Map<string, WatchlistMember>();
 
+  for (const member of members) {
+    dedupedMembers.set(member.userId, member);
+  }
+
+  // The owner row is always rendered from the watchlist's own ownership anchor
+  // and keeps a synthetic id, so the real owner membership id never reaches a
+  // client that could then aim a member-removal request at it.
   dedupedMembers.set(watchlist.ownerUserId, {
-    acceptedAt: null,
+    acceptedAt: dedupedMembers.get(watchlist.ownerUserId)?.acceptedAt ?? null,
     id: `owner:${watchlist.ownerUserId}`,
     invitedByUserId: null,
     role: 'owner',
     userId: watchlist.ownerUserId,
     watchlistId: watchlist.id,
   });
-
-  for (const member of members) {
-    dedupedMembers.set(member.userId, member);
-  }
 
   return [...dedupedMembers.values()].sort((left, right) => {
     if (left.role === 'owner') {
@@ -222,11 +225,24 @@ export async function removeSharedWatchlistMember(args: {
   repository: WatchlistRepository;
   watchlistId: string;
 }): Promise<void> {
-  await requireOwnedSharedWatchlist({
+  const watchlist = await requireOwnedSharedWatchlist({
     actorUserId: args.actorUserId,
     repository: args.repository,
     watchlistId: args.watchlistId,
   });
+
+  // A caller can craft a removal request with the real membership id even
+  // though the member list exposes only a synthetic owner id. Removing it
+  // would strip the owner's edit access, because can_edit_watchlist reads memberships.
+  const ownerMembership = await args.repository.findMembershipForUser(
+    watchlist.id,
+    watchlist.ownerUserId,
+  );
+
+  if (ownerMembership && ownerMembership.id === args.membershipId) {
+    throw new WatchlistAccessError('Watchlist access denied.');
+  }
+
   const removed = await args.repository.removeMembershipFromWatchlist(
     args.watchlistId,
     args.membershipId,

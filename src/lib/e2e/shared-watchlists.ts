@@ -243,6 +243,15 @@ export function removeE2EWatchlistMember(args: {
     return false;
   }
 
+  // Mirrors the Supabase path: the owner's access is never removable, however
+  // the membership id was obtained.
+  if (
+    memberToRemove.userId === access.watchlist.ownerUserId
+    || memberToRemove.role === 'owner'
+  ) {
+    return false;
+  }
+
   setE2ESharedStateCookie(args.response, {
     memberships: sharedState.memberships.filter(
       (membership) => membership.id !== args.membershipId,

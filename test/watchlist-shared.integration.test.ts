@@ -586,4 +586,70 @@ describe('shared watchlist regression integration', () => {
     });
     expect(getMembers()).toHaveLength(1);
   });
+
+  it('refuses a cookie-API attempt by the owner to remove their own owner membership', async () => {
+    const ownerMember = buildWatchlistMember({
+      acceptedAt: '2026-06-19T00:00:00.000Z',
+      id: 'membership-owner',
+      invitedByUserId: TEST_USER_IDS.OWNER,
+      role: 'owner',
+      userId: TEST_USER_IDS.OWNER,
+    });
+    const editorMember = buildWatchlistMember({ id: 'membership-1' });
+    const { getMembers, repository } = createSharedRegressionRepository({
+      members: [ownerMember, editorMember],
+    });
+
+    setupAuthenticatedRouteMocks(repository);
+
+    const { DELETE } = await import(
+      '../src/app/api/watchlist/shared/[watchlistId]/members/[membershipId]/route'
+    );
+    const response = await DELETE(
+      new NextRequest(
+        `https://moviecal.test/api/watchlist/shared/${TEST_WATCHLIST_IDS.SHARED}/members/membership-owner`,
+        { method: 'DELETE' },
+      ),
+      {
+        params: Promise.resolve({
+          membershipId: 'membership-owner',
+          watchlistId: TEST_WATCHLIST_IDS.SHARED,
+        }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Watchlist access denied.',
+    });
+    expect(getMembers()).toHaveLength(2);
+  });
+
+  it('refuses a cookie-API attempt to write to another user\'s watchlist without leaking its metadata', async () => {
+    const { getItems, repository } = createSharedRegressionRepository();
+
+    setupCollaboratorAuth();
+    mocks.createSupabaseWatchlistRepository.mockReturnValue(repository);
+    mocks.hasE2EAuthenticatedSession.mockReturnValue(false);
+    mocks.getMovieDetails.mockImplementation(async (tmdbId: number) =>
+      buildNormalizedMovieDetail(tmdbId),
+    );
+
+    const { POST } = await import('../src/app/api/watchlist/route');
+    const response = await POST(
+      new NextRequest('https://moviecal.test/api/watchlist', {
+        method: 'POST',
+        body: JSON.stringify({
+          tmdb_id: TEST_TMDB_IDS.INCEPTION,
+          watchlist_id: TEST_WATCHLIST_IDS.PERSONAL,
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Watchlist access denied.',
+    });
+    expect(getItems(TEST_WATCHLIST_IDS.PERSONAL)).toHaveLength(1);
+  });
 });
