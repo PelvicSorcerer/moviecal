@@ -12,6 +12,10 @@ const migrationPaths = [
 const migrationSql = migrationPaths
   .map((path) => readFileSync(path, 'utf8'))
   .join('\n');
+const ownershipInvariantsSql = readFileSync(
+  'supabase/migrations/20260924000000_mov_330_watchlist_ownership_invariants.sql',
+  'utf8',
+);
 
 describe('Supabase database types', () => {
   it('declares the personal and shared watchlist tables in the Database shape', () => {
@@ -147,6 +151,66 @@ describe('Supabase migration contract', () => {
     );
     expect(migrationSql).toContain(
       'not any future friend model',
+    );
+  });
+});
+
+describe('Watchlist ownership invariants migration (MOV-330)', () => {
+  it('repairs existing ownership rows before any invariant binds', () => {
+    const backfillIndex = ownershipInvariantsSql.indexOf(
+      'insert into public.watchlist_memberships (',
+    );
+    const triggerIndex = ownershipInvariantsSql.indexOf(
+      'create trigger enforce_watchlist_membership_invariants',
+    );
+
+    expect(backfillIndex).toBeGreaterThan(-1);
+    expect(triggerIndex).toBeGreaterThan(backfillIndex);
+    expect(ownershipInvariantsSql).toContain(
+      'on conflict (watchlist_id, user_id) do nothing',
+    );
+    expect(ownershipInvariantsSql).toContain("set role = 'editor'");
+  });
+
+  it.each([
+    // the owner membership is permanent, accepted, unmovable, and exclusive
+    'the watchlist owner membership cannot be removed',
+    'the watchlist owner membership cannot be demoted',
+    'the watchlist owner membership cannot be reassigned',
+    'the watchlist owner membership must remain accepted',
+    'only the watchlist owner may hold the owner membership role',
+    'before insert or update or delete\non public.watchlist_memberships',
+    // owner_user_id and kind are frozen, personal watchlists are undeletable
+    'watchlists.owner_user_id is immutable after creation',
+    'watchlists.kind is immutable after creation',
+    'a personal watchlist cannot be deleted',
+    'create policy "owners can delete shared watchlists"',
+    // interactive updates are scoped to the name column
+    'revoke update on table public.watchlists from authenticated;',
+    'grant update (name) on table public.watchlists to authenticated;',
+    'create policy "editors can rename shared watchlists"',
+    'an accepted editor may update only the shared watchlist name',
+    // the account-cascade discriminator for both delete guards
+    'if not exists (select 1 from auth.users where id = old.owner_user_id) then',
+    'if not exists (select 1 from auth.users where id = old.user_id) then',
+  ])('enforces %s', (clause) => {
+    expect(ownershipInvariantsSql).toContain(clause);
+  });
+
+  it('scopes ensure_personal_watchlist_for_user to the calling user', () => {
+    const start = ownershipInvariantsSql.indexOf(
+      'create or replace function public.ensure_personal_watchlist_for_user(',
+    );
+    const body = ownershipInvariantsSql.slice(
+      ownershipInvariantsSql.indexOf('as $$', start),
+      ownershipInvariantsSql.indexOf('$$;', start),
+    );
+
+    expect(start).toBeGreaterThan(-1);
+    expect(body).toContain('actor_user_id uuid := auth.uid()');
+    expect(body).toContain('actor_user_id is not null and actor_user_id <> target_user_id');
+    expect(body).toContain(
+      'ensure_personal_watchlist_for_user may only be called for the authenticated user',
     );
   });
 });
