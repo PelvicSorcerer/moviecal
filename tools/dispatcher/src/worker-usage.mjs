@@ -151,13 +151,19 @@ export function aggregateUsage(runs, key) {
     if (!groups.has(group)) groups.set(group, []);
     groups.get(group).push(run);
   }
-  return [...groups].map(([name, rows]) => ({
-    name, runs: rows.length,
-    costTotalUsd: rows.reduce((sum, row) => sum + (row.costUsd || 0), 0),
-    costMedianUsd: median(rows.map((row) => row.costUsd)),
-    durationTotalMs: rows.reduce((sum, row) => sum + (row.durationMs || 0), 0),
-    durationMedianMs: median(rows.map((row) => row.durationMs)),
-    turnsTotal: rows.reduce((sum, row) => sum + (row.turns || 0), 0),
-    turnsMedian: median(rows.map((row) => row.turns)),
-  })).sort((a, b) => a.name.localeCompare(b.name));
+  const metrics = {
+    costUsd: "costUsd", durationMs: "durationMs", turns: "turns",
+    inputTokens: "inputTokens", outputTokens: "outputTokens",
+    cacheReadTokens: "cacheReadTokens", cacheWriteTokens: "cacheWriteTokens",
+    thinkingTokens: "thinkingTokens", verifyRuns: "verifyRuns",
+  };
+  return [...groups].map(([name, rows]) => {
+    const report = { name, runs: rows.length };
+    for (const [field, label] of Object.entries(metrics)) {
+      const values = rows.map((row) => row[field]).filter((value) => typeof value === "number");
+      report[`${label}Total`] = values.length ? values.reduce((sum, value) => sum + value, 0) : null;
+      report[`${label}Median`] = median(values);
+    }
+    return report;
+  }).sort((a, b) => a.name.localeCompare(b.name));
 }

@@ -45,8 +45,10 @@ describe("worker usage", () => {
       expect(store.recent()).toHaveLength(1);
       const [aggregate] = aggregateUsage([summary, { ...summary, costUsd: 2.4 }], "tier");
       expect(aggregate).toMatchObject({ name: "default", runs: 2 });
-      expect(aggregate.costTotalUsd).toBeCloseTo(3.6);
-      expect(aggregate.costMedianUsd).toBeCloseTo(1.8);
+      expect(aggregate.costUsdTotal).toBeCloseTo(3.6);
+      expect(aggregate.costUsdMedian).toBeCloseTo(1.8);
+      expect(aggregate.cacheReadTokensTotal).toBe(6_200_000);
+      expect(aggregate.verifyRunsMedian).toBe(2);
       expect(fs.readFileSync(path.join(root, "usage.json"), "utf8")).not.toContain("private");
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
