@@ -44,6 +44,8 @@ Codex is the dispatcher's second worker option, selected via the `worker:codex` 
 
 "Cheap" / "default" / "strong" map to the current Claude model catalog (see the `claude-api` skill or Anthropic's published model list for exact IDs — this document intentionally does not pin model IDs, since they change over time and pinning them here would require touching this file on every model release).
 
+The Claude strong tier now defaults to Opus 5.5. The change reflects lower published token prices and stronger published coding results; see the review identified as `reports/model-tier-routing-review.md` in [MOV-362](https://linear.app/moviecal/issue/MOV-362/route-modelstrong-claude-workers-to-claude-opus-55). `MOVIECAL_MODEL_STRONG` still overrides the default.
+
 For Codex, the tier maps to a `model_reasoning_effort` value passed via `-c`, and optionally an explicit `--model` id:
 
 | Tier | `model_reasoning_effort` | `--model` |
