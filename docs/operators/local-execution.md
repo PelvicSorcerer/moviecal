@@ -6,6 +6,8 @@ Read `AGENTS.md` first. This document covers the local-Mac execution path: how a
 
 See `docs/governance/linear-information-architecture.md` for the Linear workspace design this path is driven by, and `docs/operators/worker-routing.md` for how a worker binary and model are selected per issue.
 
+`dispatcher dry-run` also prints each planned worker invocation, including Claude's effective `--effort` when supported. An invalid Claude effort override is reported as a routing error before a worker or worktree is started. `dispatcher doctor` reports when a Haiku 4.5 model causes an effort override to be omitted; see the tier table in `docs/operators/worker-routing.md`.
+
 ## What changed from the cloud-agent model
 
 The previous system assumed agents ran in degraded cloud containers: no `gh` CLI, GitHub GraphQL blocked by a network proxy, no Docker, no persistent local state. None of that applies here. This Mac has a full `gh` install, direct GitHub API access, a real filesystem, and a real process supervisor. Do not carry forward workarounds written for that constrained environment — they produce strictly worse behavior locally (e.g. avoiding `gh` in favor of a comment-command workflow when `gh` is simply available).

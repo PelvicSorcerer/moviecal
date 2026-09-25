@@ -46,6 +46,16 @@ Codex is the dispatcher's second worker option, selected via the `worker:codex` 
 
 The Claude strong tier now defaults to Opus 5.5. The change reflects lower published token prices and stronger published coding results; see the review identified as `reports/model-tier-routing-review.md` in [MOV-362](https://linear.app/moviecal/issue/MOV-362/route-modelstrong-claude-workers-to-claude-opus-55). `MOVIECAL_MODEL_STRONG` still overrides the default.
 
+Claude workers receive an explicit `--effort` by tier when their model supports it. Implementation and repair workers use the same mapping:
+
+| Tier | Default Claude effort | Override |
+|---|---|---|
+| `cheap` | none (flag omitted) | `MOVIECAL_CLAUDE_EFFORT_CHEAP` |
+| `default` | `medium` | `MOVIECAL_CLAUDE_EFFORT_DEFAULT` |
+| `strong` | `high` | `MOVIECAL_CLAUDE_EFFORT_STRONG` |
+
+Overrides accept `low`, `medium`, `high`, `xhigh`, `max`, or `none`; `none` omits the flag. An invalid value is a routing error. Haiku 4.5 does not support effort, so the dispatcher omits `--effort` even if an override requests one. `dispatcher doctor` notes that omission. `dispatcher dry-run` prints the planned invocation and any routing error.
+
 For Codex, the tier maps to a `model_reasoning_effort` value passed via `-c`, and optionally an explicit `--model` id:
 
 | Tier | `model_reasoning_effort` | `--model` |

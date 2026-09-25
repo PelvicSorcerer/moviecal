@@ -490,6 +490,14 @@ async function dispatchIssue(issue, ctx) {
     await linearClient.addComment(issue.id, `**Dispatcher routing failed:** ${routing.reason}`);
     return { issue: issue.identifier, outcome: "needs-human", reason: routing.reason };
   }
+  let invocation;
+  try {
+    invocation = workerInvocation(routing.worker, routing.model, { steering: steeringEnabled && routing.worker === "claude" });
+  } catch (error) {
+    await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
+    await linearClient.addComment(issue.id, `**Dispatcher routing failed:** ${error.message}`);
+    return { issue: issue.identifier, outcome: "needs-human", reason: error.message };
+  }
 
   // MOV-143: last check before this becomes irreversible. Everything above
   // reasoned about the poll snapshot, and a human can change an issue's route,
@@ -663,6 +671,7 @@ async function dispatchIssue(issue, ctx) {
       entry,
       branch,
       routing,
+      invocation,
       publisher,
       stopController,
       resume,
@@ -764,7 +773,7 @@ async function reportStop(request, { issue, publisher, worktreeManager }) {
  * audited, or published: a resumed worker goes through the identical safety
  * boundary as any other implementation worker, deliberately.
  */
-async function runClaimedAttempt({ issue, entry, branch, routing, publisher, stopController, resume = null, ctx }) {
+async function runClaimedAttempt({ issue, entry, branch, routing, invocation, publisher, stopController, resume = null, ctx }) {
   const {
     stateIds,
     worktreeManager,
@@ -795,6 +804,9 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     iosSimLeaseId = null,
   } = ctx;
 
+  const steeringActive = steeringEnabled && routing.worker === "claude";
+  const claudeEffort = routing.worker === "claude" ? invocation.reasoningEffort : null;
+
   await publisher.publish("acknowledged", {
     stateId: stateIds.agentWorking,
     summary: resume
@@ -806,7 +818,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
     sections: [
       `Worktree: \`${entry.path}\`${resume ? " — the same worktree the deferred attempt left behind; it was not reclaimed, removed, or recreated" : ""}`,
       `Branch: \`${branch}\``,
-      `Worker: ${routing.worker} (model: ${routing.model})`,
+      `Worker: ${routing.worker} (model: ${routing.model}${routing.worker === "claude" ? `, effort: ${claudeEffort ?? "none"}` : ""})`,
       ...(resume
         ? [
             "",
@@ -854,8 +866,6 @@ async function runClaimedAttempt({ issue, entry, branch, routing, publisher, sto
   // both silently ignore the option for it, but computing it once here keeps
   // this function's own branching (registry registration, the turn-loop)
   // from having to repeat that condition.
-  const steeringActive = steeringEnabled && routing.worker === "claude";
-  const invocation = workerInvocation(routing.worker, routing.model, { steering: steeringActive });
   const logDir = path.join(logRoot, entry.name);
 
   // Two abort controllers with different jobs: `abortController` kills the
