@@ -55,6 +55,7 @@ import {
   logRoot,
   worktreesStatePath,
   usageLimitStatePath,
+  workerCooldownStatePath,
   repairLedgerStatePath,
   masterIncidentLedgerStatePath,
   prAutonomyLedgerStatePath,
@@ -88,7 +89,8 @@ import {
 import { LinearClient } from "../src/linear-client.mjs";
 import { getAppToken } from "../src/linear-app-auth.mjs";
 import { evaluatePreflight, worktreeName, branchName } from "../src/preflight.mjs";
-import { resolveRouting } from "../src/worker-routing.mjs";
+import { resolveRouting, resolveDispatchWorker } from "../src/worker-routing.mjs";
+import { WorkerCooldownStore, WORKERS as WORKER_POOLS } from "../src/worker-cooldown.mjs";
 import { inferExecutionRoute, resolveExecutionRoute } from "../src/execution-routing.mjs";
 import {
   describeDelegate,
@@ -297,6 +299,27 @@ async function cmdDoctor() {
     });
   }
 
+  // Worker-quota-pool cooldowns (MOV-360). Informational, like the issue
+  // completeness contract above: `doctor` never mutates, so this is a read of
+  // the same live store `dispatcher run` gates dispatch on, not a probe of
+  // anything live against the providers themselves.
+  {
+    const cooldowns = new WorkerCooldownStore(workerCooldownStatePath());
+    const now = new Date();
+    for (const worker of WORKER_POOLS) {
+      const state = cooldowns.state(worker, now);
+      checks.push({
+        name: `${worker} worker quota-pool cooldown`,
+        ok: true,
+        detail: state.cooling
+          ? `cooling down until ${state.resetAt}${state.evidence ? ` (${state.evidence})` : ""} — dispatch of every ${worker}-routed issue is held until then`
+          : state.probeOwed
+            ? `reset ${state.resetAt} has passed; awaiting exactly one post-reset probe attempt before ${worker} dispatches normally again`
+            : "open — no cooldown recorded",
+      });
+    }
+  }
+
   // claude / codex on PATH
   for (const bin of ["claude", "codex"]) {
     const which = tryRun(() => execFileSync("which", [bin], { encoding: "utf8" }).trim());
@@ -395,12 +418,30 @@ async function cmdDryRun({ fixturePath } = {}) {
   // command deliberately never reclaims), so print the durable record's own
   // view alongside it rather than leaving the operator to guess.
   const usageLimits = new UsageLimitStore(usageLimitStatePath());
+  // MOV-360: read-only, same as usageLimits above -- a snapshot taken once so
+  // every issue's printed worker reflects one consistent view of quota-pool
+  // cooldown state, never a probe or a write against it.
+  const cooldowns = new WorkerCooldownStore(workerCooldownStatePath());
+  const cooldownSnapshot = Object.fromEntries(WORKER_POOLS.map((worker) => [worker, cooldowns.state(worker)]));
+  // "Open" for a fresh worker:any pick means only "not actively cooling" --
+  // matches run-loop.mjs's own real dispatch-time selection oracle, so this
+  // preview reflects the worker a real dispatch would actually try (a
+  // probe-owed worker remains a legitimate, if contested, target).
+  const cooldownOpen = (worker) => !cooldownSnapshot[worker].cooling;
 
   const dispatcherDelegate = resolveDispatcherDelegate();
 
   console.log(`${issues.length} issue(s) in Ready for Agent:\n`);
   for (const issue of issues) {
     const routing = resolveRouting(issue);
+    // MOV-360: the actual dispatch-time worker decision -- pinned as-is, or
+    // (for worker:any) the same quota-aware pick/binding `dispatcher run`
+    // would make against this same live cooldown snapshot. `routing` above is
+    // kept only for its `model`/`ok` fields; this is what "worker:" prints.
+    const resolvedWorker = resolveDispatchWorker(issue, {
+      boundWorker: usageLimits.get(issue.identifier)?.worker ?? null,
+      cooldownOpen,
+    });
     const execution = resolveExecutionRoute(issue);
     const eligibility = evaluateLocalDispatch(issue, { expectedDelegate: dispatcherDelegate });
     const name = worktreeName(issue.identifier, issue.title);
@@ -423,7 +464,19 @@ async function cmdDryRun({ fixturePath } = {}) {
     console.log(`- ${issue.identifier}: ${issue.title}`);
     console.log(`  worktree: ${path.join(worktreeRoot(), name)}`);
     console.log(`  branch:   ${branch}`);
-    console.log(`  worker:   ${routing.worker} (model: ${routing.model})${routing.ok ? "" : `  [ROUTING BLOCKED: ${routing.reason}]`}`);
+    const workerLabel = !resolvedWorker.ok
+      ? routing.worker
+      : !resolvedWorker.available
+        ? "NONE — both worker quota pools are cooling down"
+        : resolvedWorker.worker;
+    const workerNote = resolvedWorker.isAny
+      ? resolvedWorker.bound
+        ? "  [worker:any, bound to this issue's prior attempt]"
+        : resolvedWorker.available
+          ? "  [worker:any, quota-based pick]"
+          : ""
+      : "";
+    console.log(`  worker:   ${workerLabel} (model: ${routing.model})${routing.ok ? "" : `  [ROUTING BLOCKED: ${routing.reason}]`}${workerNote}`);
     console.log(`  execution: ${execution.ok ? execution.route : `INVALID — ${execution.reason}`} (inferred ${inferExecutionRoute(issue)})`);
     console.log(`  delegate: ${describeDelegate(issue.delegate)}`);
     console.log(
@@ -446,6 +499,21 @@ async function cmdDryRun({ fixturePath } = {}) {
     }
     console.log("");
   }
+
+  // MOV-360: the worker-quota-pool cooldown state every issue's `worker:`
+  // line above was resolved against, printed once so an operator can see
+  // *why* a batch is skewed toward one worker without re-deriving it by hand.
+  console.log("Worker quota-pool cooldowns:");
+  for (const worker of WORKER_POOLS) {
+    const state = cooldownSnapshot[worker];
+    const status = state.cooling
+      ? `COOLING until ${state.resetAt}${state.evidence ? ` (${state.evidence})` : ""}`
+      : state.probeOwed
+        ? `PROBE OWED — reset ${state.resetAt} has passed; awaiting exactly one post-reset attempt`
+        : "open";
+    console.log(`  ${worker}: ${status}`);
+  }
+  console.log("");
 
   // MOV-143: make the adapter split visible, so it is obvious at a glance
   // whether an issue is being declined because it belongs to the (not yet

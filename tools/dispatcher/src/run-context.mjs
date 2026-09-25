@@ -18,6 +18,7 @@ import {
   worktreesStatePath,
   circuitBreakerStatePath,
   usageLimitStatePath,
+  workerCooldownStatePath,
   repairLedgerStatePath,
   envLocalPath,
   logRoot,
@@ -36,6 +37,7 @@ import {
 import { WorktreeManager } from "./worktree-manager.mjs";
 import { CircuitBreakerStore } from "./circuit-breaker.mjs";
 import { UsageLimitStore } from "./usage-limit.mjs";
+import { WorkerCooldownStore } from "./worker-cooldown.mjs";
 import { RepairLedger } from "./repair-ledger.mjs";
 import { buildIsIssueSatisfied } from "./dependency-gate.mjs";
 import { spawnWorker } from "./worker-spawn.mjs";
@@ -118,6 +120,11 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     // MOV-192: this durable store turns a sole, reset-bearing provider refusal
     // into one deferred retry instead of the no-op fallback's escalation.
     usageLimitStore: new UsageLimitStore(usageLimitStatePath()),
+    // MOV-360: the worker-wide (Claude/Codex quota-pool) dispatch cooldown,
+    // gating every issue pinned to (or resolving to, via worker:any) a worker
+    // whose provider quota a *different* issue's attempt already found
+    // exhausted -- independent of usageLimitStore's per-issue retry history.
+    workerCooldownStore: new WorkerCooldownStore(workerCooldownStatePath()),
     // MOV-179: advisory-only diagnosis for the residual "unrecognized
     // failure" escalation bucket. diagnoseUnrecognizedFailure itself already
     // fails safe (missing ANTHROPIC_API_KEY, network error, timeout, bad

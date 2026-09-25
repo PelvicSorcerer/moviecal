@@ -2,6 +2,8 @@ import { describe, it, expect, afterEach } from "vitest";
 import {
   parseRoutingLabels,
   resolveRouting,
+  resolveDispatchWorker,
+  selectAvailableWorker,
   workerInvocation,
   CLAUDE_WORKER_PERMISSION_DENIES,
   CLAUDE_WORKER_SETTINGS,
@@ -70,6 +72,100 @@ describe("resolveRouting", () => {
   it("does not require an upgrade condition for model:cheap", () => {
     const result = resolveRouting({ labels: ["model:cheap"] });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("selectAvailableWorker (MOV-360)", () => {
+  it("prefers claude when claude is open", () => {
+    expect(selectAvailableWorker({ cooldownOpen: () => true })).toBe("claude");
+  });
+
+  it("falls back to codex when claude is cooling and codex is open", () => {
+    expect(selectAvailableWorker({ cooldownOpen: (w) => w !== "claude" })).toBe("codex");
+  });
+
+  it("falls back to claude when codex is the preferred worker and codex is cooling (symmetric case)", () => {
+    expect(selectAvailableWorker({ preferred: "codex", cooldownOpen: (w) => w !== "codex" })).toBe("claude");
+  });
+
+  it("returns null when neither worker is open", () => {
+    expect(selectAvailableWorker({ cooldownOpen: () => false })).toBeNull();
+  });
+
+  it("requires a cooldownOpen oracle", () => {
+    expect(() => selectAvailableWorker({})).toThrow(/cooldownOpen oracle is required/);
+  });
+});
+
+describe("resolveDispatchWorker (MOV-360)", () => {
+  const ALWAYS_OPEN = () => true;
+  const CLAUDE_COOLING = (w) => w !== "claude";
+  const BOTH_COOLING = () => false;
+
+  it("never consults cooldown for a claude-pinned issue", () => {
+    const result = resolveDispatchWorker({ labels: ["worker:claude"] }, { cooldownOpen: BOTH_COOLING });
+    expect(result).toMatchObject({ worker: "claude", isAny: false, available: true, bound: false, ok: true });
+  });
+
+  it("never consults cooldown for a codex-pinned issue", () => {
+    const result = resolveDispatchWorker({ labels: ["worker:codex"] }, { cooldownOpen: BOTH_COOLING });
+    expect(result).toMatchObject({ worker: "codex", isAny: false, available: true, bound: false, ok: true });
+  });
+
+  it("treats the no-label rubric default as pinned to claude, unaffected by cooldown", () => {
+    const result = resolveDispatchWorker({ labels: [] }, { cooldownOpen: BOTH_COOLING });
+    expect(result).toMatchObject({ worker: "claude", isAny: false, available: true });
+  });
+
+  it("picks claude for a fresh worker:any issue when claude is open", () => {
+    const result = resolveDispatchWorker({ labels: ["worker:any"] }, { cooldownOpen: ALWAYS_OPEN });
+    expect(result).toMatchObject({ worker: "claude", isAny: true, available: true, bound: false });
+  });
+
+  it("picks codex for a fresh worker:any issue when claude is cooling", () => {
+    const result = resolveDispatchWorker({ labels: ["worker:any"] }, { cooldownOpen: CLAUDE_COOLING });
+    expect(result).toMatchObject({ worker: "codex", isAny: true, available: true, bound: false });
+  });
+
+  it("reports unavailable for a fresh worker:any issue when both workers are cooling, rather than picking one anyway", () => {
+    const result = resolveDispatchWorker({ labels: ["worker:any"] }, { cooldownOpen: BOTH_COOLING });
+    expect(result).toMatchObject({ worker: null, isAny: true, available: false });
+  });
+
+  it("keeps a worker:any issue bound to its prior attempt's worker, even when the other is open", () => {
+    // claude is cooling, codex is open -- selectAvailableWorker would pick
+    // codex for a *fresh* claim, but this issue already started on claude.
+    const result = resolveDispatchWorker(
+      { labels: ["worker:any"] },
+      { boundWorker: "claude", cooldownOpen: CLAUDE_COOLING },
+    );
+    expect(result).toMatchObject({ worker: "claude", isAny: true, available: true, bound: true });
+  });
+
+  it("keeps a worker:any issue bound to codex the same way", () => {
+    const result = resolveDispatchWorker(
+      { labels: ["worker:any"] },
+      { boundWorker: "codex", cooldownOpen: ALWAYS_OPEN },
+    );
+    expect(result).toMatchObject({ worker: "codex", isAny: true, available: true, bound: true });
+  });
+
+  it("ignores a malformed bound-worker value and falls back to a fresh pick", () => {
+    const result = resolveDispatchWorker(
+      { labels: ["worker:any"] },
+      { boundWorker: "gemini", cooldownOpen: ALWAYS_OPEN },
+    );
+    expect(result).toMatchObject({ worker: "claude", bound: false });
+  });
+
+  it("still rejects model:strong with no upgrade condition, independent of worker selection", () => {
+    const result = resolveDispatchWorker({ labels: ["worker:any", "model:strong"] }, { cooldownOpen: ALWAYS_OPEN });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/upgrade-condition/);
+  });
+
+  it("defaults cooldownOpen to always-open when the caller supplies none", () => {
+    expect(resolveDispatchWorker({ labels: ["worker:any"] })).toMatchObject({ worker: "claude", available: true });
   });
 });
 

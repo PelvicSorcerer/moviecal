@@ -115,6 +115,73 @@ export function resolveRouting(issue) {
   return { worker, model, ok: true, reason: null, upgradeConditions };
 }
 
+/**
+ * MOV-360: pick which worker a *fresh* `worker:any` claim should try, given
+ * which of the two workers is open right now.
+ *
+ * Defaults to Claude, matching the rubric's own default worker (see
+ * `resolveRouting` above and docs/operators/worker-routing.md); falls back to
+ * Codex only when Claude is unavailable, and the symmetric case when Codex is
+ * the preferred worker. Returns `null` when neither is open right now -- the
+ * caller must leave the issue queued without claiming a worker rather than
+ * picking one anyway.
+ *
+ * Pure: `cooldownOpen(worker)` is supplied by the caller (a live
+ * WorkerCooldownStore read in run-loop.mjs, a batch-start snapshot, or a
+ * dry-run snapshot) so this stays unit-testable with plain booleans.
+ */
+export function selectAvailableWorker({ cooldownOpen, preferred = "claude" } = {}) {
+  if (typeof cooldownOpen !== "function") throw new Error("cooldownOpen oracle is required");
+  const other = preferred === "claude" ? "codex" : "claude";
+  if (cooldownOpen(preferred)) return preferred;
+  if (cooldownOpen(other)) return other;
+  return null;
+}
+
+/**
+ * MOV-360: resolve the worker a specific dispatch attempt for `issue` must
+ * use, given any worker this issue's own attempt is already bound to and the
+ * current quota-pool cooldown state.
+ *
+ * - A pinned issue (`worker:claude`/`worker:codex`, or the no-label rubric
+ *   default) always uses that worker. Pinned workers are never changed by
+ *   cooldown -- this function does not even consult `cooldownOpen` for one.
+ * - A `worker:any` issue that has already begun an attempt -- `boundWorker`
+ *   is the worker recorded on its own usage-limit record from that prior
+ *   dispatch (`UsageLimitStore.get(id)?.worker`) -- keeps using that worker
+ *   for its scheduled retry or MOV-205 retained-worktree resume. Never
+ *   silently switched, even if the other worker is open and this one is not.
+ * - A fresh `worker:any` issue (no binding yet) picks an available worker via
+ *   `selectAvailableWorker`. `available: false` means neither worker pool is
+ *   open right now; the caller must leave the issue queued without a claim
+ *   rather than dispatch it on a worker it never actually picked.
+ *
+ * Returns everything `resolveRouting` returns (`model`, `ok`, `reason`,
+ * `upgradeConditions`) plus `isAny`/`available`/`bound`, so a caller that only
+ * cares about the pinned case can keep using `resolveRouting` directly (as
+ * `resolveRouting`'s own worker:any-defaults-to-claude behavior documents --
+ * see worker-routing.test.mjs -- this function is what actually implements
+ * the dispatcher's quota-based pick that default stands in for).
+ */
+export function resolveDispatchWorker(issue, { boundWorker = null, cooldownOpen = () => true } = {}) {
+  const routing = resolveRouting(issue);
+  if (!routing.ok) return { ...routing, isAny: false, available: true, bound: false };
+
+  const { worker: overrideWorker } = parseRoutingLabels(issue.labels || []);
+  const isAny = overrideWorker === "any";
+  if (!isAny) {
+    return { ...routing, isAny: false, available: true, bound: false };
+  }
+  if (boundWorker === "claude" || boundWorker === "codex") {
+    return { ...routing, worker: boundWorker, isAny: true, available: true, bound: true };
+  }
+  const selected = selectAvailableWorker({ cooldownOpen, preferred: "claude" });
+  if (!selected) {
+    return { ...routing, worker: null, isAny: true, available: false, bound: false };
+  }
+  return { ...routing, worker: selected, isAny: true, available: true, bound: false };
+}
+
 // Both workers read their brief from stdin rather than a file path argument
 // (worker-spawn.mjs pipes it), since a stdin brief works identically whether
 // the worker binary reads from a real TTY-less pipe or a piped-in file.

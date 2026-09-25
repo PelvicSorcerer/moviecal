@@ -64,6 +64,11 @@ export function usageLimitStatePath() {
   return path.join(configDir(), "usage-limits.json");
 }
 
+/** MOV-360: persisted per-worker (quota-pool) dispatch cooldown record (worker-cooldown.mjs). */
+export function workerCooldownStatePath() {
+  return path.join(configDir(), "worker-cooldowns.json");
+}
+
 /**
  * MOV-188: the durable record of what automatic repair has already tried
  * (repair-ledger.mjs). Not a credential — but it *is* what makes the repair
