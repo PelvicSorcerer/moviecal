@@ -70,6 +70,14 @@ verbatim and names this consequence; there is no leniency to add on the
 evidence-capture side without weakening the fail-closed contract MOV-275
 built.
 
+Both implementation and repair briefs give workers focused Vitest, typecheck,
+and lint commands for their editing loop. They instruct workers to run the
+literal `npm run verify` when they believe the change is complete, and to use
+focused checks before retrying if it fails. Evidence capture still requires
+every exact verify run to pass; a failed intermediate run disables PR autonomy
+for that attempt. See [focused checks](../planning/testing-lanes.md#focused-checks-while-editing)
+for the commands.
+
 Dispatcher code lives in `tools/dispatcher/` in this repository (TypeScript, using the repo's existing Node 24 + Vitest toolchain). Runtime config lives outside the repo at `~/.config/moviecal/` (mode 700) — API keys and `.env.local` must never be committed. Run logs live at `~/Library/Logs/moviecal-dispatcher/`, retained 90 days.
 
 ### Worker usage accounting

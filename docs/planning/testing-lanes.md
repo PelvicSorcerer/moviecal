@@ -23,6 +23,10 @@ For the environment contract behind each lane, including disposable credential r
 
 The default fast pull-request gate is `npm run verify`, which runs the **baseline**, **unit**, and **integration** lanes in sequence. Browser, real-stack, and smoke lanes stay separate so failures are attributable to the lane that owns the behavior.
 
+### Focused checks while editing
+
+Workers can run affected tests with `npx vitest --config vitest.unit.config.ts --run <path-or-pattern>` or `npx vitest --config vitest.integration.config.ts --run <path-or-pattern>`. For dispatcher changes, pass the matching `tools/dispatcher/test/...` path or pattern. Run `npm run typecheck` and `npm run lint` as needed. When the change is complete, run the literal `npm run verify` as the final fast gate. If it fails, fix the failure with focused checks before running it again. Each exact verify run is recorded; any failed run disables PR autonomy for that attempt.
+
 ## Lane definitions
 
 ### Baseline (`lane:baseline`)
