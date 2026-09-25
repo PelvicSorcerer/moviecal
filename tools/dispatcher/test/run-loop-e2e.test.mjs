@@ -44,6 +44,7 @@ import { UsageLimitStore } from "../src/usage-limit.mjs";
 import { CircuitBreakerStore } from "../src/circuit-breaker.mjs";
 import { CREDENTIAL_FAILURE } from "../src/credential-failure.mjs";
 import { NESTED_SANDBOX_CRASH } from "../src/failure-classification.mjs";
+import { DEFAULT_ISSUE_SPEC_MODE } from "../src/issue-spec.mjs";
 
 // MOV-179: the real diagnosis adapter makes a live Anthropic API call.
 // Nothing in this file wants that -- the point of the describe block below is
@@ -94,6 +95,18 @@ vi.mock("../src/config.mjs", async (importOriginal) => {
     // credential stores by design). Re-anchor it on the same temp directory
     // as every other path here; the real function still runs.
     resolveDispatcherDelegate: () => actual.resolveDispatcherDelegate({ linearAppPath: `${TMP_ROOT}/linear-app.env` }),
+    // Every fixture below is a minimal `READY_SECTIONS`-only issue, not a
+    // fully labeled one -- the issue-completeness contract (MOV-303) would
+    // refuse every one of them under `enforce` mode. Without this override,
+    // `resolveIssueSpecMode()` reads this Mac's real
+    // `MOVIECAL_ISSUE_SPEC_MODE`, so a machine an operator has switched to
+    // `enforce` (the documented post-backfill step, §Automated promotion)
+    // fails every test in this file with an unrelated issue-spec reason
+    // instead of the dependency/credential/usage-limit behavior each one
+    // means to exercise. Pin it to the shipped default so this file's
+    // fixtures are deterministic regardless of the host environment, same as
+    // every other real-path override above.
+    resolveIssueSpecMode: () => DEFAULT_ISSUE_SPEC_MODE,
   };
 });
 

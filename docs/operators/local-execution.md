@@ -103,6 +103,8 @@ delegation; the polling dispatcher and every gate in this section are
 unchanged. Configuration and live stop/replay/offline evidence are recorded in
 `docs/governance/mov-220-loop-to-mac-handoff-validation.md`.
 
+Linear itself refuses this Loop's delegation on an unowned issue: "moviecal-dispatcher works on behalf of a person. Assign a workspace member to the issue first, then delegate." Before MOV-359, nothing in the local flow ever set an assignee, so a fully specced issue promoted without one reached this rejection and the Loop moved it to `Needs Human Decision`. §Automated promotion's configured-human-owner step (below) is what closes that gap: the promoter fills a missing assignee immediately before the `Ready for Agent` transition this Loop reacts to, so the delegation it attempts here always finds an owner already in place.
+
 ## Automated promotion
 
 `Ready for Agent` is filled automatically, not by hand (MOV-129), and the dispatcher now runs **priority propagation before promotion** (MOV-366). Poll-cycle order is:
@@ -131,11 +133,26 @@ After propagation, `dispatcher run` executes the promoter over every issue in `B
 - its description has a non-empty **acceptance-criteria** section (heading matching `/^#+\s*acceptance criteria/i`);
 - its description has a non-empty **Testing Expectations** section (`/^#+\s*testing expectations/i`);
 - every issue that `blocks` it is in a completed/canceled state (`Done`, `Released`, `Canceled`, `Duplicate`), resolved via the same `inverseRelations` data the dependency gate uses;
-- **in `enforce` mode only** (MOV-303/MOV-307), it satisfies the issue-completeness contract — labels, project, and milestone. In `report` mode, the shipped default, this clause does not apply and promotion behaves exactly as it did before.
+- **in `enforce` mode only** (MOV-303/MOV-307), it satisfies the issue-completeness contract — labels, project, and milestone. In `report` mode, the shipped default, this clause does not apply and promotion behaves exactly as it did before;
+- it already carries an assignee, **or** the configured human owner can be resolved and written to it (MOV-359, below) — an issue that fails every other clause is never even checked for this one.
 
 For a `Blocked` issue there is one extra condition: its most recent `**Dispatcher preflight failed:**` comment must name an unresolved-relation reason (now resolved). An issue blocked for any other reason — a missing secret, a worktree collision, a human's decision — is left alone.
 
-On promotion the promoter comments `Auto-promoted to Ready for Agent — …` (which, via the app-actor identity from MOV-122, notifies the repo owner). It is idempotent: a promoted issue is no longer in `Backlog`/`Blocked`, so a second pass does nothing.
+On promotion the promoter first fills a missing assignee (below), then comments `Auto-promoted to Ready for Agent — …` (which, via the app-actor identity from MOV-122, notifies the repo owner). It is idempotent: a promoted issue is no longer in `Backlog`/`Blocked`, so a second pass does nothing, and an issue that already has an assignee is never reassigned or recommented.
+
+### Configured human owner before handoff (MOV-359)
+
+The handoff Loop (§Dispatch trigger, MOV-220) cannot delegate an issue Linear considers unowned. Rather than require a human or authoring agent to set an assignee by hand on every issue, the promoter fills exactly one gap: an otherwise-promotable issue (every clause above except this one) that has **no assignee at all** is assigned the single operator-configured human owner, immediately before the `Ready for Agent` write — never after, since a state transition with no assignee behind it would still race the Loop's own rejection.
+
+- **Configuration.** `MOVIECAL_DEFAULT_OWNER_EMAIL`, resolved by `resolveDefaultOwnerEmail()`. Unset by default — the initial operator value is Adam Moore's workspace email, set only in this Mac's own environment, never committed to the repo. Unset or blank reads as "no owner configured", not as a hardcoded fallback person.
+- **Validation.** The configured email must resolve to a workspace member who is active, human (not an app/bot actor), and has access to the `Moviecal` team. Any of those failing — including the lookup itself failing — is treated identically to a missing assignee write: the issue is held out of `Ready for Agent`.
+- **Preserving an existing owner.** An issue that already has any assignee is never touched — no lookup, no write, no re-check on a later pass. This is the one narrowly-scoped exception to the "nothing is ever auto-filled" rule in `docs/governance/linear-information-architecture.md` §Issue completeness contract; every other field that rule covers (labels, project, milestone, state) is still never guessed at by the dispatcher.
+- **Write + readback.** The assignment mutation and its readback happen together (`LinearClient.assignIssue`) — a bare `success: true` is not trusted; the returned assignee id must match the one requested before the promoter proceeds to the `Ready for Agent` transition.
+- **Failure is retryable, not noisy.** A missing/invalid owner or a failed assignment withholds promotion with a specific, per-pass console reason (`owner assignment: …`) — it never posts a Linear comment, so a persistent misconfiguration does not spam the issue every 30-second poll. Because a fresh assigner is built at the start of every promote pass, a transient failure (an expired credential, a momentary Linear API error) is retried automatically on the next cycle with no special-cased recovery.
+- **Dry-run.** `dispatcher promote --dry-run` reports the planned assignee (and the promotion that would follow) without writing either.
+- **Never inferred.** The owner is always the one configured email — never the issue's creator, never an app/bot workspace user, and never applied to an issue the promoter would not otherwise promote (unready, `human-only`, coordination, or still blocked).
+
+See `tools/dispatcher/src/owner-assignment.mjs` for the pure eligibility/validation logic and `promoter.mjs`'s `promoteEligible` for how it is sequenced against the `Ready for Agent` write.
 
 ### Issue completeness (MOV-303/MOV-307/MOV-308)
 

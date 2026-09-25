@@ -18,7 +18,9 @@
 //   dispatcher gc                  - prune merged/stale worktrees and old run logs
 //   dispatcher promote [--dry-run] - move Backlog/Blocked issues that meet the
 //                                     readiness contract into Ready for Agent
-//                                     (MOV-129); the run loop does this each cycle
+//                                     (MOV-129), assigning the configured
+//                                     human owner first if one is missing
+//                                     (MOV-359); the run loop does this each cycle
 //   dispatcher priorities [--dry-run] [--once] - dependency-aware priority
 //                                     propagation across incomplete issues
 //   dispatcher audit-issues [--dry-run]
@@ -76,6 +78,7 @@ import {
   resolveMasterIncidentProject,
   resolveIssueSpecMode,
   resolveIssueSpecAuditIntervalMs,
+  resolveDefaultOwnerEmail,
   checkSecretFileMode,
   DEFAULT_CONCURRENCY,
   RUN_LOG_RETENTION_DAYS,
@@ -103,6 +106,7 @@ import {
 } from "../src/run-context.mjs";
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
+import { createOwnerAssigner } from "../src/owner-assignment.mjs";
 import { AUDITED_SPEC_STATE_TYPES, evaluateIssueSpec, formatIssueSpecMissing } from "../src/issue-spec.mjs";
 import { auditIssueSpecs, IssueSpecAuditScheduleStore, isAuditDue } from "../src/issue-spec-audit.mjs";
 import { propagatePriorities, TERMINAL_PRIORITY_STATE_TYPES } from "../src/priority-propagation.mjs";
@@ -686,6 +690,12 @@ async function runPrAutonomy(linearClient, teamKey) {
  * Automated backlog promoter (MOV-129): move issues in Backlog/Blocked that
  * meet the readiness contract into "Ready for Agent". Returns 0/1 for the
  * standalone `promote` command; `promotePass()` wraps it for the run loop.
+ *
+ * MOV-359: also fills a missing assignee with the configured human owner
+ * immediately before that transition, so the handoff Loop can delegate the
+ * issue afterward. A fresh `ownerAssignment` orchestrator is built every
+ * call, so a transient lookup/assignment failure is retried from scratch on
+ * the very next pass rather than latched.
  */
 async function cmdPromoteOnce({ dryRun = false } = {}) {
   const built = buildLinearClient();
@@ -700,6 +710,7 @@ async function cmdPromoteOnce({ dryRun = false } = {}) {
   }
 
   const issueSpecMode = resolveIssueSpecMode();
+  const ownerAssignment = createOwnerAssigner({ linearClient, teamKey, ownerEmail: resolveDefaultOwnerEmail() });
   const issues = await linearClient.issuesForPromotion({ teamKey, stateNames: PROMOTABLE_STATES });
   const isBlockerSatisfied = buildIsIssueSatisfied(issues);
   const results = await promoteEligible(issues, {
@@ -708,12 +719,21 @@ async function cmdPromoteOnce({ dryRun = false } = {}) {
     isBlockerSatisfied,
     dryRun,
     issueSpecMode,
+    ownerAssignment,
   });
 
   const promoted = results.filter((r) => r.promoted);
   for (const r of results) {
-    if (r.promoted) console.log(`${r.issue}: ${dryRun ? "would promote" : "promoted"} — ${r.reason}`);
-    else console.log(`${r.issue}: skip — ${r.reason}`);
+    if (r.promoted) {
+      const ownerNote = r.ownerAssigned
+        ? `; assigned ${r.ownerName || "configured owner"}`
+        : r.ownerPlanned
+          ? `; would assign ${r.ownerName || "configured owner"}`
+          : "";
+      console.log(`${r.issue}: ${dryRun ? "would promote" : "promoted"}${ownerNote} — ${r.reason}`);
+    } else {
+      console.log(`${r.issue}: skip — ${r.reason}`);
+    }
     // MOV-303/MOV-307: in `report` mode (the default) an incomplete issue
     // still promotes, so its violations would otherwise be invisible here.
     // Log them on every non-enforcing pass — in `enforce` mode they are

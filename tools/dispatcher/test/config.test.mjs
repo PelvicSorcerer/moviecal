@@ -14,6 +14,7 @@ import {
   resolveRepairBudgets,
   resolveIssueSpecMode,
   resolveIssueSpecAuditIntervalMs,
+  resolveDefaultOwnerEmail,
   DEFAULT_ISSUE_SPEC_AUDIT_INTERVAL_MS,
   issueSpecAuditStatePath,
   configDir,
@@ -262,6 +263,18 @@ describe("issue-completeness mode (MOV-303)", () => {
     // indistinguishable from the promoter itself being broken.
     expect(resolveIssueSpecMode({ MOVIECAL_ISSUE_SPEC_MODE: "enforced" })).toBe("report");
     expect(resolveIssueSpecMode({ MOVIECAL_ISSUE_SPEC_MODE: "strict" })).toBe("report");
+  });
+});
+
+describe("resolveDefaultOwnerEmail (MOV-359)", () => {
+  it("is unset (null) by default, so an unassigned issue fails closed rather than falling back to a hardcoded person", () => {
+    expect(resolveDefaultOwnerEmail({})).toBeNull();
+    expect(resolveDefaultOwnerEmail({ MOVIECAL_DEFAULT_OWNER_EMAIL: "" })).toBeNull();
+    expect(resolveDefaultOwnerEmail({ MOVIECAL_DEFAULT_OWNER_EMAIL: "   " })).toBeNull();
+  });
+
+  it("trims and returns a configured value", () => {
+    expect(resolveDefaultOwnerEmail({ MOVIECAL_DEFAULT_OWNER_EMAIL: " adam@example.com " })).toBe("adam@example.com");
   });
 });
 

@@ -76,6 +76,7 @@ describe("LinearClient", () => {
         url: "https://linear.app/moviecal/issue/MOV-126",
         project: "Calendar Feed",
         delegate: null,
+        assignee: null,
         labels: ["area:calendar", "worker:codex"],
         blockedByIds: ["id-125"],
         inverseRelations: [
@@ -928,6 +929,166 @@ describe("LinearClient", () => {
       expect(await client.agentSession("s1")).toBeNull();
       expect(await client.agentSession(null)).toBeNull();
       expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("assignee normalization (MOV-359)", () => {
+    it("selects the assignee field alongside delegate", async () => {
+      const fetchImpl = mockFetch({ issues: { nodes: [] } });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      await client.issuesInState({ teamKey: "MOV", stateName: "Ready for Agent" });
+
+      const { query } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+      expect(query).toMatch(/assignee\s*\{\s*id\s+name\s+displayName\s*\}/);
+    });
+
+    it("normalizes an assigned issue to {id, name, displayName}", async () => {
+      const fetchImpl = mockFetch({
+        issues: {
+          nodes: [
+            {
+              id: "id-1",
+              identifier: "MOV-1",
+              title: "T",
+              url: "https://linear.app/moviecal/issue/MOV-1",
+              project: null,
+              assignee: { id: "user-adam", name: "Adam Moore", displayName: "Adam" },
+              labels: { nodes: [] },
+              relations: { nodes: [] },
+            },
+          ],
+        },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const [issue] = await client.issuesInState({ teamKey: "MOV", stateName: "Ready for Agent" });
+
+      expect(issue.assignee).toEqual({ id: "user-adam", name: "Adam Moore", displayName: "Adam" });
+    });
+
+    it("normalizes an unassigned issue to null", async () => {
+      const fetchImpl = mockFetch({
+        issues: {
+          nodes: [
+            {
+              id: "id-1",
+              identifier: "MOV-1",
+              title: "T",
+              url: "https://linear.app/moviecal/issue/MOV-1",
+              project: null,
+              assignee: null,
+              labels: { nodes: [] },
+              relations: { nodes: [] },
+            },
+          ],
+        },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const [issue] = await client.issuesInState({ teamKey: "MOV", stateName: "Ready for Agent" });
+
+      expect(issue.assignee).toBeNull();
+    });
+  });
+
+  describe("assignIssue (MOV-359)", () => {
+    it("writes the assigneeId and reads the resulting assignee back in the same mutation", async () => {
+      const fetchImpl = mockFetch({ issueUpdate: { success: true, issue: { assignee: { id: "user-adam" } } } });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const result = await client.assignIssue("id-1", "user-adam");
+
+      expect(result).toEqual({ success: true, assigneeId: "user-adam" });
+      const { variables, query } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+      expect(variables).toEqual({ issueId: "id-1", assigneeId: "user-adam" });
+      expect(query).toMatch(/assigneeId:\s*\$assigneeId/);
+    });
+
+    it("reports assigneeId: null when the write did not stick, even if success is true", async () => {
+      const fetchImpl = mockFetch({ issueUpdate: { success: true, issue: { assignee: null } } });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const result = await client.assignIssue("id-1", "user-adam");
+
+      expect(result).toEqual({ success: true, assigneeId: null });
+    });
+
+    it("reports failure without throwing when the mutation itself fails", async () => {
+      const fetchImpl = mockFetch({ issueUpdate: { success: false, issue: null } });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const result = await client.assignIssue("id-1", "user-adam");
+
+      expect(result).toEqual({ success: false, assigneeId: null });
+    });
+  });
+
+  describe("workspaceMemberByEmail (MOV-359)", () => {
+    it("normalizes an active human member with team access", async () => {
+      const fetchImpl = mockFetch({
+        users: {
+          nodes: [
+            {
+              id: "user-adam",
+              name: "Adam Moore",
+              displayName: "Adam",
+              email: "adam@example.com",
+              active: true,
+              app: false,
+              guest: false,
+              teamMemberships: { nodes: [{ team: { key: "MOV" } }] },
+            },
+          ],
+        },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const member = await client.workspaceMemberByEmail("adam@example.com");
+
+      expect(member).toEqual({
+        id: "user-adam",
+        name: "Adam",
+        email: "adam@example.com",
+        active: true,
+        isApp: false,
+        isGuest: false,
+        teamKeys: ["MOV"],
+      });
+      const { variables } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+      expect(variables).toEqual({ email: "adam@example.com" });
+    });
+
+    it("flags an app/bot member via the app field", async () => {
+      const fetchImpl = mockFetch({
+        users: {
+          nodes: [
+            {
+              id: "bot-1", name: "moviecal-dispatcher", displayName: null, email: "bot@example.com",
+              active: true, app: true, guest: false, teamMemberships: { nodes: [] },
+            },
+          ],
+        },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const member = await client.workspaceMemberByEmail("bot@example.com");
+      expect(member.isApp).toBe(true);
+    });
+
+    it("returns null when nobody matches, without throwing", async () => {
+      const fetchImpl = mockFetch({ users: { nodes: [] } });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      expect(await client.workspaceMemberByEmail("nobody@example.com")).toBeNull();
+    });
+
+    it("returns null immediately for an empty email, without making a request", async () => {
+      const fetchImpl = mockFetch({});
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      expect(await client.workspaceMemberByEmail("")).toBeNull();
+      expect(fetchImpl).not.toHaveBeenCalled();
     });
   });
 });

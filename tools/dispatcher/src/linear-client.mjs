@@ -27,6 +27,7 @@ const ISSUE_FIELDS = `
   url
   project { name }
   delegate { id name displayName }
+  assignee { id name displayName }
   labels { nodes { name } }
   relations { nodes {
     type
@@ -421,6 +422,73 @@ export class LinearClient {
   }
 
   /**
+   * Assign one issue to a workspace member, reading the resulting assignee
+   * back in the same mutation (MOV-359). The promoter must verify the write
+   * actually landed before it moves the issue into Ready for Agent — a bare
+   * `success: true` does not guarantee the field stuck — so the readback is
+   * part of this call rather than a separate round trip a caller could skip.
+   */
+  async assignIssue(issueId, assigneeId) {
+    const mutation = `
+      mutation($issueId: String!, $assigneeId: String!) {
+        issueUpdate(id: $issueId, input: { assigneeId: $assigneeId }) {
+          success
+          issue { assignee { id } }
+        }
+      }
+    `;
+    const data = await this.request(mutation, { issueId, assigneeId });
+    return {
+      success: Boolean(data.issueUpdate && data.issueUpdate.success),
+      assigneeId: (data.issueUpdate && data.issueUpdate.issue && data.issueUpdate.issue.assignee && data.issueUpdate.issue.assignee.id) || null,
+    };
+  }
+
+  /**
+   * One workspace member by exact email, with enough shape to validate them
+   * as a promoter-assignable human owner (MOV-359): whether they are active,
+   * an app/bot actor, and which teams they belong to.
+   *
+   * `app` and `teamMemberships` are unverified against this live workspace —
+   * the same caveat as `createAgentSessionOnIssue` below — but unlike that
+   * path a failure here is never silently swallowed: `owner-assignment.mjs`
+   * treats a thrown request or an unresolved candidate as "do not promote",
+   * the fail-closed direction, so a wrong field name blocks a promotion
+   * rather than mis-assigning one.
+   */
+  async workspaceMemberByEmail(email) {
+    if (!email) return null;
+    const query = `
+      query($email: String!) {
+        users(filter: { email: { eq: $email } }) {
+          nodes {
+            id
+            name
+            displayName
+            email
+            active
+            app
+            guest
+            teamMemberships { nodes { team { key } } }
+          }
+        }
+      }
+    `;
+    const data = await this.request(query, { email });
+    const node = data.users?.nodes?.[0];
+    if (!node) return null;
+    return {
+      id: node.id,
+      name: node.displayName || node.name || null,
+      email: node.email || null,
+      active: node.active !== false,
+      isApp: Boolean(node.app),
+      isGuest: Boolean(node.guest),
+      teamKeys: (node.teamMemberships?.nodes || []).map((m) => m.team?.key).filter(Boolean),
+    };
+  }
+
+  /**
    * Create a "blocks" dependency: `blockerId` blocks `blockedId`
    * (i.e. `blockedId` cannot start until `blockerId` is done).
    *
@@ -721,6 +789,11 @@ function normalizeIssue(node) {
     // MOV-143: the actor this issue is delegated to, or null. Normalized here
     // (rather than at each decision site) so every consumer sees one shape.
     delegate: normalizeDelegate(node.delegate),
+    // MOV-359: the human owner the promoter checks before filling a missing
+    // one. Same shape and same null-handling as `delegate` — both are just a
+    // `User` node — so this reuses `normalizeDelegate` rather than a
+    // near-duplicate normalizer.
+    assignee: normalizeDelegate(node.assignee),
     labels: node.labels.nodes.map((l) => l.name),
     // A "blocks" entry under this issue's own `relations` means THIS issue
     // blocks the related one (a dependent) -- the inverse of what "blocked
