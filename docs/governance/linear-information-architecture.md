@@ -31,7 +31,7 @@ One workspace (`moviecal`), one team (`MOV`). GitHub Issues Sync is one-repo-to-
 Three initiatives group the active product and development-system outcomes:
 
 - **Web App** — outcomes that ship to or directly support the Next.js application: Shared Watchlists Core & API, Web Shared Watchlists, Calendar Feed, and the completed Platform & Infrastructure project.
-- **Native iOS App** — native product outcomes and their shared prerequisites: iOS Companion App, Shared Watchlists Core & API, iOS Shared Watchlists, and Calendar Feed.
+- **iOS App** — native product outcomes and their shared prerequisites: iOS Companion App, Shared Watchlists Core & API, iOS Shared Watchlists, and Calendar Feed.
 - **Automate moviecal Development and Delivery** — cross-cutting development infrastructure that supports every current and future product initiative. Its active projects are Autonomous local-agent delivery and Deferred Linear cloud execution option; completed/canceled predecessor projects remain associated for history.
 
 (A first attempt at provisioning these hit `FEATURE_NOT_ACCESSIBLE` — initiatives were originally plan-gated on this workspace, so this doc briefly shipped a "skip initiatives, projects stand alone" design. The repo owner then enabled the feature directly in Linear, and the initiatives + links above were created and verified live. The `leadTeamId` sub-feature remains gated, see "Plan" above — irrelevant here with one team.)
@@ -40,12 +40,12 @@ Three initiatives group the active product and development-system outcomes:
 
 | Linear project | Initiative | Role |
 |---|---|---|
-| Shared Watchlists Core & API | Web App + Native iOS App | Shared watchlist data, authorization, invitations, calendar behavior, and versioned API used by both clients |
+| Shared Watchlists Core & API | Web App + iOS App | Shared watchlist data, authorization, invitations, calendar behavior, and versioned API used by both clients |
 | Web Shared Watchlists | Web App | Finite browser collaboration experience using the shared core |
-| iOS Shared Watchlists | Native iOS App | Finite native collaboration experience using the shared API |
-| Calendar Feed | Web App + Native iOS App | Finite calendar-feed product outcome shared by both clients |
+| iOS Shared Watchlists | iOS App | Finite native collaboration experience using the shared API |
+| Calendar Feed | Web App + iOS App | Finite calendar-feed product outcome shared by both clients |
 | Platform & Infrastructure | Web App | **Completed.** Finite platform outcome |
-| iOS Companion App | Native iOS App | Finite native-app outcome |
+| iOS Companion App | iOS App | Finite native-app outcome |
 | Documentation aligned with shipped product | None | Finite product documentation reconciliation; deliberately not an ongoing documentation bucket |
 | Autonomous local-agent delivery | Automate moviecal Development and Delivery | **Active.** Finish bounded local intake, handoff, acceptance, and controlled autonomy |
 | Deferred Linear cloud execution option | Automate moviecal Development and Delivery | **Deferred.** Keep cloud environment/kickoff/pilots independently authorizable and out of the local critical path |
