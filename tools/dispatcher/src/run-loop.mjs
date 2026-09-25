@@ -855,7 +855,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, pu
     return detectStopFromSnapshot(snapshot, { expectedDelegate: dispatcherDelegate });
   };
 
-  const repositoryContext = repositoryContextFn({ worktreePath: entry.path, branch });
+  const repositoryContext = repositoryContextFn({ worktreePath: entry.path, branch, issueDescription: issue.description });
   const brief = generateBrief(issue, {
     branch,
     worktreePath: entry.path,

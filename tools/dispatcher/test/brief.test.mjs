@@ -10,6 +10,19 @@ describe("generateBrief", () => {
     labels: ["area:calendar", "risk:low"],
   };
 
+  it("includes concise exploration guidance and optional redacted path metadata", () => {
+    const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", repositoryContext: {
+      likelyStartingPoints: [{ path: "src/long.ts", lines: 401, readByRange: true }],
+    } });
+    expect(brief).toContain("## Explore efficiently");
+    expect(brief).toContain("`Grep`/`Glob`");
+    expect(brief).toContain("`offset`/`limit`");
+    expect(brief).toContain("`explore` subagent");
+    expect(brief).toContain("`src/long.ts` — 401 lines (read by range)");
+    expect(brief).not.toContain("file contents");
+    expect(generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude" })).not.toContain("Likely starting points");
+  });
+
   it("includes the issue identifier, title, and Linear URL", () => {
     const brief = generateBrief(issue, { branch: "agent/MOV-42-fix-the-thing", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
     expect(brief).toContain("MOV-42: Fix the thing");
@@ -218,6 +231,15 @@ describe("generateRepairBrief (MOV-188)", () => {
     trigger: "ci",
     reason: "grouped code/test failures on the current head",
   };
+
+  it("carries the same exploration guidance and optional starting points", () => {
+    const brief = generateRepairBrief(issue, { ...options, repositoryContext: {
+      likelyStartingPoints: [{ path: "src/long.ts", lines: 401, readByRange: true }],
+    } });
+    expect(brief).toContain("## Explore efficiently");
+    expect(brief).toContain("`src/long.ts` — 401 lines (read by range)");
+    expect(generateRepairBrief(issue, options)).not.toContain("Likely starting points");
+  });
 
   it("names the pull request, branch, head SHA, and attempt bound", () => {
     const brief = generateRepairBrief(issue, options);
