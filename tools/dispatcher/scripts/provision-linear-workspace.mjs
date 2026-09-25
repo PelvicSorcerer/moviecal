@@ -195,7 +195,7 @@ async function main() {
   }
 
   const webAppInit = await ensureInitiative("Web App");
-  const iosInit = await ensureInitiative("Native iOS App");
+  const iosInit = await ensureInitiative("iOS App");
   const automationInit = await ensureInitiative("Automate moviecal Development and Delivery");
 
   // --- Projects ---
