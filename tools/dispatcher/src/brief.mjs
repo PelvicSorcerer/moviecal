@@ -54,6 +54,17 @@ function explorationLines(context) {
   ];
 }
 
+function iterativeVerificationLines() {
+  return [
+    "## Check your work while iterating",
+    "",
+    "Use focused checks as you edit: `npx vitest --config vitest.unit.config.ts --run <path-or-pattern>` for affected unit tests, `npx vitest --config vitest.integration.config.ts --run <path-or-pattern>` for affected integration tests, `npm run typecheck`, and `npm run lint`. For dispatcher changes, target the matching `tools/dispatcher/test/...` files with the appropriate Vitest command.",
+    "",
+    "When you believe the change is complete, run the literal `npm run verify` once. Do not use it as a probe. If it fails, fix the failure using focused checks, then run `npm run verify` again. Every exact verify run is recorded; any failed run disables PR autonomy for this attempt, even if a later run passes.",
+    "",
+  ];
+}
+
 /**
  * The section a resumed worker needs and a fresh one must never see (MOV-205).
  *
@@ -126,6 +137,7 @@ export function generateBrief(issue, { branch, worktreePath, worker, model, upgr
   lines.push(...resumeLines(resume));
   lines.push(...repositoryContextLines(repositoryContext));
   lines.push(...explorationLines(repositoryContext));
+  lines.push(...iterativeVerificationLines());
   lines.push(...iosWorkerLeaseLines(issue));
   lines.push(...iosVerificationLines(issue, repositoryContext));
   lines.push("## Instructions");
@@ -261,6 +273,7 @@ export function generateRepairBrief(issue, {
     "",
     ...repositoryContextLines(repositoryContext),
     ...explorationLines(repositoryContext),
+    ...iterativeVerificationLines(),
     "## What you are being asked to do",
     "",
     `This is a **bounded repair**, not an implementation task. An existing dispatcher-owned pull request is failing, and automatic repair was admitted for it: ${reason || "a required check failed on the current head"}.`,
