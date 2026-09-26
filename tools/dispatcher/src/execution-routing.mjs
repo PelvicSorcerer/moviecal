@@ -10,18 +10,20 @@ export const EXECUTION_LABEL_GROUP = "execution";
 const EXECUTION_LABEL_RE = /^execution:(cloud|mac|none)$/;
 const IOS_OR_XCODE_RE = /\b(?:ios|xcode|xcodebuild|simulator)\b|\bself-hosted\s+macos?\s+runner\b|\blocal\s+secret\b/i;
 const COORDINATION_LABELS = new Set(["type:coordination", "coordination", "umbrella"]);
-const MAC_PROJECTS = new Set([
+// Active roster, kept in step with linear-topology.mjs by execution-routing.test.mjs.
+// Calendar Feed was an empty project and is retired: it is not a roster member.
+export const MAC_PROJECTS = new Set([
   "Shared Watchlists Core & API",
   "Web Shared Watchlists",
   "iOS Shared Watchlists",
-  "Calendar Feed",
-  "Platform & Infrastructure",
   "iOS Companion App",
+  "Documentation aligned with shipped product",
   "Autonomous local-agent delivery",
   // Completed history remains Mac-only if an old issue is ever re-read.
+  "Platform & Infrastructure",
   "Local development workflow stabilization and governance",
 ]);
-const CLOUD_PROJECTS = new Set(["Deferred Linear cloud execution option"]);
+export const CLOUD_PROJECTS = new Set(["Deferred Linear cloud execution option"]);
 const MIXED_ROUTE_PROJECTS = new Set([
   // Retained aliases for completed history. New work must not be assigned here.
   "Hybrid workflow foundations (completed)",
