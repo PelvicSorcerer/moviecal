@@ -9,7 +9,7 @@
 
 import path from "node:path";
 import { evaluatePreflight, worktreeName, branchName, resolveWorkflowEditAuthorization, IOS_COMPANION_APP_PROJECT } from "./preflight.mjs";
-import { resolveRouting, workerInvocation } from "./worker-routing.mjs";
+import { resolveRouting, resolveDispatchWorker, workerInvocation } from "./worker-routing.mjs";
 import { confirmStillClaimable, evaluateLocalDispatch } from "./dispatch-eligibility.mjs";
 import { generateBrief } from "./brief.mjs";
 import { collectRepositoryContext } from "./repository-context.mjs";
@@ -17,8 +17,9 @@ import { tailLogs } from "./worker-spawn.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "./worker-guard.mjs";
 import { classifyWorkerFailure, NESTED_SANDBOX_CRASH } from "./failure-classification.mjs";
 import { classifyCredentialFailure, CREDENTIAL_FAILURE } from "./credential-failure.mjs";
-import { classifyUsageLimitFailure, decideUsageLimitOutcome } from "./usage-limit.mjs";
+import { classifyUsageLimitFailure, decideUsageLimitOutcome, MAX_USAGE_LIMIT_DEFERRAL_MS } from "./usage-limit.mjs";
 import { admitBudgetContinuation, admitUsageLimitResume } from "./usage-limit-resume.mjs";
+import { WORKERS as WORKER_POOLS } from "./worker-cooldown.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
 import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-signals.mjs";
@@ -61,6 +62,7 @@ import { budgetHandoffSections, diffSummary, hasWorkerProgress, readWorkerProgre
  * @param {"off"|"report"|"enforce"} [ctx.issueSpecMode] - MOV-303: forwarded to `evaluatePreflight()` (preflight.mjs); `enforce` moves an incomplete issue to Blocked instead of dispatching it, naming every missing item. This is the gate every dispatched issue passes through regardless of how it reached Ready for Agent -- the promoter's own gate (promoter.mjs) only covers the ones it promoted itself. Undefined defaults to `report`, same as the promoter
  * @param {{isOpen: (name: string) => boolean, trip: (name: string, reason: string) => void, clear: (name: string) => void}} [ctx.circuitBreaker] - MOV-180/MOV-177: shared, named host-wide failure-signature breaker store (circuit-breaker.mjs), gating two independent breakers -- NESTED_SANDBOX_CRASH and CREDENTIAL_FAILURE. While either is open, `runOnce` lets exactly one issue per batch through as a half-open probe and skips the rest with outcome "circuit-breaker-open" (also applied dynamically within a batch if a breaker trips mid-cycle from an earlier issue's own outcome); defaults to a permanently-closed no-op so existing callers are unaffected
  * @param {{get: Function, record: Function, clear: Function, deferral: Function}} [ctx.usageLimitStore] - MOV-151: per-issue dispatch-time provider usage-limit record (usage-limit.mjs). Defaults to a no-op store, so a caller that does not wire it keeps today's "every non-zero exit escalates" behaviour exactly
+ * @param {{get: Function, record: Function, clear: Function, state: Function}} [ctx.workerCooldownStore] - MOV-360: worker-quota-pool (Claude/Codex) dispatch-wide cooldown record (worker-cooldown.mjs), gating dispatch of *every* issue pinned to (or, via `worker:any`, resolving to) a worker whose provider quota is known to be exhausted -- independent of any one issue's own usage-limit history. Defaults to a no-op store that always reports every worker open, so a caller that does not wire it keeps today's per-issue-only usage-limit behaviour exactly, including `resolveDispatchWorker`'s `worker:any` default of Claude
  * @param {(issue: object) => Promise<{acquired: true, lease: object}|{acquired: false, reason: string}>} [ctx.acquireIosSimLeaseFn] - MOV-311: for an "iOS Companion App" issue only, acquire the machine-wide worker-lane simulator lease (scripts/ios-sim-lease.mjs, MOV-309) for the whole worker run. Never waits -- `acquired: false` (held by another lane, queued, or unmanaged simulator state) defers the issue silently, exactly like the usage-limit deferral above. Defaults to always-acquired-with-no-lease, so a caller that does not wire it (every non-iOS issue) is unaffected
  * @param {(leaseId: string) => Promise<void>} [ctx.releaseIosSimLeaseFn] - MOV-311: releases the lease `acquireIosSimLeaseFn` returned, called from the one `processIssue` chokepoint that wraps every terminal path of `dispatchIssue`. Defaults to a no-op
  * @param {(args: {exitCode: number, logTail: string, auditText: string}) => Promise<{ok: true, confident: boolean, diagnosis: string, evidence: string|null}|{ok: false, reason: string}>} [ctx.diagnoseFailureFn] - MOV-179: advisory-only, single bounded call that writes a grounded diagnosis into the residual "unrecognized failure" `Needs Human Decision` comment (worker-diagnosis.mjs). Never changes whether or how an issue escalates -- any failure, rejection, or missing wiring falls back to today's plain comment. Only called for failures with no dedicated classification of their own (not rate-limit, not credential-failure, not a security-policy block); defaults to a no-op that always reports no diagnosis
@@ -79,6 +81,9 @@ export async function runOnce(issues, ctx) {
     concurrencyLimit,
     worktreeManager,
     circuitBreaker = { isOpen: () => false, trip: () => {}, clear: () => {} },
+    workerCooldownStore = NO_WORKER_COOLDOWN_STORE,
+    usageLimitStore = NO_USAGE_LIMIT_STORE,
+    now = () => new Date(),
   } = ctx;
 
   // MOV-180: once tripped, let exactly one issue in this batch through as a
@@ -92,6 +97,36 @@ export async function runOnce(issues, ctx) {
   const openBreakersAtStart = DISPATCH_BREAKERS.filter((name) => circuitBreaker.isOpen(name));
   const breakerOpenAtStart = openBreakersAtStart.length > 0;
   let probeClaimed = false;
+
+  // Resolve once, preserving prior provider bindings. Cooldown only gates this
+  // worker; it never changes a fresh worker:any claim's Claude default.
+  const nowTs = now();
+  const cooldownAtStart = Object.fromEntries(WORKER_POOLS.map((worker) => [worker, workerCooldownStore.state(worker, nowTs)]));
+  const resolvedWorkers = issues.map((issue) => resolveDispatchWorker(issue, {
+    boundWorker: usageLimitStore.get(issue.identifier)?.worker ?? null,
+  }));
+
+  // Admit one eligible post-reset probe, preferring a due retry or resume.
+  const probeWinnerId = {};
+  for (const worker of WORKER_POOLS) {
+    if (!cooldownAtStart[worker].probeOwed) continue;
+    let dueCandidateId = null;
+    let firstCandidateId = null;
+    issues.forEach((issue, index) => {
+      const resolved = resolvedWorkers[index];
+      if (!resolved.ok || resolved.worker !== worker) return;
+      if (!evaluateLocalDispatch(issue, { expectedDelegate: ctx.dispatcherDelegate }).eligible) return;
+      if (usageLimitStore.deferral(issue.identifier, nowTs)?.deferred) return;
+      if (firstCandidateId === null) firstCandidateId = issue.id;
+      if (dueCandidateId !== null) return;
+      const record = usageLimitStore.get(issue.identifier);
+      const dueClean = Boolean(record?.retryAt) && new Date(record.retryAt).getTime() <= nowTs.getTime();
+      const dueResume =
+        typeof usageLimitStore.resumption === "function" && Boolean(usageLimitStore.resumption(issue.identifier, nowTs));
+      if (dueClean || dueResume) dueCandidateId = issue.id;
+    });
+    probeWinnerId[worker] = dueCandidateId ?? firstCandidateId ?? null;
+  }
 
   // MOV-138: bound how many `processIssue` calls run concurrently within this
   // batch to the slots this cycle can actually use — the concurrency limit
@@ -123,6 +158,32 @@ export async function runOnce(issues, ctx) {
   const results = new Array(issues.length);
   await Promise.all(
     issues.map(async (issue, index) => {
+
+      // Gate silently before taking a concurrency slot or host-breaker probe.
+      const resolvedWorker = resolvedWorkers[index];
+      const resolvedWorkerName = resolvedWorker.worker;
+      if (resolvedWorkerName) {
+        const cooldown = cooldownAtStart[resolvedWorkerName];
+        if (cooldown.cooling) {
+          results[index] = {
+            issue: issue.identifier,
+            outcome: "deferred-worker-cooldown",
+            reason: `${resolvedWorkerName} worker cooldown active until ${cooldown.resetAt}`,
+            retryAt: cooldown.resetAt,
+          };
+          return;
+        }
+        if (cooldown.probeOwed && probeWinnerId[resolvedWorkerName] !== issue.id) {
+          results[index] = {
+            issue: issue.identifier,
+            outcome: "deferred-worker-cooldown",
+            reason: `awaiting the single post-reset probe attempt for the ${resolvedWorkerName} worker cooldown (reset ${cooldown.resetAt} already passed)`,
+            retryAt: cooldown.resetAt,
+          };
+          return;
+        }
+      }
+
       if (breakerOpenAtStart) {
         // Synchronous check-and-set, no `await` in between: only the first
         // entrant to reach this point claims the probe slot, regardless of
@@ -133,6 +194,7 @@ export async function runOnce(issues, ctx) {
         }
         probeClaimed = true;
       }
+
       await acquire();
       // MOV-177: a breaker that was closed when this batch started can still
       // trip mid-batch, from an earlier issue in this very same cycle
@@ -151,8 +213,23 @@ export async function runOnce(issues, ctx) {
           return;
         }
       }
+      // A preceding attempt may have exhausted this provider while we waited.
+      // Recheck availability without selecting another worker.
+      const liveWorkerName = resolvedWorkerName;
+      if (liveWorkerName) {
+        const liveCooldown = workerCooldownStore.state(liveWorkerName, now());
+        if (liveCooldown.cooling) {
+          results[index] = {
+            issue: issue.identifier, outcome: "deferred-worker-cooldown",
+            reason: `${liveWorkerName} worker cooldown started earlier in this batch (until ${liveCooldown.resetAt})`,
+            retryAt: liveCooldown.resetAt,
+          };
+          release();
+          return;
+        }
+      }
       try {
-        results[index] = await processIssue(issue, ctx);
+        results[index] = await processIssue(issue, { ...ctx, resolvedWorker: liveWorkerName });
       } finally {
         release();
         // MOV-166: this issue is no longer a live attempt an inbound signal
@@ -179,6 +256,22 @@ const NO_USAGE_LIMIT_STORE = Object.freeze({
   resumption: () => null,
   consumeResume: () => null,
 });
+
+// Unwired callers retain per-issue-only usage-limit handling.
+const NO_WORKER_COOLDOWN_STORE = Object.freeze({
+  get: () => null,
+  record: () => null,
+  clear: () => {},
+  state: () => ({ cooling: false, probeOwed: false, resetAt: null, evidence: null }),
+});
+
+// Apply the per-issue reset ceiling independently of its retry allowance.
+function usageLimitResetIsTrustworthy(classification, now, maxDeferralMs = MAX_USAGE_LIMIT_DEFERRAL_MS) {
+  if (!classification?.resetAt) return false;
+  const reset = new Date(classification.resetAt);
+  if (Number.isNaN(reset.getTime())) return false;
+  return reset.getTime() - now.getTime() <= maxDeferralMs;
+}
 
 /**
  * MOV-179: the default when a caller wires no diagnosis adapter — always
@@ -385,6 +478,7 @@ async function dispatchIssue(issue, ctx) {
     stopPollIntervalMs = 0,
     circuitBreaker = { isOpen: () => false, trip: () => {}, clear: () => {} },
     usageLimitStore = NO_USAGE_LIMIT_STORE,
+    workerCooldownStore = NO_WORKER_COOLDOWN_STORE,
     diagnoseFailureFn = NO_DIAGNOSIS,
     steeringEnabled = false,
     turnBudgetFn = turnBudgetForTier,
@@ -396,6 +490,8 @@ async function dispatchIssue(issue, ctx) {
     logger = console,
     issueSpecMode,
     iosSimLeaseId = null,
+    // Preserve the provider binding computed at batch start.
+    resolvedWorker = null,
     captureWorkerUsageFn = () => null,
   } = ctx;
 
@@ -498,6 +594,8 @@ async function dispatchIssue(issue, ctx) {
     await linearClient.addComment(issue.id, `**Dispatcher routing failed:** ${routing.reason}`);
     return { issue: issue.identifier, outcome: "needs-human", reason: routing.reason };
   }
+  // Reuse the gated provider; direct callers retain resolveRouting defaults.
+  if (resolvedWorker) routing.worker = resolvedWorker;
   let invocation;
   let turnBudget;
   try {
@@ -712,6 +810,7 @@ async function dispatchIssue(issue, ctx) {
         circuitBreaker,
         iosSimLeaseId,
         usageLimitStore,
+        workerCooldownStore,
         diagnoseFailureFn,
         steeringEnabled,
         now,
@@ -810,6 +909,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     stopPollIntervalMs,
     circuitBreaker,
     usageLimitStore,
+    workerCooldownStore = NO_WORKER_COOLDOWN_STORE,
     diagnoseFailureFn = NO_DIAGNOSIS,
     // MOV-214/215: live mid-run prompt delivery, off by default and Claude-only
     // (see workerInvocation()/spawnWorker()'s own steering gates). With this
@@ -1037,7 +1137,10 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     abortController.abort();
     // A worker that ran long enough to time out was granted a provider
     // session, so any earlier usage-limit history is not consecutive (MOV-151).
+    // The same fact clears this worker's cooldown, if any (MOV-360): a
+    // session that ran this long is proof the quota constraint has lifted.
     usageLimitStore.clear(issue.identifier);
+    workerCooldownStore.clear(routing.worker);
     worktreeManager.markStatus(issue.identifier, "failed");
     await publisher.publish("error", {
       stateId: stateIds.needsHumanDecision,
@@ -1302,6 +1405,20 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     // other non-zero exit exactly as before.
     const usageLimit = classifyUsageLimitFailure({ exitCode: spawnResult.exitCode, logTail: tail, now: now() });
 
+    // Refresh provider cooldown even when this issue has exhausted its retry.
+    if (usageLimitResetIsTrustworthy(usageLimit, now())) {
+      workerCooldownStore.record(routing.worker, { resetAt: usageLimit.resetAt, evidence: usageLimit.evidence, now: now() });
+    } else if (!usageLimit) {
+      // Not a recognized usage limit at all: this attempt reached the worker
+      // and failed for an unrelated reason, which is itself proof the quota
+      // constraint (if any) is no longer what is stopping this worker.
+      workerCooldownStore.clear(routing.worker);
+    }
+    // An untrustworthy-but-recognized classification (no reset, or one beyond
+    // the deferral ceiling) says nothing reliable either way about the
+    // worker-wide gate -- leave any existing cooldown exactly as it is rather
+    // than invent or mask a reset (MOV-360 acceptance criteria).
+
     // MOV-151 preserved the worktree here and stopped: a provider limit that
     // landed on top of unpublished changes went permanently to a human,
     // because requeueing would have collided with (or reclaimed) a worktree
@@ -1334,6 +1451,10 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
           retryAt: verdict.retryAt,
           evidence: usageLimit.evidence,
           consecutive: verdict.consecutive,
+          // MOV-360: binds this issue's scheduled resume to the worker it
+          // actually ran under, so a `worker:any` issue's resume reuses this
+          // same worker rather than being re-picked when it fires.
+          worker: routing.worker,
           resume: {
             worktreePath: entry.path,
             branch,
@@ -1407,6 +1528,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
         retryAt: null,
         evidence: usageLimit.evidence,
         consecutive: verdict.consecutive,
+        worker: routing.worker,
         now: now(),
       });
       worktreeManager.markStatus(issue.identifier, "failed");
@@ -1458,6 +1580,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
         retryAt: usageVerdict.retryAt,
         evidence: usageLimit.evidence,
         consecutive: usageVerdict.consecutive,
+        worker: routing.worker,
         now: now(),
       });
       if (recorded?.retryAt !== usageVerdict.retryAt) {
@@ -1508,6 +1631,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
         retryAt: null,
         evidence: usageLimit.evidence,
         consecutive: usageVerdict.consecutive,
+        worker: routing.worker,
         now: now(),
       });
     } else {
@@ -1564,6 +1688,9 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
   // clean exit, so whatever usage-limit history it had is no longer
   // "consecutive". Nothing to forget in the overwhelmingly common case.
   usageLimitStore.clear(issue.identifier);
+  // MOV-360: a clean worker session is the clearest possible proof this
+  // worker's provider quota is available -- close its cooldown too.
+  workerCooldownStore.clear(routing.worker);
 
   const workflowAuth = resolveWorkflowEditAuthorization(issue);
   if (workflowAuth.authorized && workerMode !== "repair") {

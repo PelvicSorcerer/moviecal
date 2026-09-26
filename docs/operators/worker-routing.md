@@ -94,10 +94,21 @@ Moving up a tier requires citing the specific condition, either in the Linear is
 
 ## Overrides
 
-- `worker:claude` / `worker:codex` / `worker:any` — pins the worker binary. `worker:any` lets the dispatcher pick based on quota availability.
+- `worker:claude` / `worker:codex` — pins the worker binary. Pinned workers are never changed, including by the quota-pool cooldown below.
+- `worker:any` — currently uses Claude for fresh claims; a prior attempt retains its recorded worker. Temporary selection changes are tracked in [MOV-383](https://linear.app/moviecal/issue/MOV-383) and require the trial release gate in [MOV-384](https://linear.app/moviecal/issue/MOV-384). The no-label default is **not** `worker:any`: it is a pin to Claude, same as an explicit `worker:claude` label, per the routing table above.
 - `model:cheap` / `model:default` / `model:strong` — pins the model tier.
 
 A human-applied label always overrides the default routing table above. There is no silent fallback: if a requested worker or model is unavailable, the dispatcher stops and moves the issue to `Blocked` rather than substituting a different one.
+
+## Worker quota-pool cooldown (MOV-360)
+
+A worker binary's provider usage limit is a fact about that *worker*, not about any one issue. `docs/operators/local-execution.md` §Worktree lifecycle already covers the per-issue side of this (MOV-151/192/205's bounded one-retry-or-resume). This section is the dispatch-wide side: once a worker hits a recognized, reset-bearing provider usage limit, `dispatcher run` pauses dispatch of *every* issue that would use that same worker — pinned or `worker:any` — until the reported reset passes, so one exhausted quota window cannot burn through the rest of the `Ready for Agent` queue one issue at a time, the way it did on 2026-09-25 (`tools/dispatcher/src/worker-cooldown.mjs`).
+
+- **Scope.** Two independent cooldowns, one per worker (`claude`, `codex`), persisted at `~/.config/moviecal/worker-cooldowns.json` (mode 700, alongside the rest of `~/.config/moviecal/`) so a restart does not lose the wait. A cooldown on one worker never affects the other — a Codex-pinned issue keeps dispatching normally while Claude is cooling down, and symmetrically.
+- **`worker:any` binding.** Fresh issues retain the current Claude default, and wait if Claude is cooling down. The cooldown never switches them to Codex. A scheduled retry or retained-worktree resume keeps the provider recorded on its per-issue usage-limit record. Fresh-issue selection changes belong to MOV-383; the live trial remains held for explicit operator approval.
+- **After the reset.** Exactly one issue using the cooled worker is admitted as a probe once its reported reset has passed — preferring a due per-issue retry/resume for that worker over a fresh claim, when one is eligible in the same batch. A clean probe closes the cooldown; a new recognized limit refreshes it to the newly reported reset instead, even when the probing issue itself has exhausted its own one-retry allowance and escalates to `Needs Human Decision`.
+- **What it never does.** Gate reconciliation, parent-completion/priority-propagation passes, promotion, or read-only CI observation — all of those keep running during a cooldown. Move an unrelated issue to `Blocked` or `Needs Human Decision` — the cooldown is a dispatch gate, not an escalation. Mask or invent a reset: an unrecognized failure, a credential failure, or a usage-limit message whose reset cannot be trusted (unparseable, or further out than `usage-limit.mjs`'s `MAX_USAGE_LIMIT_DEFERRAL_MS`) never touches the cooldown either way.
+- **Operator visibility.** `dispatcher dry-run` prints each worker's live cooldown state (`open` / `COOLING until <reset>` / `PROBE OWED`) and, per issue, the worker it would actually use — including the unchanged default or an existing worker binding — without consuming a probe or writing anything. `dispatcher doctor` reports the same per-worker state as an informational check. Both are read-only views of the same store `dispatcher run` gates on.
 
 ## Subagents
 

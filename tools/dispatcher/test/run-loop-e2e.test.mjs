@@ -41,6 +41,7 @@ import { branchName, worktreeName } from "../src/preflight.mjs";
 import { admitRepair } from "../src/repair-policy.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
 import { UsageLimitStore } from "../src/usage-limit.mjs";
+import { WorkerCooldownStore } from "../src/worker-cooldown.mjs";
 import { CircuitBreakerStore } from "../src/circuit-breaker.mjs";
 import { CREDENTIAL_FAILURE } from "../src/credential-failure.mjs";
 import { NESTED_SANDBOX_CRASH } from "../src/failure-classification.mjs";
@@ -89,6 +90,7 @@ vi.mock("../src/config.mjs", async (importOriginal) => {
     // real worker-usage ledger.
     workerUsageStatePath: () => `${TMP_ROOT}/worker-usage.json`,
     repairLedgerStatePath: () => `${TMP_ROOT}/repair-ledger.json`,
+    workerCooldownStatePath: () => `${TMP_ROOT}/worker-cooldowns.json`,
     envLocalPath: () => `${TMP_ROOT}/env.local`,
     logRoot: () => `${TMP_ROOT}/logs`,
     linearAppEnvPath: () => `${TMP_ROOT}/linear-app.env`,
@@ -460,10 +462,16 @@ describe("dependency-gating -> promotion -> dispatch, one continuous run (MOV-19
     expect(plan.worktreePath).toBe(manager.state["MOV-RESUME"].path);
     expect(plan.retryAt).toBe(manager.state["MOV-RESUME"].usageLimitResumeAt);
 
-    // Cycle 2 -- before the reset. Silent, and claims nothing.
+    // Cycle 2 -- before the reset. Silent, and claims nothing. The real
+    // buildRunContext-wired workerCooldownStore (MOV-360) now gates this
+    // batch-wide, before dispatchIssue's own per-issue deferral check ever
+    // runs -- cycle 1's classification set *both* durable records, so this
+    // issue's own retry is still exactly as bounded as before, just reported
+    // under the more general worker-cooldown outcome every same-worker issue
+    // shares during the wait.
     const callsBeforeHold = linearClient.calls.length;
     const [held] = await runOnce([issue], ctx);
-    expect(held.outcome).toBe("deferred-usage-limit");
+    expect(held.outcome).toBe("deferred-worker-cooldown");
     expect(linearClient.calls.length).toBe(callsBeforeHold);
     expect(manager.createCalls).toHaveLength(1); // still just cycle 1's
     expect(manager.resumeCalls).toHaveLength(0);
@@ -498,6 +506,148 @@ describe("dependency-gating -> promotion -> dispatch, one continuous run (MOV-19
     // fourth cycle would be an ordinary dispatch again.
     expect(ctx.usageLimitStore.resumption("MOV-RESUME", ctx.now())).toBeNull();
     expect(ctx.usageLimitStore.get("MOV-RESUME")).toBeNull();
+  });
+});
+
+// MOV-360: pausing dispatch of a whole worker quota pool after a provider
+// usage limit, driven through the real buildRunContext -> runOnce seam (not
+// hand-assembled fakes) -- the acceptance criteria this issue names for the
+// integration layer: exact worker spawn/worktree counts across one batch,
+// Codex-pinned progress and fresh worker:any deferral during a Claude cooldown, the
+// original worker preserved on a deferred worker:any retry across a restart,
+// due-retry probe priority, and no same-batch cascade after the refusal.
+describe("worker-quota-pool cooldown across the real dispatcher wiring (MOV-360)", () => {
+  beforeEach(() => {
+    fs.rmSync(TMP_ROOT, { recursive: true, force: true });
+  });
+
+  function makeIssue({ id, identifier, title, labels = [] }) {
+    return {
+      id,
+      identifier,
+      title,
+      description: READY_SECTIONS,
+      url: `https://linear.app/moviecal/issue/${identifier}`,
+      project: null,
+      labels: ["execution:mac", ...labels],
+      delegate: DELEGATE,
+      blockedByIds: [],
+    };
+  }
+
+  function writeUsageLimitLog(logRoot, name, resetOffsetMs) {
+    const logDir = path.join(logRoot, name);
+    fs.mkdirSync(logDir, { recursive: true });
+    const resetEpochSeconds = Math.floor((Date.now() + resetOffsetMs) / 1000);
+    fs.writeFileSync(path.join(logDir, "stdout.log"), `Claude usage limit reached · reset|${resetEpochSeconds}\n`);
+    return logDir;
+  }
+
+  function writeCleanLog(logRoot, name) {
+    const logDir = path.join(logRoot, name);
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.writeFileSync(path.join(logDir, "stdout.log"), "\n");
+    return logDir;
+  }
+
+  it("blocks a second same-batch claude issue after the first hits a limit, while codex-pinned work progresses and fresh worker:any waits", async () => {
+    const issueC1 = makeIssue({ id: "id-c1", identifier: "MOV-C1", title: "First claude issue" });
+    const issueC2 = makeIssue({ id: "id-c2", identifier: "MOV-C2", title: "Second claude issue" });
+    const issueCodex = makeIssue({ id: "id-cx", identifier: "MOV-CX", title: "A codex issue", labels: ["worker:codex"] });
+    const issueAny = makeIssue({ id: "id-any", identifier: "MOV-ANY", title: "A flexible issue", labels: ["worker:any"] });
+    const linearClient = fakeLinearClient({
+      "id-c1": issueC1,
+      "id-c2": issueC2,
+      "id-cx": issueCodex,
+      "id-any": issueAny,
+    });
+    const issues = [issueC1, issueC2, issueCodex, issueAny];
+    const ctx = {
+      ...(await buildRunContext(linearClient, TEAM_KEY, issues)),
+      ...fakeLeaves({ worktreeManager: statefulWorktreeRegistry() }),
+    };
+    const manager = ctx.worktreeManager;
+
+    const c1LogDir = writeUsageLimitLog(ctx.logRoot, worktreeName(issueC1.identifier, issueC1.title), 3600_000);
+    const c2LogDir = writeCleanLog(ctx.logRoot, worktreeName(issueC2.identifier, issueC2.title));
+    const cxLogDir = writeCleanLog(ctx.logRoot, worktreeName(issueCodex.identifier, issueCodex.title));
+    const anyLogDir = writeCleanLog(ctx.logRoot, worktreeName(issueAny.identifier, issueAny.title));
+    ctx.spawnWorkerFn = vi.fn(async ({ cwd }) => {
+      if (cwd.includes("MOV-C1")) return { exitCode: 1, logDir: c1LogDir };
+      if (cwd.includes("MOV-C2")) return { exitCode: 0, logDir: c2LogDir };
+      if (cwd.includes("MOV-CX")) return { exitCode: 0, logDir: cxLogDir };
+      return { exitCode: 0, logDir: anyLogDir };
+    });
+
+    const [c1Result, c2Result, cxResult, anyResult] = await runOnce(issues, ctx);
+
+    expect(c1Result.outcome).toBe("usage-limit-deferred");
+    // The whole point: MOV-C2 (same worker, same batch) is stopped before it
+    // ever creates a worktree or spawns a worker -- not escalated, not
+    // dispatched, no Linear write of its own.
+    expect(c2Result).toMatchObject({ issue: "MOV-C2", outcome: "deferred-worker-cooldown" });
+    expect(linearClient.calls.some((c) => c.issueId === "id-c2")).toBe(false);
+    // Codex-pinned work progresses independently; worker:any keeps Claude.
+    expect(cxResult).toMatchObject({ issue: "MOV-CX", outcome: "in-review" });
+    expect(anyResult).toMatchObject({ issue: "MOV-ANY", outcome: "deferred-worker-cooldown" });
+    expect(linearClient.calls.some((c) => c.issueId === "id-any")).toBe(false);
+
+    // Only C1 and the explicitly pinned Codex issue create worktrees.
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(2);
+    expect(manager.createCalls.map((c) => c.id)).toEqual(["MOV-C1", "MOV-CX"]);
+    expect(manager.createCalls.find((c) => c.id === "MOV-CX").worker).toBe("codex");
+
+    // The cooldown this batch produced is real, persisted state -- a fresh
+    // store over the same on-disk path (a restarted daemon) still sees it.
+    const restarted = new WorkerCooldownStore(`${TMP_ROOT}/worker-cooldowns.json`);
+    expect(restarted.state("claude", new Date()).cooling).toBe(true);
+    expect(restarted.state("codex", new Date()).cooling).toBe(false);
+  });
+
+  // Acceptance: "That issue's scheduled retry or retained-worktree resume
+  // uses its original worker and branch. After reset, one eligible attempt
+  // for that worker is admitted first as a probe." Run as one continuous
+  // sequence of real poll cycles -- deferral, a restart, the post-reset
+  // probe -- against the same on-disk state, because the property worth
+  // proving is that the *worker binding* survives the restart intact.
+  it("keeps a worker:any issue's deferred retry bound to the worker its first attempt used, across a restart and into the post-reset probe", async () => {
+    const issue = makeIssue({ id: "id-any2", identifier: "MOV-ANY2", title: "Binds to its first worker", labels: ["worker:any"] });
+    const linearClient = fakeLinearClient({ "id-any2": issue });
+    let ctx = {
+      ...(await buildRunContext(linearClient, TEAM_KEY, [issue])),
+      ...fakeLeaves({ worktreeManager: statefulWorktreeRegistry() }),
+    };
+
+    const name = worktreeName(issue.identifier, issue.title);
+    const logDir = writeUsageLimitLog(ctx.logRoot, name, 3600_000);
+    ctx.spawnWorkerFn = vi.fn(async () => ({ exitCode: 1, logDir }));
+
+    // Cycle 1: a fresh worker:any claim with no cooldown anywhere picks the
+    // rubric default, Claude, and immediately hits a limit.
+    const [deferred] = await runOnce([issue], ctx);
+    expect(deferred.outcome).toBe("usage-limit-deferred");
+    expect(ctx.usageLimitStore.get("MOV-ANY2")).toMatchObject({ worker: "claude" });
+    expect(new WorkerCooldownStore(`${TMP_ROOT}/worker-cooldowns.json`).state("claude", new Date()).cooling).toBe(true);
+
+    // Restart: brand-new store instances over the same on-disk paths, exactly
+    // as buildRunContext would construct for a freshly launched daemon.
+    ctx = {
+      ...(await buildRunContext(linearClient, TEAM_KEY, [issue])),
+      ...fakeLeaves({ worktreeManager: statefulWorktreeRegistry() }),
+    };
+    expect(ctx.usageLimitStore.get("MOV-ANY2").worker).toBe("claude");
+
+    // Cycle 2, after the reset: this is the single admitted post-reset probe.
+    // If the worker were silently re-picked here, it could just as easily
+    // land on Codex -- the assertion below is what proves it does not.
+    ctx.now = () => new Date(Date.now() + 2 * 3600_000);
+    ctx.spawnWorkerFn = vi.fn(async () => ({ exitCode: 0, logDir }));
+
+    const [probed] = await runOnce([issue], ctx);
+
+    expect(probed.outcome).toBe("in-review");
+    expect(ctx.worktreeManager.createCalls).toEqual([expect.objectContaining({ id: "MOV-ANY2", worker: "claude" })]);
+    expect(new WorkerCooldownStore(`${TMP_ROOT}/worker-cooldowns.json`).state("claude", ctx.now()).cooling).toBe(false);
   });
 });
 

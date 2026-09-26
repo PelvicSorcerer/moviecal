@@ -71,6 +71,11 @@ export function usageLimitStatePath() {
   return path.join(configDir(), "usage-limits.json");
 }
 
+/** MOV-360: persisted per-worker (quota-pool) dispatch cooldown record (worker-cooldown.mjs). */
+export function workerCooldownStatePath() {
+  return path.join(configDir(), "worker-cooldowns.json");
+}
+
 /** Numeric, redacted summaries of completed worker attempts (MOV-363). */
 export function workerUsageStatePath() {
   return path.join(configDir(), "worker-usage.json");
