@@ -6,6 +6,7 @@ import { observePullRequest } from "../src/pr-reconcile.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
 import { previewRepairPass, runRepairPass } from "../src/repair-run.mjs";
 import { captureWorkerUsage, WorkerUsageStore } from "../src/worker-usage.mjs";
+import { CLAUDE_WORKER_TOOLS, workerInvocation } from "../src/worker-routing.mjs";
 import { CODEX_SINGLE_TURN } from "./usage-fixtures.mjs";
 
 const REPO = "owner/repo";
@@ -118,6 +119,31 @@ describe("runRepairPass (MOV-190)", () => {
       inputTokens: 24763, cacheReadTokens: 24448, outputTokens: 122, costUsd: null, exitOutcome: "exited-0", origin: "dispatcher",
     });
     expect(usage.attemptId).toEqual(expect.any(String));
+  });
+
+  it("gives a Claude repair worker the explicit tool set and warns on a mismatched init event without stopping (MOV-386)", async () => {
+    const ctx = context({ entry: { ...ENTRY, worker: "claude" } });
+    ctx.workerInvocationFn = workerInvocation;
+    ctx.logger = { error: vi.fn(), warn: vi.fn() };
+    ctx.spawnWorkerFn = vi.fn(async ({ onWorkerInit }) => {
+      onWorkerInit({ type: "system", subtype: "init", permissionMode: "acceptEdits", tools: [...CLAUDE_WORKER_TOOLS, "Workflow"] });
+      return { exitCode: 0 };
+    });
+
+    const [result] = await runRepairPass(ctx);
+
+    expect(result.outcome).toBe("repaired");
+    const { invocation } = ctx.spawnWorkerFn.mock.calls[0][0];
+    expect(invocation.args.slice(invocation.args.indexOf("--permission-mode"), invocation.args.indexOf("--permission-mode") + 8)).toEqual([
+      "--permission-mode", "default", "--permission-prompts", "none", "--tools", CLAUDE_WORKER_TOOLS.join(","), "--allowedTools", CLAUDE_WORKER_TOOLS.join(","),
+    ]);
+    expect(ctx.logger.warn).toHaveBeenCalledWith(expect.stringMatching(/Claude worker for MOV-190 repair did not start as configured — permissionMode is "acceptEdits".*tools outside the allowlist: Workflow/));
+  });
+
+  it("does not attach the Claude startup check to a Codex repair worker (MOV-386)", async () => {
+    const ctx = context();
+    await runRepairPass(ctx);
+    expect(ctx.spawnWorkerFn.mock.calls[0][0]).not.toHaveProperty("onWorkerInit");
   });
 
   it("re-runs an admitted transient failure without starting a worker or publishing code", async () => {

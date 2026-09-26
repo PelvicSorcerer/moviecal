@@ -40,6 +40,7 @@ import { DEFAULT_REPAIR_BUDGETS } from "./ci-outcomes.mjs";
 import { admitRepair, guardRepairTarget } from "./repair-policy.mjs";
 import { repairJobKey } from "./repair-ledger.mjs";
 import { workerInvocation } from "./worker-routing.mjs";
+import { evaluateClaudeInit, reportClaudeStartupCheck } from "./worker-startup-check.mjs";
 import { formatUsageLine, usageContextFromInvocation } from "./worker-usage.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
@@ -489,6 +490,10 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
       signal: abortController.signal,
       securityContext: { mode: REPAIR_WORKER_MODE },
       trial: entry.trial ?? null,
+      // MOV-386: the same startup check as an implementation worker.
+      ...((entry.worker || "claude") === "claude"
+        ? { onWorkerInit: (event) => reportClaudeStartupCheck(evaluateClaudeInit(event), { label: `${entry.id} repair`, logger }) }
+        : {}),
     });
     // The race below owns this rejection; this no-op handler only stops Node
     // reporting the loser of the race as an unhandled rejection.

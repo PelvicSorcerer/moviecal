@@ -56,6 +56,21 @@ export const CLAUDE_WORKER_PERMISSION_DENIES = [
   "Edit(.codex/**)",
 ];
 
+// MOV-386: the complete built-in tool set a dispatched Claude worker (and a
+// repair worker, which shares workerInvocation()) may see. It is passed both
+// as the available set (`--tools`, so nothing else -- Workflow, Cron*,
+// ScheduleWakeup, RemoteTrigger, SendMessage, PushNotification, WebFetch,
+// WebSearch, Enter/ExitWorktree, DesignSync, Monitor -- is loaded at all) and
+// as the permission allowlist (`--allowedTools`). The deny list above still
+// applies on top: Claude evaluates deny before allow, so `Bash(git*)` refuses
+// a Git command even though `Bash` is allowed. `Task` stays so a worker can
+// delegate a broad search to a built-in subagent, which inherits this
+// session's tool set, permission mode, and denies.
+export const CLAUDE_WORKER_TOOLS = Object.freeze(["Read", "Edit", "Write", "Glob", "Grep", "Bash", "NotebookEdit", "Task"]);
+
+/** The only permission mode a headless Claude worker may run in (see workerInvocation()). */
+export const CLAUDE_WORKER_PERMISSION_MODE = "default";
+
 export const CLAUDE_WORKER_SETTINGS = {
   permissions: { deny: CLAUDE_WORKER_PERMISSION_DENIES },
   // Claude's own inner sandbox cannot nest within worker-guard.mjs's
@@ -188,23 +203,16 @@ export function workerProbeWinners(issues, routes, cooldowns, { eligible, due })
 // (worker-spawn.mjs pipes it), since a stdin brief works identically whether
 // the worker binary reads from a real TTY-less pipe or a piped-in file.
 //
-// Claude's `-p` (print/non-interactive) mode starts in Manual permission mode
-// on every plan -- with no explicit mode set, a tool call that would need
-// approval genuinely blocks waiting for an answer that can never come in a
-// headless subprocess with no TTY (verified directly against the CLI version
-// installed on this Mac, 2.1.208). `--permission-mode dontAsk` is the fix:
-// it auto-denies anything not already covered by permissions.allow in
-// the base project allow list, the worker-only deny list below, or the
-// built-in read-only command set, instead of
-// prompting -- so an unmatched call fails cleanly rather than hanging. (A
-// newer, more precise combination -- `acceptEdits` plus `--permission-prompts
-// none` -- requires Claude Code v2.1.259+; the installed version rejects
-// `--permission-prompts` as an unknown option, so this uses the
-// version-compatible single flag instead.) Permission rules (including the
-// deny list in CLAUDE_WORKER_SETTINGS) are enforced by Claude Code's own
-// harness code, not by the model choosing to comply -- see
-// docs/operators/local-execution.md §Security model for what that boundary
-// does and does not cover.
+// Claude's headless workers must never wait for a person to approve a call.
+// On installed Claude Code 2.1.282, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 forces
+// default mode unconditionally, even with --allowedTools. Keep the credential
+// scrub and request default explicitly; --permission-prompts none (>=2.1.259)
+// automatically denies anything that would otherwise prompt. Older CLIs fail
+// on the unsupported flag; there is no fallback that can wait for approval.
+// --tools restricts availability and --allowedTools preapproves the same set;
+// the worker-only denies and outer OS guard remain authoritative. The startup
+// event confirms mode and tools; it does not report permission-prompts, whose
+// value is preserved in the manifest and proven by a live unapproved-call probe.
 /**
  * @param {"claude"|"codex"} worker
  * @param {"cheap"|"default"|"strong"} model
@@ -214,8 +222,9 @@ export function workerProbeWinners(issues, routes, cooldowns, { eligible, due })
  *   option). Claude only -- Codex has no equivalent interactive protocol, so
  *   `opts.steering` is silently ignored for it; the returned invocation is
  *   identical either way. Every existing safety flag
- *   (`--permission-mode dontAsk`, `--safe-mode`, `--strict-mcp-config`, the
- *   sandbox-disabling `--settings`) is unaffected -- steering only changes
+ *   (`--permission-mode default`, `--permission-prompts none`,
+ *   `--tools`/`--allowedTools`, `--safe-mode`,
+ *   `--strict-mcp-config`, the sandbox-disabling `--settings`) is unaffected -- steering only changes
  *   how additional conversational turns reach the process, never what the
  *   process is allowed to do.
  */
@@ -233,7 +242,15 @@ export function workerInvocation(worker, model, { steering = false } = {}) {
         modelId,
         ...(effort ? ["--effort", effort] : []),
         "--permission-mode",
-        "dontAsk",
+        CLAUDE_WORKER_PERMISSION_MODE,
+        "--permission-prompts",
+        "none",
+        // Each list is one comma-separated value so these variadic options
+        // can never absorb a following argument.
+        "--tools",
+        CLAUDE_WORKER_TOOLS.join(","),
+        "--allowedTools",
+        CLAUDE_WORKER_TOOLS.join(","),
         "--setting-sources",
         "project",
         "--safe-mode",
