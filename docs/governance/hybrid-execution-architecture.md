@@ -43,7 +43,12 @@ cloud execution part of today's release path.
 
 All development-system projects belong to the cross-cutting initiative
 **Automate moviecal Development and Delivery**. They do not belong to a product
-initiative merely because they support product work.
+initiative merely because they support product work. Product work is grouped
+by the finite outcome initiatives **Deliver Shared Watchlists across Web and
+iOS** and **First iOS TestFlight beta**, which may share projects (their rollups
+overlap by design); the retired perpetual Web App / iOS App initiatives and the
+empty Calendar Feed project are not part of the active topology. See
+`docs/governance/linear-information-architecture.md` §Initiatives.
 
 | Project | State | Purpose |
 |---|---|---|
@@ -134,9 +139,9 @@ consequential mutation so a mid-flight change becomes a safe stop/no-op.
 Current project defaults are deliberately local-first:
 
 - **Mac:** Shared Watchlists Core & API, Web Shared Watchlists, iOS Shared
-  Watchlists, Calendar Feed, Platform & Infrastructure, iOS Companion App,
-  Autonomous local-agent delivery, and any Xcode, simulator,
-  self-hosted-runner, or local-secret work.
+  Watchlists, iOS Companion App, Documentation aligned with shipped product,
+  Autonomous local-agent delivery, completed Platform & Infrastructure history,
+  and any Xcode, simulator, self-hosted-runner, or local-secret work.
 - **Cloud:** Deferred Linear cloud execution option only. Its implementation
   issues stay in `Icebox` until authorized.
 - **None:** bounded coordination issues labeled `type:coordination`; these

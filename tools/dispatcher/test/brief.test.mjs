@@ -1,5 +1,44 @@
 import { describe, it, expect } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
 import { generateBrief, generateRepairBrief, generateRepairEvidence } from "../src/brief.mjs";
+
+function expectIterativeVerification(brief) {
+  expect(brief).toContain("## Check your work while iterating");
+  expect(brief).toContain("npx vitest --config vitest.unit.config.ts --run <path-or-pattern>");
+  expect(brief).toContain("npx vitest --config vitest.integration.config.ts --run <path-or-pattern>");
+  expect(brief).toContain("npm run typecheck");
+  expect(brief).toContain("npm run lint");
+  expect(brief).toContain("tools/dispatcher/test/...");
+  expect(brief).toMatch(/literal `npm run verify` once/);
+  expect(brief).toMatch(/If it fails, fix the failure using focused checks, then run `npm run verify` again/);
+  expect(brief).toMatch(/any failed run disables PR autonomy for this attempt/);
+  expect(brief).toMatch(/Run verification synchronously/);
+  expect(brief).toMatch(/Prepare dependencies before verification/);
+  expect(brief).toMatch(/exact command, verbatim/);
+}
+
+it("keeps both briefs' focused commands aligned with package scripts and Vitest config files", () => {
+  const packageJson = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8"));
+  const issue = { identifier: "MOV-42", title: "Fix", url: "https://linear.app/moviecal/issue/MOV-42" };
+  const briefs = [
+    generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude" }),
+    generateRepairBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", prNumber: 42 }),
+  ];
+
+  for (const brief of briefs) {
+    expectIterativeVerification(brief);
+    const configs = [...brief.matchAll(/npx vitest --config (\S+) --run <path-or-pattern>/g)].map((match) => match[1]);
+    expect(configs).toEqual(["vitest.unit.config.ts", "vitest.integration.config.ts"]);
+    for (const [index, lane] of ["lane:unit", "lane:integration"].entries()) {
+      expect(existsSync(new URL(`../../../${configs[index]}`, import.meta.url))).toBe(true);
+      expect(packageJson.scripts[lane]).toBe(`vitest --config ${configs[index]} --run`);
+    }
+    for (const script of ["typecheck", "lint", "verify"]) {
+      expect(brief).toContain(`npm run ${script}`);
+      expect(packageJson.scripts[script]).toEqual(expect.any(String));
+    }
+  }
+});
 
 describe("generateBrief", () => {
   const issue = {
@@ -9,6 +48,19 @@ describe("generateBrief", () => {
     description: "Do the specific fix described here.",
     labels: ["area:calendar", "risk:low"],
   };
+
+  it("includes concise exploration guidance and optional redacted path metadata", () => {
+    const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", repositoryContext: {
+      likelyStartingPoints: [{ path: "src/long.ts", lines: 401, readByRange: true }],
+    } });
+    expect(brief).toContain("## Explore efficiently");
+    expect(brief).toContain("`Grep`/`Glob`");
+    expect(brief).toContain("`offset`/`limit`");
+    expect(brief).toContain("`explore` subagent");
+    expect(brief).toContain("`src/long.ts` — 401 lines (read by range)");
+    expect(brief).not.toContain("file contents");
+    expect(generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude" })).not.toContain("Likely starting points");
+  });
 
   it("includes the issue identifier, title, and Linear URL", () => {
     const brief = generateBrief(issue, { branch: "agent/MOV-42-fix-the-thing", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
@@ -218,6 +270,15 @@ describe("generateRepairBrief (MOV-188)", () => {
     trigger: "ci",
     reason: "grouped code/test failures on the current head",
   };
+
+  it("carries the same exploration guidance and optional starting points", () => {
+    const brief = generateRepairBrief(issue, { ...options, repositoryContext: {
+      likelyStartingPoints: [{ path: "src/long.ts", lines: 401, readByRange: true }],
+    } });
+    expect(brief).toContain("## Explore efficiently");
+    expect(brief).toContain("`src/long.ts` — 401 lines (read by range)");
+    expect(generateRepairBrief(issue, options)).not.toContain("Likely starting points");
+  });
 
   it("names the pull request, branch, head SHA, and attempt bound", () => {
     const brief = generateRepairBrief(issue, options);

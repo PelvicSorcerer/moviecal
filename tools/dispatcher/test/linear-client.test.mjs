@@ -45,7 +45,7 @@ describe("LinearClient", () => {
             title: "Do the thing",
             description: "Full description text.",
             url: "https://linear.app/moviecal/issue/MOV-126",
-            project: { name: "Calendar Feed" },
+            project: { name: "Web Shared Watchlists" },
             labels: { nodes: [{ name: "area:calendar" }, { name: "worker:codex" }] },
             relations: {
               nodes: [
@@ -74,7 +74,7 @@ describe("LinearClient", () => {
         title: "Do the thing",
         description: "Full description text.",
         url: "https://linear.app/moviecal/issue/MOV-126",
-        project: "Calendar Feed",
+        project: "Web Shared Watchlists",
         delegate: null,
         assignee: null,
         labels: ["area:calendar", "worker:codex"],

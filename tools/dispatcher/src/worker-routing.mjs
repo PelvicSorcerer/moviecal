@@ -4,6 +4,8 @@
 // Pure functions only — no I/O — so this is fully unit-testable without a
 // live Linear connection or a real worktree.
 
+import { turnBudgetForTier } from "./turn-budget.mjs";
+
 export const WORKERS = ["claude", "codex"];
 export const MODEL_TIERS = ["cheap", "default", "strong"];
 
@@ -115,71 +117,12 @@ export function resolveRouting(issue) {
   return { worker, model, ok: true, reason: null, upgradeConditions };
 }
 
-/**
- * MOV-360: pick which worker a *fresh* `worker:any` claim should try, given
- * which of the two workers is open right now.
- *
- * Defaults to Claude, matching the rubric's own default worker (see
- * `resolveRouting` above and docs/operators/worker-routing.md); falls back to
- * Codex only when Claude is unavailable, and the symmetric case when Codex is
- * the preferred worker. Returns `null` when neither is open right now -- the
- * caller must leave the issue queued without claiming a worker rather than
- * picking one anyway.
- *
- * Pure: `cooldownOpen(worker)` is supplied by the caller (a live
- * WorkerCooldownStore read in run-loop.mjs, a batch-start snapshot, or a
- * dry-run snapshot) so this stays unit-testable with plain booleans.
- */
-export function selectAvailableWorker({ cooldownOpen, preferred = "claude" } = {}) {
-  if (typeof cooldownOpen !== "function") throw new Error("cooldownOpen oracle is required");
-  const other = preferred === "claude" ? "codex" : "claude";
-  if (cooldownOpen(preferred)) return preferred;
-  if (cooldownOpen(other)) return other;
-  return null;
-}
-
-/**
- * MOV-360: resolve the worker a specific dispatch attempt for `issue` must
- * use, given any worker this issue's own attempt is already bound to and the
- * current quota-pool cooldown state.
- *
- * - A pinned issue (`worker:claude`/`worker:codex`, or the no-label rubric
- *   default) always uses that worker. Pinned workers are never changed by
- *   cooldown -- this function does not even consult `cooldownOpen` for one.
- * - A `worker:any` issue that has already begun an attempt -- `boundWorker`
- *   is the worker recorded on its own usage-limit record from that prior
- *   dispatch (`UsageLimitStore.get(id)?.worker`) -- keeps using that worker
- *   for its scheduled retry or MOV-205 retained-worktree resume. Never
- *   silently switched, even if the other worker is open and this one is not.
- * - A fresh `worker:any` issue (no binding yet) picks an available worker via
- *   `selectAvailableWorker`. `available: false` means neither worker pool is
- *   open right now; the caller must leave the issue queued without a claim
- *   rather than dispatch it on a worker it never actually picked.
- *
- * Returns everything `resolveRouting` returns (`model`, `ok`, `reason`,
- * `upgradeConditions`) plus `isAny`/`available`/`bound`, so a caller that only
- * cares about the pinned case can keep using `resolveRouting` directly (as
- * `resolveRouting`'s own worker:any-defaults-to-claude behavior documents --
- * see worker-routing.test.mjs -- this function is what actually implements
- * the dispatcher's quota-based pick that default stands in for).
- */
-export function resolveDispatchWorker(issue, { boundWorker = null, cooldownOpen = () => true } = {}) {
+/** Preserve a worker:any attempt's provider binding; fresh claims retain Claude. */
+export function resolveDispatchWorker(issue, { boundWorker = null } = {}) {
   const routing = resolveRouting(issue);
-  if (!routing.ok) return { ...routing, isAny: false, available: true, bound: false };
-
-  const { worker: overrideWorker } = parseRoutingLabels(issue.labels || []);
-  const isAny = overrideWorker === "any";
-  if (!isAny) {
-    return { ...routing, isAny: false, available: true, bound: false };
-  }
-  if (boundWorker === "claude" || boundWorker === "codex") {
-    return { ...routing, worker: boundWorker, isAny: true, available: true, bound: true };
-  }
-  const selected = selectAvailableWorker({ cooldownOpen, preferred: "claude" });
-  if (!selected) {
-    return { ...routing, worker: null, isAny: true, available: false, bound: false };
-  }
-  return { ...routing, worker: selected, isAny: true, available: true, bound: false };
+  const isAny = parseRoutingLabels(issue.labels || []).worker === "any";
+  const bound = routing.ok && isAny && (boundWorker === "claude" || boundWorker === "codex");
+  return { ...routing, worker: bound ? boundWorker : routing.worker, isAny, available: true, bound };
 }
 
 // Both workers read their brief from stdin rather than a file path argument
@@ -218,13 +161,18 @@ export function resolveDispatchWorker(issue, { boundWorker = null, cooldownOpen 
  *   process is allowed to do.
  */
 export function workerInvocation(worker, model, { steering = false } = {}) {
+  turnBudgetForTier(model); // validate env overrides on every routing surface, including dry-run
   if (worker === "claude") {
+    const modelId = modelIdForTier("claude", model);
+    const effort = claudeEffortForTier(model, modelId);
     return {
       command: "claude",
+      reasoningEffort: effort, // MOV-363 usage record can persist the effective flag value.
       args: [
         "-p",
         "--model",
-        modelIdForTier("claude", model),
+        modelId,
+        ...(effort ? ["--effort", effort] : []),
         "--permission-mode",
         "dontAsk",
         "--setting-sources",
@@ -271,10 +219,30 @@ export function workerInvocation(worker, model, { steering = false } = {}) {
       `model_reasoning_effort=${codexReasoningEffortForTier(model)}`,
     ];
     const codexModel = codexModelIdForTier(model);
-    if (codexModel) args.push("--model", codexModel);
+    args.push("--model", codexModel);
     return { command: "codex", args };
   }
   throw new Error(`unknown worker: ${worker}`);
+}
+
+/** Haiku 4.5 rejects the effort parameter, including dated model IDs. */
+export function claudeModelDoesNotSupportEffort(modelId) {
+  return /^claude-haiku-4-5(?:$|-)/.test(modelId);
+}
+
+/** Return the effective CLI effort, or null when the flag must be omitted. */
+export function claudeEffortForTier(tier, modelId = modelIdForTier("claude", tier)) {
+  const table = {
+    cheap: process.env.MOVIECAL_CLAUDE_EFFORT_CHEAP ?? "none",
+    default: process.env.MOVIECAL_CLAUDE_EFFORT_DEFAULT ?? "medium",
+    strong: process.env.MOVIECAL_CLAUDE_EFFORT_STRONG ?? "high",
+  };
+  if (!(tier in table)) throw new Error(`unknown model tier: ${tier}`);
+  const effort = table[tier];
+  if (!["none", "low", "medium", "high", "xhigh", "max"].includes(effort)) {
+    throw new Error(`invalid Claude effort ${JSON.stringify(effort)} for ${tier} tier; expected none, low, medium, high, xhigh, or max`);
+  }
+  return effort === "none" || claudeModelDoesNotSupportEffort(modelId) ? null : effort;
 }
 
 /**
@@ -284,11 +252,11 @@ export function workerInvocation(worker, model, { steering = false } = {}) {
  * needs updating when the model catalog changes.
  */
 export function modelIdForTier(worker, tier) {
-  if (worker !== "claude") return null; // codex resolves its own default
+  if (worker !== "claude") return null; // Codex uses codexModelIdForTier().
   const table = {
     cheap: process.env.MOVIECAL_MODEL_CHEAP || "claude-haiku-4-5",
     default: process.env.MOVIECAL_MODEL_DEFAULT || "claude-sonnet-5",
-    strong: process.env.MOVIECAL_MODEL_STRONG || "claude-opus-5",
+    strong: process.env.MOVIECAL_MODEL_STRONG || "claude-opus-5-5",
   };
   const id = table[tier];
   if (!id) throw new Error(`unknown model tier: ${tier}`);
@@ -311,16 +279,15 @@ export function codexReasoningEffortForTier(tier) {
 }
 
 /**
- * Resolve a model tier to an explicit Codex `--model` id, if one has been
- * configured. No default: with no env override, this returns null and
- * workerInvocation omits `--model` entirely, falling through to whatever
- * `~/.codex/config.toml` holds.
+ * Resolve a model tier to an explicit Codex `--model` ID. Per-tier environment
+ * overrides take precedence over these defaults; --ignore-user-config means
+ * worker invocations never rely on a personal config.toml model.
  */
 export function codexModelIdForTier(tier) {
   const table = {
-    cheap: process.env.MOVIECAL_CODEX_MODEL_CHEAP || null,
-    default: process.env.MOVIECAL_CODEX_MODEL_DEFAULT || null,
-    strong: process.env.MOVIECAL_CODEX_MODEL_STRONG || null,
+    cheap: process.env.MOVIECAL_CODEX_MODEL_CHEAP || "gpt-6-luna",
+    default: process.env.MOVIECAL_CODEX_MODEL_DEFAULT || "gpt-6-sol",
+    strong: process.env.MOVIECAL_CODEX_MODEL_STRONG || "gpt-6-sol",
   };
   if (!(tier in table)) throw new Error(`unknown model tier: ${tier}`);
   return table[tier];

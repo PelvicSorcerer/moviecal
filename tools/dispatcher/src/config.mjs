@@ -69,6 +69,11 @@ export function workerCooldownStatePath() {
   return path.join(configDir(), "worker-cooldowns.json");
 }
 
+/** Numeric, redacted summaries of completed worker attempts (MOV-363). */
+export function workerUsageStatePath() {
+  return path.join(configDir(), "worker-usage.json");
+}
+
 /**
  * MOV-188: the durable record of what automatic repair has already tried
  * (repair-ledger.mjs). Not a credential — but it *is* what makes the repair

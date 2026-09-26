@@ -11,8 +11,18 @@
 // provide (MOV-244 hit this with a quoted `\|` inside a `grep` pattern).
 const ESCAPED_OPERATOR_PLACEHOLDERS = { ";": "__escaped_semicolon__", "|": "__escaped_pipe__", "&": "__escaped_amp__" };
 
+// Quoted operators are literal arguments (for example grep -E "a|b"),
+// not shell boundaries. Keep substitutions and shell-wrapper bodies visible
+// to the conservative audit rather than trying to parse executable shell code.
+function protectQuotedOperators(text) {
+  if (/\$\(|`/.test(text) || /\b(?:sh|bash|zsh)\s+-c\b/.test(text)) return text;
+  return text.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, (quoted) =>
+    quoted.replace(/[;|&]/g, (operator) => ESCAPED_OPERATOR_PLACEHOLDERS[operator]),
+  );
+}
+
 function canonicalize(text) {
-  return String(text || "")
+  return protectQuotedOperators(String(text || ""))
     // An escaped shell operator is literal data, not a command separator. Keep
     // it distinct while normalizing so a regex such as `foo\\|git` cannot be
     // mistaken for a pipeline that invokes Git.
@@ -144,17 +154,18 @@ const HUMAN_DECISION_PATTERNS = [
 /** Classify a structured tool command or file path. */
 export function classifyAction(text, { workerMode = "implementation" } = {}) {
   const normalized = canonicalize(text);
+  const hasSubstitution = /\$\(|`/.test(String(text || ""));
   for (const { re, test, reason, category } of COMMAND_RULES) {
     if ((test ? test(normalized) : re.test(normalized))) return { verdict: "hard-deny", reason, category };
   }
   for (const { re, reason, category } of PATH_RULES) {
-    if (re.test(normalized) && !isReadOnlyProtectedPathInspection(normalized, re)) {
+    if (re.test(normalized) && (hasSubstitution || !isReadOnlyProtectedPathInspection(normalized, re))) {
       return { verdict: "hard-deny", reason, category };
     }
   }
   if (workerMode === "repair") {
     for (const { re, reason } of REPAIR_ONLY_RULES) {
-      if (re.test(normalized) && !isReadOnlyRepairInspection(normalized, re)) {
+      if (re.test(normalized) && (hasSubstitution || !isReadOnlyRepairInspection(normalized, re))) {
         return { verdict: "hard-deny", reason, category: "safety" };
       }
     }

@@ -3,13 +3,13 @@ import {
   parseRoutingLabels,
   resolveRouting,
   resolveDispatchWorker,
-  selectAvailableWorker,
   workerInvocation,
   CLAUDE_WORKER_PERMISSION_DENIES,
   CLAUDE_WORKER_SETTINGS,
   modelIdForTier,
   codexReasoningEffortForTier,
   codexModelIdForTier,
+  claudeEffortForTier,
 } from "../src/worker-routing.mjs";
 
 const CODEX_ENV_VARS = [
@@ -54,7 +54,7 @@ describe("resolveRouting", () => {
 
   it("treats worker:any as not pinning claude", () => {
     const result = resolveRouting({ labels: ["worker:any"] });
-    expect(result.worker).toBe("claude"); // dispatcher's own quota-based pick, defaulting to claude here
+    expect(result.worker).toBe("claude"); // fresh worker:any defaults to Claude
   });
 
   it("rejects model:strong with no cited upgrade condition", () => {
@@ -72,28 +72,6 @@ describe("resolveRouting", () => {
   it("does not require an upgrade condition for model:cheap", () => {
     const result = resolveRouting({ labels: ["model:cheap"] });
     expect(result.ok).toBe(true);
-  });
-});
-
-describe("selectAvailableWorker (MOV-360)", () => {
-  it("prefers claude when claude is open", () => {
-    expect(selectAvailableWorker({ cooldownOpen: () => true })).toBe("claude");
-  });
-
-  it("falls back to codex when claude is cooling and codex is open", () => {
-    expect(selectAvailableWorker({ cooldownOpen: (w) => w !== "claude" })).toBe("codex");
-  });
-
-  it("falls back to claude when codex is the preferred worker and codex is cooling (symmetric case)", () => {
-    expect(selectAvailableWorker({ preferred: "codex", cooldownOpen: (w) => w !== "codex" })).toBe("claude");
-  });
-
-  it("returns null when neither worker is open", () => {
-    expect(selectAvailableWorker({ cooldownOpen: () => false })).toBeNull();
-  });
-
-  it("requires a cooldownOpen oracle", () => {
-    expect(() => selectAvailableWorker({})).toThrow(/cooldownOpen oracle is required/);
   });
 });
 
@@ -122,19 +100,18 @@ describe("resolveDispatchWorker (MOV-360)", () => {
     expect(result).toMatchObject({ worker: "claude", isAny: true, available: true, bound: false });
   });
 
-  it("picks codex for a fresh worker:any issue when claude is cooling", () => {
+  it("keeps fresh worker:any on claude when claude is cooling", () => {
     const result = resolveDispatchWorker({ labels: ["worker:any"] }, { cooldownOpen: CLAUDE_COOLING });
-    expect(result).toMatchObject({ worker: "codex", isAny: true, available: true, bound: false });
+    expect(result).toMatchObject({ worker: "claude", isAny: true, available: true, bound: false });
   });
 
-  it("reports unavailable for a fresh worker:any issue when both workers are cooling, rather than picking one anyway", () => {
+  it("keeps fresh worker:any on claude even when both pools are cooling", () => {
     const result = resolveDispatchWorker({ labels: ["worker:any"] }, { cooldownOpen: BOTH_COOLING });
-    expect(result).toMatchObject({ worker: null, isAny: true, available: false });
+    expect(result).toMatchObject({ worker: "claude", isAny: true, available: true });
   });
 
   it("keeps a worker:any issue bound to its prior attempt's worker, even when the other is open", () => {
-    // claude is cooling, codex is open -- selectAvailableWorker would pick
-    // codex for a *fresh* claim, but this issue already started on claude.
+    // Cooldowns do not alter a provider binding.
     const result = resolveDispatchWorker(
       { labels: ["worker:any"] },
       { boundWorker: "claude", cooldownOpen: CLAUDE_COOLING },
@@ -177,6 +154,8 @@ describe("workerInvocation", () => {
       "-p",
       "--model",
       modelIdForTier("claude", "default"),
+      "--effort",
+      "medium",
       "--permission-mode",
       "dontAsk",
       "--setting-sources",
@@ -309,6 +288,8 @@ describe("workerInvocation", () => {
       "--json",
       "-c",
       "model_reasoning_effort=medium",
+      "--model",
+      "gpt-6-sol",
     ]);
   });
 
@@ -327,9 +308,10 @@ describe("workerInvocation", () => {
       expect(workerInvocation("codex", "strong").args).toContain("model_reasoning_effort=high");
     });
 
-    it("omits --model entirely when no override is configured", () => {
-      const invocation = workerInvocation("codex", "strong");
-      expect(invocation.args).not.toContain("--model");
+    it.each([["cheap", "gpt-6-luna", "low"], ["default", "gpt-6-sol", "medium"], ["strong", "gpt-6-sol", "high"]])("pins %s model and effort independently of user config", (tier, model, effort) => {
+      const args = workerInvocation("codex", tier).args;
+      expect(args.slice(-4)).toEqual(["-c", `model_reasoning_effort=${effort}`, "--model", model]);
+      expect(args).toContain("--ignore-user-config");
     });
 
     it("honors MOVIECAL_CODEX_EFFORT_STRONG when set", () => {
@@ -376,8 +358,43 @@ describe("workerInvocation", () => {
         "--json",
         "-c",
         "model_reasoning_effort=medium",
+        "--model",
+        "gpt-6-sol",
       ]);
     });
+  });
+});
+
+describe("Claude effort routing (MOV-364)", () => {
+  const names = ["CHEAP", "DEFAULT", "STRONG"].map((tier) => `MOVIECAL_CLAUDE_EFFORT_${tier}`);
+  afterEach(() => names.forEach((name) => delete process.env[name]));
+
+  it("uses no flag for cheap, medium for default and high for strong", () => {
+    expect(workerInvocation("claude", "cheap").args).not.toContain("--effort");
+    for (const [tier, value] of [["default", "medium"], ["strong", "high"]]) {
+      const args = workerInvocation("claude", tier).args;
+      expect(args.slice(args.indexOf("--effort"), args.indexOf("--effort") + 2)).toEqual(["--effort", value]);
+    }
+  });
+
+  it("honors each override and none, and rejects invalid values", () => {
+    process.env.MOVIECAL_CLAUDE_EFFORT_CHEAP = "low";
+    process.env.MOVIECAL_MODEL_CHEAP = "claude-sonnet-5";
+    expect(claudeEffortForTier("cheap")).toBe("low");
+    process.env.MOVIECAL_CLAUDE_EFFORT_DEFAULT = "none";
+    expect(workerInvocation("claude", "default").args).not.toContain("--effort");
+    process.env.MOVIECAL_CLAUDE_EFFORT_STRONG = "xhigh";
+    expect(claudeEffortForTier("strong")).toBe("xhigh");
+    process.env.MOVIECAL_CLAUDE_EFFORT_DEFAULT = "bogus";
+    expect(() => workerInvocation("claude", "default")).toThrow(/invalid Claude effort "bogus"/);
+    delete process.env.MOVIECAL_MODEL_CHEAP;
+  });
+
+  it("omits effort for Haiku 4.5 even when a tier override requests it", () => {
+    process.env.MOVIECAL_MODEL_DEFAULT = "claude-haiku-4-5-20251001";
+    process.env.MOVIECAL_CLAUDE_EFFORT_DEFAULT = "high";
+    expect(workerInvocation("claude", "default").args).not.toContain("--effort");
+    delete process.env.MOVIECAL_MODEL_DEFAULT;
   });
 });
 
@@ -402,10 +419,22 @@ describe("codexModelIdForTier", () => {
     for (const key of CODEX_ENV_VARS) delete process.env[key];
   });
 
-  it("returns null with no override configured (falls through to ~/.codex/config.toml)", () => {
-    expect(codexModelIdForTier("cheap")).toBeNull();
-    expect(codexModelIdForTier("default")).toBeNull();
-    expect(codexModelIdForTier("strong")).toBeNull();
+  it("returns explicit defaults without overrides", () => {
+    expect(codexModelIdForTier("cheap")).toBe("gpt-6-luna");
+    expect(codexModelIdForTier("default")).toBe("gpt-6-sol");
+    expect(codexModelIdForTier("strong")).toBe("gpt-6-sol");
+  });
+
+  it.each(["cheap", "default", "strong"])("isolates the %s model and effort overrides", (tier) => {
+    const tiers = ["cheap", "default", "strong"];
+    const before = tiers.map((t) => workerInvocation("codex", t));
+    process.env[`MOVIECAL_CODEX_MODEL_${tier.toUpperCase()}`] = "custom-model";
+    process.env[`MOVIECAL_CODEX_EFFORT_${tier.toUpperCase()}`] = "custom-effort";
+    tiers.forEach((t, i) => {
+      const invocation = workerInvocation("codex", t);
+      if (t === tier) expect(invocation.args.slice(-4)).toEqual(["-c", "model_reasoning_effort=custom-effort", "--model", "custom-model"]);
+      else expect(invocation).toEqual(before[i]);
+    });
   });
 
   it("returns the override when set", () => {
@@ -419,6 +448,36 @@ describe("codexModelIdForTier", () => {
 });
 
 describe("modelIdForTier", () => {
+  const originalModelEnv = Object.fromEntries(
+    ["MOVIECAL_MODEL_CHEAP", "MOVIECAL_MODEL_DEFAULT", "MOVIECAL_MODEL_STRONG"].map((key) => [key, process.env[key]]),
+  );
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(originalModelEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("uses the new Claude strong default in the worker invocation", () => {
+    delete process.env.MOVIECAL_MODEL_STRONG;
+    const args = workerInvocation("claude", "strong").args;
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "claude-opus-5-5"]);
+  });
+
+  it("honors the configured Claude strong model override", () => {
+    process.env.MOVIECAL_MODEL_STRONG = "custom-strong-model";
+    const args = workerInvocation("claude", "strong").args;
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "custom-strong-model"]);
+  });
+
+  it("keeps the Claude cheap and default models unchanged", () => {
+    delete process.env.MOVIECAL_MODEL_CHEAP;
+    delete process.env.MOVIECAL_MODEL_DEFAULT;
+    expect(modelIdForTier("claude", "cheap")).toBe("claude-haiku-4-5");
+    expect(modelIdForTier("claude", "default")).toBe("claude-sonnet-5");
+  });
+
   it("returns null for a non-claude worker (codex resolves its own default)", () => {
     expect(modelIdForTier("codex", "default")).toBeNull();
   });

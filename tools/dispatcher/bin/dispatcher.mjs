@@ -3,6 +3,7 @@
 //
 // Usage:
 //   dispatcher doctor              - read-only health check of every dependency
+//   dispatcher usage               - read-only recent worker usage and aggregates
 //   dispatcher dry-run             - fetch Ready-for-Agent issues and print the plan
 //                                     without touching any worktree, branch, or Linear
 //                                     state (safe to run with a live or missing key)
@@ -56,6 +57,7 @@ import {
   worktreesStatePath,
   usageLimitStatePath,
   workerCooldownStatePath,
+  workerUsageStatePath,
   repairLedgerStatePath,
   masterIncidentLedgerStatePath,
   prAutonomyLedgerStatePath,
@@ -89,7 +91,7 @@ import {
 import { LinearClient } from "../src/linear-client.mjs";
 import { getAppToken } from "../src/linear-app-auth.mjs";
 import { evaluatePreflight, worktreeName, branchName } from "../src/preflight.mjs";
-import { resolveRouting, resolveDispatchWorker } from "../src/worker-routing.mjs";
+import { resolveRouting, resolveDispatchWorker, workerInvocation, modelIdForTier, claudeEffortForTier, claudeModelDoesNotSupportEffort } from "../src/worker-routing.mjs";
 import { WorkerCooldownStore, WORKERS as WORKER_POOLS } from "../src/worker-cooldown.mjs";
 import { inferExecutionRoute, resolveExecutionRoute } from "../src/execution-routing.mjs";
 import {
@@ -123,6 +125,7 @@ import { SignalLedger, StopController, handleAgentSignal } from "../src/agent-si
 import { AgentStreamClient } from "../src/agent-stream-client.mjs";
 import { previewRepairPass, runRepairPass } from "../src/repair-run.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
+import { WorkerUsageStore, aggregateUsage } from "../src/worker-usage.mjs";
 import { PrAutonomyLedger, runPrAutonomyPass } from "../src/pr-autonomy.mjs";
 import { MasterIncidentLedger } from "../src/master-incident-ledger.mjs";
 import { runMasterCiPass, reconcileMasterIncidents, previewMasterCiPass } from "../src/master-ci-observer.mjs";
@@ -326,6 +329,19 @@ async function cmdDoctor() {
     checks.push({ name: `${bin} on PATH`, ok: which.ok, detail: which.ok ? which.value : `not found (required for the ${bin} worker adapter)` });
   }
 
+  for (const tier of ["cheap", "default", "strong"]) {
+    const modelId = modelIdForTier("claude", tier);
+    const effort = tryRun(() => claudeEffortForTier(tier, modelId));
+    const requested = process.env[`MOVIECAL_CLAUDE_EFFORT_${tier.toUpperCase()}`] ?? { cheap: "none", default: "medium", strong: "high" }[tier];
+    checks.push({
+      name: `Claude ${tier} effort`,
+      ok: effort.ok,
+      detail: !effort.ok ? effort.error : claudeModelDoesNotSupportEffort(modelId) && requested !== "none"
+        ? `omitted: ${modelId} does not support --effort (requested ${requested})`
+        : effort.value ?? `omitted for ${modelId}`,
+    });
+  }
+
   // MOV-145: both adapters depend on the same inherited macOS Seatbelt
   // boundary. A missing/disabled sandbox is a hard health-check failure; the
   // dispatcher must not silently fall back to prompt-only permissions.
@@ -423,24 +439,18 @@ async function cmdDryRun({ fixturePath } = {}) {
   // cooldown state, never a probe or a write against it.
   const cooldowns = new WorkerCooldownStore(workerCooldownStatePath());
   const cooldownSnapshot = Object.fromEntries(WORKER_POOLS.map((worker) => [worker, cooldowns.state(worker)]));
-  // "Open" for a fresh worker:any pick means only "not actively cooling" --
-  // matches run-loop.mjs's own real dispatch-time selection oracle, so this
-  // preview reflects the worker a real dispatch would actually try (a
-  // probe-owed worker remains a legitimate, if contested, target).
-  const cooldownOpen = (worker) => !cooldownSnapshot[worker].cooling;
-
   const dispatcherDelegate = resolveDispatcherDelegate();
 
   console.log(`${issues.length} issue(s) in Ready for Agent:\n`);
+  let routingError = false;
   for (const issue of issues) {
     const routing = resolveRouting(issue);
     // MOV-360: the actual dispatch-time worker decision -- pinned as-is, or
-    // (for worker:any) the same quota-aware pick/binding `dispatcher run`
+    // (for worker:any) the same prior-worker binding `dispatcher run`
     // would make against this same live cooldown snapshot. `routing` above is
     // kept only for its `model`/`ok` fields; this is what "worker:" prints.
     const resolvedWorker = resolveDispatchWorker(issue, {
       boundWorker: usageLimits.get(issue.identifier)?.worker ?? null,
-      cooldownOpen,
     });
     const execution = resolveExecutionRoute(issue);
     const eligibility = evaluateLocalDispatch(issue, { expectedDelegate: dispatcherDelegate });
@@ -464,19 +474,23 @@ async function cmdDryRun({ fixturePath } = {}) {
     console.log(`- ${issue.identifier}: ${issue.title}`);
     console.log(`  worktree: ${path.join(worktreeRoot(), name)}`);
     console.log(`  branch:   ${branch}`);
-    const workerLabel = !resolvedWorker.ok
-      ? routing.worker
-      : !resolvedWorker.available
-        ? "NONE — both worker quota pools are cooling down"
-        : resolvedWorker.worker;
-    const workerNote = resolvedWorker.isAny
-      ? resolvedWorker.bound
-        ? "  [worker:any, bound to this issue's prior attempt]"
-        : resolvedWorker.available
-          ? "  [worker:any, quota-based pick]"
-          : ""
-      : "";
-    console.log(`  worker:   ${workerLabel} (model: ${routing.model})${routing.ok ? "" : `  [ROUTING BLOCKED: ${routing.reason}]`}${workerNote}`);
+    const workerNote = resolvedWorker.bound ? " [bound to prior worker:any attempt]" : "";
+    console.log(`  worker:   ${resolvedWorker.worker} (model: ${routing.model})${routing.ok ? "" : `  [ROUTING BLOCKED: ${routing.reason}]`}${workerNote}`);
+    const quota = cooldownSnapshot[resolvedWorker.worker];
+    if (quota?.cooling || quota?.probeOwed) console.log(`  worker cooldown: ${quota.cooling ? "COOLING" : "PROBE OWED"} until ${quota.resetAt}`);
+    if (routing.ok) {
+      const planned = tryRun(() => workerInvocation(resolvedWorker.worker, routing.model));
+      if (planned.ok) {
+        const args = planned.value.args;
+        const shown = resolvedWorker.worker === "claude"
+          ? ["-p", "--model", args[args.indexOf("--model") + 1], ...(planned.value.reasoningEffort ? ["--effort", planned.value.reasoningEffort] : [])]
+          : args;
+        console.log(`  planned invocation: ${planned.value.command} ${shown.join(" ")}`);
+      } else {
+        routingError = true;
+        console.log(`  routing error: ${planned.error}`);
+      }
+    }
     console.log(`  execution: ${execution.ok ? execution.route : `INVALID — ${execution.reason}`} (inferred ${inferExecutionRoute(issue)})`);
     console.log(`  delegate: ${describeDelegate(issue.delegate)}`);
     console.log(
@@ -525,7 +539,7 @@ async function cmdDryRun({ fixturePath } = {}) {
     `Cloud-routed (not executable here; the cloud adapter is not enabled): ${cloud.length}${cloud.length ? ` (${cloud.map((i) => i.identifier).join(", ")})` : ""}`,
   );
   console.log("Dry run only — no worktree, branch, or Linear state was changed.");
-  return 0;
+  return routingError ? 1 : 0;
 }
 
 function cmdGc() {
@@ -1289,6 +1303,11 @@ async function cmdMasterCi({ dryRun = false } = {}) {
 async function main() {
   const [, , cmd, ...rest] = process.argv;
   switch (cmd) {
+    case "usage": {
+      const runs = new WorkerUsageStore(workerUsageStatePath()).recent();
+      console.log(JSON.stringify({ readOnly: true, recentRuns: runs.slice(-20).reverse(), byTier: aggregateUsage(runs, "tier"), byModel: aggregateUsage(runs, "modelId") }, null, 2));
+      break;
+    }
     case "doctor":
       process.exitCode = await cmdDoctor();
       break;
@@ -1355,7 +1374,7 @@ async function main() {
     }
     default:
       console.error(
-        "Usage: dispatcher <doctor|health|dry-run|shadow|agent-signal|gc|promote|priorities|audit-issues|reconcile-parents|repair|master-ci|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
+        "Usage: dispatcher <doctor|health|usage|dry-run|shadow|agent-signal|gc|promote|priorities|audit-issues|reconcile-parents|repair|master-ci|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
       );
       process.exitCode = 1;
   }

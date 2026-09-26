@@ -89,7 +89,7 @@ describe("evaluateLocalDispatch", () => {
   });
 
   it("escalates a cloud route that crosses an active product-project boundary", () => {
-    const issue = eligibleIssue({ project: "Calendar Feed", labels: ["execution:cloud"] });
+    const issue = eligibleIssue({ project: "Web Shared Watchlists", labels: ["execution:cloud"] });
     expect(evaluateLocalDispatch(issue, { expectedDelegate: EXPECTED })).toMatchObject({
       action: "escalate",
       eligible: false,
@@ -224,7 +224,7 @@ describe("confirmStillClaimable", () => {
   });
 
   it("is a no-op when the route flipped to cloud after the poll snapshot", () => {
-    const flipped = fresh({ project: "Calendar Feed", labels: ["execution:cloud"] });
+    const flipped = fresh({ project: "Web Shared Watchlists", labels: ["execution:cloud"] });
     expect(confirmStillClaimable(flipped, { expectedDelegate: EXPECTED })).toMatchObject({ claimable: false });
   });
 

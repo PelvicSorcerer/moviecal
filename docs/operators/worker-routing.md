@@ -13,7 +13,7 @@ Only workers that can execute against a real local git worktree on this Mac are 
 | Worker | Invocation | Notes |
 |---|---|---|
 | `claude` | `claude -p --model <id>` | Primary worker. Full local tool access, MCP, worktree-aware |
-| `codex` | `codex exec --sandbox workspace-write -c model_reasoning_effort=<tier>` | Secondary worker. Independent quota pool — useful when Claude is throttled, and a real vendor-neutrality check on the worker-adapter interface. See below for the tier→effort/model mapping |
+| `codex` | `codex --sandbox workspace-write exec --model <id> -c model_reasoning_effort=<tier>` | Secondary worker. Independent quota pool — useful when Claude is throttled, and a real vendor-neutrality check on the worker-adapter interface. See below for the tier→effort/model mapping |
 
 Cursor Cloud Agent and GitHub Copilot coding agent are **not** viable dispatch targets for this pipeline: both execute in a cloud VM with no path to this Mac's worktrees. They may still be useful as an editor/IDE completion tool, but that is a separate decision from this repo's agent-dispatch architecture and is not covered by this document.
 
@@ -25,6 +25,8 @@ Codex is the dispatcher's second worker option, selected via the `worker:codex` 
    ```sh
    npm i -g @openai/codex
    ```
+
+   Codex CLI 0.157.0 or newer is required for the current routing defaults: that release added GPT-6 Sol and Luna to its model catalog. Older CLI versions can reject those IDs even for an eligible Plus account. Upgrade with `npm install -g @openai/codex@latest` (an administrator must update a root-owned installation), then confirm `codex --version` and run the controlled model/effort smoke checks before dispatch. See the [0.157.0 release notes](https://github.com/openai/codex/releases/tag/rust-v0.157.0).
 
 2. **Verify** the installation by running `dispatcher doctor`, which will report "codex on PATH" as a passing check:
    ```sh
@@ -44,15 +46,39 @@ Codex is the dispatcher's second worker option, selected via the `worker:codex` 
 
 "Cheap" / "default" / "strong" map to the current Claude model catalog (see the `claude-api` skill or Anthropic's published model list for exact IDs — this document intentionally does not pin model IDs, since they change over time and pinning them here would require touching this file on every model release).
 
-For Codex, the tier maps to a `model_reasoning_effort` value passed via `-c`, and optionally an explicit `--model` id:
+The Claude strong tier now defaults to Opus 5.5. The change reflects lower published token prices and stronger published coding results; see the retained review evidence in [MOV-362](https://linear.app/moviecal/issue/MOV-362/route-modelstrong-claude-workers-to-claude-opus-55). `MOVIECAL_MODEL_STRONG` still overrides the default.
+
+Claude workers receive an explicit `--effort` by tier when their model supports it. Implementation and repair workers use the same mapping:
+
+| Tier | Default Claude effort | Override |
+|---|---|---|
+| `cheap` | none (flag omitted) | `MOVIECAL_CLAUDE_EFFORT_CHEAP` |
+| `default` | `medium` | `MOVIECAL_CLAUDE_EFFORT_DEFAULT` |
+| `strong` | `high` | `MOVIECAL_CLAUDE_EFFORT_STRONG` |
+
+Overrides accept `low`, `medium`, `high`, `xhigh`, `max`, or `none`; `none` omits the flag. An invalid value is a routing error. Haiku 4.5 does not support effort, so the dispatcher omits `--effort` even if an override requests one. `dispatcher doctor` notes that omission. `dispatcher dry-run` prints the planned invocation and any routing error.
+
+### Per-run turn budget (MOV-367)
+
+| Tier | Initial budget | Environment override | Observed median (2026-09-25) |
+|---|---:|---|---:|
+| `cheap` | 60 | `MOVIECAL_TURN_BUDGET_CHEAP` | 14 |
+| `default` | 150 | `MOVIECAL_TURN_BUDGET_DEFAULT` | 18 |
+| `strong` | 250 | `MOVIECAL_TURN_BUDGET_STRONG` | 96 |
+
+Overrides must be positive safe integers; an invalid value stops routing before a worktree or worker is started. These are initial guardrails above the observed medians, allowing ordinary runs room to finish. The 2026-09-25 most expensive runs took 130–200 turns, so the **250-turn strong default would not have stopped them**. It limits still longer runs while avoiding a sudden cutoff near the strong-tier median; review and lower these values using [MOV-363](https://linear.app/moviecal/issue/MOV-363/record-per-run-worker-usage-and-report-it-on-the-issue) per-run usage data after live experience. A 45-minute wall-clock timeout remains an independent backstop.
+
+The dispatcher counts Claude assistant messages from its live `stream-json` output and Codex `turn.completed` events from `--json`; neither uses a CLI turn-limit flag. If Codex emits no completed-turn events, its wall-clock timeout is the only runtime cap. At 85% of the budget, an opted-in Claude steering session receives one wrap-up prompt asking for `WORKER_PROGRESS.md`. Without steering, there is no prompt. At 100%, the dispatcher reaps the process group, retains the worktree, and tries one fresh-process continuation on the same worker and branch after worktree admission. A second budget stop, or failed admission, hands the retained worktree to a human with one summary comment. See `docs/operators/local-execution.md` for the continuation and handoff details.
+
+For Codex, the tier maps to a `model_reasoning_effort` value passed via `-c`, and an explicit `--model` ID resolved by `codexModelIdForTier()` in `tools/dispatcher/src/worker-routing.mjs`:
 
 | Tier | `model_reasoning_effort` | `--model` |
 |---|---|---|
-| `cheap` | `low` | omitted unless `MOVIECAL_CODEX_MODEL_CHEAP` is set |
-| `default` | `medium` | omitted unless `MOVIECAL_CODEX_MODEL_DEFAULT` is set |
-| `strong` | `high` | omitted unless `MOVIECAL_CODEX_MODEL_STRONG` is set |
+| `cheap` | `low` | routing-code default or `MOVIECAL_CODEX_MODEL_CHEAP` |
+| `default` | `medium` | routing-code default or `MOVIECAL_CODEX_MODEL_DEFAULT` |
+| `strong` | `high` | routing-code default or `MOVIECAL_CODEX_MODEL_STRONG` |
 
-So `workerInvocation("codex", "strong")` spawns `codex exec --sandbox workspace-write -c model_reasoning_effort=high`, and adds `--model <id>` only when the corresponding `MOVIECAL_CODEX_MODEL_*` env var is set. With no `--model` flag, Codex falls through to whatever `~/.codex/config.toml` holds for `model`. The effort values above can be overridden the same way as the Claude model table, via `MOVIECAL_CODEX_EFFORT_CHEAP` / `MOVIECAL_CODEX_EFFORT_DEFAULT` / `MOVIECAL_CODEX_EFFORT_STRONG`.
+Every implementation and repair invocation passes the resolved `--model <id>` and effort explicitly. `--ignore-user-config` prevents loading the personal `~/.codex/config.toml`, so model selection never depends on it. Concrete model defaults live only in the routing code; each `MOVIECAL_CODEX_MODEL_*` override affects its own tier. Effort remains independently overridable via `MOVIECAL_CODEX_EFFORT_CHEAP` / `MOVIECAL_CODEX_EFFORT_DEFAULT` / `MOVIECAL_CODEX_EFFORT_STRONG`. Dry-run shows the exact invocation; the run manifest records its arguments and usage summaries retain model and effort. CLI rejection follows the existing failure/escalation path without substituting a model or tier.
 
 ## Upgrade conditions
 
@@ -69,7 +95,7 @@ Moving up a tier requires citing the specific condition, either in the Linear is
 ## Overrides
 
 - `worker:claude` / `worker:codex` — pins the worker binary. Pinned workers are never changed, including by the quota-pool cooldown below.
-- `worker:any` — lets the dispatcher pick based on quota availability (see below). The no-label default is **not** `worker:any`: it is a pin to Claude, same as an explicit `worker:claude` label, per the routing table above.
+- `worker:any` — currently uses Claude for fresh claims; a prior attempt retains its recorded worker. Temporary selection changes are tracked in [MOV-383](https://linear.app/moviecal/issue/MOV-383) and require the trial release gate in [MOV-384](https://linear.app/moviecal/issue/MOV-384). The no-label default is **not** `worker:any`: it is a pin to Claude, same as an explicit `worker:claude` label, per the routing table above.
 - `model:cheap` / `model:default` / `model:strong` — pins the model tier.
 
 A human-applied label always overrides the default routing table above. There is no silent fallback: if a requested worker or model is unavailable, the dispatcher stops and moves the issue to `Blocked` rather than substituting a different one.
@@ -78,11 +104,11 @@ A human-applied label always overrides the default routing table above. There is
 
 A worker binary's provider usage limit is a fact about that *worker*, not about any one issue. `docs/operators/local-execution.md` §Worktree lifecycle already covers the per-issue side of this (MOV-151/192/205's bounded one-retry-or-resume). This section is the dispatch-wide side: once a worker hits a recognized, reset-bearing provider usage limit, `dispatcher run` pauses dispatch of *every* issue that would use that same worker — pinned or `worker:any` — until the reported reset passes, so one exhausted quota window cannot burn through the rest of the `Ready for Agent` queue one issue at a time, the way it did on 2026-09-25 (`tools/dispatcher/src/worker-cooldown.mjs`).
 
-- **Scope.** Two independent cooldowns, one per worker (`claude`, `codex`), persisted at `~/.config/moviecal/worker-cooldowns.json` (mode 700, alongside the rest of `~/.config/moviecal/`) so a restart does not lose the wait. A cooldown on one worker never affects the other — a Codex-pinned issue (and, per the selection rule below, a fresh `worker:any` issue) keeps dispatching normally while Claude is cooling down, and symmetrically.
-- **`worker:any` selection.** A fresh claim (no prior attempt, no retained worktree) picks Claude by default, or Codex when Claude is cooling down; the symmetric case holds when Codex is the preferred worker. Once an issue's attempt has begun, its scheduled retry or MOV-205 retained-worktree resume stays bound to the worker that first attempt actually used — recorded on the same per-issue usage-limit record `usage-limit.mjs` already keeps, and never silently re-picked, even if the other worker is open. If neither worker is available, a fresh `worker:any` issue is left queued without a claim rather than started on a worker it never actually picked.
+- **Scope.** Two independent cooldowns, one per worker (`claude`, `codex`), persisted at `~/.config/moviecal/worker-cooldowns.json` (mode 700, alongside the rest of `~/.config/moviecal/`) so a restart does not lose the wait. A cooldown on one worker never affects the other — a Codex-pinned issue keeps dispatching normally while Claude is cooling down, and symmetrically.
+- **`worker:any` binding.** Fresh issues retain the current Claude default, and wait if Claude is cooling down. The cooldown never switches them to Codex. A scheduled retry or retained-worktree resume keeps the provider recorded on its per-issue usage-limit record. Fresh-issue selection changes belong to MOV-383; the live trial remains held for explicit operator approval.
 - **After the reset.** Exactly one issue using the cooled worker is admitted as a probe once its reported reset has passed — preferring a due per-issue retry/resume for that worker over a fresh claim, when one is eligible in the same batch. A clean probe closes the cooldown; a new recognized limit refreshes it to the newly reported reset instead, even when the probing issue itself has exhausted its own one-retry allowance and escalates to `Needs Human Decision`.
 - **What it never does.** Gate reconciliation, parent-completion/priority-propagation passes, promotion, or read-only CI observation — all of those keep running during a cooldown. Move an unrelated issue to `Blocked` or `Needs Human Decision` — the cooldown is a dispatch gate, not an escalation. Mask or invent a reset: an unrecognized failure, a credential failure, or a usage-limit message whose reset cannot be trusted (unparseable, or further out than `usage-limit.mjs`'s `MAX_USAGE_LIMIT_DEFERRAL_MS`) never touches the cooldown either way.
-- **Operator visibility.** `dispatcher dry-run` prints each worker's live cooldown state (`open` / `COOLING until <reset>` / `PROBE OWED`) and, per issue, the worker it would actually use — including a quota-aware `worker:any` pick or an existing binding — without consuming a probe or writing anything. `dispatcher doctor` reports the same per-worker state as an informational check. Both are read-only views of the same store `dispatcher run` gates on.
+- **Operator visibility.** `dispatcher dry-run` prints each worker's live cooldown state (`open` / `COOLING until <reset>` / `PROBE OWED`) and, per issue, the worker it would actually use — including the unchanged default or an existing worker binding — without consuming a probe or writing anything. `dispatcher doctor` reports the same per-worker state as an informational check. Both are read-only views of the same store `dispatcher run` gates on.
 
 ## Subagents
 

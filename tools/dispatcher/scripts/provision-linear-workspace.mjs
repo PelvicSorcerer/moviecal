@@ -4,7 +4,8 @@
 // See docs/governance/linear-information-architecture.md for the target shape.
 //
 // Safe to re-run: every step checks current state first and only creates or
-// updates what's missing/different.
+// updates what's missing/different. Pass --check for a read-only drift report
+// of the initiative/project/milestone topology (exit 1 when it has drifted).
 //
 // Deliberately NOT provisioned here (see docs/governance/linear-information-architecture.md):
 // - Custom views: the saved-view filterData JSON shape isn't documented in
@@ -20,10 +21,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { reconcileTopology } from "../src/linear-topology.mjs";
+
 const envPath = path.join(os.homedir(), ".config", "moviecal", "linear.env");
 const envText = fs.readFileSync(envPath, "utf8");
 const apiKey = envText.match(/^LINEAR_API_KEY=(.*)$/m)?.[1]?.trim();
 if (!apiKey) throw new Error("LINEAR_API_KEY not found");
+
+// `--check` is a read-only drift check: it reads the team and the planning
+// topology, prints what an apply run would change, and exits 1 on drift. It
+// performs no mutations (no team, state, label, or topology writes).
+const checkOnly = process.argv.includes("--check");
 
 async function gql(query, variables = {}) {
   const res = await fetch("https://api.linear.app/graphql", {
@@ -46,6 +54,13 @@ async function main() {
   const team = teamData.teams.nodes[0];
   if (!team) throw new Error("Team MOV not found");
   log(`Team: ${team.name} (${team.key}) id=${team.id}`);
+
+  if (checkOnly) {
+    const { drift } = await reconcileTopology(gql, { teamId: team.id, check: true, log });
+    log(drift ? "\nDrift detected (read-only check; nothing was changed)." : "\nNo topology drift.");
+    process.exitCode = drift ? 1 : 0;
+    return;
+  }
 
   // Enable triage
   await gql(
@@ -171,116 +186,19 @@ async function main() {
     log(`  label created: ${name}`);
   }
 
-  // --- Initiatives ---
-  // NOTE: initiativeCreate rejects a leadTeamId on this workspace's plan
-  // ("Not allowed to access feature 'teamInitiatives' ... Subscribe to the
-  // Business plan") but succeeds with no leadTeamId at all. With a single
-  // team (MOV), an initiative's "lead team" isn't meaningful here anyway, so
-  // this omits it rather than needing that sub-feature.
-  const initiativesData = await gql(`query { initiatives { nodes { id name } } }`);
-  const initByName = (n) => initiativesData.initiatives.nodes.find((i) => i.name === n);
-
-  async function ensureInitiative(name) {
-    let init = initByName(name);
-    if (init) {
-      log(`  [exists] initiative '${name}'`);
-      return init;
-    }
-    const data = await gql(
-      `mutation($input: InitiativeCreateInput!) { initiativeCreate(input: $input) { success initiative { id name } } }`,
-      { input: { name } },
-    );
-    log(`  created initiative '${name}'`);
-    return data.initiativeCreate.initiative;
-  }
-
-  const webAppInit = await ensureInitiative("Web App");
-  const iosInit = await ensureInitiative("iOS App");
-  const automationInit = await ensureInitiative("Automate moviecal Development and Delivery");
-
-  // --- Projects ---
-  const projectsData = await gql(`query { projects { nodes { id name } } }`);
-  const projByName = (n) => projectsData.projects.nodes.find((p) => p.name === n);
-
-  async function ensureProject(name, initiatives) {
-    let proj = projByName(name);
-    if (!proj) {
-      const data = await gql(
-        `mutation($input: ProjectCreateInput!) { projectCreate(input: $input) { success project { id name } } }`,
-        { input: { name, teamIds: [team.id] } },
-      );
-      proj = data.projectCreate.project;
-      log(`  created project '${name}'`);
-    } else {
-      log(`  [exists] project '${name}'`);
-    }
-    const linkCheck = await gql(
-      `query($projId: String!) { project(id: $projId) { initiatives { nodes { id } } } }`,
-      { projId: proj.id },
-    );
-    const linkedIds = new Set(linkCheck.project.initiatives.nodes.map((i) => i.id));
-    for (const initiative of initiatives) {
-      if (linkedIds.has(initiative.id)) continue;
-      await gql(
-        `mutation($input: InitiativeToProjectCreateInput!) { initiativeToProjectCreate(input: $input) { success } }`,
-        { input: { projectId: proj.id, initiativeId: initiative.id } },
-      );
-      log(`    linked '${name}' -> initiative '${initiative.name}'`);
-    }
-    return proj;
-  }
-
-  const sharedCoreProject = await ensureProject("Shared Watchlists Core & API", [webAppInit, iosInit]);
-  const sharedWebProject = await ensureProject("Web Shared Watchlists", [webAppInit]);
-  const sharedIosProject = await ensureProject("iOS Shared Watchlists", [iosInit]);
-  await ensureProject("Calendar Feed", [webAppInit, iosInit]);
-  await ensureProject("Platform & Infrastructure", [webAppInit]);
-  const iosProject = await ensureProject("iOS Companion App", [iosInit]);
-  await ensureProject("Documentation aligned with shipped product", []);
-  const localDeliveryProject = await ensureProject("Autonomous local-agent delivery", [automationInit]);
-  const deferredCloudProject = await ensureProject("Deferred Linear cloud execution option", [automationInit]);
-
-  // The canceled "Developer Governance & Agent Infrastructure" project and
-  // the completed local-stabilization / hybrid-foundation projects are
-  // deliberately not provisioned, updated, deleted, or relinked here. They are
-  // live-workspace audit artifacts, not desired active topology. Issue
-  // reassignment is likewise a migration operation, never provisioning.
-
-  // --- Project milestones ---
-  async function ensureMilestones(project, names) {
-    const milestonesData = await gql(
-      `query($projId: String!) { project(id: $projId) { projectMilestones { nodes { id name } } } }`,
-      { projId: project.id },
-    );
-    const existingMilestones = new Set(milestonesData.project.projectMilestones.nodes.map((m) => m.name));
-
-    let sortOrder = 0;
-    for (const name of names) {
-      if (existingMilestones.has(name)) {
-        log(`  [exists] milestone '${name}'`);
-      } else {
-        await gql(
-          `mutation($input: ProjectMilestoneCreateInput!) { projectMilestoneCreate(input: $input) { success } }`,
-          { input: { name, projectId: project.id, sortOrder } },
-        );
-        log(`  created milestone '${name}'`);
-      }
-      sortOrder += 10;
-    }
-  }
-
-  await ensureMilestones(sharedCoreProject, ["Access and invitation safety", "Cross-client shared API"]);
-  await ensureMilestones(sharedWebProject, ["Complete web collaboration"]);
-  await ensureMilestones(sharedIosProject, ["Native experience"]);
-  await ensureMilestones(iosProject, ["Skeleton", "Auth + API client", "Navigation shell"]);
-  await ensureMilestones(localDeliveryProject, [
-    "Automated intake & local kickoff",
-    "Local acceptance & controlled autonomy",
-  ]);
-  await ensureMilestones(deferredCloudProject, [
-    "Cloud environment & kickoff",
-    "Cloud pilots & eligibility",
-  ]);
+  // --- Initiatives, projects, project labels, milestones ---
+  // The desired topology lives in ../src/linear-topology.mjs. NOTE:
+  // initiativeCreate rejects a leadTeamId on this workspace's plan ("Not
+  // allowed to access feature 'teamInitiatives' ... Subscribe to the Business
+  // plan") but succeeds with no leadTeamId at all, so initiatives are created
+  // without one.
+  //
+  // The reconciler is additive only. It never recreates the retired Web App /
+  // iOS App initiatives or the Calendar Feed project, never unlinks, deletes,
+  // or moves issues, and skips completed/canceled projects and initiatives (the
+  // completed local-stabilization / hybrid-foundation projects and the canceled
+  // Developer Governance project are live-workspace audit artifacts).
+  await reconcileTopology(gql, { teamId: team.id, log });
 
   log("\nDone. Re-run this script any time — it's idempotent.");
 }

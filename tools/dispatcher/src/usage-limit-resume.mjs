@@ -58,6 +58,29 @@ function samePath(a, b) {
   return path.resolve(text(a)) === path.resolve(text(b));
 }
 
+function retainedIdentityReasons({ issueId, entry, repository, branch, worktreePath, dispatcherOwned, integrity }) {
+  const reasons = [];
+  if (!entry) {
+    reasons.push("the retained worktree has no entry in the dispatcher worktree registry");
+  } else {
+    if (!samePath(entry.path, worktreePath)) reasons.push(`the registry entry points at ${entry.path}, not ${worktreePath}`);
+    if (entry.branch !== branch) reasons.push(`the registry entry is on branch ${entry.branch}, not ${branch}`);
+    if (entry.status !== RESUMABLE_STATUS) reasons.push(`the registry entry is "${entry.status}", not the retained "${RESUMABLE_STATUS}" state a resume may start from`);
+    if (entry.provenance?.executor !== APPROVED_EXECUTOR) reasons.push("the retained worktree lacks approved-executor provenance");
+    if (!text(repository) || entry.provenance?.repository !== repository) reasons.push("the retained worktree's provenance does not match the configured repository");
+  }
+  if (!text(branch).startsWith(`agent/${issueId}-`)) reasons.push(`branch ${branch || "none"} is outside the dispatcher issue namespace for ${issueId}`);
+  if (dispatcherOwned !== true) reasons.push("the worktree is not provably dispatcher-owned (no ownership marker in its private Git directory)");
+  if (!integrity || integrity.intact !== true) reasons.push(integrity?.reason || "the retained worktree could not be confirmed intact");
+  return reasons;
+}
+
+/** Same ownership and integrity gate as a usage-limit resume, with a clean tree allowed. */
+export function admitBudgetContinuation(args = {}) {
+  const reasons = retainedIdentityReasons(args);
+  return { admitted: reasons.length === 0, reasons, reason: reasons.length ? reasons.join("; ") : null };
+}
+
 /**
  * Decide whether one scheduled retained-worktree resume may start now.
  *
@@ -116,14 +139,7 @@ export function admitUsageLimitResume({
 
   // 2. The registry still agrees, and still describes a retained worktree
   //    rather than one some other lifecycle has since claimed.
-  if (!entry) {
-    reasons.push("the retained worktree has no entry in the dispatcher worktree registry");
-  } else {
-    if (!samePath(entry.path, worktreePath)) reasons.push(`the registry entry points at ${entry.path}, not ${worktreePath}`);
-    if (entry.branch !== branch) reasons.push(`the registry entry is on branch ${entry.branch}, not ${branch}`);
-    if (entry.status !== RESUMABLE_STATUS) {
-      reasons.push(`the registry entry is "${entry.status}", not the retained "${RESUMABLE_STATUS}" state a resume may start from`);
-    }
+  if (entry) {
     // The registry's own copy of the scheduled reset, written in the same
     // transition that retained the worktree. Requiring it to match the store
     // binds the two durable records together: a resume plan that survived a
@@ -134,30 +150,8 @@ export function admitUsageLimitResume({
         `the registry entry records a scheduled resume of ${entry.usageLimitResumeAt || "none"}, which does not match the durable record's ${plan.retryAt || "none"}`,
       );
     }
-    if (entry.provenance?.executor !== APPROVED_EXECUTOR) reasons.push("the retained worktree lacks approved-executor provenance");
-    if (!text(repository) || entry.provenance?.repository !== repository) {
-      reasons.push("the retained worktree's provenance does not match the configured repository");
-    }
   }
-
-  // 3. The branch is still inside this dispatcher's own namespace for this
-  //    issue — the same check repair admission makes, for the same reason.
-  if (!text(branch).startsWith(`agent/${issueId}-`)) {
-    reasons.push(`branch ${branch || "none"} is outside the dispatcher issue namespace for ${issueId}`);
-  }
-
-  // 4. Ownership, proven only by the marker `WorktreeManager.create()` stamped
-  //    into the worktree's private Git directory (MOV-199) — never inferred
-  //    from the path or branch, which a human-delegated worktree shares.
-  if (dispatcherOwned !== true) {
-    reasons.push("the worktree is not provably dispatcher-owned (no ownership marker in its private Git directory)");
-  }
-
-  // 5. It is still a real, intact Git worktree, still checked out on the
-  //    branch the resume was scheduled for.
-  if (!integrity || integrity.intact !== true) {
-    reasons.push(integrity?.reason || "the retained worktree could not be confirmed intact");
-  }
+  reasons.push(...retainedIdentityReasons({ issueId, entry, repository, branch, worktreePath, dispatcherOwned, integrity }));
 
   // 6. The premise still holds. The resume exists to carry unpublished work
   //    across a provider reset; if that work is gone, somebody recovered,

@@ -28,11 +28,15 @@ One workspace (`moviecal`), one team (`MOV`). GitHub Issues Sync is one-repo-to-
 
 ## Initiatives
 
-Three initiatives group the active product and development-system outcomes:
+An initiative is a **completable outcome**: it has a definition of done and ends. It is not a permanent bucket for a platform or product area. Three initiatives group the active product, release, and development-system outcomes:
 
-- **Web App** — outcomes that ship to or directly support the Next.js application: Shared Watchlists Core & API, Web Shared Watchlists, Calendar Feed, and the completed Platform & Infrastructure project.
-- **iOS App** — native product outcomes and their shared prerequisites: iOS Companion App, Shared Watchlists Core & API, iOS Shared Watchlists, and Calendar Feed.
+- **Deliver Shared Watchlists across Web and iOS** — the *feature* outcome. Contains Shared Watchlists Core & API, Web Shared Watchlists, and iOS Shared Watchlists. It completes when shared watchlists work end to end on both clients.
+- **First iOS TestFlight beta** — the *release* outcome. Contains iOS Companion App, Shared Watchlists Core & API, and iOS Shared Watchlists. It does **not** contain Web Shared Watchlists: the first TestFlight build requires native Shared Watchlists and the Core & API capability it needs, not completion of the web collaboration experience.
 - **Automate moviecal Development and Delivery** — cross-cutting development infrastructure that supports every current and future product initiative. Its active projects are Autonomous local-agent delivery and Deferred Linear cloud execution option; completed/canceled predecessor projects remain associated for history.
+
+**Feature versus release membership.** A feature initiative groups the projects that together deliver one capability; a release initiative groups the projects that must be complete to cut one release. The same project may belong to both. Shared Watchlists Core & API and iOS Shared Watchlists are in both initiatives above, so their progress is counted in both rollups. Overlapping rollups are intentional and must not be added together as a portfolio total. Membership never gates dispatch; real prerequisites are issue-level blocking relations.
+
+**Retired initiatives.** The former perpetual **Web App** and **iOS App** initiatives (and the empty **Calendar Feed** project) are superseded. The live objects and their historical project links are preserved as audit history; the provisioner never creates, relinks, or deletes them. Permanent platform grouping is provided by project labels and views (see §Project labels and platform views), not by initiatives.
 
 (A first attempt at provisioning these hit `FEATURE_NOT_ACCESSIBLE` — initiatives were originally plan-gated on this workspace, so this doc briefly shipped a "skip initiatives, projects stand alone" design. The repo owner then enabled the feature directly in Linear, and the initiatives + links above were created and verified live. The `leadTeamId` sub-feature remains gated, see "Plan" above — irrelevant here with one team.)
 
@@ -40,12 +44,11 @@ Three initiatives group the active product and development-system outcomes:
 
 | Linear project | Initiative | Role |
 |---|---|---|
-| Shared Watchlists Core & API | Web App + iOS App | Shared watchlist data, authorization, invitations, calendar behavior, and versioned API used by both clients |
-| Web Shared Watchlists | Web App | Finite browser collaboration experience using the shared core |
-| iOS Shared Watchlists | iOS App | Finite native collaboration experience using the shared API |
-| Calendar Feed | Web App + iOS App | Finite calendar-feed product outcome shared by both clients |
-| Platform & Infrastructure | Web App | **Completed.** Finite platform outcome |
-| iOS Companion App | iOS App | Finite native-app outcome |
+| Shared Watchlists Core & API | Deliver Shared Watchlists across Web and iOS + First iOS TestFlight beta | Shared watchlist data, authorization, invitations, calendar behavior, and versioned API used by both clients. Required for the first TestFlight build to the extent native Shared Watchlists depends on it |
+| Web Shared Watchlists | Deliver Shared Watchlists across Web and iOS | Finite browser collaboration experience using the shared core. Not a TestFlight prerequisite |
+| iOS Shared Watchlists | Deliver Shared Watchlists across Web and iOS + First iOS TestFlight beta | Finite native collaboration experience using the shared API. Required before the first TestFlight build |
+| Platform & Infrastructure | None (historical link to the retired Web App initiative) | **Completed.** Finite platform outcome; audit history |
+| iOS Companion App | First iOS TestFlight beta | Finite native-app outcome (personal-watchlist parity and release engineering) |
 | Documentation aligned with shipped product | None | Finite product documentation reconciliation; deliberately not an ongoing documentation bucket |
 | Autonomous local-agent delivery | Automate moviecal Development and Delivery | **Active.** Finish bounded local intake, handoff, acceptance, and controlled autonomy |
 | Deferred Linear cloud execution option | Automate moviecal Development and Delivery | **Deferred.** Keep cloud environment/kickoff/pilots independently authorizable and out of the local critical path |
@@ -53,17 +56,29 @@ Three initiatives group the active product and development-system outcomes:
 | Hybrid workflow foundations (completed) | Automate moviecal Development and Delivery | **Completed history.** Architecture, routing, CI/review, and Agent Session foundations |
 | Developer Governance & Agent Infrastructure | Automate moviecal Development and Delivery | **Canceled audit history.** Do not assign new issues |
 
-`Docs` and `Migration` are not projects — they are work *types*, represented as labels. `Future` is not a project — it is the `Icebox` backlog state.
+`Docs` and `Migration` are not projects — they are work *types*, represented as labels. `Future` is not a project — it is the `Icebox` backlog state. There is no Calendar Feed project: the calendar feed shipped inside the existing product projects, and the empty project was retired rather than kept as a topic bucket.
 
 The legacy Developer Governance & Agent Infrastructure project is deliberately retained so its former organization remains auditable. Its old milestones remain empty; all issues were moved to finite successors. Do not delete or repopulate it. The provisioner leaves it and the completed predecessor projects untouched and never performs issue migration. Documentation aligned with shipped product has no initiative because it is a bounded reconciliation task spanning product surfaces, not an initiative outcome on its own.
 
-Shared Watchlists Core & API appears in both product initiatives because each client depends on the same shared capability. Its progress is counted in both initiative views; initiative percentages therefore overlap and must not be added together as a portfolio total. Web and iOS delivery remain separate projects, so each initiative's status can be read alongside the core project's status. New feature work belongs to the project that owns its capability, regardless of which client is scheduled to ship first. Use issue-level blocking relations for actual API-to-client prerequisites; project membership and milestone order do not impose sequencing. A future Android app can gain its own initiative and feature project without moving shared-core issues.
+**The three Shared Watchlists project boundaries.**
+
+- **Shared Watchlists Core & API** owns capability shared by both clients: data model, authorization, invitation and acceptance safety, calendar behavior, and the bearer-authenticated `v1` API with cross-client authorization parity. Nothing client-specific belongs here.
+- **Web Shared Watchlists** owns the browser collaboration flows and the two-account web journey. It consumes the core; it does not own API behavior.
+- **iOS Shared Watchlists** owns the native SwiftUI collaboration flows, accessibility, and web/iOS parity. It consumes the core's `v1` API; it does not own API behavior.
+
+Shared Watchlists Core & API is in both the feature initiative and the TestFlight release initiative, and iOS Shared Watchlists is in both, because each initiative depends on those capabilities. Progress is counted in every initiative that contains a project; percentages therefore overlap and must not be added together as a portfolio total. Web and iOS delivery remain separate projects, so each initiative's status can be read alongside the core project's status. New feature work belongs to the project that owns its capability, regardless of which client is scheduled to ship first. Use issue-level blocking relations for actual API-to-client prerequisites; project membership and milestone order do not impose sequencing. A future Android app can gain its own feature project and initiative without moving shared-core issues.
+
+**First TestFlight scope.** The first TestFlight build requires the completed iOS Companion App outcome, completed iOS Shared Watchlists, and the Core & API capability that native Shared Watchlists needs. It does not require completion of Web Shared Watchlists. The web project can finish before or after the beta without moving the release. See `docs/planning/native-ios-app-plan.md` (decision D6).
+
+### Project labels and platform views
+
+Web and iOS are permanent *classifications*, not outcomes, so they do not get initiatives. Group them with workspace **project labels** `platform:web` and `platform:ios`, provisioned by `provision-linear-workspace.mjs` and applied to active projects (Core & API carries both; Web Shared Watchlists carries `platform:web`; iOS Shared Watchlists and iOS Companion App carry `platform:ios`). Permanent per-platform project views filter on those labels and are built by hand in the Linear UI, like the issue views in §Custom views; the provisioner deliberately does not create saved views through the undocumented `filterData` shape.
 
 ## Planning-object semantics
 
 Use the smallest Linear object that expresses the actual planning relationship:
 
-- **Initiative:** a strategic outcome spanning one or more projects. An initiative may be cross-cutting; it does not have to correspond to a product surface.
+- **Initiative:** a strategic outcome spanning one or more projects, with a definition of done. An initiative is completable — never a permanent platform or topic bucket — and may be cross-cutting. A feature initiative and a release initiative may share projects; their rollups overlap by design.
 - **Project:** a finite, completable outcome with an explicit boundary. A project is not a permanent topic bucket for every future issue in an area. Later defects or enhancements belong in the ordinary backlog or a new bounded project unless they are required to satisfy the original completion criteria.
 - **Milestone:** a project-local phase containing multiple issues and a recognizable exit condition. Milestones never span projects and should not be used as reusable topic tags.
 - **Parent issue:** one bounded deliverable split into child issues, normally one implementation issue per PR. A parent must not duplicate the scope of its project or act as a permanent milestone coordinator. Parent completion is derived from child state.
@@ -231,7 +246,7 @@ No agent conversation is ever a source of truth. Every decision an agent makes t
 
 ## Provisioning
 
-The active team settings, initiatives, workflow states, labels, projects, and milestones described above are provisioned by `tools/dispatcher/scripts/provision-linear-workspace.mjs`, an idempotent script safe to re-run when the workspace needs to be reconciled back to this design or when setting up a second environment. It reads `LINEAR_API_KEY` from `~/.config/moviecal/linear.env`. It provisions the active local and deferred-cloud projects, not the completed/canceled history. It does not create custom views, move issues, delete projects, or mutate audit projects.
+The active team settings, initiatives, workflow states, labels, projects, and milestones described above are provisioned by `tools/dispatcher/scripts/provision-linear-workspace.mjs`, an idempotent script safe to re-run when the workspace needs to be reconciled back to this design or when setting up a second environment. It reads `LINEAR_API_KEY` from `~/.config/moviecal/linear.env`. It provisions the two outcome initiatives and their project memberships, the active product, local, and deferred-cloud projects, milestones, and the `platform:*` project labels; the desired topology is declared in `tools/dispatcher/src/linear-topology.mjs`. It is additive: it does not provision the retired Web App / iOS App initiatives or the Calendar Feed project, and it does not create custom views, move issues, delete or unlink anything, or mutate completed/canceled audit projects and initiatives. Run it with `--check` for a read-only drift report (it exits 1 when the live topology differs from the design, and also flags unplanned projects inside the managed initiatives for a human to resolve). Deterministic tests cover the desired topology and idempotency against a mocked GraphQL boundary; no test writes to live Linear.
 
 ## GitHub Issues: migration and ongoing sync
 

@@ -10,6 +10,7 @@ import { NESTED_SANDBOX_CRASH } from "../src/failure-classification.mjs";
 import { CREDENTIAL_FAILURE } from "../src/credential-failure.mjs";
 import { UsageLimitStore } from "../src/usage-limit.mjs";
 import { worktreeName } from "../src/preflight.mjs";
+import { captureWorkerUsage, WorkerUsageStore } from "../src/worker-usage.mjs";
 
 const STATE_IDS = {
   blocked: "state-blocked",
@@ -196,6 +197,47 @@ const ISSUE = {
 };
 
 describe("runOnce", () => {
+  it("records fixture worker usage and adds one line to the existing completion comment", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mov363-run-loop-"));
+    try {
+      const store = new WorkerUsageStore(path.join(root, "usage-state.json"));
+      const ctx = baseCtx({
+        logRoot: root,
+        spawnWorkerFn: vi.fn(async ({ logDir }) => {
+          fs.mkdirSync(logDir, { recursive: true });
+          fs.writeFileSync(path.join(logDir, "stdout.log"), JSON.stringify({ type: "result", num_turns: 3, duration_ms: 120000, total_cost_usd: 0.25, usage: { input_tokens: 10, output_tokens: 5 }, modelUsage: { "claude-sonnet-5": {} } }) + "\n");
+          return { exitCode: 0, logDir };
+        }),
+        captureWorkerUsageFn: (logDir, context) => captureWorkerUsage(logDir, context, { store }),
+      });
+      const [result] = await runOnce([ISSUE], ctx);
+      expect(result.outcome).toBe("in-review");
+      const summary = store.recent()[0];
+      expect(summary).toMatchObject({ issue: "MOV-1", turns: 3, costUsd: 0.25, partial: false });
+      expect(JSON.parse(fs.readFileSync(path.join(root, ctx.worktreeManager.createCalls[0].name, "usage.json"), "utf8"))).toMatchObject({ issue: "MOV-1", turns: 3 });
+      const completion = ctx.linearClient.calls.filter((call) => call.type === "addComment" && call.body.includes("Pull request opened:"));
+      expect(completion).toHaveLength(1);
+      expect(completion[0].body.match(/Usage:/g)).toHaveLength(1);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+  it.each([["cheap", "gpt-6-luna", "low"], ["default", "gpt-6-sol", "medium"], ["strong", "gpt-6-sol", "high"]])("records the resolved Codex %s model and effort", async (tier, modelId, reasoningEffort) => {
+    const capture = vi.fn(() => null);
+    const ctx = baseCtx({ captureWorkerUsageFn: capture });
+    const issue = { ...ISSUE, labels: [...ISSUE.labels, "worker:codex", `model:${tier}`, "upgrade:architecture"] };
+    const [result] = await runOnce([issue], ctx);
+    expect(result.outcome).toBe("in-review");
+    expect(capture).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ worker: "codex", modelId, reasoningEffort, tier }));
+  });
+
+  it("escalates Codex model rejection without spawning a fallback", async () => {
+    const ctx = baseCtx({ spawnWorkerFn: vi.fn(async () => ({ exitCode: 1 })) });
+    const [result] = await runOnce([{ ...ISSUE, labels: [...ISSUE.labels, "worker:codex"] }], ctx);
+    expect(result.outcome).not.toBe("in-review");
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+    expect(ctx.publishWorkerResultFn).not.toHaveBeenCalled();
+    expect(ctx.linearClient.calls.some((call) => call.stateId === STATE_IDS.needsHumanDecision)).toBe(true);
+  });
+
   it("moves a human-only issue to blocked without touching the worktree manager", async () => {
     const ctx = baseCtx();
     const issue = { ...ISSUE, labels: [...ISSUE.labels, "human-only"] };
@@ -295,6 +337,7 @@ describe("runOnce", () => {
     expect(ctx.repositoryContextFn).toHaveBeenCalledWith({
       worktreePath: "/fake/worktrees/MOV-1-fix-the-thing",
       branch: "agent/MOV-1-fix-the-thing",
+      issueDescription: ISSUE.description,
     });
     expect(spawnArg.securityContext).toEqual({ mode: "implementation" });
 
@@ -983,6 +1026,35 @@ describe("runOnce", () => {
   });
 
   describe("lifecycle publication and stop controls (MOV-158)", () => {
+    it("rejects an invalid Claude effort before claiming a worktree or spawning a worker", async () => {
+      process.env.MOVIECAL_CLAUDE_EFFORT_DEFAULT = "bogus";
+      try {
+        const ctx = baseCtx();
+        const [result] = await runOnce([ISSUE], ctx);
+        expect(result.outcome).toBe("needs-human");
+        expect(result.reason).toMatch(/invalid Claude effort "bogus"/);
+        expect(ctx.worktreeManager.createCalls).toHaveLength(0);
+        expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.MOVIECAL_CLAUDE_EFFORT_DEFAULT;
+      }
+    });
+
+    it("spawns Claude with the tier effort and reports the same effort in each start comment (MOV-364)", async () => {
+      const cases = [
+        { tier: "default", labels: ["execution:mac"], effort: "medium" },
+        { tier: "strong", labels: ["execution:mac", "model:strong", "upgrade:architecture"], effort: "high" },
+      ];
+      for (const { tier, labels, effort } of cases) {
+        const ctx = baseCtx();
+        const [result] = await runOnce([{ ...ISSUE, identifier: `MOV-${tier}`, labels }], ctx);
+        expect(result.outcome).toBe("in-review");
+        const args = ctx.spawnWorkerFn.mock.calls[0][0].invocation.args;
+        expect(args.slice(args.indexOf("--effort"), args.indexOf("--effort") + 2)).toEqual(["--effort", effort]);
+        const start = ctx.linearClient.calls.find((call) => call.type === "addComment").body;
+        expect(start).toContain(`Worker: claude (model: ${tier}, effort: ${effort})`);
+      }
+    });
     /** A Linear client that also speaks the Agent Session surface. */
     function sessionCapableClient() {
       const client = fakeLinearClient();
@@ -2511,8 +2583,6 @@ describe("runOnce", () => {
   });
 });
 
-// MOV-360: pausing dispatch of a whole worker quota pool after a provider
-// usage limit, on top of MOV-151/205's existing per-issue bounded retry.
 describe("worker-quota-pool cooldown (MOV-360)", () => {
   const NOW = new Date("2026-09-14T12:00:00.000Z");
   const USAGE_LIMIT_LOG = "Claude AI usage limit reached · resets 2026-09-14T17:00:00Z\n";
@@ -2603,11 +2673,6 @@ describe("worker-quota-pool cooldown (MOV-360)", () => {
     fs.rmSync(tmpLogRoot, { recursive: true, force: true });
   });
 
-  // run-loop.mjs computes the log directory it actually reads itself, from
-  // ctx.logRoot and the worktree name (path.join(logRoot, entry.name)) --
-  // never from spawnWorkerFn's returned `logDir`. So this has to write to
-  // that exact same computed path (worktreeName()'s slug for `name`) or the
-  // classifier reads an empty/wrong tail. Defaults to ISSUE's own name.
   function withLog(contents, name = worktreeName(ISSUE.identifier, ISSUE.title)) {
     const logDir = path.join(tmpLogRoot, name);
     fs.mkdirSync(logDir, { recursive: true });
@@ -2615,10 +2680,6 @@ describe("worker-quota-pool cooldown (MOV-360)", () => {
     return logDir;
   }
 
-  // Acceptance criterion: "The first reset-bearing Claude usage-limit failure
-  // defers its issue under the existing rule and prevents a second Claude
-  // issue in the same batch and subsequent polls from creating a worktree or
-  // spawning a worker before reset."
   it("holds a claude-pinned issue back silently while claude is cooling, before preflight or the worktree manager are ever touched", async () => {
     const workerCooldownStore = fakeWorkerCooldownStore({
       claude: { worker: "claude", resetAt: "2026-09-14T17:00:00.000Z", evidence: "5-hour session limit" },
@@ -2633,8 +2694,6 @@ describe("worker-quota-pool cooldown (MOV-360)", () => {
     expect(ctx.linearClient.calls).toEqual([]);
   });
 
-  // Acceptance criterion: "A Codex-pinned issue remains eligible during a
-  // Claude cooldown; the symmetric Codex case also holds."
   it("lets a codex-pinned issue dispatch normally during a claude cooldown", async () => {
     const workerCooldownStore = fakeWorkerCooldownStore({
       claude: { worker: "claude", resetAt: "2026-09-14T17:00:00.000Z" },
@@ -2661,9 +2720,7 @@ describe("worker-quota-pool cooldown (MOV-360)", () => {
     expect(ctx.worktreeManager.createCalls[0]).toMatchObject({ worker: "claude" });
   });
 
-  // Acceptance criterion: "A fresh worker:any issue selects an available
-  // worker and can start on Codex while Claude is cooling down."
-  it("picks codex for a fresh worker:any issue while claude is cooling", async () => {
+  it("defers a fresh worker:any issue while claude is cooling without fallback", async () => {
     const workerCooldownStore = fakeWorkerCooldownStore({
       claude: { worker: "claude", resetAt: "2026-09-14T17:00:00.000Z" },
     });
@@ -2672,8 +2729,9 @@ describe("worker-quota-pool cooldown (MOV-360)", () => {
 
     const [result] = await runOnce([issue], ctx);
 
-    expect(result.outcome).toBe("in-review");
-    expect(ctx.worktreeManager.createCalls[0]).toMatchObject({ worker: "codex" });
+    expect(result.outcome).toBe("deferred-worker-cooldown");
+    expect(ctx.worktreeManager.createCalls).toEqual([]);
+    expect(ctx.linearClient.calls).toEqual([]);
   });
 
   it("leaves a fresh worker:any issue queued without a claim when both worker pools are cooling", async () => {
@@ -2691,10 +2749,6 @@ describe("worker-quota-pool cooldown (MOV-360)", () => {
     expect(ctx.linearClient.calls).toEqual([]);
   });
 
-  // Acceptance criterion: "A rate-limited issue, including worker:any,
-  // remains bound to the worker that began its attempt for its scheduled
-  // retry or retained-worktree resume; do not silently switch that
-  // already-started issue to another worker."
   it("keeps a worker:any issue bound to the worker its earlier attempt used, even though the other worker is fully open", async () => {
     const usageLimitStore = fakeUsageLimitStore({
       "MOV-1": { issue: "MOV-1", worker: "codex", consecutive: 1, retryAt: null },
@@ -2709,9 +2763,6 @@ describe("worker-quota-pool cooldown (MOV-360)", () => {
     expect(ctx.worktreeManager.createCalls[0]).toMatchObject({ worker: "codex" });
   });
 
-  // Acceptance criterion: "Once the reset arrives, admit only one attempt for
-  // the cooled worker as a probe. Prefer that worker's due deferred issue
-  // over a fresh issue when one is eligible."
   it("admits exactly one probe after reset, preferring a due per-issue retry over a fresh worker:any claim listed earlier in the batch", async () => {
     const PAST_RESET = "2026-09-14T11:00:00.000Z"; // already before NOW -- reset has passed
     const usageLimitStore = fakeUsageLimitStore({
@@ -2727,8 +2778,6 @@ describe("worker-quota-pool cooldown (MOV-360)", () => {
       labels: [...ISSUE.labels, "worker:any"],
     };
 
-    // The fresh issue is listed *first* -- proving the preference is a real
-    // batch-wide computation, not an artifact of array/processing order.
     const [freshResult, dueResult] = await runOnce([freshIssue, ISSUE], ctx);
 
     expect(dueResult).toMatchObject({ issue: "MOV-1", outcome: "in-review" });
@@ -2737,7 +2786,33 @@ describe("worker-quota-pool cooldown (MOV-360)", () => {
     expect(ctx.worktreeManager.createCalls.map((c) => c.id)).toEqual(["MOV-1"]);
   });
 
-  // Acceptance criterion: "A clean probe closes only that worker's cooldown."
+  it("does not give an undelegated due retry the provider probe", async () => {
+    const pastReset = "2026-09-14T11:00:00.000Z";
+    const withdrawn = { ...ISSUE, id: "withdrawn", identifier: "MOV-WITHDRAWN", delegate: null };
+    const ctx = baseCtx({
+      now: () => NOW,
+      usageLimitStore: fakeUsageLimitStore({ "MOV-WITHDRAWN": { worker: "claude", retryAt: pastReset } }),
+      workerCooldownStore: fakeWorkerCooldownStore({ claude: { resetAt: pastReset } }),
+    });
+    const [, eligible] = await runOnce([withdrawn, ISSUE], ctx);
+    expect(eligible.outcome).toBe("in-review");
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not spend a host-wide breaker probe on a quota-deferred issue", async () => {
+    const open = new Set([CREDENTIAL_FAILURE]);
+    const breaker = { isOpen: (name) => open.has(name), trip: (name) => open.add(name), clear: (name) => open.delete(name) };
+    const ctx = baseCtx({
+      now: () => NOW, circuitBreaker: breaker,
+      workerCooldownStore: fakeWorkerCooldownStore({ claude: { resetAt: "2026-09-14T17:00:00.000Z" } }),
+    });
+    const codex = { ...ISSUE, id: "codex-probe", identifier: "MOV-CODEX-PROBE", labels: [...ISSUE.labels, "worker:codex"] };
+    const [held, probe] = await runOnce([ISSUE, codex], ctx);
+    expect(held.outcome).toBe("deferred-worker-cooldown");
+    expect(probe.outcome).toBe("in-review");
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+  });
+
   it("closes the worker cooldown once the post-reset probe completes cleanly", async () => {
     const PAST_RESET = "2026-09-14T11:00:00.000Z";
     const workerCooldownStore = fakeWorkerCooldownStore({ claude: { worker: "claude", resetAt: PAST_RESET } });
@@ -2750,9 +2825,6 @@ describe("worker-quota-pool cooldown (MOV-360)", () => {
     expect(workerCooldownStore.get("claude")).toBeNull();
   });
 
-  // Acceptance criterion: "A new recognized limit refreshes its cooldown to
-  // the newly reported reset, including when the probing issue has exhausted
-  // its own one-retry allowance and moves to Needs Human Decision."
   it("refreshes the worker cooldown to a newly reported reset even though the probing issue itself escalates on a second consecutive limit", async () => {
     const PAST_RESET = "2026-09-14T11:00:00.000Z";
     const NEW_RESET_LOG = "Claude AI usage limit reached · resets 2026-09-14T20:00:00Z\n";
@@ -2778,12 +2850,6 @@ describe("worker-quota-pool cooldown (MOV-360)", () => {
     expect(workerCooldownStore.get("claude")).toMatchObject({ resetAt: "2026-09-14T20:00:00.000Z" });
   });
 
-  // Two issues pinned to the same worker, forced sequential (concurrencyLimit
-  // 1) so the first fully resolves -- including its own worker-cooldown
-  // record() call -- before the second is ever considered. Proves the
-  // mid-batch recheck, not just the batch-start snapshot, is what stops a
-  // dead worker from being burned through one issue at a time within a single
-  // poll (the exact 2026-09-25 incident shape).
   it("stops a second same-batch, same-worker issue once an earlier one discovers a new limit mid-batch", async () => {
     const usageLimitStore = fakeUsageLimitStore();
     const workerCooldownStore = fakeWorkerCooldownStore(); // both open at batch start
@@ -2811,8 +2877,6 @@ describe("worker-quota-pool cooldown (MOV-360)", () => {
     expect(workerCooldownStore.get("claude")).toMatchObject({ resetAt: "2026-09-14T17:00:00.000Z" });
   });
 
-  // Acceptance criterion: "An unrecognized failure ... keep their existing
-  // classifications; the new cooldown does not mask them or invent a reset."
   it("never touches the worker cooldown for a usage-limit message whose reset time cannot be parsed", async () => {
     const workerCooldownStore = fakeWorkerCooldownStore();
     const logDir = withLog("session limit reached, resetting at some point\n");
@@ -3017,6 +3081,168 @@ describe("steering turn-loop wiring", () => {
 
     expect(steering.fn.mock.calls[0][0]).toMatchObject({ steering: false });
     expect(steering.fn.mock.calls[0][0].invocation.command).toBe("codex");
+  });
+});
+
+describe("MOV-367 turn budget continuation", () => {
+  function budgetContext({ steeringEnabled = false, secondStops = false, secondExit = 0, failAdmission = false, missingProgress = false } = {}) {
+    const worktreeManager = fakeWorktreeManager();
+    let registryEntry;
+    const originalCreate = worktreeManager.create.bind(worktreeManager);
+    worktreeManager.create = (args) => {
+      const created = originalCreate(args);
+      registryEntry = { ...created, status: "active", provenance: { executor: "moviecal-dispatcher", repository: "owner/repo" } };
+      return created;
+    };
+    const originalMarkStatus = worktreeManager.markStatus.bind(worktreeManager);
+    worktreeManager.markStatus = (id, status, extra) => {
+      originalMarkStatus(id, status, extra);
+      registryEntry.status = status;
+    };
+    worktreeManager.loadState = () => ({ "MOV-1": registryEntry });
+    worktreeManager.isDispatcherOwnedWorktree = () => !failAdmission;
+    worktreeManager.worktreeIntegrity = () => ({ intact: true, branch: registryEntry.branch });
+    worktreeManager.resumeEntry = vi.fn(() => {
+      registryEntry.status = "active";
+      return registryEntry;
+    });
+    const writeTurns = [];
+    let starts = 0;
+    const spawnWorkerFn = vi.fn((args) => {
+      starts += 1;
+      const limit = starts === 1 || secondStops ? 8 : 3;
+      const promise = new Promise((resolve) => {
+        args.signal.addEventListener("abort", () => resolve({ exitCode: 143, logDir: args.logDir }), { once: true });
+        queueMicrotask(() => {
+          for (let turn = 1; turn <= limit; turn += 1) {
+            if (args.signal.aborted) break;
+            args.onAssistantTurn(turn);
+          }
+          if (!args.signal.aborted) resolve({ exitCode: starts === 1 ? 0 : secondExit, logDir: args.logDir });
+        });
+      });
+      return args.steering ? { promise, writeTurn: (text) => writeTurns.push(text), requestClose: () => {}, nextTurnBoundary: async () => ({ ended: true }) } : promise;
+    });
+    const ctx = baseCtx({
+      worktreeManager, spawnWorkerFn, steeringEnabled, turnBudgetFn: () => 8,
+      readWorkerProgressFn: () => missingProgress ? "Progress file missing." : "Done: implementation. Left: verify.",
+      removeWorkerProgressFn: vi.fn(),
+      diffSummaryFn: () => " src/a.ts | 2 ++",
+      uncommittedChangesFn: () => ["src/a.ts", "WORKER_PROGRESS.md"],
+      captureVerificationEvidenceFn: () => ({ status: "failed" }),
+      captureWorkerUsageFn: (_logDir, context) => ({ worker: "claude", tier: "default", turns: context.attemptKind === "implementation" ? 8 : 3, verifyRuns: 1 }),
+    });
+    return { ctx, writeTurns };
+  }
+
+  it("leaves an under-budget run on the ordinary publish path", async () => {
+    const { ctx, writeTurns } = budgetContext();
+    ctx.spawnWorkerFn = vi.fn(async (args) => {
+      for (let turn = 1; turn <= 3; turn += 1) args.onAssistantTurn(turn);
+      return { exitCode: 0, logDir: args.logDir };
+    });
+    const [result] = await runOnce([ISSUE], ctx);
+    expect(result.outcome).toBe("in-review");
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+    expect(writeTurns).toEqual([]);
+  });
+
+  it.each([true, false])("stops once, continues in place, and publishes only after success (steering %s)", async (steeringEnabled) => {
+    const { ctx, writeTurns } = budgetContext({ steeringEnabled });
+    const [result] = await runOnce([ISSUE], ctx);
+    expect(result.outcome).toBe("in-review");
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(2);
+    expect(ctx.worktreeManager.resumeEntry).toHaveBeenCalledTimes(1);
+    const [first, second] = ctx.spawnWorkerFn.mock.calls.map(([args]) => args);
+    expect(second.cwd).toBe(first.cwd);
+    expect(second.invocation).toEqual(first.invocation);
+    expect(second.brief).toContain("Done: implementation");
+    expect(second.brief).toContain("src/a.ts | 2 ++");
+    expect(ctx.publishWorkerResultFn).toHaveBeenCalledTimes(1);
+    expect(ctx.removeWorkerProgressFn).toHaveBeenCalledTimes(1);
+    expect(writeTurns.filter((text) => text.includes("WORKER_PROGRESS.md"))).toHaveLength(steeringEnabled ? 1 : 0);
+  });
+
+  it("treats a clean exit after the wrap-up prompt with a progress file as a budget stop", async () => {
+    const { ctx, writeTurns } = budgetContext({ steeringEnabled: true });
+    let starts = 0;
+    ctx.hasWorkerProgressFn = () => true;
+    ctx.spawnWorkerFn = vi.fn((args) => {
+      starts += 1;
+      const turns = starts === 1 ? 7 : 3;
+      const promise = (async () => {
+        await Promise.resolve();
+        for (let turn = 1; turn <= turns; turn += 1) args.onAssistantTurn(turn);
+        return { exitCode: 0, logDir: args.logDir };
+      })();
+      return { promise, writeTurn: (text) => writeTurns.push(text), requestClose: () => {}, nextTurnBoundary: async () => ({ ended: true }) };
+    });
+    const [result] = await runOnce([ISSUE], ctx);
+    expect(writeTurns.filter((text) => text.includes("WORKER_PROGRESS.md"))).toHaveLength(1);
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(2);
+    expect(ctx.worktreeManager.resumeEntry).toHaveBeenCalledTimes(1);
+    expect(result.outcome).toBe("in-review");
+    expect(ctx.publishWorkerResultFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not stop a clean exit that has a progress file but never received the wrap-up prompt", async () => {
+    const { ctx } = budgetContext();
+    ctx.hasWorkerProgressFn = () => true;
+    ctx.spawnWorkerFn = vi.fn(async (args) => {
+      for (let turn = 1; turn <= 3; turn += 1) args.onAssistantTurn(turn);
+      return { exitCode: 0, logDir: args.logDir };
+    });
+    const [result] = await runOnce([ISSUE], ctx);
+    expect(result.outcome).toBe("in-review");
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues from the diff when the progress file is absent", async () => {
+    const { ctx } = budgetContext({ missingProgress: true });
+    const [result] = await runOnce([ISSUE], ctx);
+    expect(result.outcome).toBe("in-review");
+    expect(ctx.spawnWorkerFn.mock.calls[1][0].brief).toContain("Progress file missing.");
+  });
+
+  it("hands off after the second budget stop without a third spawn or publish", async () => {
+    const { ctx } = budgetContext({ secondStops: true });
+    const [result] = await runOnce([ISSUE], ctx);
+    expect(result.outcome).toBe("budget-handoff");
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(2);
+    expect(ctx.publishWorkerResultFn).not.toHaveBeenCalled();
+    const handoffs = ctx.linearClient.calls.filter((call) => call.type === "addComment" && call.body.includes("human review required"));
+    expect(handoffs).toHaveLength(1);
+    expect(handoffs[0].body).toContain("Latest exact verify: failed");
+    expect(handoffs[0].body).toContain("src/a.ts");
+  });
+
+  it("hands off once when retained worktree ownership cannot be proved", async () => {
+    const { ctx } = budgetContext({ failAdmission: true });
+    const [result] = await runOnce([ISSUE], ctx);
+    expect(result.outcome).toBe("budget-handoff");
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+    expect(ctx.publishWorkerResultFn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["credential", "OAuth access token has expired", "credential-failure"],
+    ["usage limit", `Claude usage limit reached · reset|${Math.floor((Date.now() + 3600_000) / 1000)}`, "worker-failed"],
+  ])("keeps %s classification ahead of a simultaneous budget event", async (_name, signature, expected) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mov367-precedence-"));
+    try {
+      const { ctx } = budgetContext();
+      ctx.logRoot = root;
+      ctx.spawnWorkerFn = vi.fn(async (args) => {
+        fs.mkdirSync(args.logDir, { recursive: true });
+        fs.writeFileSync(path.join(args.logDir, "stdout.log"), `${signature}\n`);
+        for (let turn = 1; turn <= 8; turn += 1) args.onAssistantTurn(turn);
+        return { exitCode: 1, logDir: args.logDir };
+      });
+      const [result] = await runOnce([ISSUE], ctx);
+      expect(result.outcome).toBe(expected);
+      expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+      expect(ctx.publishWorkerResultFn).not.toHaveBeenCalled();
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 });
 

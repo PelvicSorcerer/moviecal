@@ -81,7 +81,7 @@ describe("dispatcher run-loop wiring (MOV-129/MOV-317/MOV-366)", () => {
   it("exposes only a read-only master-CI preview outside dispatcher run", () => {
     const preview = bodyOf("cmdMasterCi");
     expect(source).toMatch(/case "master-ci":/);
-    expect(source).toMatch(/dispatcher <doctor\|health\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|audit-issues\|reconcile-parents\|repair\|master-ci\|run>/);
+    expect(source).toMatch(/dispatcher <doctor\|health\|usage\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|audit-issues\|reconcile-parents\|repair\|master-ci\|run>/);
     expect(preview).toMatch(/if\s*\(!dryRun\)/);
     expect(preview).toMatch(/previewMasterCiPass\(/);
     expect(preview).toMatch(/readOnly:\s*true/);
@@ -359,6 +359,7 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       // it mirrors usageLimitStatePath's own "dispatcher state, not a
       // credential" reasoning, just scoped to one worker instead of one issue.
       "workerCooldownStatePath",
+      "workerUsageStatePath",
       "worktreesStatePath",
     ]);
     for (const [name, text] of dispatcherSources) {
@@ -449,7 +450,7 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
 
   it("registers agent-signal as a read-only command that mutates nothing", () => {
     expect(source).toMatch(/case "agent-signal":/);
-    expect(source).toMatch(/dispatcher <doctor\|health\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|audit-issues\|reconcile-parents\|repair\|master-ci\|run>/);
+    expect(source).toMatch(/dispatcher <doctor\|health\|usage\|dry-run\|shadow\|agent-signal\|gc\|promote\|priorities\|audit-issues\|reconcile-parents\|repair\|master-ci\|run>/);
     const body = source.slice(source.indexOf("function cmdAgentSignal("));
     const end = body.indexOf("\n}\n");
     const fn = body.slice(0, end);

@@ -39,6 +39,32 @@ function repositoryContextLines(context) {
   ];
 }
 
+function explorationLines(context) {
+  return [
+    "## Explore efficiently",
+    "",
+    "Locate code with `Grep`/`Glob` before opening files. For large files, read only relevant line ranges (`offset`/`limit`). Avoid re-reading a file unless it has changed since your last read. For broad searches across many files, delegate to the repo's `explore` subagent in `.claude/agents/` so those reads stay out of your main context.",
+    "",
+    ...(context?.likelyStartingPoints?.length ? [
+      "### Likely starting points",
+      "",
+      ...context.likelyStartingPoints.map((point) => `- \`${point.path}\` — ${point.lines} lines${point.readByRange ? " (read by range)" : ""}`),
+      "",
+    ] : []),
+  ];
+}
+
+function iterativeVerificationLines() {
+  return [
+    "## Check your work while iterating",
+    "",
+    "Use focused checks as you edit: `npx vitest --config vitest.unit.config.ts --run <path-or-pattern>` for affected unit tests, `npx vitest --config vitest.integration.config.ts --run <path-or-pattern>` for affected integration tests, `npm run typecheck`, and `npm run lint`. For dispatcher changes, target the matching `tools/dispatcher/test/...` files with the appropriate Vitest command.",
+    "",
+    "When you believe the change is complete, run the literal `npm run verify` once. Do not use it as a probe. If it fails, fix the failure using focused checks, then run `npm run verify` again. Every exact verify run is recorded; any failed run disables PR autonomy for this attempt, even if a later run passes.",
+    "",
+  ];
+}
+
 /**
  * The section a resumed worker needs and a fresh one must never see (MOV-205).
  *
@@ -110,6 +136,8 @@ export function generateBrief(issue, { branch, worktreePath, worker, model, upgr
   lines.push("");
   lines.push(...resumeLines(resume));
   lines.push(...repositoryContextLines(repositoryContext));
+  lines.push(...explorationLines(repositoryContext));
+  lines.push(...iterativeVerificationLines());
   lines.push(...iosWorkerLeaseLines(issue));
   lines.push(...iosVerificationLines(issue, repositoryContext));
   lines.push("## Instructions");
@@ -244,6 +272,8 @@ export function generateRepairBrief(issue, {
     `Repair attempt: ${attempt}${budget ? ` of at most ${budget} for this pull request` : ""}`,
     "",
     ...repositoryContextLines(repositoryContext),
+    ...explorationLines(repositoryContext),
+    ...iterativeVerificationLines(),
     "## What you are being asked to do",
     "",
     `This is a **bounded repair**, not an implementation task. An existing dispatcher-owned pull request is failing, and automatic repair was admitted for it: ${reason || "a required check failed on the current head"}.`,

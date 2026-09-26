@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
+import { DESIRED_PROJECTS, RETIRED_PROJECTS } from "../src/linear-topology.mjs";
 import {
+  CLOUD_PROJECTS,
   EXECUTION_LABELS,
+  MAC_PROJECTS,
   inferExecutionRoute,
   isCoordinationIssue,
   parseExecutionLabels,
@@ -26,9 +29,19 @@ describe("execution routing", () => {
       expect(inferExecutionRoute({ project })).toBe("mac");
       expect(resolveExecutionRoute({ project, labels: ["execution:mac"] })).toMatchObject({ ok: true, route: "mac" });
     }
-    expect(inferExecutionRoute({ project: "Calendar Feed" })).toBe("mac");
     expect(inferExecutionRoute({ project: "Autonomous local-agent delivery" })).toBe("mac");
     expect(inferExecutionRoute({ project: "Local development workflow stabilization and governance" })).toBe("mac");
+  });
+
+  it("routes every desired active project and no retired project", () => {
+    const roster = new Set([...MAC_PROJECTS, ...CLOUD_PROJECTS]);
+    for (const { name } of DESIRED_PROJECTS) expect(roster.has(name)).toBe(true);
+    for (const name of RETIRED_PROJECTS) expect(roster.has(name)).toBe(false);
+    // Mac/cloud separation is intact: no project is on both sides.
+    for (const name of CLOUD_PROJECTS) expect(MAC_PROJECTS.has(name)).toBe(false);
+    for (const { name } of DESIRED_PROJECTS) {
+      expect(inferExecutionRoute({ project: name })).toBe(CLOUD_PROJECTS.has(name) ? "cloud" : "mac");
+    }
   });
 
   it("infers cloud only for the separately deferred cloud project", () => {

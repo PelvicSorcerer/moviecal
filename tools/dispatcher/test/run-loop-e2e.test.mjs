@@ -343,18 +343,27 @@ describe("dependency-gating -> promotion -> dispatch, one continuous run (MOV-19
     // would return it, goes through the real buildRunContext -> runOnce path.
     const dispatchIssue = {
       id: "id-dep2", identifier: "MOV-DEP2", title: "Depends on the blocker",
-      description: READY_SECTIONS, url: "https://linear.app/moviecal/issue/MOV-DEP2",
+      description: `${READY_SECTIONS}\n\nStart at \`src/feature/example.ts\`.`, url: "https://linear.app/moviecal/issue/MOV-DEP2",
       project: null, labels: ["execution:mac"], delegate: DELEGATE,
       blockedByIds: ["id-blocker2"],
       inverseRelations: readyDescription.inverseRelations,
     };
     linearClient.issueSnapshot = async () => dispatchIssue;
-    const ctx = { ...(await buildRunContext(linearClient, TEAM_KEY, [dispatchIssue])), ...fakeLeaves() };
+    const leaves = fakeLeaves();
+    const create = leaves.worktreeManager.create.bind(leaves.worktreeManager);
+    leaves.worktreeManager.create = (args) => {
+      const entry = create(args);
+      fs.mkdirSync(path.join(entry.path, "src/feature"), { recursive: true });
+      fs.writeFileSync(path.join(entry.path, "src/feature/example.ts"), "first\nsecond\n");
+      return entry;
+    };
+    const ctx = { ...(await buildRunContext(linearClient, TEAM_KEY, [dispatchIssue])), ...leaves };
 
     const [result] = await runOnce([dispatchIssue], ctx);
 
     expect(result.outcome).toBe("in-review");
     expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+    expect(ctx.spawnWorkerFn.mock.calls[0][0].brief).toContain("`src/feature/example.ts` — 2 lines");
     expect(ctx.worktreeManager.createCalls).toHaveLength(1);
     expect(ctx.worktreeManager.createCalls[0]).toMatchObject({ id: "MOV-DEP2" });
   });
@@ -499,7 +508,7 @@ describe("dependency-gating -> promotion -> dispatch, one continuous run (MOV-19
 // usage limit, driven through the real buildRunContext -> runOnce seam (not
 // hand-assembled fakes) -- the acceptance criteria this issue names for the
 // integration layer: exact worker spawn/worktree counts across one batch,
-// Codex-pinned and fresh worker:any progress during a Claude cooldown, the
+// Codex-pinned progress and fresh worker:any deferral during a Claude cooldown, the
 // original worker preserved on a deferred worker:any retry across a restart,
 // due-retry probe priority, and no same-batch cascade after the refusal.
 describe("worker-quota-pool cooldown across the real dispatcher wiring (MOV-360)", () => {
@@ -536,7 +545,7 @@ describe("worker-quota-pool cooldown across the real dispatcher wiring (MOV-360)
     return logDir;
   }
 
-  it("blocks a second same-batch claude issue after the first hits a limit, while a codex-pinned issue and a fresh worker:any issue both still progress on codex", async () => {
+  it("blocks a second same-batch claude issue after the first hits a limit, while codex-pinned work progresses and fresh worker:any waits", async () => {
     const issueC1 = makeIssue({ id: "id-c1", identifier: "MOV-C1", title: "First claude issue" });
     const issueC2 = makeIssue({ id: "id-c2", identifier: "MOV-C2", title: "Second claude issue" });
     const issueCodex = makeIssue({ id: "id-cx", identifier: "MOV-CX", title: "A codex issue", labels: ["worker:codex"] });
@@ -573,17 +582,15 @@ describe("worker-quota-pool cooldown across the real dispatcher wiring (MOV-360)
     // dispatched, no Linear write of its own.
     expect(c2Result).toMatchObject({ issue: "MOV-C2", outcome: "deferred-worker-cooldown" });
     expect(linearClient.calls.some((c) => c.issueId === "id-c2")).toBe(false);
-    // Codex is a fully independent quota pool: both the pinned and the fresh
-    // worker:any issue progress normally on it.
+    // Codex-pinned work progresses independently; worker:any keeps Claude.
     expect(cxResult).toMatchObject({ issue: "MOV-CX", outcome: "in-review" });
-    expect(anyResult).toMatchObject({ issue: "MOV-ANY", outcome: "in-review" });
+    expect(anyResult).toMatchObject({ issue: "MOV-ANY", outcome: "deferred-worker-cooldown" });
+    expect(linearClient.calls.some((c) => c.issueId === "id-any")).toBe(false);
 
-    // Exact spawn/worktree counts: three real attempts (C1, CX, ANY), never
-    // four -- C2 never reaches worktree creation or the worker at all.
-    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(3);
-    expect(manager.createCalls.map((c) => c.id)).toEqual(["MOV-C1", "MOV-CX", "MOV-ANY"]);
+    // Only C1 and the explicitly pinned Codex issue create worktrees.
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(2);
+    expect(manager.createCalls.map((c) => c.id)).toEqual(["MOV-C1", "MOV-CX"]);
     expect(manager.createCalls.find((c) => c.id === "MOV-CX").worker).toBe("codex");
-    expect(manager.createCalls.find((c) => c.id === "MOV-ANY").worker).toBe("codex");
 
     // The cooldown this batch produced is real, persisted state -- a fresh
     // store over the same on-disk path (a restarted daemon) still sees it.
