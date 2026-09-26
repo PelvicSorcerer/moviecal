@@ -8,7 +8,7 @@ const number = (value) => typeof value === "number" && Number.isFinite(value) ? 
 const identifier = (value) => typeof value === "string" && /^[A-Za-z0-9_.:-]{1,100}$/.test(value) ? value : null;
 const size = (value) => typeof value === "string" ? value.length : value == null ? 0 : JSON.stringify(value).length;
 
-export function parseWorkerUsage(transcript, { issue, attemptKind, worker, modelId = null, tier = null, reasoningEffort = null, exitOutcome = null, durationMs = null } = {}) {
+export function parseWorkerUsage(transcript, { issue, attemptKind, worker, modelId = null, tier = null, reasoningEffort = null, exitOutcome = null, durationMs = null, observedTurns = null } = {}) {
   const summary = {
     issue: identifier(issue), attemptKind: identifier(attemptKind), worker: identifier(worker),
     modelId: identifier(modelId), tier: identifier(tier), reasoningEffort: identifier(reasoningEffort),
@@ -92,6 +92,7 @@ export function parseWorkerUsage(transcript, { issue, attemptKind, worker, model
     summary.thinkingTokens = number(codexUsage.reasoning_output_tokens);
     summary.partial = true; // Codex does not report the full Claude result shape.
   }
+  if (summary.turns === null && number(observedTurns) !== null && observedTurns > 0) summary.turns = observedTurns;
   return summary;
 }
 

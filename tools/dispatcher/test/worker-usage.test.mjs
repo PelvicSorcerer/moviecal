@@ -25,6 +25,13 @@ describe("worker usage", () => {
     expect(result).toMatchObject({ turns: null, costUsd: null, inputTokens: null, partial: true, verifyRuns: 2 });
   });
 
+  it("retains a live observed turn count for a budget-reaped partial transcript", () => {
+    const result = parseWorkerUsage('{"type":"assistant","message":{"role":"assistant"}}\n', {
+      issue: "MOV-367", worker: "claude", attemptKind: "continuation", observedTurns: 8, exitOutcome: "exited-143",
+    });
+    expect(result).toMatchObject({ turns: 8, partial: true, costUsd: null, exitOutcome: "exited-143" });
+  });
+
   it("uses available Codex usage, leaving absent values null", () => {
     const transcript = [
       { type: "item.started", item: { id: "one", type: "command_execution", command: "npm run verify" } },
