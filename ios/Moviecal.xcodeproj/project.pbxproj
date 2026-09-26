@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		CAFEF00D0000000000000916 /* SharedWatchlistDetailViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000906 /* SharedWatchlistDetailViewModelTests.swift */; };
+		CAFEF00D0000000000000915 /* WatchlistsViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000905 /* WatchlistsViewModelTests.swift */; };
+		CAFEF00D0000000000000914 /* WatchlistBrowserViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000904 /* WatchlistBrowserViews.swift */; };
+		CAFEF00D0000000000000913 /* SharedWatchlistDetailViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000903 /* SharedWatchlistDetailViewModel.swift */; };
+		CAFEF00D0000000000000912 /* WatchlistsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000902 /* WatchlistsViewModel.swift */; };
+		CAFEF00D0000000000000911 /* WatchlistSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFEF00D0000000000000901 /* WatchlistSummary.swift */; };
 		05162BF8F731FF063EA2EF8F /* SupabaseAuthTokenProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0971793DF4898BD6A6D55383 /* SupabaseAuthTokenProvider.swift */; };
 		3613820ED224C062500FFFCB /* SupabaseAuthAPIClientIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF54F5821818C237F5BA7343 /* SupabaseAuthAPIClientIntegrationTests.swift */; };
 		3745137F7F58EFCE2946A030 /* AuthState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E8A2C6D941134652C810AA3 /* AuthState.swift */; };
@@ -73,6 +79,12 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		CAFEF00D0000000000000906 /* SharedWatchlistDetailViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedWatchlistDetailViewModelTests.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000905 /* WatchlistsViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistsViewModelTests.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000904 /* WatchlistBrowserViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistBrowserViews.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000903 /* SharedWatchlistDetailViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedWatchlistDetailViewModel.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000902 /* WatchlistsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistsViewModel.swift; sourceTree = "<group>"; };
+		CAFEF00D0000000000000901 /* WatchlistSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistSummary.swift; sourceTree = "<group>"; };
 		0971793DF4898BD6A6D55383 /* SupabaseAuthTokenProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SupabaseAuthTokenProvider.swift; sourceTree = "<group>"; };
 		0EEBBE8E5FE554D8CAB41B55 /* AuthStoreTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthStoreTests.swift; sourceTree = "<group>"; };
 		2A166CCCCB2C47E587B70A76 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -234,6 +246,7 @@
 			children = (
 				CAFEF00D0000000000000048 /* Movie.swift */,
 				CAFEF00D0000000000000049 /* WatchlistItem.swift */,
+				CAFEF00D0000000000000901 /* WatchlistSummary.swift */,
 				CAFEF00D0000000000000050 /* MovieSearchResult.swift */,
 				CAFEF00D0000000000000051 /* CalendarSubscriptionResponse.swift */,
 				CAFEF00D0000000000000052 /* APIErrorBody.swift */,
@@ -321,6 +334,9 @@
 			children = (
 				CAFEF00D0000000000000082 /* WatchlistView.swift */,
 				CAFEF00D0000000000000084 /* WatchlistViewModel.swift */,
+				CAFEF00D0000000000000904 /* WatchlistBrowserViews.swift */,
+				CAFEF00D0000000000000903 /* SharedWatchlistDetailViewModel.swift */,
+				CAFEF00D0000000000000902 /* WatchlistsViewModel.swift */,
 			);
 			path = Watchlist;
 			sourceTree = "<group>";
@@ -329,6 +345,8 @@
 			isa = PBXGroup;
 			children = (
 				CAFEF00D0000000000000086 /* WatchlistViewModelTests.swift */,
+				CAFEF00D0000000000000906 /* SharedWatchlistDetailViewModelTests.swift */,
+				CAFEF00D0000000000000905 /* WatchlistsViewModelTests.swift */,
 			);
 			path = Watchlist;
 			sourceTree = "<group>";
@@ -526,6 +544,7 @@
 				CAFEF00D0000000000000059 /* APIClient.swift in Sources */,
 				CAFEF00D0000000000000060 /* Movie.swift in Sources */,
 				CAFEF00D0000000000000061 /* WatchlistItem.swift in Sources */,
+				CAFEF00D0000000000000911 /* WatchlistSummary.swift in Sources */,
 				CAFEF00D0000000000000062 /* MovieSearchResult.swift in Sources */,
 				CAFEF00D0000000000000063 /* CalendarSubscriptionResponse.swift in Sources */,
 				CAFEF00D0000000000000064 /* APIErrorBody.swift in Sources */,
@@ -544,6 +563,9 @@
 				CAFEF00D0000000000000081 /* SettingsView.swift in Sources */,
 				CAFEF00D0000000000000083 /* WatchlistView.swift in Sources */,
 				CAFEF00D0000000000000085 /* WatchlistViewModel.swift in Sources */,
+				CAFEF00D0000000000000914 /* WatchlistBrowserViews.swift in Sources */,
+				CAFEF00D0000000000000913 /* SharedWatchlistDetailViewModel.swift in Sources */,
+				CAFEF00D0000000000000912 /* WatchlistsViewModel.swift in Sources */,
 				8E7B97AF40A85E8BE9274532 /* ConfigurationErrorView.swift in Sources */,
 				CAFEF00D0000000000000114 /* CalendarSubscriptionViewModel.swift in Sources */,
 			);
@@ -562,6 +584,8 @@
 				A5D9402080B0053ED61DC354 /* SupabaseAuthTokenProviderTests.swift in Sources */,
 				3613820ED224C062500FFFCB /* SupabaseAuthAPIClientIntegrationTests.swift in Sources */,
 				CAFEF00D0000000000000087 /* WatchlistViewModelTests.swift in Sources */,
+				CAFEF00D0000000000000916 /* SharedWatchlistDetailViewModelTests.swift in Sources */,
+				CAFEF00D0000000000000915 /* WatchlistsViewModelTests.swift in Sources */,
 				CAFEF00D0000000000000203 /* SearchViewModelTests.swift in Sources */,
 				CAFEF00D0000000000000089 /* SignInViewModelTests.swift in Sources */,
 				CAFEF00D0000000000000091 /* SnapshotAssertion.swift in Sources */,

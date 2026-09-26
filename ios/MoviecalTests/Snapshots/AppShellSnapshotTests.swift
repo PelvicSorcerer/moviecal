@@ -156,6 +156,92 @@ final class AppShellSnapshotTests: XCTestCase {
         )
         assertSnapshot(of: WatchlistContentView(state: .loaded([item]), onRetry: {}), named: "Watchlist-WithItems")
     }
+
+    // MARK: - Personal and shared lists
+
+    private func watchlistItem() -> WatchlistItem {
+        WatchlistItem(
+            id: "watchlist-item-1",
+            addedAt: "2026-06-13T05:00:00.000Z",
+            movie: Movie(id: 42, tmdbId: 603, title: "The Matrix", releaseDate: "1999-03-31", posterPath: nil, overview: nil)
+        )
+    }
+
+    func testWatchlistBrowserPersonalOnlySnapshot() {
+        assertSnapshot(
+            of: NavigationStack {
+                WatchlistBrowserContentView(state: .loaded([WatchlistsFixtures.personal]), onRetry: {})
+                    .navigationTitle("Watchlists")
+            },
+            named: "WatchlistBrowser-PersonalOnly"
+        )
+    }
+
+    func testWatchlistBrowserOwnerAndEditorSnapshot() {
+        assertSnapshot(
+            of: NavigationStack {
+                WatchlistBrowserContentView(
+                    state: .loaded([WatchlistsFixtures.personal, WatchlistsFixtures.owned, WatchlistsFixtures.edited]),
+                    onRetry: {}
+                )
+                .navigationTitle("Watchlists")
+            },
+            named: "WatchlistBrowser-OwnerAndEditor"
+        )
+    }
+
+    func testWatchlistBrowserLargeTextDarkSnapshot() {
+        assertSnapshot(
+            of: NavigationStack {
+                WatchlistBrowserContentView(
+                    state: .loaded([WatchlistsFixtures.personal, WatchlistsFixtures.owned, WatchlistsFixtures.edited]),
+                    onRetry: {}
+                )
+                .navigationTitle("Watchlists")
+            }
+            .dynamicTypeSize(.accessibility3)
+            .preferredColorScheme(.dark),
+            named: "WatchlistBrowser-LargeText-Dark"
+        )
+    }
+
+    func testWatchlistBrowserEmptySnapshot() {
+        assertSnapshot(of: WatchlistBrowserContentView(state: .loaded([]), onRetry: {}), named: "WatchlistBrowser-Empty")
+    }
+
+    func testWatchlistBrowserErrorSnapshot() {
+        assertSnapshot(
+            of: WatchlistBrowserContentView(state: .failed("Unable to load your watchlists. Pull to refresh to try again."), onRetry: {}),
+            named: "WatchlistBrowser-Error"
+        )
+    }
+
+    func testSharedWatchlistDetailOwnerSnapshot() {
+        assertSnapshot(
+            of: SharedWatchlistDetailContentView(
+                summary: WatchlistsFixtures.owned, state: .loaded([watchlistItem()]), onRetry: {}
+            ),
+            named: "SharedWatchlistDetail-Owner"
+        )
+    }
+
+    func testSharedWatchlistDetailEditorEmptySnapshot() {
+        assertSnapshot(
+            of: SharedWatchlistDetailContentView(
+                summary: WatchlistsFixtures.edited, state: .loaded([]), onRetry: {}
+            ),
+            named: "SharedWatchlistDetail-EditorEmpty"
+        )
+    }
+
+    func testSharedWatchlistDetailErrorSnapshot() {
+        assertSnapshot(
+            of: SharedWatchlistDetailContentView(
+                summary: WatchlistsFixtures.edited, state: .failed("Unable to load this watchlist. Pull to refresh to try again."), onRetry: {}
+            ),
+            named: "SharedWatchlistDetail-Error"
+        )
+    }
 }
 
 private struct SnapshotStubTokenProvider: AuthTokenProviding {
