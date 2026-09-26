@@ -1,12 +1,8 @@
 import { NextResponse } from 'next/server';
 
 import { apiError, handleDomainError } from '../../../../lib/api/response';
-import { extractBearerToken } from '../../../../lib/auth/bearer';
-import { resolveAuthTokensWithClient } from '../../../../lib/auth/identity';
-import {
-  createServerSupabaseClient,
-  createServerSupabaseServiceRoleClient,
-} from '../../../../lib/supabase/server';
+import { resolveBearerIdentity } from '../../../../lib/auth/bearer-identity';
+import { createServerSupabaseServiceRoleClient } from '../../../../lib/supabase/server';
 import { createSupabaseWatchlistRepository } from '../../../../lib/supabase/watchlist';
 import {
   getMovieDetails,
@@ -49,39 +45,26 @@ interface ResolvedRequest {
  * repository. Returns a `401` `NextResponse` when the token is missing,
  * malformed, or does not resolve to a user.
  *
- * The user-scoped client (`userClient`) is used only for identity resolution
- * via `resolveAuthTokensWithClient` and the `ensurePersonalWatchlist` RPC. The
- * service-role client (`adminClient`) backs all `watchlist_items`, `movies`,
- * `watchlists`, and membership data-access operations. Authorization is
- * enforced at the application level by the ownership check in
- * `getWatchlistAccess`, not by RLS on `watchlist_items`.
+ * Identity resolution is the shared `resolveBearerIdentity` helper the watchlist `v1`
+ * routes use, so this surface cannot drift from the shared-list routes on what
+ * counts as an authenticated bearer request. The user-scoped client
+ * (`userClient`) is used only for identity resolution and the
+ * `ensurePersonalWatchlist` RPC. The service-role client (`adminClient`) backs
+ * all `watchlist_items`, `movies`, `watchlists`, and membership data-access
+ * operations. Authorization is enforced at the application level by the
+ * ownership check in `getWatchlistAccess`, not by RLS on `watchlist_items`.
  */
 async function resolveRequest(
   request: Request,
 ): Promise<ResolvedRequest | NextResponse> {
-  const token = extractBearerToken(request);
+  const identity = await resolveBearerIdentity(request);
 
-  if (!token) {
-    return apiError('Unauthorized.', 401);
-  }
-
-  const userClient = createServerSupabaseClient(token);
-
-  const auth = await resolveAuthTokensWithClient(
-    userClient,
-    // Bearer-only auth: the Authorization header carries no refresh token, so
-    // there is nothing to refresh. `refreshToken` is empty and, with
-    // `allowRefresh: false`, the refresh branch never runs and never reads it.
-    { accessToken: token, refreshToken: '' },
-    { allowRefresh: false },
-  );
-
-  if (!auth.user) {
+  if (!identity) {
     return apiError('Unauthorized.', 401);
   }
 
   const repository = createSupabaseWatchlistRepository({
-    userClient,
+    userClient: identity.userClient,
     // Service-role client used for all data-access operations: watchlist_items
     // queries/mutations, movies upsert, watchlists lookup (getWatchlistAccess),
     // and membership operations. This matches the unversioned routes. User
@@ -90,7 +73,7 @@ async function resolveRequest(
     adminClient: createServerSupabaseServiceRoleClient(),
   });
 
-  return { repository, userId: auth.user.id };
+  return { repository, userId: identity.user.id };
 }
 
 interface WatchlistCreateRequestBody {

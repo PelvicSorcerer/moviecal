@@ -5,4 +5,5 @@ export * from './factories/search';
 export * from './factories/users';
 export * from './factories/watchlists';
 export * from './mocks/calendar-token-repository';
+export * from './mocks/shared-watchlist-read-repository';
 export * from './mocks/watchlist-repository';

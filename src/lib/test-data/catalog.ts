@@ -20,15 +20,21 @@ export const TEST_TIMESTAMPS = {
 export const TEST_USER_IDS = {
   OWNER: 'user-1',
   COLLABORATOR: 'user-2',
+  PENDING_INVITEE: 'user-3',
+  OUTSIDER: 'user-4',
   E2E_OWNER: 'e2e-user',
   E2E_COLLABORATOR: 'e2e-collaborator-user',
 } as const;
 
 export const TEST_WATCHLIST_IDS = {
   PERSONAL: 'personal-watchlist-1',
+  COLLABORATOR_PERSONAL: 'personal-watchlist-2',
+  PENDING_INVITEE_PERSONAL: 'personal-watchlist-3',
+  OUTSIDER_PERSONAL: 'personal-watchlist-4',
   SHARED: 'shared-watchlist-1',
   DOMAIN_PERSONAL: 'watchlist-1',
   E2E_PERSONAL: 'e2e-personal-watchlist',
+  UNKNOWN: 'watchlist-that-does-not-exist',
 } as const;
 
 export const TEST_ITEM_IDS = {

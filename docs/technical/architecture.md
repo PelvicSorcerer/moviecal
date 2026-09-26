@@ -27,3 +27,7 @@ Security boundaries
 Scalability
 - Design keeps feed generation efficient (query accessible watchlists → join cached movie release dates → dedupe by movie identity → stream .ics).
 - Cache TMDb responses to minimize API calls and stay within rate limits.
+
+## Versioned shared-watchlist reads (MOV-340)
+
+`GET /api/v1/watchlists` and `GET /api/v1/watchlists/{id}` expose authorized personal/shared summaries and items with `role` and `canEdit`. Bearer identity is validated before service-role construction, with no cookie fallback or token logging. List summaries use caller-scoped RLS; detail uses server-only service-role data access after the same actor-scoped ownership/accepted-membership check as cookie reads. Pending invitees and outsiders receive no shared metadata; forbidden and unknown detail IDs both return 404. Direct user clients remain subject to RLS, and clients never receive service-role keys. The singular personal API remains compatible. Stable IDs, UTC dates, error shapes, and bounded cursor pagination are defined in [v1 contract](../api/v1-contract.md). Native presentation and shared mutation APIs remain separate work.
