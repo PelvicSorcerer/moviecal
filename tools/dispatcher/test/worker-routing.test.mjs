@@ -159,7 +159,9 @@ describe("workerInvocation", () => {
       "--effort",
       "medium",
       "--permission-mode",
-      "dontAsk",
+      "default",
+      "--permission-prompts",
+      "none",
       "--tools",
       "Read,Edit,Write,Glob,Grep,Bash,NotebookEdit,Task",
       "--allowedTools",
@@ -188,7 +190,7 @@ describe("workerInvocation", () => {
     it("pins the exact tool constant and the permission mode", () => {
       expect(CLAUDE_WORKER_TOOLS).toEqual(["Read", "Edit", "Write", "Glob", "Grep", "Bash", "NotebookEdit", "Task"]);
       expect(Object.isFrozen(CLAUDE_WORKER_TOOLS)).toBe(true);
-      expect(CLAUDE_WORKER_PERMISSION_MODE).toBe("dontAsk");
+      expect(CLAUDE_WORKER_PERMISSION_MODE).toBe("default");
       for (const tool of EXCLUDED) expect(CLAUDE_WORKER_TOOLS).not.toContain(tool);
     });
 
@@ -199,6 +201,7 @@ describe("workerInvocation", () => {
         expect(valueAfter("--tools")).toBe(CLAUDE_WORKER_TOOLS.join(","));
         expect(valueAfter("--allowedTools")).toBe(CLAUDE_WORKER_TOOLS.join(","));
         expect(valueAfter("--permission-mode")).toBe(CLAUDE_WORKER_PERMISSION_MODE);
+        expect(valueAfter("--permission-prompts")).toBe("none");
         expect(args.filter((arg) => arg === "--tools")).toHaveLength(1);
         expect(args).not.toContain("--disallowedTools");
         // The deny list still rides in --settings on top of the allowlist.
@@ -216,6 +219,7 @@ describe("workerInvocation", () => {
       expect(args).not.toContain("--tools");
       expect(args).not.toContain("--allowedTools");
       expect(args).not.toContain("--permission-mode");
+      expect(args).not.toContain("--permission-prompts");
     });
   });
 
@@ -263,18 +267,15 @@ describe("workerInvocation", () => {
   });
 
   it("scopes the claude invocation to a non-hanging, non-bypassing permission mode", () => {
-    // dontAsk auto-denies anything not covered by the base project allow list
-    // or the dispatcher-only worker deny list, instead of prompting -- which is what prevents a
-    // headless run with no TTY from hanging on an unmatched permission
-    // request. Verified against the installed CLI version (2.1.208): the
-    // newer `acceptEdits` + `--permission-prompts none` combination is
-    // rejected as an unknown option on this version.
+    // The scrub fixes the effective mode at default. Explicit prompt routing
+    // denies anything requiring an approval host instead of waiting for one.
+    // This requires CLI >=2.1.259; older versions must reject the flag.
     const invocation = workerInvocation("claude", "default");
     expect(invocation.args).toContain("--permission-mode");
-    expect(invocation.args).toContain("dontAsk");
+    expect(invocation.args).toContain("default");
     expect(invocation.args).not.toContain("bypassPermissions");
     expect(invocation.args).not.toContain("--dangerously-skip-permissions");
-    expect(invocation.args).not.toContain("--permission-prompts");
+    expect(invocation.args[invocation.args.indexOf("--permission-prompts") + 1]).toBe("none");
   });
 
   it("keeps every legacy Claude deny in the dispatcher-only settings payload (MOV-237)", () => {

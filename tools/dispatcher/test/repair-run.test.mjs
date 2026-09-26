@@ -126,7 +126,7 @@ describe("runRepairPass (MOV-190)", () => {
     ctx.workerInvocationFn = workerInvocation;
     ctx.logger = { error: vi.fn(), warn: vi.fn() };
     ctx.spawnWorkerFn = vi.fn(async ({ onWorkerInit }) => {
-      onWorkerInit({ type: "system", subtype: "init", permissionMode: "default", tools: [...CLAUDE_WORKER_TOOLS, "Workflow"] });
+      onWorkerInit({ type: "system", subtype: "init", permissionMode: "acceptEdits", tools: [...CLAUDE_WORKER_TOOLS, "Workflow"] });
       return { exitCode: 0 };
     });
 
@@ -134,10 +134,10 @@ describe("runRepairPass (MOV-190)", () => {
 
     expect(result.outcome).toBe("repaired");
     const { invocation } = ctx.spawnWorkerFn.mock.calls[0][0];
-    expect(invocation.args.slice(invocation.args.indexOf("--permission-mode"), invocation.args.indexOf("--permission-mode") + 6)).toEqual([
-      "--permission-mode", "dontAsk", "--tools", CLAUDE_WORKER_TOOLS.join(","), "--allowedTools", CLAUDE_WORKER_TOOLS.join(","),
+    expect(invocation.args.slice(invocation.args.indexOf("--permission-mode"), invocation.args.indexOf("--permission-mode") + 8)).toEqual([
+      "--permission-mode", "default", "--permission-prompts", "none", "--tools", CLAUDE_WORKER_TOOLS.join(","), "--allowedTools", CLAUDE_WORKER_TOOLS.join(","),
     ]);
-    expect(ctx.logger.warn).toHaveBeenCalledWith(expect.stringMatching(/Claude worker for MOV-190 repair did not start as configured — permissionMode is "default".*tools outside the allowlist: Workflow/));
+    expect(ctx.logger.warn).toHaveBeenCalledWith(expect.stringMatching(/Claude worker for MOV-190 repair did not start as configured — permissionMode is "acceptEdits".*tools outside the allowlist: Workflow/));
   });
 
   it("does not attach the Claude startup check to a Codex repair worker (MOV-386)", async () => {

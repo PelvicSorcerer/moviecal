@@ -1,14 +1,12 @@
 // MOV-386: confirm a Claude worker really started the way workerInvocation()
 // asked it to.
 //
-// The CLI can override the requested flags without failing: with
-// CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 and no explicit tool declaration, Claude
-// Code 2.1.281 silently forced `--permission-mode dontAsk` back to `default`
-// and loaded every built-in tool. The only trustworthy evidence of what a
-// session actually runs with is its own stream-json `system/init` event, so
-// this module compares that event against CLAUDE_WORKER_PERMISSION_MODE and
-// CLAUDE_WORKER_TOOLS. A mismatch is recorded and reported loudly; it never
-// kills the run (that is a later, separate decision).
+// With the credential scrub enabled, Claude Code 2.1.282 forces default mode.
+// workerInvocation explicitly requests default plus permission-prompts none;
+// the latter denies unmatched approval-requiring calls without prompting.
+// system/init confirms only the effective mode and available tools. Prompt
+// routing is recorded in the manifest argv and verified by a live denial probe.
+// A mode/tool mismatch is recorded and reported; it never kills the run.
 
 import { CLAUDE_WORKER_PERMISSION_MODE, CLAUDE_WORKER_TOOLS } from "./worker-routing.mjs";
 
@@ -111,7 +109,7 @@ export function describeClaudeStartupCheck(runs = []) {
   const claudeRuns = runs.filter((run) => run?.worker === "claude" && run.startupCheck && typeof run.startupCheck === "object");
   const name = "Claude worker startup mode and tools";
   if (!claudeRuns.length) {
-    return { name, ok: true, detail: "no Claude worker run with a recorded startup check yet — dispatch a worker:claude issue to confirm dontAsk and the explicit tool set" };
+    return { name, ok: true, detail: "no Claude worker run with a recorded startup check yet — dispatch a worker:claude issue to confirm default mode and the explicit tool set" };
   }
   const latest = claudeRuns[claudeRuns.length - 1];
   const observed = [...claudeRuns].reverse().find((run) => run.startupCheck.status === "match" || run.startupCheck.status === "mismatch");

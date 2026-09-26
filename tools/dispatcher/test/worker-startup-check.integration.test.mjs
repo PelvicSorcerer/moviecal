@@ -20,14 +20,13 @@ describe("real-process Claude startup check (MOV-386)", () => {
     const checkout = path.join(root, "checkout");
     const logRoot = path.join(root, "logs");
     fs.mkdirSync(checkout);
-    // Reproduces the observed Claude Code 2.1.281 behaviour: the scrub forced
-    // the session to `default` and every built-in tool was loaded.
+    // Synthetic unexpected mode and extra tools must warn without killing the run.
     const fixture = path.join(root, "claude");
     fs.writeFileSync(fixture, `#!${process.execPath}\n` + String.raw`
 const fs = require("node:fs");
 const path = require("node:path");
 const emit = (event) => process.stdout.write(JSON.stringify(event) + "\n");
-emit({ type: "system", subtype: "init", permissionMode: "default", claude_code_version: "2.1.281",
+emit({ type: "system", subtype: "init", permissionMode: "acceptEdits", claude_code_version: "2.1.281",
   tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "NotebookEdit", "Task", "Workflow", "WebFetch"] });
 fs.writeFileSync(path.join(process.cwd(), "change.txt"), "fixture work");
 emit({ type: "assistant", message: { role: "assistant", id: "m1" } });
@@ -79,17 +78,17 @@ process.exit(0);
       // Dispatcher log: one loud warning naming both problems.
       const warnings = logger.warn.mock.calls.map(([message]) => message).filter((message) => message.includes("MOV-386"));
       expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toMatch(/Claude worker for MOV-386 did not start as configured — permissionMode is "default", expected "dontAsk"; tools outside the allowlist: Workflow, WebFetch/);
+      expect(warnings[0]).toMatch(/Claude worker for MOV-386 did not start as configured — permissionMode is "acceptEdits", expected "default"; tools outside the allowlist: Workflow, WebFetch/);
 
       // Usage record (ledger and the run's own usage.json).
       const [usage] = store.recent();
       expect(usage.startupCheck).toMatchObject({
-        status: "mismatch", permissionMode: "default", unexpectedTools: ["Workflow", "WebFetch"], cliVersion: "2.1.281",
+        status: "mismatch", permissionMode: "acceptEdits", unexpectedTools: ["Workflow", "WebFetch"], cliVersion: "2.1.281",
       });
       expect(JSON.parse(fs.readFileSync(path.join(logRoot, entry.name, "usage.json"), "utf8")).startupCheck.status).toBe("mismatch");
 
       // Doctor reads the same ledger.
-      expect(describeClaudeStartupCheck(store.recent())).toMatchObject({ ok: false, detail: expect.stringMatching(/^MISMATCH — .*Last observed MOV-386 .*Claude Code 2\.1\.281: mode default/) });
+      expect(describeClaudeStartupCheck(store.recent())).toMatchObject({ ok: false, detail: expect.stringMatching(/^MISMATCH — .*Last observed MOV-386 .*Claude Code 2\.1\.281: mode acceptEdits/) });
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   }, 15000);
 });
