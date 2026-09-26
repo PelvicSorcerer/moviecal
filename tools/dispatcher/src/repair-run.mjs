@@ -488,6 +488,7 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
       logDir,
       signal: abortController.signal,
       securityContext: { mode: REPAIR_WORKER_MODE },
+      trial: entry.trial ?? null,
     });
     // The race below owns this rejection; this no-op handler only stops Node
     // reporting the loser of the race as an unhandled rejection.
@@ -498,6 +499,7 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
       worker: entry.worker || "claude",
       ...usageContextFromInvocation(invocation, entry.worker || "claude"),
       tier: entry.model || "default",
+      trial: entry.trial ?? null,
       exitOutcome: result.exitCode === 0 ? "exited-0" : `exited-${result.exitCode}`,
     })).catch((error) => { logger.error(`Could not capture repair usage for ${entry.id}: ${error.message}`); return null; });
     spawnResult = await raceRepairTimeout(workerPromise, workerTimeoutMs);

@@ -46,6 +46,19 @@ const identifier = (value) => typeof value === "string" && /^[A-Za-z0-9_.:-]{1,1
 const timestamp = (value) => typeof value === "string" && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
 const size = (value) => typeof value === "string" ? value.length : value == null ? 0 : JSON.stringify(value).length;
 
+/** MOV-383: keep only bounded identifiers/timestamps of the worker-trial attribution; null outside a trial. */
+function sanitizeTrial(trial) {
+  const trialId = identifier(trial?.trialId);
+  if (!trialId) return null;
+  return {
+    trialId,
+    requestedWorker: identifier(trial.requestedWorker),
+    resolvedWorker: identifier(trial.resolvedWorker),
+    routingReason: typeof trial.routingReason === "string" ? trial.routingReason.slice(0, 200) : null,
+    assignedAt: timestamp(trial.assignedAt),
+  };
+}
+
 /** Codex wraps commands as `bash -lc '<cmd>'`; unwrap so the exact-verify count sees the real command. */
 export function unwrapShellCommand(command) {
   if (typeof command !== "string") return command;
@@ -107,7 +120,7 @@ export function foldCodexUsage(events) {
 export function parseWorkerUsage(transcript, {
   issue, attemptKind, worker, modelId = null, tier = null, reasoningEffort = null, exitOutcome = null,
   durationMs = null, observedTurns = null, attemptId = null, origin = null, startedAt = null, endedAt = null,
-  wallDurationMs = null, terminationReason = null,
+  wallDurationMs = null, terminationReason = null, trial = null,
 } = {}) {
   const wall = number(wallDurationMs) ?? number(durationMs);
   const summary = {
@@ -115,6 +128,7 @@ export function parseWorkerUsage(transcript, {
     issue: identifier(issue), attemptKind: identifier(attemptKind), worker: identifier(worker),
     modelId: identifier(modelId), modelSource: identifier(modelId) ? "invocation" : null, modelsReported: [],
     tier: identifier(tier), reasoningEffort: identifier(reasoningEffort),
+    trial: sanitizeTrial(trial),
     startedAt: timestamp(startedAt), endedAt: timestamp(endedAt),
     turns: null, turnsSource: null, durationMs: wall, wallDurationMs: wall, durationSource: wall === null ? null : "manifest-wall-clock",
     costUsd: null, costSource: null, costEstimateUsd: null,
@@ -426,6 +440,7 @@ export function summarizeByIssue(runs) {
       issue,
       attempts: rows.length,
       attemptIds: rows.map((row) => row.attemptId).filter(Boolean),
+      trialIds: [...new Set(rows.map((row) => row.trial?.trialId).filter(Boolean))].sort(),
       attemptsByKind: countBy(rows, "attemptKind"),
       attemptsByExitOutcome: countBy(rows, "exitOutcome"),
       partialAttempts: rows.filter((row) => row.partial).length,

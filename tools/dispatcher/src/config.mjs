@@ -76,6 +76,16 @@ export function workerCooldownStatePath() {
   return path.join(configDir(), "worker-cooldowns.json");
 }
 
+/** MOV-383: the bounded worker:any -> Codex trial config; absent means disabled (worker-trial.mjs). */
+export function workerTrialConfigPath() {
+  return path.join(configDir(), "worker-trial.json");
+}
+
+/** MOV-383: durable, append-only record of trial assignments; makes the cap survive restarts. */
+export function workerTrialAssignmentsPath() {
+  return path.join(configDir(), "worker-trial-assignments.json");
+}
+
 /** Numeric, redacted summaries of completed worker attempts (MOV-363). */
 export function workerUsageStatePath() {
   return path.join(configDir(), "worker-usage.json");
