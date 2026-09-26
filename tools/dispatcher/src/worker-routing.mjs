@@ -208,7 +208,7 @@ export function workerInvocation(worker, model, { steering = false } = {}) {
       `model_reasoning_effort=${codexReasoningEffortForTier(model)}`,
     ];
     const codexModel = codexModelIdForTier(model);
-    if (codexModel) args.push("--model", codexModel);
+    args.push("--model", codexModel);
     return { command: "codex", args };
   }
   throw new Error(`unknown worker: ${worker}`);
@@ -241,7 +241,7 @@ export function claudeEffortForTier(tier, modelId = modelIdForTier("claude", tie
  * needs updating when the model catalog changes.
  */
 export function modelIdForTier(worker, tier) {
-  if (worker !== "claude") return null; // codex resolves its own default
+  if (worker !== "claude") return null; // Codex uses codexModelIdForTier().
   const table = {
     cheap: process.env.MOVIECAL_MODEL_CHEAP || "claude-haiku-4-5",
     default: process.env.MOVIECAL_MODEL_DEFAULT || "claude-sonnet-5",
@@ -268,16 +268,15 @@ export function codexReasoningEffortForTier(tier) {
 }
 
 /**
- * Resolve a model tier to an explicit Codex `--model` id, if one has been
- * configured. No default: with no env override, this returns null and
- * workerInvocation omits `--model` entirely, falling through to whatever
- * `~/.codex/config.toml` holds.
+ * Resolve a model tier to an explicit Codex `--model` ID. Per-tier environment
+ * overrides take precedence over these defaults; --ignore-user-config means
+ * worker invocations never rely on a personal config.toml model.
  */
 export function codexModelIdForTier(tier) {
   const table = {
-    cheap: process.env.MOVIECAL_CODEX_MODEL_CHEAP || null,
-    default: process.env.MOVIECAL_CODEX_MODEL_DEFAULT || null,
-    strong: process.env.MOVIECAL_CODEX_MODEL_STRONG || null,
+    cheap: process.env.MOVIECAL_CODEX_MODEL_CHEAP || "gpt-6-luna",
+    default: process.env.MOVIECAL_CODEX_MODEL_DEFAULT || "gpt-6-sol",
+    strong: process.env.MOVIECAL_CODEX_MODEL_STRONG || "gpt-6-sol",
   };
   if (!(tier in table)) throw new Error(`unknown model tier: ${tier}`);
   return table[tier];

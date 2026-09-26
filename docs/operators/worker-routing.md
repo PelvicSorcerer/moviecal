@@ -13,7 +13,7 @@ Only workers that can execute against a real local git worktree on this Mac are 
 | Worker | Invocation | Notes |
 |---|---|---|
 | `claude` | `claude -p --model <id>` | Primary worker. Full local tool access, MCP, worktree-aware |
-| `codex` | `codex exec --sandbox workspace-write -c model_reasoning_effort=<tier>` | Secondary worker. Independent quota pool — useful when Claude is throttled, and a real vendor-neutrality check on the worker-adapter interface. See below for the tier→effort/model mapping |
+| `codex` | `codex --sandbox workspace-write exec --model <id> -c model_reasoning_effort=<tier>` | Secondary worker. Independent quota pool — useful when Claude is throttled, and a real vendor-neutrality check on the worker-adapter interface. See below for the tier→effort/model mapping |
 
 Cursor Cloud Agent and GitHub Copilot coding agent are **not** viable dispatch targets for this pipeline: both execute in a cloud VM with no path to this Mac's worktrees. They may still be useful as an editor/IDE completion tool, but that is a separate decision from this repo's agent-dispatch architecture and is not covered by this document.
 
@@ -25,6 +25,8 @@ Codex is the dispatcher's second worker option, selected via the `worker:codex` 
    ```sh
    npm i -g @openai/codex
    ```
+
+Codex CLI 0.157.0 or newer is required for the current routing defaults: that release added GPT-6 Sol and Luna to its model catalog. Older CLI versions can reject those IDs even for an eligible Plus account. Upgrade with `npm install -g @openai/codex@latest` (an administrator must update a root-owned installation), then confirm `codex --version` and run the controlled model/effort smoke checks before dispatch. See the [0.157.0 release notes](https://github.com/openai/codex/releases/tag/rust-v0.157.0).
 
 2. **Verify** the installation by running `dispatcher doctor`, which will report "codex on PATH" as a passing check:
    ```sh
@@ -44,7 +46,7 @@ Codex is the dispatcher's second worker option, selected via the `worker:codex` 
 
 "Cheap" / "default" / "strong" map to the current Claude model catalog (see the `claude-api` skill or Anthropic's published model list for exact IDs — this document intentionally does not pin model IDs, since they change over time and pinning them here would require touching this file on every model release).
 
-The Claude strong tier now defaults to Opus 5.5. The change reflects lower published token prices and stronger published coding results; see the review identified as `reports/model-tier-routing-review.md` in [MOV-362](https://linear.app/moviecal/issue/MOV-362/route-modelstrong-claude-workers-to-claude-opus-55). `MOVIECAL_MODEL_STRONG` still overrides the default.
+The Claude strong tier now defaults to Opus 5.5. The change reflects lower published token prices and stronger published coding results; see the retained review evidence in [MOV-362](https://linear.app/moviecal/issue/MOV-362/route-modelstrong-claude-workers-to-claude-opus-55). `MOVIECAL_MODEL_STRONG` still overrides the default.
 
 Claude workers receive an explicit `--effort` by tier when their model supports it. Implementation and repair workers use the same mapping:
 
@@ -56,15 +58,15 @@ Claude workers receive an explicit `--effort` by tier when their model supports 
 
 Overrides accept `low`, `medium`, `high`, `xhigh`, `max`, or `none`; `none` omits the flag. An invalid value is a routing error. Haiku 4.5 does not support effort, so the dispatcher omits `--effort` even if an override requests one. `dispatcher doctor` notes that omission. `dispatcher dry-run` prints the planned invocation and any routing error.
 
-For Codex, the tier maps to a `model_reasoning_effort` value passed via `-c`, and optionally an explicit `--model` id:
+For Codex, the tier maps to a `model_reasoning_effort` value passed via `-c`, and an explicit `--model` ID resolved by `codexModelIdForTier()` in `tools/dispatcher/src/worker-routing.mjs`:
 
 | Tier | `model_reasoning_effort` | `--model` |
 |---|---|---|
-| `cheap` | `low` | omitted unless `MOVIECAL_CODEX_MODEL_CHEAP` is set |
-| `default` | `medium` | omitted unless `MOVIECAL_CODEX_MODEL_DEFAULT` is set |
-| `strong` | `high` | omitted unless `MOVIECAL_CODEX_MODEL_STRONG` is set |
+| `cheap` | `low` | routing-code default or `MOVIECAL_CODEX_MODEL_CHEAP` |
+| `default` | `medium` | routing-code default or `MOVIECAL_CODEX_MODEL_DEFAULT` |
+| `strong` | `high` | routing-code default or `MOVIECAL_CODEX_MODEL_STRONG` |
 
-So `workerInvocation("codex", "strong")` spawns `codex exec --sandbox workspace-write -c model_reasoning_effort=high`, and adds `--model <id>` only when the corresponding `MOVIECAL_CODEX_MODEL_*` env var is set. With no `--model` flag, Codex falls through to whatever `~/.codex/config.toml` holds for `model`. The effort values above can be overridden the same way as the Claude model table, via `MOVIECAL_CODEX_EFFORT_CHEAP` / `MOVIECAL_CODEX_EFFORT_DEFAULT` / `MOVIECAL_CODEX_EFFORT_STRONG`.
+Every implementation and repair invocation passes the resolved `--model <id>` and effort explicitly. `--ignore-user-config` prevents loading the personal `~/.codex/config.toml`, so model selection never depends on it. Concrete model defaults live only in the routing code; each `MOVIECAL_CODEX_MODEL_*` override affects its own tier. Effort remains independently overridable via `MOVIECAL_CODEX_EFFORT_CHEAP` / `MOVIECAL_CODEX_EFFORT_DEFAULT` / `MOVIECAL_CODEX_EFFORT_STRONG`. Dry-run shows the exact invocation; the run manifest records its arguments and usage summaries retain model and effort. CLI rejection follows the existing failure/escalation path without substituting a model or tier.
 
 ## Upgrade conditions
 

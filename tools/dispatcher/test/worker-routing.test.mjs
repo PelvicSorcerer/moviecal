@@ -216,6 +216,8 @@ describe("workerInvocation", () => {
       "--json",
       "-c",
       "model_reasoning_effort=medium",
+      "--model",
+      "gpt-6-sol",
     ]);
   });
 
@@ -234,9 +236,10 @@ describe("workerInvocation", () => {
       expect(workerInvocation("codex", "strong").args).toContain("model_reasoning_effort=high");
     });
 
-    it("omits --model entirely when no override is configured", () => {
-      const invocation = workerInvocation("codex", "strong");
-      expect(invocation.args).not.toContain("--model");
+    it.each([["cheap", "gpt-6-luna", "low"], ["default", "gpt-6-sol", "medium"], ["strong", "gpt-6-sol", "high"]])("pins %s model and effort independently of user config", (tier, model, effort) => {
+      const args = workerInvocation("codex", tier).args;
+      expect(args.slice(-4)).toEqual(["-c", `model_reasoning_effort=${effort}`, "--model", model]);
+      expect(args).toContain("--ignore-user-config");
     });
 
     it("honors MOVIECAL_CODEX_EFFORT_STRONG when set", () => {
@@ -283,6 +286,8 @@ describe("workerInvocation", () => {
         "--json",
         "-c",
         "model_reasoning_effort=medium",
+        "--model",
+        "gpt-6-sol",
       ]);
     });
   });
@@ -342,10 +347,22 @@ describe("codexModelIdForTier", () => {
     for (const key of CODEX_ENV_VARS) delete process.env[key];
   });
 
-  it("returns null with no override configured (falls through to ~/.codex/config.toml)", () => {
-    expect(codexModelIdForTier("cheap")).toBeNull();
-    expect(codexModelIdForTier("default")).toBeNull();
-    expect(codexModelIdForTier("strong")).toBeNull();
+  it("returns explicit defaults without overrides", () => {
+    expect(codexModelIdForTier("cheap")).toBe("gpt-6-luna");
+    expect(codexModelIdForTier("default")).toBe("gpt-6-sol");
+    expect(codexModelIdForTier("strong")).toBe("gpt-6-sol");
+  });
+
+  it.each(["cheap", "default", "strong"])("isolates the %s model and effort overrides", (tier) => {
+    const tiers = ["cheap", "default", "strong"];
+    const before = tiers.map((t) => workerInvocation("codex", t));
+    process.env[`MOVIECAL_CODEX_MODEL_${tier.toUpperCase()}`] = "custom-model";
+    process.env[`MOVIECAL_CODEX_EFFORT_${tier.toUpperCase()}`] = "custom-effort";
+    tiers.forEach((t, i) => {
+      const invocation = workerInvocation("codex", t);
+      if (t === tier) expect(invocation.args.slice(-4)).toEqual(["-c", "model_reasoning_effort=custom-effort", "--model", "custom-model"]);
+      else expect(invocation).toEqual(before[i]);
+    });
   });
 
   it("returns the override when set", () => {
