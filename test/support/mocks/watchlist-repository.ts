@@ -42,7 +42,7 @@ export function createWatchlistRepository(
       return userId === TEST_USER_IDS.OWNER
         ? personalWatchlist
         : buildWatchlistSummary({
-            id: TEST_WATCHLIST_IDS.COLLABORATOR_PERSONAL,
+            id: 'personal-watchlist-2',
             ownerUserId: userId,
           });
     },
@@ -86,12 +86,12 @@ export function createWatchlistRepository(
 
       if (
         actorUserId !== TEST_USER_IDS.OWNER
-        && watchlistId === TEST_WATCHLIST_IDS.COLLABORATOR_PERSONAL
+        && watchlistId === 'personal-watchlist-2'
       ) {
         return {
           status: 'authorized' as const,
           watchlist: buildWatchlistSummary({
-            id: TEST_WATCHLIST_IDS.COLLABORATOR_PERSONAL,
+            id: 'personal-watchlist-2',
             ownerUserId: actorUserId,
           }),
           canEdit: true,
@@ -127,7 +127,7 @@ export function createWatchlistRepository(
         ? [personalWatchlist, sharedWatchlist]
         : [
             buildWatchlistSummary({
-              id: TEST_WATCHLIST_IDS.COLLABORATOR_PERSONAL,
+              id: 'personal-watchlist-2',
               ownerUserId: userId,
             }),
           ];

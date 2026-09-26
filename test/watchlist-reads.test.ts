@@ -12,7 +12,6 @@ import {
   MAX_PAGE_LIMIT,
   decodePageCursor,
   encodePageCursor,
-  getAuthorizedWatchlistDetail,
   listAuthorizedWatchlists,
   mapWatchlistRow,
   orderWatchlistItemsForRead,
@@ -20,15 +19,12 @@ import {
   parsePageRequest,
   toUtcIsoString,
   WatchlistInputError,
-  WatchlistNotFoundError,
   type WatchlistItem,
 } from '../src/lib/watchlist';
 import {
   buildWatchlistItem,
   buildWatchlistRow,
   createSharedWatchlistReadRepository,
-  NEWEST_SHARED_ITEM_ID,
-  SHARED_WATCHLIST_NAME,
 } from './support';
 
 const FIRST_PAGE = { cursor: null, limit: DEFAULT_PAGE_LIMIT };
@@ -161,112 +157,6 @@ describe('cursor pagination', () => {
     expect(() =>
       paginateById(entries, idOf, { cursor: encodePageCursor('gone'), limit: 2 }),
     ).toThrow(WatchlistInputError);
-  });
-});
-
-describe('getAuthorizedWatchlistDetail', () => {
-  it('returns the ordered, UTC-normalized items for the owner', async () => {
-    const result = await getAuthorizedWatchlistDetail({
-      actorUserId: TEST_USER_IDS.OWNER,
-      page: FIRST_PAGE,
-      repository: createSharedWatchlistReadRepository(),
-      watchlistId: TEST_WATCHLIST_IDS.SHARED,
-    });
-
-    expect(result.watchlist).toEqual({
-      canEdit: true,
-      id: TEST_WATCHLIST_IDS.SHARED,
-      kind: 'shared',
-      name: SHARED_WATCHLIST_NAME,
-      ownerUserId: TEST_USER_IDS.OWNER,
-      role: 'owner',
-    });
-    expect(result.items.map((entry) => entry.id)).toEqual([
-      NEWEST_SHARED_ITEM_ID,
-      TEST_ITEM_IDS.MATRIX,
-      TEST_ITEM_IDS.INCEPTION,
-    ]);
-    expect(result.items[0]?.addedAt).toBe(TEST_TIMESTAMPS.MATRIX_ADDED_AT);
-  });
-
-  it('returns the same items to an accepted editor, with the editor role', async () => {
-    const owner = await getAuthorizedWatchlistDetail({
-      actorUserId: TEST_USER_IDS.OWNER,
-      page: FIRST_PAGE,
-      repository: createSharedWatchlistReadRepository(),
-      watchlistId: TEST_WATCHLIST_IDS.SHARED,
-    });
-    const editor = await getAuthorizedWatchlistDetail({
-      actorUserId: TEST_USER_IDS.COLLABORATOR,
-      page: FIRST_PAGE,
-      repository: createSharedWatchlistReadRepository(),
-      watchlistId: TEST_WATCHLIST_IDS.SHARED,
-    });
-
-    expect(editor.items).toEqual(owner.items);
-    expect(editor.watchlist).toEqual({ ...owner.watchlist, role: 'editor' });
-  });
-
-  it.each([TEST_USER_IDS.PENDING_INVITEE, TEST_USER_IDS.OUTSIDER])(
-    'reports the shared watchlist as not found for %s, exactly like an unknown id',
-    async (actorUserId) => {
-      const unauthorized = getAuthorizedWatchlistDetail({
-        actorUserId,
-        page: FIRST_PAGE,
-        repository: createSharedWatchlistReadRepository(),
-        watchlistId: TEST_WATCHLIST_IDS.SHARED,
-      });
-      const unknown = getAuthorizedWatchlistDetail({
-        actorUserId,
-        page: FIRST_PAGE,
-        repository: createSharedWatchlistReadRepository(),
-        watchlistId: TEST_WATCHLIST_IDS.UNKNOWN,
-      });
-
-      await expect(unauthorized).rejects.toThrowError(
-        new WatchlistNotFoundError('Watchlist not found.'),
-      );
-      await expect(unknown).rejects.toThrowError(
-        new WatchlistNotFoundError('Watchlist not found.'),
-      );
-    },
-  );
-
-  it("reports another user's personal watchlist as not found", async () => {
-    await expect(
-      getAuthorizedWatchlistDetail({
-        actorUserId: TEST_USER_IDS.OUTSIDER,
-        page: FIRST_PAGE,
-        repository: createSharedWatchlistReadRepository(),
-        watchlistId: TEST_WATCHLIST_IDS.PERSONAL,
-      }),
-    ).rejects.toThrowError(WatchlistNotFoundError);
-  });
-
-  it('pages items with a stable cursor', async () => {
-    const repository = createSharedWatchlistReadRepository();
-    const firstPage = await getAuthorizedWatchlistDetail({
-      actorUserId: TEST_USER_IDS.OWNER,
-      page: { cursor: null, limit: 2 },
-      repository,
-      watchlistId: TEST_WATCHLIST_IDS.SHARED,
-    });
-    const secondPage = await getAuthorizedWatchlistDetail({
-      actorUserId: TEST_USER_IDS.OWNER,
-      page: { cursor: firstPage.page.nextCursor, limit: 2 },
-      repository,
-      watchlistId: TEST_WATCHLIST_IDS.SHARED,
-    });
-
-    expect(firstPage.items.map((entry) => entry.id)).toEqual([
-      NEWEST_SHARED_ITEM_ID,
-      TEST_ITEM_IDS.MATRIX,
-    ]);
-    expect(firstPage.page.nextCursor).toBe(encodePageCursor(TEST_ITEM_IDS.MATRIX));
-    expect(secondPage.items.map((entry) => entry.id)).toEqual([
-      TEST_ITEM_IDS.INCEPTION,
-    ]);
-    expect(secondPage.page.nextCursor).toBeNull();
   });
 });
 

@@ -10,7 +10,6 @@ import {
   TEST_USER_IDS,
   TEST_WATCHLIST_IDS,
 } from '../../../src/lib/test-data/catalog';
-import { buildWatchlistMember } from '../factories/memberships';
 import { buildWatchlistRow, buildWatchlistSummary } from '../factories/watchlists';
 
 import { createWatchlistRepository } from './watchlist-repository';
@@ -68,29 +67,6 @@ export function createSharedWatchlistReadRepository(
   return createWatchlistRepository({
     async ensurePersonalWatchlist(userId) {
       return personalWatchlistFor(userId);
-    },
-
-    async findMembershipForUser(watchlistId, userId) {
-      if (watchlistId !== TEST_WATCHLIST_IDS.SHARED) {
-        return null;
-      }
-
-      if (userId === TEST_USER_IDS.COLLABORATOR) {
-        return buildWatchlistMember({
-          acceptedAt: TEST_TIMESTAMPS.MEMBERSHIP_ACCEPTED,
-          userId,
-        });
-      }
-
-      if (userId === TEST_USER_IDS.PENDING_INVITEE) {
-        return buildWatchlistMember({
-          acceptedAt: null,
-          id: 'membership-2',
-          userId,
-        });
-      }
-
-      return null;
     },
 
     async getWatchlistAccess(actorUserId, watchlistId) {

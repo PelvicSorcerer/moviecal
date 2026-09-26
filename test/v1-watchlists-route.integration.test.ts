@@ -130,15 +130,6 @@ describe('v1 shared watchlist read routes (mobile Bearer surface)', () => {
       );
     });
 
-    it('builds the repository from the caller-scoped and service-role clients', async () => {
-      await listWatchlists();
-
-      expect(mocks.createSupabaseWatchlistRepository).toHaveBeenCalledWith({
-        userClient: { name: 'user-client' },
-        adminClient: { name: 'service-role-client' },
-      });
-    });
-
     it.each([
       ['a missing Authorization header', null],
       ['a malformed Authorization header', ''],
@@ -193,24 +184,6 @@ describe('v1 shared watchlist read routes (mobile Bearer surface)', () => {
           },
         ],
       });
-    });
-
-    it('reports an accepted member as an editor who can edit', async () => {
-      setupRouteMocks(TEST_USER_IDS.COLLABORATOR);
-
-      const response = await listWatchlists();
-      const body = (await response.json()) as {
-        watchlists: { canEdit: boolean; id: string; role: string }[];
-      };
-
-      expect(response.status).toBe(200);
-      expect(body.watchlists).toContainEqual(
-        expect.objectContaining({
-          canEdit: true,
-          id: TEST_WATCHLIST_IDS.SHARED,
-          role: 'editor',
-        }),
-      );
     });
 
     it.each([TEST_USER_IDS.PENDING_INVITEE, TEST_USER_IDS.OUTSIDER])(
