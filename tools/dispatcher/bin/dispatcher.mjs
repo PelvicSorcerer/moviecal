@@ -136,6 +136,7 @@ import { AgentStreamClient } from "../src/agent-stream-client.mjs";
 import { previewRepairPass, runRepairPass } from "../src/repair-run.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
 import { WorkerUsageStore, aggregateUsage, buildUsageExport, parseUsageExportArgs } from "../src/worker-usage.mjs";
+import { describeClaudeStartupCheck } from "../src/worker-startup-check.mjs";
 import { PrAutonomyLedger, runPrAutonomyPass } from "../src/pr-autonomy.mjs";
 import { MasterIncidentLedger } from "../src/master-incident-ledger.mjs";
 import { runMasterCiPass, reconcileMasterIncidents, previewMasterCiPass } from "../src/master-ci-observer.mjs";
@@ -338,6 +339,16 @@ async function cmdDoctor() {
   {
     const state = buildWorkerTrialStore().state(new Date());
     checks.push({ name: "worker:any trial routing", ok: state.status !== "invalid", detail: describeTrialState(state) });
+  }
+
+  // MOV-386: the last effective Claude worker permission mode and tool set,
+  // read from the usage ledger (each run's own system/init event). Read-only;
+  // a recorded mismatch fails the check so it cannot go unnoticed.
+  {
+    const runs = tryRun(() => new WorkerUsageStore(workerUsageStatePath()).recent());
+    checks.push(runs.ok
+      ? describeClaudeStartupCheck(runs.value)
+      : { name: "Claude worker startup mode and tools", ok: false, detail: `could not read the worker usage ledger: ${runs.error}` });
   }
 
   // claude / codex on PATH

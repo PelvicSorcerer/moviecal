@@ -6,6 +6,8 @@ import {
   workerInvocation,
   CLAUDE_WORKER_PERMISSION_DENIES,
   CLAUDE_WORKER_SETTINGS,
+  CLAUDE_WORKER_TOOLS,
+  CLAUDE_WORKER_PERMISSION_MODE,
   modelIdForTier,
   codexReasoningEffortForTier,
   codexModelIdForTier,
@@ -158,6 +160,10 @@ describe("workerInvocation", () => {
       "medium",
       "--permission-mode",
       "dontAsk",
+      "--tools",
+      "Read,Edit,Write,Glob,Grep,Bash,NotebookEdit,Task",
+      "--allowedTools",
+      "Read,Edit,Write,Glob,Grep,Bash,NotebookEdit,Task",
       "--setting-sources",
       "project",
       "--safe-mode",
@@ -171,6 +177,46 @@ describe("workerInvocation", () => {
       "--settings",
       JSON.stringify(CLAUDE_WORKER_SETTINGS),
     ]);
+  });
+
+  describe("explicit Claude worker tool set (MOV-386)", () => {
+    const EXCLUDED = [
+      "Workflow", "CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger", "SendMessage",
+      "PushNotification", "WebFetch", "WebSearch", "EnterWorktree", "ExitWorktree", "DesignSync", "Monitor",
+    ];
+
+    it("pins the exact tool constant and the permission mode", () => {
+      expect(CLAUDE_WORKER_TOOLS).toEqual(["Read", "Edit", "Write", "Glob", "Grep", "Bash", "NotebookEdit", "Task"]);
+      expect(Object.isFrozen(CLAUDE_WORKER_TOOLS)).toBe(true);
+      expect(CLAUDE_WORKER_PERMISSION_MODE).toBe("dontAsk");
+      for (const tool of EXCLUDED) expect(CLAUDE_WORKER_TOOLS).not.toContain(tool);
+    });
+
+    it.each(["cheap", "default", "strong"])("passes the tool set as both --tools and --allowedTools for the %s tier, with and without steering", (tier) => {
+      for (const steering of [false, true]) {
+        const args = workerInvocation("claude", tier, { steering }).args;
+        const valueAfter = (flag) => args[args.indexOf(flag) + 1];
+        expect(valueAfter("--tools")).toBe(CLAUDE_WORKER_TOOLS.join(","));
+        expect(valueAfter("--allowedTools")).toBe(CLAUDE_WORKER_TOOLS.join(","));
+        expect(valueAfter("--permission-mode")).toBe(CLAUDE_WORKER_PERMISSION_MODE);
+        expect(args.filter((arg) => arg === "--tools")).toHaveLength(1);
+        expect(args).not.toContain("--disallowedTools");
+        // The deny list still rides in --settings on top of the allowlist.
+        expect(JSON.parse(valueAfter("--settings")).permissions).toEqual({ deny: CLAUDE_WORKER_PERMISSION_DENIES });
+      }
+    });
+
+    it("keeps every excluded tool name out of the whole claude argv", () => {
+      const joined = workerInvocation("claude", "default").args.join(" ");
+      for (const tool of EXCLUDED) expect(joined).not.toMatch(new RegExp(`\\b${tool}\\b`));
+    });
+
+    it("leaves the codex invocation without any Claude tool flags", () => {
+      const args = workerInvocation("codex", "default").args;
+      expect(args).not.toContain("--tools");
+      expect(args).not.toContain("--allowedTools");
+      expect(args).not.toContain("--permission-mode");
+    });
   });
 
   it("adds --input-format stream-json for claude only when steering is requested, changing nothing else (MOV-214/215)", () => {

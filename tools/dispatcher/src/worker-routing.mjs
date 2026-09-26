@@ -56,6 +56,21 @@ export const CLAUDE_WORKER_PERMISSION_DENIES = [
   "Edit(.codex/**)",
 ];
 
+// MOV-386: the complete built-in tool set a dispatched Claude worker (and a
+// repair worker, which shares workerInvocation()) may see. It is passed both
+// as the available set (`--tools`, so nothing else -- Workflow, Cron*,
+// ScheduleWakeup, RemoteTrigger, SendMessage, PushNotification, WebFetch,
+// WebSearch, Enter/ExitWorktree, DesignSync, Monitor -- is loaded at all) and
+// as the permission allowlist (`--allowedTools`). The deny list above still
+// applies on top: Claude evaluates deny before allow, so `Bash(git*)` refuses
+// a Git command even though `Bash` is allowed. `Task` stays so a worker can
+// delegate a broad search to a built-in subagent, which inherits this
+// session's tool set, permission mode, and denies.
+export const CLAUDE_WORKER_TOOLS = Object.freeze(["Read", "Edit", "Write", "Glob", "Grep", "Bash", "NotebookEdit", "Task"]);
+
+/** The only permission mode a headless Claude worker may run in (see workerInvocation()). */
+export const CLAUDE_WORKER_PERMISSION_MODE = "dontAsk";
+
 export const CLAUDE_WORKER_SETTINGS = {
   permissions: { deny: CLAUDE_WORKER_PERMISSION_DENIES },
   // Claude's own inner sandbox cannot nest within worker-guard.mjs's
@@ -180,6 +195,17 @@ export function resolveDispatchWorker(issue, { boundWorker = null, trial = null 
 // harness code, not by the model choosing to comply -- see
 // docs/operators/local-execution.md §Security model for what that boundary
 // does and does not cover.
+//
+// MOV-386: worker-guard.mjs sets CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 (so Bash,
+// hooks, and MCP children never inherit Claude's provider credential). Claude
+// Code 2.1.281 treats that hardening as incompatible with an *implicit* tool
+// set: unless allowedTools is declared explicitly it silently forces the
+// session back to `default` mode ("Permission mode forced to default --
+// CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set"), cancelling `dontAsk`. The scrub
+// stays; instead the invocation declares CLAUDE_WORKER_TOOLS as both the
+// available set (`--tools`) and the allowlist (`--allowedTools`), which keeps
+// `dontAsk` in force. worker-startup-check.mjs reads the worker's own
+// system/init event to confirm the mode and tool set actually took effect.
 /**
  * @param {"claude"|"codex"} worker
  * @param {"cheap"|"default"|"strong"} model
@@ -189,8 +215,8 @@ export function resolveDispatchWorker(issue, { boundWorker = null, trial = null 
  *   option). Claude only -- Codex has no equivalent interactive protocol, so
  *   `opts.steering` is silently ignored for it; the returned invocation is
  *   identical either way. Every existing safety flag
- *   (`--permission-mode dontAsk`, `--safe-mode`, `--strict-mcp-config`, the
- *   sandbox-disabling `--settings`) is unaffected -- steering only changes
+ *   (`--permission-mode dontAsk`, `--tools`/`--allowedTools`, `--safe-mode`,
+ *   `--strict-mcp-config`, the sandbox-disabling `--settings`) is unaffected -- steering only changes
  *   how additional conversational turns reach the process, never what the
  *   process is allowed to do.
  */
@@ -208,7 +234,13 @@ export function workerInvocation(worker, model, { steering = false } = {}) {
         modelId,
         ...(effort ? ["--effort", effort] : []),
         "--permission-mode",
-        "dontAsk",
+        CLAUDE_WORKER_PERMISSION_MODE,
+        // Each list is one comma-separated value so these variadic options
+        // can never absorb a following argument.
+        "--tools",
+        CLAUDE_WORKER_TOOLS.join(","),
+        "--allowedTools",
+        CLAUDE_WORKER_TOOLS.join(","),
         "--setting-sources",
         "project",
         "--safe-mode",

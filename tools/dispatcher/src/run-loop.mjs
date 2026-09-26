@@ -27,6 +27,7 @@ import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-si
 import { registerActiveAttempt, unregisterActiveAttempt, updateActiveAttempt } from "./active-attempt-registry.mjs";
 import { captureVerificationEvidence } from "./readiness-evidence.mjs";
 import { formatUsageLine, usageContextFromInvocation } from "./worker-usage.mjs";
+import { evaluateClaudeInit, reportClaudeStartupCheck } from "./worker-startup-check.mjs";
 import { budgetHandoffSections, diffSummary, hasWorkerProgress, readWorkerProgress, removeWorkerProgress, turnBudgetForTier, wrapUpAt, WRAP_UP_PROMPT } from "./turn-budget.mjs";
 
 /**
@@ -1069,6 +1070,12 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
       },
       iosSimLeaseId,
       trial,
+      // MOV-386: warn as soon as the worker's own init event shows a
+      // permission mode or tool set other than the one requested. The usage
+      // record captures the same check from stdout.log once the run ends.
+      ...(routing.worker === "claude"
+        ? { onWorkerInit: (event) => reportClaudeStartupCheck(evaluateClaudeInit(event), { label: issue.identifier, logger }) }
+        : {}),
       // `spawnWorker()` invokes this before the brief can start work. The
       // stored pid is also the detached process-group id, allowing a
       // replacement dispatcher to terminate the complete worker tree before

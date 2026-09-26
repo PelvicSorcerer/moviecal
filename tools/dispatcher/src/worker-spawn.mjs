@@ -115,6 +115,27 @@ export function makeAssistantTurnCounter(worker, onTurn) {
   };
 }
 
+/** MOV-386: call `onInit` once, with the first stream-json `system/init` event. */
+export function makeInitEventWatcher(onInit) {
+  let carry = "";
+  let fired = false;
+  return (chunk) => {
+    if (fired) return;
+    carry += chunk.toString("utf8");
+    const lines = carry.split("\n");
+    carry = lines.pop() ?? "";
+    for (const line of lines) {
+      let event;
+      try { event = JSON.parse(line); } catch { continue; }
+      if (event?.type !== "system" || event.subtype !== "init") continue;
+      fired = true;
+      carry = "";
+      onInit(event);
+      return;
+    }
+  };
+}
+
 function redactionStream(env) {
   let carry = "";
   return new Transform({
@@ -188,6 +209,9 @@ function reapProcessGroup(pid, { graceMs, killImpl }) {
  *   (an "iOS Companion App" issue only), added to the sanitized worker environment as MOVIECAL_IOS_SIM_LEASE_ID so
  *   a nested `ios:sim:run` inside the worker recognizes and renews it instead of queueing behind its own dispatcher.
  *   Only ever applied inside the sandboxed (securityContext) branch -- there is no unsandboxed production path.
+ * @param {(event: object) => void} [opts.onWorkerInit] - MOV-386: called once with the worker's first stream-json
+ *   `system/init` event (Claude only emits one), so the caller can confirm the effective permission mode and tool set
+ *   while the worker runs. Observation only: a throwing callback is swallowed and never affects the worker.
  * @param {object|null} [opts.trial] - MOV-383: worker-trial attribution (trialId, requestedWorker, resolvedWorker, routingReason, assignedAt) recorded in manifest.json; null outside a trial
  * @returns {Promise<{exitCode: number, logDir: string, pid: number|null}>|{promise: Promise<{exitCode: number, logDir: string, pid: number|null}>, writeTurn: (text: string) => void, requestClose: () => void, nextTurnBoundary: () => Promise<{ended: boolean}>}}
  */
@@ -207,6 +231,7 @@ export function spawnWorker({
   steering = false,
   iosSimLeaseId = null,
   onAssistantTurn = null,
+  onWorkerInit = null,
   trial = null,
 }) {
   fs.mkdirSync(logDir, { recursive: true });
@@ -296,6 +321,12 @@ export function spawnWorker({
     child.stderr?.pipe(redactionStream(process.env)).pipe(stderrStream);
     if (onAssistantTurn) {
       child.stdout?.on("data", makeAssistantTurnCounter(path.basename(invocation.command), onAssistantTurn));
+    }
+    if (onWorkerInit) {
+      // A watcher's own failure must never affect the worker it observes.
+      child.stdout?.on("data", makeInitEventWatcher((event) => {
+        try { onWorkerInit(event); } catch { /* observation only */ }
+      }));
     }
     if (steering) {
       // A second, independent listener on the same readable -- Node

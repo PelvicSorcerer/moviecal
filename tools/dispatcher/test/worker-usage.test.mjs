@@ -57,6 +57,29 @@ describe("worker usage", () => {
     expect(result).toMatchObject({ turns: 8, turnsSource: "dispatcher-observed", partial: true, costUsd: null, exitOutcome: "exited-143", terminationReason: "turn-budget" });
   });
 
+  describe("Claude startup check (MOV-386)", () => {
+    const ALLOWED = ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "NotebookEdit", "Task"];
+
+    it("records a matching init event", () => {
+      const events = [line({ type: "system", subtype: "init", permissionMode: "dontAsk", tools: ALLOWED, claude_code_version: "2.1.281" }), claude].join("\n");
+      expect(parseWorkerUsage(events, { worker: "claude" }).startupCheck).toMatchObject({
+        status: "match", permissionMode: "dontAsk", tools: ALLOWED, unexpectedTools: [], cliVersion: "2.1.281", problems: [],
+      });
+    });
+
+    it("records the forced-default mode and every extra tool as a mismatch", () => {
+      const events = [line({ type: "system", subtype: "init", permissionMode: "default", tools: [...ALLOWED, "Workflow", "WebFetch"] }), claude].join("\n");
+      const { startupCheck } = parseWorkerUsage(events, { worker: "claude" });
+      expect(startupCheck).toMatchObject({ status: "mismatch", permissionMode: "default", unexpectedTools: ["Workflow", "WebFetch"] });
+      expect(startupCheck.problems.join(" ")).toMatch(/permissionMode is "default", expected "dontAsk"/);
+    });
+
+    it("records a transcript with no init event as missing, and leaves Codex without a check", () => {
+      expect(parseWorkerUsage(claude, { worker: "claude" }).startupCheck).toMatchObject({ status: "missing", permissionMode: null, tools: null });
+      expect(parseWorkerUsage(CODEX_SINGLE_TURN, { worker: "codex" }).startupCheck).toBeNull();
+    });
+  });
+
   describe("Codex", () => {
     it("reports exactly what the CLI exposes and leaves the rest null with reasons", () => {
       const result = parseWorkerUsage(CODEX_SINGLE_TURN, { issue: "MOV-382", worker: "codex", modelId: "gpt-6-sol", reasoningEffort: "medium" });
