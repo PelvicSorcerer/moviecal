@@ -25,6 +25,13 @@ function readOptionalString(value: unknown): string | null {
   return trimmedValue ? trimmedValue : null;
 }
 
+/** UTC presentation for plural reads; the personal API keeps stored spelling. */
+export function toUtcIsoString(value: string): string {
+  const parsed = Date.parse(value);
+
+  return Number.isNaN(parsed) ? value : new Date(parsed).toISOString();
+}
+
 function assertTmdbId(tmdbId: number): void {
   if (!Number.isInteger(tmdbId) || tmdbId <= 0) {
     throw new WatchlistInputError('A valid tmdb_id is required.');

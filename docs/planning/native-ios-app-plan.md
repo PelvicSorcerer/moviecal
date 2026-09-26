@@ -207,3 +207,7 @@ first TestFlight build requires.
    - `#239` / `MOV-106` (Supabase auth via supabase-swift) — **Done**.
    - `#240` / `MOV-107` (navigation shell + placeholder screens) — **Backlog**.
 3. Note: dependency tracking now uses native Linear `blocked by`/`blocks` relations (see `docs/governance/linear-information-architecture.md` §Relations); the GitHub-Project `Dependencies` field approach is superseded.
+
+## Versioned shared-watchlist reads (MOV-340)
+
+`GET /api/v1/watchlists` and `GET /api/v1/watchlists/{id}` expose authorized personal/shared summaries and items with `role` and `canEdit`. Bearer identity is validated before service-role construction, with no cookie fallback or token logging. List summaries use caller-scoped RLS; detail uses server-only service-role data access after the same actor-scoped ownership/accepted-membership check as cookie reads. Pending invitees and outsiders receive no shared metadata; forbidden and unknown detail IDs both return 404. Direct user clients remain subject to RLS, and clients never receive service-role keys. The singular personal API remains compatible. Stable IDs, UTC dates, error shapes, and bounded cursor pagination are defined in [v1 contract](../api/v1-contract.md). Native presentation and shared mutation APIs remain separate work.

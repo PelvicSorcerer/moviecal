@@ -20,7 +20,7 @@ All errors use `{ "error": string }` with an appropriate HTTP status:
 
 | Status | Meaning |
 |---|---|
-| `400` | Invalid request body (`WatchlistInputError`) or missing/empty search query `q`. |
+| `400` | Invalid request body, pagination limit/cursor (`WatchlistInputError`), or missing/empty search query `q`. |
 | `401` | Missing, malformed, expired, or otherwise invalid bearer token — `{ "error": "Unauthorized." }`. |
 | `403` | Access denied by domain/RLS (`WatchlistAccessError`). |
 | `404` | Item or watchlist not found (`WatchlistNotFoundError`). |
@@ -31,7 +31,7 @@ All errors use `{ "error": string }` with an appropriate HTTP status:
 
 ### Watchlist
 
-Base path: `/api/v1/watchlist`. All currently implemented `v1` watchlist endpoints operate on the authenticated user's **personal** watchlist. Shared-list `v1` endpoints are planned separately; the moviecal web app currently uses its cookie-session routes for shared lists.
+Base path: `/api/v1/watchlist`. The singular path remains the authenticated user's **personal** item API. The plural read endpoints below additionally expose authorized personal and shared lists. Shared mutations remain on the cookie-session web surface.
 
 ### `GET /api/v1/watchlist`
 
@@ -76,6 +76,21 @@ Removes a movie from the personal watchlist.
 - Response `204`: no body.
 - `400` if `watchlistItemId` is missing or not a non-empty string.
 - `404` if the item does not exist in the caller's personal watchlist.
+
+### Shared and personal list reads
+
+`GET /api/v1/watchlists` returns `{ watchlists: WatchlistView[], page: Page }`.
+`GET /api/v1/watchlists/{id}` returns `{ watchlist: WatchlistView, items: WatchlistItem[], page: Page }`.
+Neither endpoint accepts a body.
+
+- `WatchlistView`: `{ id: string, kind: "personal" | "shared", name: string, ownerUserId: string, role: "owner" | "editor", canEdit: boolean }`.
+- `Page`: `{ limit: number, nextCursor: string | null }`.
+- Item and movie shapes match the personal API above. List/item IDs are stable database IDs; movie `id` is the database integer and `tmdbId` is TMDb identity. Shared read `addedAt` is UTC ISO-8601 with `Z`; release dates remain `YYYY-MM-DD` or `null`. The singular personal API preserves its existing stored timestamp spelling.
+- Optional `limit` defaults to 50 (absent/blank) and accepts integers 1–100. Optional `cursor` is an opaque canonical base64url encoding of the last returned row ID. Send `nextCursor` unchanged for the next page; `null` ends pagination.
+- Lists are ordered personal first, then ascending list ID. Items are newest `addedAt` first, then ascending item ID for ties. Pagination applies to the currently authorized collection, not a frozen snapshot: concurrent additions may require restarting; deleted/revoked cursor rows produce `400` with `{ "error": "Invalid pagination cursor." }`.
+- Owner and accepted editor see shared lists; pending invitees and outsiders do not. Detail returns identical `404` `{ "error": "Watchlist not found." }` for forbidden and nonexistent lists. Invalid bearer returns `401` before repository construction. Pagination errors return `400`; unexpected errors return `500`, always using the common error shape.
+
+**Authorization boundary:** Both transports call the same actor-scoped `listUserWatchlists` / `getWatchlistDetail` domain rules. List summaries use caller-scoped RLS queries (ownership or accepted membership). Detail validates access through `getWatchlistAccess` before reading items with the server-only service-role client. That path relies on domain authorization, not RLS. Service-role construction occurs only after bearer validation; no cookie fallback, token refresh, or token logging is introduced. Direct authenticated database clients remain RLS-enforced. The service-role key never reaches clients.
 
 ### Calendar
 
