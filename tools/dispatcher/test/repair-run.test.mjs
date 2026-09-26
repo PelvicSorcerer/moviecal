@@ -5,6 +5,8 @@ import path from "node:path";
 import { observePullRequest } from "../src/pr-reconcile.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
 import { previewRepairPass, runRepairPass } from "../src/repair-run.mjs";
+import { captureWorkerUsage, WorkerUsageStore } from "../src/worker-usage.mjs";
+import { CODEX_SINGLE_TURN } from "./usage-fixtures.mjs";
 
 const REPO = "owner/repo";
 const HEAD = "abc123";
@@ -93,6 +95,29 @@ describe("runRepairPass (MOV-190)", () => {
     expect(ctx.publishRepairResultFn).toHaveBeenCalledWith(expect.objectContaining({ branch: ENTRY.branch, expectedHeadSha: HEAD, issue }));
     expect(ctx.ledger.previousAttempts(ENTRY.id, ENTRY.prNumber)).toMatchObject({ codeRepair: 1, total: 1 });
     expect(ctx.worktreeManager.updateEntry).toHaveBeenCalledWith(ENTRY.id, { headSha: "def456" });
+  });
+
+  it("captures the repair attempt's usage into an injected temporary store with model and effort (MOV-382)", async () => {
+    const ctx = context();
+    const store = new WorkerUsageStore(path.join(ctx.logRoot, "usage-state.json"));
+    ctx.workerInvocationFn = vi.fn(() => ({ command: "codex", args: ["exec", "-c", "model_reasoning_effort=medium", "--model", "gpt-6-sol"] }));
+    ctx.spawnWorkerFn = vi.fn(async ({ logDir }) => {
+      fs.mkdirSync(logDir, { recursive: true });
+      fs.writeFileSync(path.join(logDir, "stdout.log"), CODEX_SINGLE_TURN);
+      return { exitCode: 0 };
+    });
+    ctx.captureWorkerUsageFn = (logDir, context) => captureWorkerUsage(logDir, { ...context, origin: "dispatcher" }, { store });
+
+    const [result] = await runRepairPass(ctx);
+
+    expect(result.outcome).toBe("repaired");
+    const [usage] = store.recent();
+    expect(store.recent()).toHaveLength(1);
+    expect(usage).toMatchObject({
+      issue: ENTRY.id, attemptKind: "repair", worker: "codex", tier: "default", modelId: "gpt-6-sol", reasoningEffort: "medium",
+      inputTokens: 24763, cacheReadTokens: 24448, outputTokens: 122, costUsd: null, exitOutcome: "exited-0", origin: "dispatcher",
+    });
+    expect(usage.attemptId).toEqual(expect.any(String));
   });
 
   it("re-runs an admitted transient failure without starting a worker or publishing code", async () => {

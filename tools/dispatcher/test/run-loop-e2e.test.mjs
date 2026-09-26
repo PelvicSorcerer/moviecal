@@ -84,6 +84,11 @@ vi.mock("../src/config.mjs", async (importOriginal) => {
     worktreesStatePath: () => `${TMP_ROOT}/worktrees.json`,
     circuitBreakerStatePath: () => `${TMP_ROOT}/circuit-breaker.json`,
     usageLimitStatePath: () => `${TMP_ROOT}/usage-limit.json`,
+    // MOV-382: these two were previously left on the live ~/.config/moviecal
+    // paths, so every fixture worker run here appended a fixture row to the
+    // real worker-usage ledger.
+    workerUsageStatePath: () => `${TMP_ROOT}/worker-usage.json`,
+    repairLedgerStatePath: () => `${TMP_ROOT}/repair-ledger.json`,
     envLocalPath: () => `${TMP_ROOT}/env.local`,
     logRoot: () => `${TMP_ROOT}/logs`,
     linearAppEnvPath: () => `${TMP_ROOT}/linear-app.env`,

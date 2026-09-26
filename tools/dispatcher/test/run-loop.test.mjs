@@ -10,6 +10,7 @@ import { NESTED_SANDBOX_CRASH } from "../src/failure-classification.mjs";
 import { CREDENTIAL_FAILURE } from "../src/credential-failure.mjs";
 import { UsageLimitStore } from "../src/usage-limit.mjs";
 import { captureWorkerUsage, WorkerUsageStore } from "../src/worker-usage.mjs";
+import { workerInvocation } from "../src/worker-routing.mjs";
 
 const STATE_IDS = {
   blocked: "state-blocked",
@@ -212,7 +213,9 @@ describe("runOnce", () => {
       const [result] = await runOnce([ISSUE], ctx);
       expect(result.outcome).toBe("in-review");
       const summary = store.recent()[0];
-      expect(summary).toMatchObject({ issue: "MOV-1", turns: 3, costUsd: 0.25, partial: false });
+      expect(summary).toMatchObject({ issue: "MOV-1", turns: 3, costUsd: 0.25, partial: false, attemptKind: "implementation", worker: "claude", terminationReason: null });
+      expect(summary.attemptId).toEqual(expect.any(String));
+      expect(summary.reasoningEffort).toBe(workerInvocation("claude", "default").reasoningEffort);
       expect(JSON.parse(fs.readFileSync(path.join(root, ctx.worktreeManager.createCalls[0].name, "usage.json"), "utf8"))).toMatchObject({ issue: "MOV-1", turns: 3 });
       const completion = ctx.linearClient.calls.filter((call) => call.type === "addComment" && call.body.includes("Pull request opened:"));
       expect(completion).toHaveLength(1);
