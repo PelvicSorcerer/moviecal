@@ -112,7 +112,7 @@ If that continuation also reaches its budget, or the retained worktree cannot be
 
 ### Temporary `worker:any` → Codex trial (MOV-383)
 
-Fresh `worker:any` issues request Claude by default; MOV-395 selects another available worker when the requested worker is rate limited. A bounded, disabled-by-default trial can temporarily send them to Codex while preserving each issue's tier and pinned model/effort; the full policy, states and rollback are in `docs/operators/worker-routing.md` §Temporary `worker:any` → Codex trial. Operationally:
+Fresh `worker:any` issues request Claude by default; MOV-395 selects another available worker when the requested worker is cooling down or its reset probe is reserved for another issue. A bounded, disabled-by-default trial can temporarily send them to Codex while preserving each issue's tier and pinned model/effort; the full policy, states and rollback are in `docs/operators/worker-routing.md` §Temporary `worker:any` → Codex trial. Operationally:
 
 - **Activate** (only after Adam releases MOV-384, and record it on that issue): `node tools/dispatcher/bin/dispatcher.mjs trial activate --id <trialId> --expires <future ISO UTC, at most 14 days> --max-assignments <1-30>`. Inspect with `trial status`, `dry-run` or `doctor`. The config is `~/.config/moviecal/worker-trial.json`; assignments are `~/.config/moviecal/worker-trial-assignments.json`.
 - **Early stop:** `node tools/dispatcher/bin/dispatcher.mjs trial stop`. It needs no daemon restart and does not take the run lock; it disables only future assignments and keeps every record and every running attempt.

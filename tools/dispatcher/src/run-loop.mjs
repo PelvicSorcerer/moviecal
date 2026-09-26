@@ -124,7 +124,7 @@ export async function runOnce(issues, ctx) {
     boundWorker: usageLimitStore.get(issue.identifier)?.worker ?? null,
     trial: trialState ? { state: trialState, assignment: workerTrialStore.get(issue.identifier) } : null,
     cooldownOpen: (worker) => !snapshot[worker].cooling &&
-      (!snapshot[worker].probeOwed || !probeWinnerId[worker] || probeWinnerId[worker] === issue.id),
+      (!snapshot[worker].probeOwed || probeWinnerId[worker] === null || probeWinnerId[worker] === issue.id),
   });
 
   // MOV-138: bound how many `processIssue` calls run concurrently within this
@@ -178,7 +178,7 @@ export async function runOnce(issues, ctx) {
           };
           return;
         }
-        if (cooldown.probeOwed && probeWinnerId[resolvedWorkerName] && probeWinnerId[resolvedWorkerName] !== issue.id) {
+        if (cooldown.probeOwed && probeWinnerId[resolvedWorkerName] !== null && probeWinnerId[resolvedWorkerName] !== issue.id) {
           results[index] = {
             issue: issue.identifier,
             outcome: "deferred-worker-cooldown",
@@ -225,7 +225,7 @@ export async function runOnce(issues, ctx) {
       const liveWorkerName = liveResolved.worker;
       if (liveWorkerName) {
         const liveCooldown = liveSnapshot[liveWorkerName];
-        if (liveCooldown.cooling || (liveCooldown.probeOwed && probeWinnerId[liveWorkerName] && probeWinnerId[liveWorkerName] !== issue.id)) {
+        if (liveCooldown.cooling || (liveCooldown.probeOwed && probeWinnerId[liveWorkerName] !== null && probeWinnerId[liveWorkerName] !== issue.id)) {
           results[index] = {
             issue: issue.identifier, outcome: "deferred-worker-cooldown",
             reason: `${liveWorkerName} worker cooldown started earlier in this batch or awaits its single post-reset probe (until ${liveCooldown.resetAt})`,
@@ -234,6 +234,7 @@ export async function runOnce(issues, ctx) {
           release();
           return;
         }
+        // Check and reserve synchronously, before processIssue can yield.
         if (liveCooldown.probeOwed) probeWinnerId[liveWorkerName] = issue.id;
       }
       try {

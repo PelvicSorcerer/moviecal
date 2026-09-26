@@ -535,10 +535,10 @@ async function cmdDryRun({ fixturePath } = {}) {
       boundWorker: usageLimits.get(issue.identifier)?.worker ?? null,
       trial: { state: trialState, assignment: trials.get(issue.identifier) },
       cooldownOpen: (worker) => !cooldownSnapshot[worker].cooling &&
-        (!cooldownSnapshot[worker].probeOwed || !probeWinners[worker] || probeWinners[worker] === issue.id),
+        (!cooldownSnapshot[worker].probeOwed || probeWinners[worker] === null || probeWinners[worker] === issue.id),
     });
     if (resolvedWorker.available && cooldownSnapshot[resolvedWorker.worker]?.probeOwed &&
-        (!probeWinners[resolvedWorker.worker] || probeWinners[resolvedWorker.worker] === issue.id) &&
+        (probeWinners[resolvedWorker.worker] === null || probeWinners[resolvedWorker.worker] === issue.id) &&
         evaluateLocalDispatch(issue, { expectedDelegate: dispatcherDelegate }).eligible &&
         !usageLimits.deferral(issue.identifier, previewNow)?.deferred) probeWinners[resolvedWorker.worker] = issue.id;
     const execution = resolveExecutionRoute(issue);
