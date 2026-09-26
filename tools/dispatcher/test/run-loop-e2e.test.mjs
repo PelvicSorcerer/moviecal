@@ -550,7 +550,7 @@ describe("worker-quota-pool cooldown across the real dispatcher wiring (MOV-360)
     return logDir;
   }
 
-  it("blocks a second same-batch claude issue after the first hits a limit, while codex-pinned work progresses and fresh worker:any waits", async () => {
+  it("blocks a second same-batch claude issue after the first hits a limit, while codex-pinned work progresses and fresh worker:any falls back", async () => {
     const issueC1 = makeIssue({ id: "id-c1", identifier: "MOV-C1", title: "First claude issue" });
     const issueC2 = makeIssue({ id: "id-c2", identifier: "MOV-C2", title: "Second claude issue" });
     const issueCodex = makeIssue({ id: "id-cx", identifier: "MOV-CX", title: "A codex issue", labels: ["worker:codex"] });
@@ -587,14 +587,14 @@ describe("worker-quota-pool cooldown across the real dispatcher wiring (MOV-360)
     // dispatched, no Linear write of its own.
     expect(c2Result).toMatchObject({ issue: "MOV-C2", outcome: "deferred-worker-cooldown" });
     expect(linearClient.calls.some((c) => c.issueId === "id-c2")).toBe(false);
-    // Codex-pinned work progresses independently; worker:any keeps Claude.
+    // Both pinned Codex and fresh flexible work progress on Codex.
     expect(cxResult).toMatchObject({ issue: "MOV-CX", outcome: "in-review" });
-    expect(anyResult).toMatchObject({ issue: "MOV-ANY", outcome: "deferred-worker-cooldown" });
-    expect(linearClient.calls.some((c) => c.issueId === "id-any")).toBe(false);
+    expect(anyResult).toMatchObject({ issue: "MOV-ANY", outcome: "in-review" });
 
-    // Only C1 and the explicitly pinned Codex issue create worktrees.
-    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(2);
-    expect(manager.createCalls.map((c) => c.id)).toEqual(["MOV-C1", "MOV-CX"]);
+    // The fresh issue uses the live cooldown recheck after waiting for the slot.
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(3);
+    expect(manager.createCalls.map((c) => c.id)).toEqual(["MOV-C1", "MOV-CX", "MOV-ANY"]);
+    expect(manager.createCalls.find((c) => c.id === "MOV-ANY").worker).toBe("codex");
     expect(manager.createCalls.find((c) => c.id === "MOV-CX").worker).toBe("codex");
 
     // The cooldown this batch produced is real, persisted state -- a fresh

@@ -2723,7 +2723,7 @@ describe("worker-quota-pool cooldown (MOV-360)", () => {
     expect(ctx.worktreeManager.createCalls[0]).toMatchObject({ worker: "claude" });
   });
 
-  it("defers a fresh worker:any issue while claude is cooling without fallback", async () => {
+  it("dispatches a fresh worker:any issue to Codex while requested Claude is cooling", async () => {
     const workerCooldownStore = fakeWorkerCooldownStore({
       claude: { worker: "claude", resetAt: "2026-09-14T17:00:00.000Z" },
     });
@@ -2732,9 +2732,8 @@ describe("worker-quota-pool cooldown (MOV-360)", () => {
 
     const [result] = await runOnce([issue], ctx);
 
-    expect(result.outcome).toBe("deferred-worker-cooldown");
-    expect(ctx.worktreeManager.createCalls).toEqual([]);
-    expect(ctx.linearClient.calls).toEqual([]);
+    expect(result.outcome).toBe("in-review");
+    expect(ctx.worktreeManager.createCalls[0]).toMatchObject({ worker: "codex" });
   });
 
   it("leaves a fresh worker:any issue queued without a claim when both worker pools are cooling", async () => {
@@ -2784,9 +2783,8 @@ describe("worker-quota-pool cooldown (MOV-360)", () => {
     const [freshResult, dueResult] = await runOnce([freshIssue, ISSUE], ctx);
 
     expect(dueResult).toMatchObject({ issue: "MOV-1", outcome: "in-review" });
-    expect(freshResult).toMatchObject({ issue: "MOV-FRESH", outcome: "deferred-worker-cooldown" });
-    expect(freshResult.reason).toMatch(/single post-reset probe/);
-    expect(ctx.worktreeManager.createCalls.map((c) => c.id)).toEqual(["MOV-1"]);
+    expect(freshResult).toMatchObject({ issue: "MOV-FRESH", outcome: "in-review" });
+    expect(ctx.worktreeManager.createCalls.map((c) => [c.id, c.worker])).toEqual([["MOV-FRESH", "codex"], ["MOV-1", "claude"]]);
   });
 
   it("does not give an undelegated due retry the provider probe", async () => {
@@ -2878,6 +2876,21 @@ describe("worker-quota-pool cooldown (MOV-360)", () => {
     expect(result2.reason).toMatch(/started earlier in this batch/);
     expect(spawnWorkerFn).toHaveBeenCalledTimes(1);
     expect(workerCooldownStore.get("claude")).toMatchObject({ resetAt: "2026-09-14T17:00:00.000Z" });
+  });
+
+  it("uses only one alternative reset probe when the requested pool is cooling", async () => {
+    const cooldowns = fakeWorkerCooldownStore({
+      claude: { resetAt: "2026-09-14T17:00:00.000Z" },
+      codex: { resetAt: "2026-09-14T11:00:00.000Z" },
+    });
+    const first = { ...ISSUE, labels: [...ISSUE.labels, "worker:any"] };
+    const second = { ...first, id: "second", identifier: "MOV-2" };
+    const logDir = withLog("usage limit reached; reset time unavailable"); // cannot clear cooldown
+    const ctx = baseCtx({ logRoot: tmpLogRoot, workerCooldownStore: cooldowns, concurrencyLimit: 1, now: () => NOW,
+      spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })) });
+    const results = await runOnce([first, second], ctx);
+    expect(results[1].outcome).toBe("deferred-worker-cooldown");
+    expect(ctx.worktreeManager.createCalls.map((c) => c.worker)).toEqual(["codex"]);
   });
 
   it("never touches the worker cooldown for a usage-limit message whose reset time cannot be parsed", async () => {

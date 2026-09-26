@@ -100,14 +100,14 @@ describe("resolveDispatchWorker (MOV-360)", () => {
     expect(result).toMatchObject({ worker: "claude", isAny: true, available: true, bound: false });
   });
 
-  it("keeps fresh worker:any on claude when claude is cooling", () => {
+  it("uses Codex when requested Claude is cooling", () => {
     const result = resolveDispatchWorker({ labels: ["worker:any"] }, { cooldownOpen: CLAUDE_COOLING });
-    expect(result).toMatchObject({ worker: "claude", isAny: true, available: true, bound: false });
+    expect(result).toMatchObject({ worker: "codex", requestedWorker: "claude", isAny: true, available: true, bound: false });
   });
 
   it("keeps fresh worker:any on claude even when both pools are cooling", () => {
     const result = resolveDispatchWorker({ labels: ["worker:any"] }, { cooldownOpen: BOTH_COOLING });
-    expect(result).toMatchObject({ worker: "claude", isAny: true, available: true });
+    expect(result).toMatchObject({ worker: "claude", isAny: true, available: false });
   });
 
   it("keeps a worker:any issue bound to its prior attempt's worker, even when the other is open", () => {
@@ -139,6 +139,20 @@ describe("resolveDispatchWorker (MOV-360)", () => {
     const result = resolveDispatchWorker({ labels: ["worker:any", "model:strong"] }, { cooldownOpen: ALWAYS_OPEN });
     expect(result.ok).toBe(false);
     expect(result.reason).toMatch(/upgrade-condition/);
+  });
+
+  it("uses Claude when requested Codex is cooling, without trial attribution", () => {
+    const trial = { state: { status: "active", trialId: "trial" }, assignment: null };
+    const issue = { labels: ["worker:any", "model:strong", "upgrade:architecture"] };
+    expect(resolveDispatchWorker(issue, { trial, cooldownOpen: (worker) => worker === "claude" }))
+      .toMatchObject({ requestedWorker: "codex", worker: "claude", model: "strong", trial: null });
+    expect(resolveDispatchWorker(issue, { trial })).toMatchObject({ worker: "codex", trial: { pending: true } });
+  });
+
+  it("returns to the requested worker when it becomes available", () => {
+    const issue = { labels: ["worker:any"] };
+    expect(resolveDispatchWorker(issue, { cooldownOpen: CLAUDE_COOLING }).worker).toBe("codex");
+    expect(resolveDispatchWorker(issue, { cooldownOpen: ALWAYS_OPEN }).worker).toBe("claude");
   });
 
   it("defaults cooldownOpen to always-open when the caller supplies none", () => {

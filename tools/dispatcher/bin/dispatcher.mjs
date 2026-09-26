@@ -100,7 +100,7 @@ import {
 import { LinearClient } from "../src/linear-client.mjs";
 import { getAppToken } from "../src/linear-app-auth.mjs";
 import { evaluatePreflight, worktreeName, branchName } from "../src/preflight.mjs";
-import { resolveRouting, resolveDispatchWorker, workerInvocation, modelIdForTier, claudeEffortForTier, claudeModelDoesNotSupportEffort } from "../src/worker-routing.mjs";
+import { resolveRouting, resolveDispatchWorker, workerProbeWinners, workerInvocation, modelIdForTier, claudeEffortForTier, claudeModelDoesNotSupportEffort } from "../src/worker-routing.mjs";
 import { WorkerCooldownStore, WORKERS as WORKER_POOLS } from "../src/worker-cooldown.mjs";
 import { WorkerTrialStore, describeTrialState } from "../src/worker-trial.mjs";
 import { inferExecutionRoute, resolveExecutionRoute } from "../src/execution-routing.mjs";
@@ -507,6 +507,20 @@ async function cmdDryRun({ fixturePath } = {}) {
   const trials = buildWorkerTrialStore();
   const trialState = trials.state(new Date());
 
+  const requestedRoutes = issues.map((issue) => resolveDispatchWorker(issue, {
+    boundWorker: usageLimits.get(issue.identifier)?.worker ?? null,
+    trial: { state: trialState, assignment: trials.get(issue.identifier) },
+  }));
+  const previewNow = new Date();
+  const probeWinners = workerProbeWinners(issues, requestedRoutes, cooldownSnapshot, {
+    eligible: (issue) => evaluateLocalDispatch(issue, { expectedDelegate: dispatcherDelegate }).eligible &&
+      !usageLimits.deferral(issue.identifier, previewNow)?.deferred,
+    due: (issue) => {
+      const record = usageLimits.get(issue.identifier);
+      return (Boolean(record?.retryAt) && new Date(record.retryAt) <= previewNow) || Boolean(usageLimits.resumption(issue.identifier, previewNow));
+    },
+  });
+
   console.log(`worker:any trial: ${describeTrialState(trialState)}\n`);
   console.log(`${issues.length} issue(s) in Ready for Agent:\n`);
   let routingError = false;
@@ -520,7 +534,13 @@ async function cmdDryRun({ fixturePath } = {}) {
     const resolvedWorker = resolveDispatchWorker(issue, {
       boundWorker: usageLimits.get(issue.identifier)?.worker ?? null,
       trial: { state: trialState, assignment: trials.get(issue.identifier) },
+      cooldownOpen: (worker) => !cooldownSnapshot[worker].cooling &&
+        (!cooldownSnapshot[worker].probeOwed || !probeWinners[worker] || probeWinners[worker] === issue.id),
     });
+    if (resolvedWorker.available && cooldownSnapshot[resolvedWorker.worker]?.probeOwed &&
+        (!probeWinners[resolvedWorker.worker] || probeWinners[resolvedWorker.worker] === issue.id) &&
+        evaluateLocalDispatch(issue, { expectedDelegate: dispatcherDelegate }).eligible &&
+        !usageLimits.deferral(issue.identifier, previewNow)?.deferred) probeWinners[resolvedWorker.worker] = issue.id;
     const execution = resolveExecutionRoute(issue);
     const eligibility = evaluateLocalDispatch(issue, { expectedDelegate: dispatcherDelegate });
     const name = worktreeName(issue.identifier, issue.title);
@@ -549,6 +569,9 @@ async function cmdDryRun({ fixturePath } = {}) {
     } else {
       console.log(`  worker:   ${resolvedWorker.worker} (model: ${routing.model})${routing.ok ? "" : `  [ROUTING BLOCKED: ${routing.reason}]`}${workerNote}`);
     }
+    if (resolvedWorker.requestedWorker) console.log(`  requested worker: ${resolvedWorker.requestedWorker}`);
+    if (resolvedWorker.requestedWorker && resolvedWorker.requestedWorker !== resolvedWorker.worker) console.log(`  fallback: ${resolvedWorker.reason}`);
+    if (!resolvedWorker.available) console.log("  dispatch: QUEUED — neither worker quota gate is available");
     if (resolvedWorker.trial) {
       const t = resolvedWorker.trial;
       console.log(`  trial:    ${t.trialId} — requested worker:any, resolved ${resolvedWorker.worker}, ${t.pending ? "would be assigned at dispatch" : `assigned ${t.assignedAt}`}; ${t.routingReason}`);

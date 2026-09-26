@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { runOnce } from "../src/run-loop.mjs";
 import { WorkerTrialStore, trialAttribution } from "../src/worker-trial.mjs";
+import { UsageLimitStore } from "../src/usage-limit.mjs";
 import { WorkerCooldownStore } from "../src/worker-cooldown.mjs";
 import { resolveDispatchWorker, workerInvocation } from "../src/worker-routing.mjs";
 import { spawnWorker } from "../src/worker-spawn.mjs";
@@ -177,14 +178,46 @@ describe("worker:any -> Codex trial through the run loop (MOV-383)", () => {
     expect(fresh().state(T0)).toMatchObject({ assigned: 1 });
   });
 
-  it("holds trial-routed issues queued during a Codex cooldown instead of falling back to Claude", async () => {
+  it("falls back to Claude during a Codex cooldown without consuming a trial assignment", async () => {
     activate();
     const cooldowns = new WorkerCooldownStore(path.join(dir, "cooldowns.json"));
     cooldowns.record("codex", { resetAt: iso(3600_000), evidence: "usage limit", now: T0 });
     const [result] = await runOnce([issue(1)], ctx({ workerCooldownStore: cooldowns }));
-    expect(result).toMatchObject({ outcome: "deferred-worker-cooldown" });
-    expect(created).toEqual([]);
-    expect(trials.state(T0).assigned).toBe(0); // no slot consumed while queued
+    expect(result).toMatchObject({ outcome: "in-review" });
+    expect(created[0]).toMatchObject({ worker: "claude", trial: null });
+    expect(spawned[0].trial).toBeNull();
+    expect(trials.state(T0).assigned).toBe(0); // Claude fallback is outside the Codex trial
+  });
+
+  it("rechecks a Codex limit in the same batch and keeps fallback out of the trial ledger", async () => {
+    activate();
+    const cooldowns = new WorkerCooldownStore(path.join(dir, "cooldowns.json"));
+    const captured = [];
+    const shared = ctx({ concurrencyLimit: 1, workerCooldownStore: cooldowns,
+      usageLimitStore: new UsageLimitStore(path.join(dir, "limits.json")),
+      captureWorkerUsageFn: (logDir, context) => { captured.push(context); return null; },
+      spawnWorkerFn: vi.fn(async (args) => {
+        spawned.push(args);
+        fs.mkdirSync(args.logDir, { recursive: true });
+        if (spawned.length === 1) {
+          fs.writeFileSync(path.join(args.logDir, "stdout.log"), `usage limit reached; resets ${iso(3600_000).replace(".000Z", "Z")}`);
+          return { exitCode: 1, logDir: args.logDir };
+        }
+        return { exitCode: 0, logDir: args.logDir };
+      }),
+    });
+    const results = await runOnce([issue(1), issue(2)], shared);
+    expect(results.map((r) => r.outcome)).toEqual(["usage-limit-deferred", "in-review"]);
+    expect(created.map((c) => c.worker)).toEqual(["codex", "claude"]);
+    expect(created[1].trial).toBeNull();
+    expect(captured[1]).toMatchObject({ worker: "claude", trial: null });
+    expect(fresh().state(T0).assigned).toBe(1);
+    expect(fresh().get("MOV-2")).toBeNull();
+    // After reset a fresh claim returns to requested Codex and consumes its own slot.
+    clock = new Date(T0.getTime() + 3600_001);
+    await runOnce([issue(3)], shared);
+    expect(created[2]).toMatchObject({ worker: "codex", trial: { trialId: "sol-vs-sonnet" } });
+    expect(fresh().state(clock).assigned).toBe(2);
   });
 
   it("refuses worker:any visibly on an invalid config while pinned issues still dispatch", async () => {

@@ -9,7 +9,7 @@
 
 import path from "node:path";
 import { evaluatePreflight, worktreeName, branchName, resolveWorkflowEditAuthorization, IOS_COMPANION_APP_PROJECT } from "./preflight.mjs";
-import { resolveRouting, resolveDispatchWorker, workerInvocation } from "./worker-routing.mjs";
+import { resolveRouting, resolveDispatchWorker, workerProbeWinners, workerInvocation } from "./worker-routing.mjs";
 import { confirmStillClaimable, evaluateLocalDispatch } from "./dispatch-eligibility.mjs";
 import { generateBrief } from "./brief.mjs";
 import { collectRepositoryContext } from "./repository-context.mjs";
@@ -100,8 +100,7 @@ export async function runOnce(issues, ctx) {
   const breakerOpenAtStart = openBreakersAtStart.length > 0;
   let probeClaimed = false;
 
-  // Resolve once, preserving prior provider bindings. Cooldown only gates this
-  // worker; it never changes a fresh worker:any claim's Claude default.
+  // Determine requested routes and retain prior bindings before allocating probes.
   const nowTs = now();
   const cooldownAtStart = Object.fromEntries(WORKER_POOLS.map((worker) => [worker, workerCooldownStore.state(worker, nowTs)]));
   // MOV-383: with no trial store wired (or the trial disabled) this is exactly
@@ -112,27 +111,21 @@ export async function runOnce(issues, ctx) {
     trial: trialState ? { state: trialState, assignment: workerTrialStore.get(issue.identifier) } : null,
   }));
 
-  // Admit one eligible post-reset probe, preferring a due retry or resume.
-  const probeWinnerId = {};
-  for (const worker of WORKER_POOLS) {
-    if (!cooldownAtStart[worker].probeOwed) continue;
-    let dueCandidateId = null;
-    let firstCandidateId = null;
-    issues.forEach((issue, index) => {
-      const resolved = resolvedWorkers[index];
-      if (!resolved.ok || resolved.worker !== worker) return;
-      if (!evaluateLocalDispatch(issue, { expectedDelegate: ctx.dispatcherDelegate }).eligible) return;
-      if (usageLimitStore.deferral(issue.identifier, nowTs)?.deferred) return;
-      if (firstCandidateId === null) firstCandidateId = issue.id;
-      if (dueCandidateId !== null) return;
+  const probeWinnerId = workerProbeWinners(issues, resolvedWorkers, cooldownAtStart, {
+    eligible: (issue) => evaluateLocalDispatch(issue, { expectedDelegate: ctx.dispatcherDelegate }).eligible &&
+      !usageLimitStore.deferral(issue.identifier, nowTs)?.deferred,
+    due: (issue) => {
       const record = usageLimitStore.get(issue.identifier);
-      const dueClean = Boolean(record?.retryAt) && new Date(record.retryAt).getTime() <= nowTs.getTime();
-      const dueResume =
-        typeof usageLimitStore.resumption === "function" && Boolean(usageLimitStore.resumption(issue.identifier, nowTs));
-      if (dueClean || dueResume) dueCandidateId = issue.id;
-    });
-    probeWinnerId[worker] = dueCandidateId ?? firstCandidateId ?? null;
-  }
+      return (Boolean(record?.retryAt) && new Date(record.retryAt) <= nowTs) ||
+        (typeof usageLimitStore.resumption === "function" && Boolean(usageLimitStore.resumption(issue.identifier, nowTs)));
+    },
+  });
+  const resolveAvailable = (issue, snapshot) => resolveDispatchWorker(issue, {
+    boundWorker: usageLimitStore.get(issue.identifier)?.worker ?? null,
+    trial: trialState ? { state: trialState, assignment: workerTrialStore.get(issue.identifier) } : null,
+    cooldownOpen: (worker) => !snapshot[worker].cooling &&
+      (!snapshot[worker].probeOwed || !probeWinnerId[worker] || probeWinnerId[worker] === issue.id),
+  });
 
   // MOV-138: bound how many `processIssue` calls run concurrently within this
   // batch to the slots this cycle can actually use — the concurrency limit
@@ -166,7 +159,7 @@ export async function runOnce(issues, ctx) {
     issues.map(async (issue, index) => {
 
       // Gate silently before taking a concurrency slot or host-breaker probe.
-      const resolvedWorker = resolvedWorkers[index];
+      const resolvedWorker = resolveAvailable(issue, cooldownAtStart);
       if (resolvedWorker.configError) {
         // MOV-383: an invalid active-trial config is a visible error, never a
         // silent Claude fallback; the issue stays queued untouched.
@@ -185,7 +178,7 @@ export async function runOnce(issues, ctx) {
           };
           return;
         }
-        if (cooldown.probeOwed && probeWinnerId[resolvedWorkerName] !== issue.id) {
+        if (cooldown.probeOwed && probeWinnerId[resolvedWorkerName] && probeWinnerId[resolvedWorkerName] !== issue.id) {
           results[index] = {
             issue: issue.identifier,
             outcome: "deferred-worker-cooldown",
@@ -225,23 +218,26 @@ export async function runOnce(issues, ctx) {
           return;
         }
       }
-      // A preceding attempt may have exhausted this provider while we waited.
-      // Recheck availability without selecting another worker.
-      const liveWorkerName = resolvedWorkerName;
+      // Re-resolve fresh claims after the slot wait: the preceding worker may
+      // have exhausted a pool, or a successful probe may have reopened it.
+      const liveSnapshot = Object.fromEntries(WORKER_POOLS.map((worker) => [worker, workerCooldownStore.state(worker, now())]));
+      const liveResolved = resolveAvailable(issue, liveSnapshot);
+      const liveWorkerName = liveResolved.worker;
       if (liveWorkerName) {
-        const liveCooldown = workerCooldownStore.state(liveWorkerName, now());
-        if (liveCooldown.cooling) {
+        const liveCooldown = liveSnapshot[liveWorkerName];
+        if (liveCooldown.cooling || (liveCooldown.probeOwed && probeWinnerId[liveWorkerName] && probeWinnerId[liveWorkerName] !== issue.id)) {
           results[index] = {
             issue: issue.identifier, outcome: "deferred-worker-cooldown",
-            reason: `${liveWorkerName} worker cooldown started earlier in this batch (until ${liveCooldown.resetAt})`,
+            reason: `${liveWorkerName} worker cooldown started earlier in this batch or awaits its single post-reset probe (until ${liveCooldown.resetAt})`,
             retryAt: liveCooldown.resetAt,
           };
           release();
           return;
         }
+        if (liveCooldown.probeOwed) probeWinnerId[liveWorkerName] = issue.id;
       }
       try {
-        results[index] = await processIssue(issue, { ...ctx, resolvedWorker: liveWorkerName, resolvedTrial: resolvedWorker.trial });
+        results[index] = await processIssue(issue, { ...ctx, resolvedWorker: liveWorkerName, resolvedTrial: liveResolved.trial });
       } finally {
         release();
         // MOV-166: this issue is no longer a live attempt an inbound signal
