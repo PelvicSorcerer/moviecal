@@ -40,7 +40,7 @@ import { DEFAULT_REPAIR_BUDGETS } from "./ci-outcomes.mjs";
 import { admitRepair, guardRepairTarget } from "./repair-policy.mjs";
 import { repairJobKey } from "./repair-ledger.mjs";
 import { workerInvocation } from "./worker-routing.mjs";
-import { formatUsageLine } from "./worker-usage.mjs";
+import { formatUsageLine, usageContextFromInvocation } from "./worker-usage.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
@@ -496,9 +496,8 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
       issue: entry.id,
       attemptKind: "repair",
       worker: entry.worker || "claude",
-      modelId: invocation.args[invocation.args.indexOf("--model") + 1] || null,
+      ...usageContextFromInvocation(invocation, entry.worker || "claude"),
       tier: entry.model || "default",
-      reasoningEffort: (entry.worker || "claude") === "codex" ? invocation.args.find((arg) => arg.startsWith("model_reasoning_effort="))?.split("=")[1] || null : null,
       exitOutcome: result.exitCode === 0 ? "exited-0" : `exited-${result.exitCode}`,
     })).catch((error) => { logger.error(`Could not capture repair usage for ${entry.id}: ${error.message}`); return null; });
     spawnResult = await raceRepairTimeout(workerPromise, workerTimeoutMs);

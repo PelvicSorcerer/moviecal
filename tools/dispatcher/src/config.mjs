@@ -19,7 +19,14 @@ export const REPO_ROOT = path.resolve(
   "..",
 );
 
+/**
+ * `MOVIECAL_CONFIG_DIR` relocates every dispatcher state file. The test lanes
+ * and disposable smoke runs point it at a temporary directory so nothing can
+ * write the live ledger under `~/.config/moviecal` (MOV-382).
+ */
 export function configDir() {
+  const override = process.env.MOVIECAL_CONFIG_DIR;
+  if (override && path.isAbsolute(override)) return override;
   return path.join(os.homedir(), ".config", "moviecal");
 }
 

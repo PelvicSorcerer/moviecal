@@ -4,6 +4,9 @@
 // Usage:
 //   dispatcher doctor              - read-only health check of every dependency
 //   dispatcher usage               - read-only recent worker usage and aggregates
+//   dispatcher usage export --issue <MOV-N> [--run <attemptId>] [--since <time>] [--until <time>]
+//                                  - read-only JSON export of selected real attempts with
+//                                     per-field completeness (see docs/operators/local-execution.md)
 //   dispatcher dry-run             - fetch Ready-for-Agent issues and print the plan
 //                                     without touching any worktree, branch, or Linear
 //                                     state (safe to run with a live or missing key)
@@ -125,7 +128,7 @@ import { SignalLedger, StopController, handleAgentSignal } from "../src/agent-si
 import { AgentStreamClient } from "../src/agent-stream-client.mjs";
 import { previewRepairPass, runRepairPass } from "../src/repair-run.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
-import { WorkerUsageStore, aggregateUsage } from "../src/worker-usage.mjs";
+import { WorkerUsageStore, aggregateUsage, buildUsageExport, parseUsageExportArgs } from "../src/worker-usage.mjs";
 import { PrAutonomyLedger, runPrAutonomyPass } from "../src/pr-autonomy.mjs";
 import { MasterIncidentLedger } from "../src/master-incident-ledger.mjs";
 import { runMasterCiPass, reconcileMasterIncidents, previewMasterCiPass } from "../src/master-ci-observer.mjs";
@@ -1304,6 +1307,18 @@ async function main() {
   const [, , cmd, ...rest] = process.argv;
   switch (cmd) {
     case "usage": {
+      if (rest[0] === "export") {
+        // Read-only: loads the ledger, filters in memory, prints JSON. Nothing is written.
+        try {
+          const { filters, statePath } = parseUsageExportArgs(rest.slice(1));
+          const store = new WorkerUsageStore(statePath || workerUsageStatePath());
+          console.log(JSON.stringify(buildUsageExport(store.recent(), filters), null, 2));
+        } catch (error) {
+          console.error(error.message);
+          process.exitCode = 1;
+        }
+        break;
+      }
       const runs = new WorkerUsageStore(workerUsageStatePath()).recent();
       console.log(JSON.stringify({ readOnly: true, recentRuns: runs.slice(-20).reverse(), byTier: aggregateUsage(runs, "tier"), byModel: aggregateUsage(runs, "modelId") }, null, 2));
       break;

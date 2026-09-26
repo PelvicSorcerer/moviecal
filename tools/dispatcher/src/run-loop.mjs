@@ -25,7 +25,7 @@ import { nullAgentSessionBridge } from "./agent-session.mjs";
 import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-signals.mjs";
 import { registerActiveAttempt, unregisterActiveAttempt, updateActiveAttempt } from "./active-attempt-registry.mjs";
 import { captureVerificationEvidence } from "./readiness-evidence.mjs";
-import { formatUsageLine } from "./worker-usage.mjs";
+import { formatUsageLine, usageContextFromInvocation } from "./worker-usage.mjs";
 import { budgetHandoffSections, diffSummary, hasWorkerProgress, readWorkerProgress, removeWorkerProgress, turnBudgetForTier, wrapUpAt, WRAP_UP_PROMPT } from "./turn-budget.mjs";
 
 /**
@@ -1000,6 +1000,9 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
   let wrapUpSent = false;
   let spawnedHandle = null;
   let observedTurns = 0;
+  // Why the dispatcher itself ended the worker, read lazily when usage is
+  // captured so a reaped attempt is not mistaken for a clean exit (MOV-382).
+  let terminationReason = null;
   try {
     // Real WorktreeManager instances always provide this durable handoff.
     // Keep dependency-injected legacy test doubles compatible; they never
@@ -1021,6 +1024,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
         }
         if (turns >= turnBudget && !budgetHit) {
           budgetHit = true;
+          terminationReason = "turn-budget";
           abortController.abort();
         }
       },
@@ -1042,12 +1046,12 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     const workerPromise = steeringActive ? spawned.promise : spawned;
     usagePromise = Promise.resolve(workerPromise).then((result) => captureWorkerUsageFn(logDir, {
       issue: issue.identifier,
-      attemptKind: continuation ? "continuation" : "implementation",
+      attemptKind: continuation ? "continuation" : resume ? "resume" : "implementation",
       worker: routing.worker,
-      modelId: invocation.args[invocation.args.indexOf("--model") + 1] || null,
+      ...usageContextFromInvocation(invocation, routing.worker),
       tier: routing.model,
-      reasoningEffort: routing.worker === "codex" ? invocation.args.find((arg) => arg.startsWith("model_reasoning_effort="))?.split("=")[1] || null : null,
       observedTurns,
+      terminationReason,
       exitOutcome: result.exitCode === 0 ? "exited-0" : `exited-${result.exitCode}`,
     })).catch((error) => { logger.error(`Could not capture usage for ${issue.identifier}: ${error.message}`); return null; });
     if (steeringActive) {
@@ -1119,6 +1123,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     // construction — but falling through with a Symbol in `spawnResult` would
     // read `spawnResult.exitCode` as `undefined` and misreport a stopped
     // attempt as `worker-failed`. Structure it so that cannot happen.
+    terminationReason = "stopped";
     abortController.abort();
     stopController.checkpoint("during-worker");
     return reportStop(stopController.stopRequest, { issue, publisher, worktreeManager });
@@ -1128,6 +1133,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     // MOV-138: kill the worker's process group (reuses MOV-137's group-kill
     // in worker-spawn.mjs, triggered by the abort signal) and hand off to a
     // human rather than let a hang (MOV-106) freeze the rest of the batch.
+    terminationReason = "timeout";
     abortController.abort();
     // A worker that ran long enough to time out was granted a provider
     // session, so any earlier usage-limit history is not consecutive (MOV-151).

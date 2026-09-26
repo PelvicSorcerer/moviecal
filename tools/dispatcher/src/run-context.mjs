@@ -39,7 +39,7 @@ import { WorktreeManager } from "./worktree-manager.mjs";
 import { CircuitBreakerStore } from "./circuit-breaker.mjs";
 import { UsageLimitStore } from "./usage-limit.mjs";
 import { WorkerCooldownStore } from "./worker-cooldown.mjs";
-import { WorkerUsageStore, captureWorkerUsage } from "./worker-usage.mjs";
+import { WorkerUsageStore, captureWorkerUsage, DISPATCHER_ORIGIN } from "./worker-usage.mjs";
 import { RepairLedger } from "./repair-ledger.mjs";
 import { buildIsIssueSatisfied } from "./dependency-gate.mjs";
 import { spawnWorker } from "./worker-spawn.mjs";
@@ -91,8 +91,14 @@ export async function checkIosRunnerOnline() {
  * each issue's `inverseRelations` (from LinearClient.issuesInState()) already carries
  * its blockers' workflow states, so isIssueSatisfied is resolved from that batch with
  * no extra Linear call.
+ *
+ * `workerUsageStore` is the injectable usage sink (MOV-382): tests and disposable
+ * smoke runs pass a temporary store, while the daemon defaults to the live
+ * ledger. Only this live wiring stamps `origin: "dispatcher"`, which is what
+ * the trial export keys on to tell real attempts from fixtures.
  */
-export async function buildRunContext(linearClient, teamKey, issues, { repairLockHeld = false } = {}) {
+export async function buildRunContext(linearClient, teamKey, issues, { repairLockHeld = false, workerUsageStore = null } = {}) {
+  const usageStore = workerUsageStore || new WorkerUsageStore(workerUsageStatePath());
   const states = await linearClient.workflowStates(teamKey);
   const stateId = (name) => {
     const s = states.find((st) => st.name === name);
@@ -127,7 +133,7 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     // whose provider quota a *different* issue's attempt already found
     // exhausted -- independent of usageLimitStore's per-issue retry history.
     workerCooldownStore: new WorkerCooldownStore(workerCooldownStatePath()),
-    captureWorkerUsageFn: (logDir, context) => captureWorkerUsage(logDir, context, { store: new WorkerUsageStore(workerUsageStatePath()) }),
+    captureWorkerUsageFn: (logDir, context) => captureWorkerUsage(logDir, { ...context, origin: DISPATCHER_ORIGIN }, { store: usageStore }),
     // MOV-179: advisory-only diagnosis for the residual "unrecognized
     // failure" escalation bucket. diagnoseUnrecognizedFailure itself already
     // fails safe (missing ANTHROPIC_API_KEY, network error, timeout, bad
