@@ -48,6 +48,26 @@ describe("classifyAction", () => {
     expect(classifyAction(command)).toEqual({ verdict: "allow", reason: null, category: null });
   });
 
+  it.each([
+    "grep -rIn -i -E \"fast follow|fast-follow|testflight|first app store|personal-watchlist parity\" docs README.md AGENTS.md .github .claude tools ios 2>/dev/null | grep -v \"/archive/\" | grep -v \"^ios/.*\\.\\(swift\\|pbxproj\\)\"",
+    "grep -rIn -E \"\\*\\*Web App\\*\\*|\\\"Web App\\\"|iOS App\\b|Web App \\+|initiative\" docs README.md AGENTS.md .github tools/dispatcher/README.md docs/operators 2>/dev/null | grep -v \"/archive/\" | grep -v \"^docs/governance/linear-information-architecture.md\" | head -30; grep -n -i \"calendar feed\" docs/planning/milestones.md docs/planning/recommended-issue-sequence.md | head; sed -n 1,12p docs/planning/milestones.md; sed -n 20,30p docs/product/product-brief.md",
+    "rg 'a|b;c&d' AGENTS.md",
+  ])("allows quoted search alternation from the MOV-368 audit: %s", (command) => {
+    expect(classifyAction(command).verdict).toBe("allow");
+  });
+
+  it.each([
+    'grep -E "a|b" AGENTS.md; cp README.md AGENTS.md',
+    'grep -E "a|b" README.md > AGENTS.md',
+    'grep -E "a|b" AGENTS.md | sed -i s/old/new/ AGENTS.md',
+    'grep "$(cp README.md AGENTS.md)" AGENTS.md',
+    'grep "`cp README.md AGENTS.md`" AGENTS.md',
+    'sh -c "cat README.md; cp README.md AGENTS.md"',
+    'grep -E "a|b" AGENTS.md|git status',
+  ])("retains safety denials alongside quoted patterns: %s", (command) => {
+    expect(classifyAction(command).verdict).toBe("hard-deny");
+  });
+
   it("still hard-denies Git after a real no-whitespace pipeline", () => {
     expect(classifyAction("printf source|git hash-object --stdin").verdict).toBe("hard-deny");
   });
