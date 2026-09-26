@@ -16,6 +16,7 @@ export {
   listPersonalWatchlistItems,
   listWatchlistItems,
   mapWatchlistRow,
+  normalizeSharedWatchlistName,
   removePersonalWatchlistItem,
   removeWatchlistItem,
 } from './items';
@@ -29,6 +30,7 @@ export {
   listSharedWatchlistMembers,
   listUserWatchlists,
   removeSharedWatchlistMember,
+  renameSharedWatchlist,
   resolveWatchlistInvite,
 } from './shared';
 export type {
