@@ -25,7 +25,7 @@ import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-si
 import { registerActiveAttempt, unregisterActiveAttempt, updateActiveAttempt } from "./active-attempt-registry.mjs";
 import { captureVerificationEvidence } from "./readiness-evidence.mjs";
 import { formatUsageLine } from "./worker-usage.mjs";
-import { budgetHandoffSections, diffSummary, readWorkerProgress, removeWorkerProgress, turnBudgetForTier, wrapUpAt, WRAP_UP_PROMPT } from "./turn-budget.mjs";
+import { budgetHandoffSections, diffSummary, hasWorkerProgress, readWorkerProgress, removeWorkerProgress, turnBudgetForTier, wrapUpAt, WRAP_UP_PROMPT } from "./turn-budget.mjs";
 
 /**
  * @param {object[]} issues - from LinearClient.issuesInState()
@@ -389,6 +389,7 @@ async function dispatchIssue(issue, ctx) {
     steeringEnabled = false,
     turnBudgetFn = turnBudgetForTier,
     readWorkerProgressFn = readWorkerProgress,
+    hasWorkerProgressFn = hasWorkerProgress,
     removeWorkerProgressFn = removeWorkerProgress,
     diffSummaryFn = diffSummary,
     now = () => new Date(),
@@ -701,6 +702,7 @@ async function dispatchIssue(issue, ctx) {
         captureVerificationEvidenceFn,
         captureWorkerUsageFn,
         readWorkerProgressFn,
+        hasWorkerProgressFn,
         removeWorkerProgressFn,
         diffSummaryFn,
         publishWorkerResultFn,
@@ -818,6 +820,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     iosSimLeaseId = null,
     captureWorkerUsageFn = () => null,
     readWorkerProgressFn = readWorkerProgress,
+    hasWorkerProgressFn = hasWorkerProgress,
     removeWorkerProgressFn = removeWorkerProgress,
     diffSummaryFn = diffSummary,
   } = ctx;
@@ -1044,6 +1047,11 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
   if (stopController.checkpoint("after-worker").halt) {
     return reportStop(stopController.stopRequest, { issue, publisher, worktreeManager });
   }
+
+  // A worker that was sent the wrap-up prompt, wrote its progress file and then
+  // exited cleanly declared itself out of budget: its work is incomplete, so
+  // it must take the budget-stop path (continuation) rather than publish.
+  if (!budgetHit && wrapUpSent && spawnResult.exitCode === 0 && hasWorkerProgressFn(entry.path)) budgetHit = true;
 
   const usage = await usagePromise;
 

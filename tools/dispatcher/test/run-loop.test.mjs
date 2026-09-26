@@ -2783,6 +2783,40 @@ describe("MOV-367 turn budget continuation", () => {
     expect(writeTurns.filter((text) => text.includes("WORKER_PROGRESS.md"))).toHaveLength(steeringEnabled ? 1 : 0);
   });
 
+  it("treats a clean exit after the wrap-up prompt with a progress file as a budget stop", async () => {
+    const { ctx, writeTurns } = budgetContext({ steeringEnabled: true });
+    let starts = 0;
+    ctx.hasWorkerProgressFn = () => true;
+    ctx.spawnWorkerFn = vi.fn((args) => {
+      starts += 1;
+      const turns = starts === 1 ? 7 : 3;
+      const promise = (async () => {
+        await Promise.resolve();
+        for (let turn = 1; turn <= turns; turn += 1) args.onAssistantTurn(turn);
+        return { exitCode: 0, logDir: args.logDir };
+      })();
+      return { promise, writeTurn: (text) => writeTurns.push(text), requestClose: () => {}, nextTurnBoundary: async () => ({ ended: true }) };
+    });
+    const [result] = await runOnce([ISSUE], ctx);
+    expect(writeTurns.filter((text) => text.includes("WORKER_PROGRESS.md"))).toHaveLength(1);
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(2);
+    expect(ctx.worktreeManager.resumeEntry).toHaveBeenCalledTimes(1);
+    expect(result.outcome).toBe("in-review");
+    expect(ctx.publishWorkerResultFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not stop a clean exit that has a progress file but never received the wrap-up prompt", async () => {
+    const { ctx } = budgetContext();
+    ctx.hasWorkerProgressFn = () => true;
+    ctx.spawnWorkerFn = vi.fn(async (args) => {
+      for (let turn = 1; turn <= 3; turn += 1) args.onAssistantTurn(turn);
+      return { exitCode: 0, logDir: args.logDir };
+    });
+    const [result] = await runOnce([ISSUE], ctx);
+    expect(result.outcome).toBe("in-review");
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+  });
+
   it("continues from the diff when the progress file is absent", async () => {
     const { ctx } = budgetContext({ missingProgress: true });
     const [result] = await runOnce([ISSUE], ctx);

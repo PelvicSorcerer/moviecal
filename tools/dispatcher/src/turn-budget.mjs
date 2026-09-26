@@ -43,6 +43,10 @@ export function readWorkerProgress(worktreePath, { maxBytes = 4096 } = {}) {
   }
 }
 
+export function hasWorkerProgress(worktreePath) {
+  try { return fs.lstatSync(path.join(worktreePath, PROGRESS_FILE)).isFile(); } catch { return false; }
+}
+
 export function removeWorkerProgress(worktreePath) {
   const file = path.join(worktreePath, PROGRESS_FILE);
   try { fs.unlinkSync(file); } catch (error) { if (error.code !== "ENOENT") throw error; }
