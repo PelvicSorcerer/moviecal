@@ -1,30 +1,63 @@
 import SwiftUI
 
-/// The Watchlist tab: the app shell's one screen wired to live backend data
-/// (`GET /api/v1/watchlist`) rather than a static placeholder.
+/// The Watchlist tab: lists every personal and shared watchlist the caller
+/// may read (`GET /api/v1/watchlists`) and pushes the selected list's detail.
 struct WatchlistView: View {
-    @State private var viewModel: WatchlistViewModel
+    @State private var viewModel: WatchlistsViewModel
+    @State private var path: [WatchlistSummary] = []
+    @Environment(\.scenePhase) private var scenePhase
+    private let apiClient: APIClient
 
     init(apiClient: APIClient) {
-        _viewModel = State(initialValue: WatchlistViewModel(apiClient: apiClient))
+        self.apiClient = apiClient
+        _viewModel = State(initialValue: WatchlistsViewModel(apiClient: apiClient))
     }
 
     var body: some View {
-        NavigationStack {
-            WatchlistContentView(
+        NavigationStack(path: $path) {
+            WatchlistBrowserContentView(
                 state: viewModel.state,
-                onRetry: { await viewModel.load() },
-                onDelete: { item in await viewModel.remove(item: item) }
+                onRetry: { await viewModel.load() }
             )
-            .navigationTitle("Watchlist")
+            .navigationTitle("Watchlists")
+            .navigationDestination(for: WatchlistSummary.self) { summary in
+                switch summary.kind {
+                case .personal:
+                    PersonalWatchlistView(apiClient: apiClient, title: summary.name)
+                case .shared:
+                    SharedWatchlistDetailView(
+                        viewModel: SharedWatchlistDetailViewModel(summary: summary, apiClient: apiClient),
+                        onAccessLost: {
+                            path.removeAll { $0.id == summary.id }
+                            Task { await viewModel.noteAccessLost(to: summary) }
+                        }
+                    )
+                }
+            }
             .task { await viewModel.load() }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase == .active {
+                    Task { await viewModel.load() }
+                }
+            }
+            .onChange(of: viewModel.state) { _, newState in
+                // Exit any open detail whose list is no longer authorized.
+                switch newState {
+                case .loaded(let summaries):
+                    path.removeAll { open in !summaries.contains { $0.id == open.id } }
+                case .failed:
+                    path.removeAll()
+                case .idle, .loading:
+                    break
+                }
+            }
             .alert(
-                "Couldn't Remove Item",
+                "Watchlist Unavailable",
                 isPresented: Binding(
-                    get: { viewModel.removalErrorMessage != nil },
+                    get: { viewModel.accessLostMessage != nil },
                     set: { isPresented in
                         if !isPresented {
-                            viewModel.dismissRemovalError()
+                            viewModel.dismissAccessLostMessage()
                         }
                     }
                 ),
@@ -32,10 +65,50 @@ struct WatchlistView: View {
                     Button("OK", role: .cancel) {}
                 },
                 message: {
-                    Text(viewModel.removalErrorMessage ?? "")
+                    Text(viewModel.accessLostMessage ?? "")
                 }
             )
         }
+    }
+}
+
+/// The caller's personal watchlist (`/api/v1/watchlist`), including item
+/// removal, unchanged from before shared lists were browsable.
+struct PersonalWatchlistView: View {
+    @State private var viewModel: WatchlistViewModel
+    private let title: String
+
+    init(apiClient: APIClient, title: String = "Watchlist") {
+        _viewModel = State(initialValue: WatchlistViewModel(apiClient: apiClient))
+        self.title = title
+    }
+
+    var body: some View {
+        WatchlistContentView(
+            state: viewModel.state,
+            onRetry: { await viewModel.load() },
+            onDelete: { item in await viewModel.remove(item: item) }
+        )
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await viewModel.load() }
+        .alert(
+            "Couldn't Remove Item",
+            isPresented: Binding(
+                get: { viewModel.removalErrorMessage != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        viewModel.dismissRemovalError()
+                    }
+                }
+            ),
+            actions: {
+                Button("OK", role: .cancel) {}
+            },
+            message: {
+                Text(viewModel.removalErrorMessage ?? "")
+            }
+        )
     }
 }
 
