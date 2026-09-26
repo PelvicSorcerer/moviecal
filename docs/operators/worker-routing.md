@@ -94,6 +94,27 @@ Moving up a tier requires citing the specific condition, either in the Linear is
 
 ## Overrides
 
+Before claiming a worktree, the dispatcher re-reads Linear and compares the
+worker/model overrides and upgrade conditions with the polling snapshot.
+Routing that changes or becomes invalid at this refresh is deferred to the next poll
+(`deferred-routing-change`). That next batch repeats quota, reset-probe, and
+trial admission; the final read never substitutes a worker after those gates.
+Label order and unrelated labels do not cause a deferral. This comparison
+applies to retained-worktree resumes as well as fresh claims.
+Only the named upgrade conditions in this policy qualify for a strong tier;
+unrecognized `upgrade:*` labels do not satisfy intake or dispatch validation.
+Invalid routing already present in the poll snapshot follows the ordinary
+preflight/routing failure handling.
+
+Bounded routing evidence is appended to `routing-decisions.jsonl` beside the
+issue's run logs. It records poll and refreshed routing inputs, the selected
+worker/tier/model/effort/budget and selection reason, and `unchanged`, `deferred`,
+or `spawn-requested` decisions. `spawn-requested` records the invocation the
+dispatcher handed to the worker adapter; the transcript confirms whether it
+started. Evidence uses known routing labels and bounded model identifiers,
+never descriptions, prompts, credentials, or arbitrary label contents.
+
+
 - `worker:claude` / `worker:codex` — pins the worker binary. Pinned workers are never changed, including by the quota-pool cooldown below.
 - `worker:any` — the baseline is **Claude** for fresh claims: fresh claims use another available worker when the requested worker is cooling down or its post-reset probe is reserved (MOV-395). A prior attempt retains its recorded worker. The only exception is the bounded, disabled-by-default Codex trial below ([MOV-383](https://linear.app/moviecal/issue/MOV-383); live activation requires the release gate in [MOV-384](https://linear.app/moviecal/issue/MOV-384)). The no-label default is **not** `worker:any`: it is a pin to Claude, same as an explicit `worker:claude` label, per the routing table above.
 - `model:cheap` / `model:default` / `model:strong` — pins the model tier.

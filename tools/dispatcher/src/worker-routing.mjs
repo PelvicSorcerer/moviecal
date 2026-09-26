@@ -81,6 +81,35 @@ export const CLAUDE_WORKER_SETTINGS = {
 const WORKER_LABEL_RE = /^worker:(claude|codex|any)$/;
 const MODEL_LABEL_RE = /^model:(cheap|default|strong)$/;
 
+const UPGRADE_LABEL_RE = /^upgrade:(multi-system|ambiguous-spec|security-critical|prior-failure|architecture)$/;
+
+/** Bounded routing inputs, independent of label ordering and unrelated labels. */
+export function routingInputs(issue) {
+  const labels = issue.labels || [];
+  const selection = (prefix, pattern) => {
+    const matches = labels.filter((label) => label.startsWith(prefix));
+    return {
+      values: [...new Set(matches.filter((label) => pattern.test(label)))].sort(),
+      count: Math.min(matches.length, 2),
+      invalid: matches.some((label) => !pattern.test(label)),
+    };
+  };
+  return {
+    worker: selection("worker:", WORKER_LABEL_RE),
+    model: selection("model:", MODEL_LABEL_RE),
+    upgrades: [...new Set(labels.filter((label) => UPGRADE_LABEL_RE.test(label)))].sort(),
+  };
+}
+
+/** A changed route must go through batch quota/trial admission on a later poll. */
+export function confirmRoutingUnchanged(issue, fresh) {
+  const poll = routingInputs(issue);
+  const refreshed = routingInputs(fresh);
+  const invalid = [refreshed.worker, refreshed.model].some((selection) => selection.invalid || selection.count > 1);
+  const unchanged = JSON.stringify(poll) === JSON.stringify(refreshed);
+  return { poll, refreshed, ok: unchanged && !invalid && resolveRouting(fresh).ok };
+}
+
 /**
  * Parse worker/model overrides out of a Linear issue's label list.
  * Returns { worker: 'claude'|'codex'|'any'|null, model: 'cheap'|'default'|'strong'|null }.
@@ -119,7 +148,7 @@ export function resolveRouting(issue) {
   const model = modelOverride || "default";
 
   const upgradeConditions = labels
-    .filter((l) => l.startsWith("upgrade:"))
+    .filter((l) => UPGRADE_LABEL_RE.test(l))
     .map((l) => l.slice("upgrade:".length));
 
   if (model === "strong" && upgradeConditions.length === 0) {

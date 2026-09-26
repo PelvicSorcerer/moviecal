@@ -44,6 +44,9 @@ describe("parseRoutingLabels", () => {
 });
 
 describe("resolveRouting", () => {
+  it("rejects a strong tier with an unknown upgrade condition", () => {
+    expect(resolveRouting({ labels: ["model:strong", "upgrade:unknown"] })).toMatchObject({ ok: false });
+  });
   it("defaults to claude + default tier with no labels", () => {
     const result = resolveRouting({ labels: [] });
     expect(result).toMatchObject({ worker: "claude", model: "default", ok: true });
