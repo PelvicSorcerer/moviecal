@@ -131,6 +131,7 @@ export function captureWorkerUsage(logDir, context, { store = null, logger = con
 export function formatUsageLine(usage) {
   if (!usage) return "Usage: unavailable.";
   const fields = [usage.modelId || usage.worker || "unknown model", `(${usage.tier || "unknown tier"})`];
+  if (usage.reasoningEffort) fields.push(`effort: ${usage.reasoningEffort}`);
   if (usage.turns != null) fields.push(`${usage.turns} turns`);
   if (usage.durationMs != null) fields.push(`${Math.round(usage.durationMs / 60000)}m`);
   if (usage.costUsd != null) fields.push(`~$${usage.costUsd.toFixed(2)}`);

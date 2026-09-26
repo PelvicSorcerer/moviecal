@@ -219,6 +219,24 @@ describe("runOnce", () => {
       expect(completion[0].body.match(/Usage:/g)).toHaveLength(1);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
+  it.each([["cheap", "gpt-6-luna", "low"], ["default", "gpt-6-sol", "medium"], ["strong", "gpt-6-sol", "high"]])("records the resolved Codex %s model and effort", async (tier, modelId, reasoningEffort) => {
+    const capture = vi.fn(() => null);
+    const ctx = baseCtx({ captureWorkerUsageFn: capture });
+    const issue = { ...ISSUE, labels: [...ISSUE.labels, "worker:codex", `model:${tier}`, "upgrade:architecture"] };
+    const [result] = await runOnce([issue], ctx);
+    expect(result.outcome).toBe("in-review");
+    expect(capture).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ worker: "codex", modelId, reasoningEffort, tier }));
+  });
+
+  it("escalates Codex model rejection without spawning a fallback", async () => {
+    const ctx = baseCtx({ spawnWorkerFn: vi.fn(async () => ({ exitCode: 1 })) });
+    const [result] = await runOnce([{ ...ISSUE, labels: [...ISSUE.labels, "worker:codex"] }], ctx);
+    expect(result.outcome).not.toBe("in-review");
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+    expect(ctx.publishWorkerResultFn).not.toHaveBeenCalled();
+    expect(ctx.linearClient.calls.some((call) => call.stateId === STATE_IDS.needsHumanDecision)).toBe(true);
+  });
+
   it("moves a human-only issue to blocked without touching the worktree manager", async () => {
     const ctx = baseCtx();
     const issue = { ...ISSUE, labels: [...ISSUE.labels, "human-only"] };

@@ -6,6 +6,8 @@ import { observePullRequest } from "../src/pr-reconcile.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
 import { runRepairPass } from "../src/repair-run.mjs";
 
+import { workerInvocation } from "../src/worker-routing.mjs";
+
 const REPO = "owner/repo";
 const HEAD = "head-1";
 const roots = [];
@@ -41,6 +43,15 @@ function context({ observation = observed(), ledgerPath = null } = {}) {
 afterEach(() => roots.splice(0).forEach((root) => fs.rmSync(root, { recursive: true, force: true })));
 
 describe("bounded repair lifecycle seam (MOV-191)", () => {
+  it("passes the pinned Codex model and effort to a repair worker", async () => {
+    const ctx = context();
+    ctx.workerInvocationFn = workerInvocation;
+    expect((await runRepairPass(ctx))[0].outcome).toBe("repaired");
+    const args = ctx.spawnWorkerFn.mock.calls[0][0].invocation.args;
+    expect(args.slice(-4)).toEqual(["-c", "model_reasoning_effort=medium", "--model", "gpt-6-sol"]);
+    expect(args).toContain("--ignore-user-config");
+  });
+
   it("publishes one code repair and a restarted dispatcher never repeats that reserved fingerprint", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-repair-restart-"));
     roots.push(root);
