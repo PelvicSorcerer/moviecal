@@ -1,13 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   compareCalendarWatchlistItemCandidates,
   dedupeCalendarWatchlistItems,
   listCalendarWatchlistItems,
+  WatchlistAccessError,
+  WatchlistDataError,
+  WatchlistNotFoundError,
   type WatchlistItem,
   type WatchlistRepository,
   type WatchlistSummary,
 } from '../src/lib/watchlist';
+import {
+  buildWatchlistRow,
+  buildWatchlistSummary,
+  createWatchlistRepository,
+  TEST_TMDB_IDS,
+  TEST_USER_IDS,
+  TEST_WATCHLIST_IDS,
+} from './support';
 
 function buildWatchlistItem(
   overrides: Partial<WatchlistItem> = {},
@@ -124,6 +135,9 @@ describe('calendar watchlist aggregation', () => {
         throw new Error('not implemented');
       },
       async deleteItemByIdForWatchlist() {
+        return false;
+      },
+      async deleteSharedWatchlistOwnedBy() {
         return false;
       },
       async ensurePersonalWatchlist() {
@@ -265,5 +279,160 @@ describe('calendar watchlist aggregation', () => {
         },
       }),
     ]);
+  });
+});
+
+/**
+ * MOV-373 — calendar access-loss semantics for a permanently deleted shared
+ * list. The feed is rebuilt from the accessible set on every request, so a
+ * former member's next request must simply stop seeing the deleted list's
+ * movies while keeping any movie that another accessible list still sources.
+ */
+describe('calendar aggregation after a shared list is deleted', () => {
+  const DELETED_ID = 'shared-watchlist-deleted';
+  const RETAINED_ID = 'shared-watchlist-retained';
+  const MEMBER_ID = TEST_USER_IDS.COLLABORATOR;
+
+  const personalWatchlist = buildWatchlistSummary({
+    id: TEST_WATCHLIST_IDS.PERSONAL,
+    kind: 'personal',
+    name: 'My watchlist',
+    ownerUserId: MEMBER_ID,
+  });
+  const deletedWatchlist = buildWatchlistSummary({
+    id: DELETED_ID,
+    kind: 'shared',
+    name: 'Deleted movie night',
+    ownerUserId: TEST_USER_IDS.OWNER,
+  });
+  const retainedWatchlist = buildWatchlistSummary({
+    id: RETAINED_ID,
+    kind: 'shared',
+    name: 'Still shared',
+    ownerUserId: TEST_USER_IDS.OWNER,
+  });
+
+  // The Matrix is in both shared lists; Inception only in the deleted one.
+  const itemsByWatchlist = new Map([
+    [TEST_WATCHLIST_IDS.PERSONAL, []],
+    [
+      DELETED_ID,
+      [
+        buildWatchlistRow(TEST_TMDB_IDS.MATRIX, { id: 'deleted-matrix' }),
+        buildWatchlistRow(TEST_TMDB_IDS.INCEPTION, { id: 'deleted-inception' }),
+      ],
+    ],
+    [
+      RETAINED_ID,
+      [buildWatchlistRow(TEST_TMDB_IDS.MATRIX, { id: 'retained-matrix' })],
+    ],
+  ]);
+
+  function createMemberRepository(accessible: WatchlistSummary[]) {
+    const listItemsForWatchlist = vi.fn(async (watchlistId: string) =>
+      itemsByWatchlist.get(watchlistId) ?? [],
+    );
+
+    return {
+      listItemsForWatchlist,
+      repository: createWatchlistRepository({
+        async ensurePersonalWatchlist() {
+          return personalWatchlist;
+        },
+        async getWatchlistAccess(actorUserId, watchlistId) {
+          const watchlist = accessible.find((entry) => entry.id === watchlistId);
+
+          if (actorUserId !== MEMBER_ID || !watchlist) {
+            return { status: 'not_found' as const };
+          }
+
+          return { status: 'authorized' as const, canEdit: true, watchlist };
+        },
+        async listWatchlistsForUser() {
+          return accessible;
+        },
+        listItemsForWatchlist,
+      }),
+    };
+  }
+
+  it('drops the deleted list\'s exclusive movie and keeps one sourced elsewhere', async () => {
+    const before = await listCalendarWatchlistItems({
+      repository: createMemberRepository([
+        personalWatchlist,
+        deletedWatchlist,
+        retainedWatchlist,
+      ]).repository,
+      userId: MEMBER_ID,
+    });
+
+    // The next request after the delete: memberships went with the list, so it
+    // is no longer in the accessible set at all.
+    const after = await listCalendarWatchlistItems({
+      repository: createMemberRepository([personalWatchlist, retainedWatchlist])
+        .repository,
+      userId: MEMBER_ID,
+    });
+
+    expect(before.map((item) => item.movie.tmdbId).sort()).toEqual([
+      TEST_TMDB_IDS.MATRIX,
+      TEST_TMDB_IDS.INCEPTION,
+    ].sort());
+    expect(after.map((item) => item.movie.tmdbId)).toEqual([
+      TEST_TMDB_IDS.MATRIX,
+    ]);
+    expect(after.map((item) => item.id)).toEqual(['retained-matrix']);
+  });
+
+  it.each([
+    ['deleted mid-request', new WatchlistNotFoundError('Watchlist not found.')],
+    ['revoked mid-request', new WatchlistAccessError('Watchlist access denied.')],
+  ])(
+    'skips a list %s and still serves every other accessible list',
+    async (_label, raised) => {
+      // listWatchlistsForUser still reported the list, but the item read no
+      // longer resolves it — a request racing the owner's delete.
+      const { repository } = createMemberRepository([
+        personalWatchlist,
+        deletedWatchlist,
+        retainedWatchlist,
+      ]);
+      const racingRepository = {
+        ...repository,
+        async getWatchlistAccess(actorUserId: string, watchlistId: string) {
+          if (watchlistId === DELETED_ID) {
+            throw raised;
+          }
+
+          return repository.getWatchlistAccess(actorUserId, watchlistId);
+        },
+      };
+
+      const items = await listCalendarWatchlistItems({
+        repository: racingRepository,
+        userId: MEMBER_ID,
+      });
+
+      expect(items.map((item) => item.id)).toEqual(['retained-matrix']);
+    },
+  );
+
+  it('still fails the feed when a watchlist read hits a real database fault', async () => {
+    const { repository } = createMemberRepository([
+      personalWatchlist,
+      retainedWatchlist,
+    ]);
+
+    await expect(
+      listCalendarWatchlistItems({
+        repository: {
+          ...repository,
+          async listItemsForWatchlist() {
+            throw new WatchlistDataError('Supabase request failed.');
+          },
+        },
+        userId: MEMBER_ID,
+      }),
+    ).rejects.toThrow(WatchlistDataError);
   });
 });

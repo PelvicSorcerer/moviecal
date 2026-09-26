@@ -35,6 +35,9 @@ export function createWatchlistRepository(
     async deleteItemByIdForWatchlist() {
       return true;
     },
+    async deleteSharedWatchlistOwnedBy() {
+      return true;
+    },
     async ensurePersonalWatchlist(userId) {
       return userId === TEST_USER_IDS.OWNER
         ? personalWatchlist

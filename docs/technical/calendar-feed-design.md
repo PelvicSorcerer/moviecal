@@ -49,3 +49,8 @@ Watchlist aggregation (MVP)
   3. otherwise keep the lexicographically smallest watchlist item id
 - Event UIDs remain `SHA256(user_id + ":" + tmdb_id) + "@moviecal"` so duplicate source items do not create duplicate calendar events.
 - If membership or ownership changes remove a watchlist from the accessible set, its movies stop contributing to the feed on the next request.
+
+Access loss (MOV-373)
+- The accessible set is recomputed on every request, so no cache invalidation or feed rewrite is involved in losing access. A permanently deleted shared list takes its membership rows with it, so a former member's very next request simply does not see it.
+- A movie that was only in the deleted list disappears from that member's feed. A movie the deleted list shared with another accessible list is still emitted, sourced from the surviving list under the same dedupe rule above — the event UID is unchanged, so the client updates rather than duplicating.
+- A request that races the owner's deletion is not a failure. `listCalendarWatchlistItems` reads each contributing list after resolving the accessible set; a list that became unresolvable or forbidden in that window is skipped and the rest of the feed is served, which is the same result every later request produces. A real database fault (`WatchlistDataError`) is deliberately **not** absorbed this way: it surfaces instead of silently shrinking somebody's calendar.
