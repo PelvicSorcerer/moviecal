@@ -85,6 +85,22 @@ describe("spawnWorker", () => {
     expect(manifest.command).toBe("claude");
   });
 
+  it("reports live assistant turns even when steering is off", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
+    const turns = [];
+    const stdoutText = [
+      { type: "assistant", message: { role: "assistant", id: "a" } },
+      { type: "assistant", message: { role: "assistant", id: "b" } },
+    ].map((event) => JSON.stringify(event)).join("\n") + "\n";
+    await spawnWorker({
+      invocation: { command: "claude", args: ["-p"] },
+      cwd: "/tmp/some-worktree", brief: "brief", logDir: path.join(tmpDir, "run"),
+      spawnImpl: () => fakeChildProcess({ stdoutText }),
+      onAssistantTurn: (turn) => turns.push(turn),
+    });
+    expect(turns).toEqual([1, 2]);
+  });
+
   it("resolves with a non-zero exit code when the worker fails", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
     const spawnImpl = () => fakeChildProcess({ exitCode: 1 });

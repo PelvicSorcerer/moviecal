@@ -47,7 +47,7 @@ describe("trusted worker publication", () => {
       runner,
     });
     expect(result).toMatchObject({ number: 9, isDraft: true, headSha: "abc" });
-    expect(calls.find((call) => call.command === "git" && call.args[0] === "add")?.args).toEqual(["add", "--all"]);
+    expect(calls.find((call) => call.command === "git" && call.args[0] === "add")?.args).toEqual(["add", "--all", "--", ".", ":!WORKER_PROGRESS.md"]);
     expect(calls.find((call) => call.command === "git" && call.args[0] === "commit")?.args).toEqual([
       "commit",
       "-m",

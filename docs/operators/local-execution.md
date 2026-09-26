@@ -70,6 +70,14 @@ verbatim and names this consequence; there is no leniency to add on the
 evidence-capture side without weakening the fail-closed contract MOV-275
 built.
 
+Both implementation and repair briefs give workers focused Vitest, typecheck,
+and lint commands for their editing loop. They instruct workers to run the
+literal `npm run verify` when they believe the change is complete, and to use
+focused checks before retrying if it fails. Evidence capture still requires
+every exact verify run to pass; a failed intermediate run disables PR autonomy
+for that attempt. See [focused checks](../planning/testing-lanes.md#focused-checks-while-editing)
+for the commands.
+
 Dispatcher code lives in `tools/dispatcher/` in this repository (TypeScript, using the repo's existing Node 24 + Vitest toolchain). Runtime config lives outside the repo at `~/.config/moviecal/` (mode 700) — API keys and `.env.local` must never be committed. Run logs live at `~/Library/Logs/moviecal-dispatcher/`, retained 90 days.
 
 ### Worker usage accounting
@@ -79,6 +87,14 @@ After each implementation or code-repair worker exits, the dispatcher parses its
 The summary records the issue, attempt kind, worker, model ID, model tier, reasoning effort when passed, turns, duration in milliseconds, cost in USD, input and output tokens, cache-read and cache-write tokens, thinking tokens when reported, exit outcome, exact `npm run verify` invocation count, calls per tool, and approximate tool-result characters per tool. Tool and model names are bounded identifiers; command text, prompts, tool results, and secrets are never copied. Claude fields come from the final structured `result` event. Codex uses only the usage events it emits, so unsupported fields remain `null`. Claude Code's cost is an **API-equivalent estimate**, not an invoice: workers bill against the subscription.
 
 Run `node tools/dispatcher/bin/dispatcher.mjs usage` for a read-only JSON report of the 20 most recent recorded runs plus per-tier and per-model medians and totals. This command reads only the usage state file; it does not contact Linear, GitHub, or a worker.
+
+### Turn budget and fresh-context continuation (MOV-367)
+
+Each implementation attempt has the tier budget in `docs/operators/worker-routing.md` (`MOVIECAL_TURN_BUDGET_<TIER>` overrides). The dispatcher counts live Claude assistant messages or Codex `turn.completed` events. A Codex stream without those events has only the independent 45-minute wall-clock timeout. At 85%, when Claude steering is enabled, one prompt asks the worker to stop exploring, make the worktree consistent, and write `WORKER_PROGRESS.md` with completed work, remaining work, and the next step. Steering off means no wrap-up prompt. A run below its budget follows the ordinary lifecycle without a budget comment. A worker that was sent the wrap-up prompt, wrote `WORKER_PROGRESS.md` and then exited 0 before the hard stop has declared itself out of budget, so it is treated as a budget stop and takes the continuation path instead of publishing incomplete work.
+
+At 100%, the same process-group reap used for timeouts stops the worker. The dispatcher keeps the branch and worktree and does not commit, push, or open a PR from that attempt. After its security audit and the existing credential and provider-limit classifications, it rechecks the retained worktree's dispatcher ownership, registry provenance, branch, repository, and integrity. If admitted, it starts exactly one new process with the same worker, branch, worktree, and a full fresh budget. The continuation brief includes a bounded, redacted excerpt of `WORKER_PROGRESS.md` when present, a diff summary, and the prior run's usage. A missing progress file is expected when steering was off or the worker was reaped before it could write one; the continuation still starts. Both processes appear in per-run usage accounting; the observed live turn count is retained even when a reaped transcript has no final result event. The wall-clock timeout still applies to each process independently, and provider usage limits keep their separate deferral rules.
+
+If that continuation also reaches its budget, or the retained worktree cannot be admitted safely, the issue moves to `Needs Human Decision`. One handoff comment gives the budget and per-attempt usage, latest exact-verify outcome, changed paths, a bounded and redacted progress excerpt or explicit missing-file note, and the retained worktree path. There is no third budget continuation. `WORKER_PROGRESS.md` is dispatcher handoff data: the dispatcher removes it before auditing a successful result, and trusted publication excludes and refuses it if staged. Human testing is required for MOV-367 itself using the disposable fixture steps in its Linear issue before its draft PR is promoted for review.
 
 ## Dispatch trigger
 

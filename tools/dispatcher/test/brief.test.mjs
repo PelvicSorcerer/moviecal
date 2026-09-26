@@ -1,5 +1,44 @@
 import { describe, it, expect } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
 import { generateBrief, generateRepairBrief, generateRepairEvidence } from "../src/brief.mjs";
+
+function expectIterativeVerification(brief) {
+  expect(brief).toContain("## Check your work while iterating");
+  expect(brief).toContain("npx vitest --config vitest.unit.config.ts --run <path-or-pattern>");
+  expect(brief).toContain("npx vitest --config vitest.integration.config.ts --run <path-or-pattern>");
+  expect(brief).toContain("npm run typecheck");
+  expect(brief).toContain("npm run lint");
+  expect(brief).toContain("tools/dispatcher/test/...");
+  expect(brief).toMatch(/literal `npm run verify` once/);
+  expect(brief).toMatch(/If it fails, fix the failure using focused checks, then run `npm run verify` again/);
+  expect(brief).toMatch(/any failed run disables PR autonomy for this attempt/);
+  expect(brief).toMatch(/Run verification synchronously/);
+  expect(brief).toMatch(/Prepare dependencies before verification/);
+  expect(brief).toMatch(/exact command, verbatim/);
+}
+
+it("keeps both briefs' focused commands aligned with package scripts and Vitest config files", () => {
+  const packageJson = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8"));
+  const issue = { identifier: "MOV-42", title: "Fix", url: "https://linear.app/moviecal/issue/MOV-42" };
+  const briefs = [
+    generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude" }),
+    generateRepairBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", prNumber: 42 }),
+  ];
+
+  for (const brief of briefs) {
+    expectIterativeVerification(brief);
+    const configs = [...brief.matchAll(/npx vitest --config (\S+) --run <path-or-pattern>/g)].map((match) => match[1]);
+    expect(configs).toEqual(["vitest.unit.config.ts", "vitest.integration.config.ts"]);
+    for (const [index, lane] of ["lane:unit", "lane:integration"].entries()) {
+      expect(existsSync(new URL(`../../../${configs[index]}`, import.meta.url))).toBe(true);
+      expect(packageJson.scripts[lane]).toBe(`vitest --config ${configs[index]} --run`);
+    }
+    for (const script of ["typecheck", "lint", "verify"]) {
+      expect(brief).toContain(`npm run ${script}`);
+      expect(packageJson.scripts[script]).toEqual(expect.any(String));
+    }
+  }
+});
 
 describe("generateBrief", () => {
   const issue = {

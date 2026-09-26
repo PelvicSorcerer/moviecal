@@ -52,9 +52,10 @@ export function publishWorkerResult({ worktreePath, branch, repo, issue, verific
 
   const dirty = String(runner("git", ["status", "--porcelain=v1"], { cwd: worktreePath })).trim();
   if (!dirty) throw new Error("worker produced no audited filesystem changes");
-  runner("git", ["add", "--all"], { cwd: worktreePath });
+  runner("git", ["add", "--all", "--", ".", ":!WORKER_PROGRESS.md"], { cwd: worktreePath });
   const staged = String(runner("git", ["diff", "--cached", "--name-only"], { cwd: worktreePath })).trim();
   if (!staged) throw new Error("worker changes produced an empty Git index");
+  if (staged.split("\n").includes("WORKER_PROGRESS.md")) throw new Error("refusing to publish worker progress file");
   runner("git", ["commit", "-m", `fix: ${issue.identifier} ${issue.title}`], { cwd: worktreePath });
 
   const afterCommit = String(runner("git", ["status", "--porcelain=v1"], { cwd: worktreePath })).trim();

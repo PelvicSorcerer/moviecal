@@ -26,7 +26,7 @@ Codex is the dispatcher's second worker option, selected via the `worker:codex` 
    npm i -g @openai/codex
    ```
 
-Codex CLI 0.157.0 or newer is required for the current routing defaults: that release added GPT-6 Sol and Luna to its model catalog. Older CLI versions can reject those IDs even for an eligible Plus account. Upgrade with `npm install -g @openai/codex@latest` (an administrator must update a root-owned installation), then confirm `codex --version` and run the controlled model/effort smoke checks before dispatch. See the [0.157.0 release notes](https://github.com/openai/codex/releases/tag/rust-v0.157.0).
+   Codex CLI 0.157.0 or newer is required for the current routing defaults: that release added GPT-6 Sol and Luna to its model catalog. Older CLI versions can reject those IDs even for an eligible Plus account. Upgrade with `npm install -g @openai/codex@latest` (an administrator must update a root-owned installation), then confirm `codex --version` and run the controlled model/effort smoke checks before dispatch. See the [0.157.0 release notes](https://github.com/openai/codex/releases/tag/rust-v0.157.0).
 
 2. **Verify** the installation by running `dispatcher doctor`, which will report "codex on PATH" as a passing check:
    ```sh
@@ -57,6 +57,18 @@ Claude workers receive an explicit `--effort` by tier when their model supports 
 | `strong` | `high` | `MOVIECAL_CLAUDE_EFFORT_STRONG` |
 
 Overrides accept `low`, `medium`, `high`, `xhigh`, `max`, or `none`; `none` omits the flag. An invalid value is a routing error. Haiku 4.5 does not support effort, so the dispatcher omits `--effort` even if an override requests one. `dispatcher doctor` notes that omission. `dispatcher dry-run` prints the planned invocation and any routing error.
+
+### Per-run turn budget (MOV-367)
+
+| Tier | Initial budget | Environment override | Observed median (2026-09-25) |
+|---|---:|---|---:|
+| `cheap` | 60 | `MOVIECAL_TURN_BUDGET_CHEAP` | 14 |
+| `default` | 150 | `MOVIECAL_TURN_BUDGET_DEFAULT` | 18 |
+| `strong` | 250 | `MOVIECAL_TURN_BUDGET_STRONG` | 96 |
+
+Overrides must be positive safe integers; an invalid value stops routing before a worktree or worker is started. These are initial guardrails above the observed medians, allowing ordinary runs room to finish. The 2026-09-25 most expensive runs took 130–200 turns, so the **250-turn strong default would not have stopped them**. It limits still longer runs while avoiding a sudden cutoff near the strong-tier median; review and lower these values using [MOV-363](https://linear.app/moviecal/issue/MOV-363/record-per-run-worker-usage-and-report-it-on-the-issue) per-run usage data after live experience. A 45-minute wall-clock timeout remains an independent backstop.
+
+The dispatcher counts Claude assistant messages from its live `stream-json` output and Codex `turn.completed` events from `--json`; neither uses a CLI turn-limit flag. If Codex emits no completed-turn events, its wall-clock timeout is the only runtime cap. At 85% of the budget, an opted-in Claude steering session receives one wrap-up prompt asking for `WORKER_PROGRESS.md`. Without steering, there is no prompt. At 100%, the dispatcher reaps the process group, retains the worktree, and tries one fresh-process continuation on the same worker and branch after worktree admission. A second budget stop, or failed admission, hands the retained worktree to a human with one summary comment. See `docs/operators/local-execution.md` for the continuation and handoff details.
 
 For Codex, the tier maps to a `model_reasoning_effort` value passed via `-c`, and an explicit `--model` ID resolved by `codexModelIdForTier()` in `tools/dispatcher/src/worker-routing.mjs`:
 
