@@ -9,7 +9,7 @@
 
 import path from "node:path";
 import { evaluatePreflight, worktreeName, branchName, resolveWorkflowEditAuthorization, IOS_COMPANION_APP_PROJECT } from "./preflight.mjs";
-import { resolveRouting, resolveDispatchWorker, workerProbeWinners, workerInvocation } from "./worker-routing.mjs";
+import { confirmRoutingUnchanged, resolveRouting, resolveDispatchWorker, workerProbeWinners, workerInvocation } from "./worker-routing.mjs";
 import { confirmStillClaimable, evaluateLocalDispatch } from "./dispatch-eligibility.mjs";
 import { generateBrief } from "./brief.mjs";
 import { collectRepositoryContext } from "./repository-context.mjs";
@@ -54,6 +54,7 @@ import { budgetHandoffSections, diffSummary, hasWorkerProgress, readWorkerProgre
  * @param {(args: {worktreePath: string, branch: string}) => object} [ctx.repositoryContextFn] - MOV-178; trusted, bounded read-only repository facts injected into the worker brief before the worker starts
  * @param {(logDir: string, report: object) => object} [ctx.writeWorkerAuditFn] - MOV-145; persists an audit record outside the worktree
  * @param {(logDir: string) => object} [ctx.captureVerificationEvidenceFn] - MOV-275; captures only completed successful verification commands from the structured transcript
+ * @param {(logDir: string, record: object) => void} [ctx.writeRoutingEvidenceFn] - MOV-397; appends bounded poll/final routing decisions outside the worktree; diagnostic write failures never weaken the final routing guard
  * @param {(args: object) => object} ctx.publishWorkerResultFn - MOV-145; required trusted dispatcher-side non-force push and draft PR creation
  * @param {{id?: string|null, name?: string|null}} [ctx.dispatcherDelegate] - MOV-143: the delegate an issue must name for this dispatcher to claim it; defaults to matching `moviecal-dispatcher` by name
  * @param {(issue: object) => Promise<object|null>} [ctx.refreshIssueFn] - MOV-143: re-read an issue immediately before committing to it, so a route/delegation change since the poll snapshot is a safe no-op; defaults to reusing the snapshot (tests that don't exercise the race can omit it)
@@ -239,7 +240,7 @@ export async function runOnce(issues, ctx) {
         if (liveCooldown.probeOwed) probeWinnerId[liveWorkerName] = issue.id;
       }
       try {
-        results[index] = await processIssue(issue, { ...ctx, resolvedWorker: liveWorkerName, resolvedTrial: liveResolved.trial });
+        results[index] = await processIssue(issue, { ...ctx, resolvedWorker: liveWorkerName, resolvedTrial: liveResolved.trial, resolvedRoute: liveResolved });
       } finally {
         release();
         // MOV-166: this issue is no longer a live attempt an inbound signal
@@ -503,6 +504,8 @@ async function dispatchIssue(issue, ctx) {
     // Preserve the provider binding computed at batch start.
     resolvedWorker = null,
     resolvedTrial = null,
+    resolvedRoute = null,
+    writeRoutingEvidenceFn = () => {},
     workerTrialStore = null,
     captureWorkerUsageFn = () => null,
   } = ctx;
@@ -652,6 +655,35 @@ async function dispatchIssue(issue, ctx) {
   }
   if (stopController.checkpoint("before-claim").halt) {
     return { issue: issue.identifier, outcome: "not-eligible", reason: stopController.stopRequest.reason };
+  }
+
+  // MOV-397: quota/probe/trial admission used the poll's routing inputs.
+  // Never replace its worker here: defer changes so the next batch repeats
+  // every admission gate, including provider bindings and trial accounting.
+  const routingCheck = confirmRoutingUnchanged(issue, fresh);
+  const routingEvidence = {
+    poll: routingCheck.poll,
+    refreshed: routingCheck.refreshed,
+    selected: routingCheck.ok ? {
+      worker: routing.worker,
+      tier: routing.model,
+      ...usageContextFromInvocation(invocation, routing.worker),
+      turnBudget,
+      reason: resolvedRoute?.bound ? "provider-binding"
+        : resolvedRoute?.requestedWorker && resolvedRoute.requestedWorker !== routing.worker ? "quota-fallback"
+        : resolvedTrial ? "trial" : "labels-or-default",
+    } : null,
+  };
+  const recordRouting = (decision) => {
+    try {
+      writeRoutingEvidenceFn(path.join(logRoot, name), { ...routingEvidence, decision, issue: issue.identifier, at: now().toISOString() });
+    } catch {
+      logger.error(`Could not record routing evidence for ${issue.identifier}`);
+    }
+  };
+  recordRouting(routingCheck.ok ? "unchanged" : "deferred");
+  if (!routingCheck.ok) {
+    return { issue: issue.identifier, outcome: "deferred-routing-change", reason: "worker/model routing changed or became invalid before claim; retry admission on the next poll" };
   }
 
   // MOV-205: exactly one of these two ways to obtain a worktree runs. A
@@ -851,6 +883,7 @@ async function dispatchIssue(issue, ctx) {
         trial,
         now,
         logger,
+        recordRouting,
       },
     });
   } finally {
@@ -960,6 +993,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     hasWorkerProgressFn = hasWorkerProgress,
     removeWorkerProgressFn = removeWorkerProgress,
     diffSummaryFn = diffSummary,
+    recordRouting = () => {},
   } = ctx;
 
   const steeringActive = steeringEnabled && routing.worker === "claude";
@@ -1045,6 +1079,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     // Keep dependency-injected legacy test doubles compatible; they never
     // spawn a real child and therefore cannot represent the crash window.
     worktreeManager.prepareWorkerSpawn?.(issue.identifier);
+    recordRouting("spawn-requested");
     const spawned = spawnWorkerFn({
       invocation,
       cwd: entry.path,

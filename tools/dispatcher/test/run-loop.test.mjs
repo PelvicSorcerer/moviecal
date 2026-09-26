@@ -742,6 +742,73 @@ describe("runOnce", () => {
         return { ctx: baseCtx({ refreshIssueFn }), refreshIssueFn };
       }
 
+      it.each([
+        ["worker:claude", "worker:codex"],
+        ["worker:codex", "worker:claude"],
+        ["worker:any", "worker:codex"],
+      ])("defers a refreshed %s -> %s pin without any claim or launch", async (before, after) => {
+        const issue = { ...ISSUE, labels: [...ISSUE.labels, before, "model:default"] };
+        const fresh = { ...issue, stateName: "Ready for Agent", labels: [...ISSUE.labels, after, "model:default"] };
+        const writeRoutingEvidenceFn = vi.fn();
+        const ctx = baseCtx({ refreshIssueFn: async () => fresh, writeRoutingEvidenceFn });
+        const [result] = await runOnce([issue], ctx);
+        expect(result.outcome).toBe("deferred-routing-change");
+        expect(ctx.worktreeManager.createCalls).toEqual([]);
+        expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+        expect(ctx.linearClient.calls).toEqual([]);
+        expect(writeRoutingEvidenceFn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+          decision: "deferred", selected: null,
+          poll: expect.objectContaining({ worker: expect.objectContaining({ values: [before] }) }),
+          refreshed: expect.objectContaining({ worker: expect.objectContaining({ values: [after] }) }),
+        }));
+      });
+
+      it.each([
+        ["worker:claude", "model:cheap"],
+        ["worker:claude", "model:strong"],
+        ["worker:claude", "model:strong", "upgrade:architecture"],
+        ["worker:claude"],
+        ["model:default"],
+        ["worker:claude", "worker:codex", "model:default"],
+        ["worker:claude", "model:cheap", "model:default"],
+        ["worker:unknown", "model:default"],
+      ])("defers missing, changed, or conflicting fresh routing: %j", async (...labels) => {
+        const issue = { ...ISSUE, labels: [...ISSUE.labels, "worker:claude", "model:default"] };
+        const ctx = baseCtx({ refreshIssueFn: async () => ({ ...issue, stateName: "Ready for Agent", labels: [...ISSUE.labels, ...labels] }) });
+        const [result] = await runOnce([issue], ctx);
+        expect(result.outcome).toBe("deferred-routing-change");
+        expect(ctx.worktreeManager.createCalls).toEqual([]);
+        expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+        expect(ctx.linearClient.calls).toEqual([]);
+      });
+
+      it("launches unchanged routing with consistent invocation, metadata, and evidence", async () => {
+        const issue = { ...ISSUE, labels: [...ISSUE.labels, "worker:codex", "model:cheap"] };
+        const fresh = { ...issue, stateName: "Ready for Agent", labels: ["area:tests", ...issue.labels.toReversed()] };
+        const writeRoutingEvidenceFn = vi.fn();
+        const ctx = baseCtx({ refreshIssueFn: async () => fresh, writeRoutingEvidenceFn });
+        const [result] = await runOnce([issue], ctx);
+        expect(result.outcome).toBe("in-review");
+        expect(ctx.worktreeManager.createCalls[0]).toMatchObject({ worker: "codex", model: "cheap" });
+        expect(ctx.spawnWorkerFn.mock.calls[0][0].invocation).toMatchObject({ command: "codex", args: expect.arrayContaining(["model_reasoning_effort=low"]) });
+        expect(ctx.linearClient.calls.find((call) => call.body?.includes("Dispatcher started work")).body).toContain("Worker: codex (model: cheap)");
+        expect(writeRoutingEvidenceFn.mock.calls.map(([, record]) => record.decision)).toEqual(["unchanged", "spawn-requested"]);
+        expect(writeRoutingEvidenceFn.mock.calls[1][1].selected).toMatchObject({ worker: "codex", tier: "cheap", reasoningEffort: "low" });
+      });
+
+      it("still defers a changed route when the diagnostic write fails", async () => {
+        const issue = { ...ISSUE, labels: [...ISSUE.labels, "worker:claude", "model:default"] };
+        const ctx = baseCtx({
+          refreshIssueFn: async () => ({ ...issue, labels: [...ISSUE.labels, "worker:codex", "model:default"] }),
+          writeRoutingEvidenceFn: () => { throw new Error("fixture failure"); },
+          logger: { error: vi.fn() },
+        });
+        expect((await runOnce([issue], ctx))[0].outcome).toBe("deferred-routing-change");
+        expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+        expect(ctx.linearClient.calls).toEqual([]);
+        expect(ctx.logger.error).toHaveBeenCalledWith("Could not record routing evidence for MOV-1");
+      });
+
       it("no-ops when the delegate was removed after the poll snapshot", async () => {
         const { ctx, refreshIssueFn } = ctxWithRefresh({ ...ISSUE, stateName: "Ready for Agent", delegate: null });
 

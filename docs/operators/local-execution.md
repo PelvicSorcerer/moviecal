@@ -80,6 +80,26 @@ for the commands.
 
 Dispatcher code lives in `tools/dispatcher/` in this repository (TypeScript, using the repo's existing Node 24 + Vitest toolchain). Runtime config lives outside the repo at `~/.config/moviecal/` (mode 700) — API keys and `.env.local` must never be committed. Run logs live at `~/Library/Logs/moviecal-dispatcher/`, retained 90 days.
 
+### Final routing refresh and evidence
+
+Immediately before claiming a worktree, worker/model overrides and upgrade
+conditions must still match the polling snapshot (MOV-397). A changed or
+invalid selection returns `deferred-routing-change` without creating/resuming
+a worktree, changing Linear state, posting a start comment, charging a trial
+assignment, or spawning a worker. The next poll repeats all provider admission
+gates; it does not substitute a worker after cooldown/probe/trial admission.
+Existing provider bindings and retained-worktree ownership checks still apply.
+
+The trusted dispatcher appends bounded decisions to
+`~/Library/Logs/moviecal-dispatcher/<issue-worktree-name>/routing-decisions.jsonl`,
+including deferrals that produce no worker transcript. The record contains
+poll/refreshed routing inputs and the selected worker, tier, effective model,
+effort, turn budget, and selection reason. `spawn-requested` means the adapter
+was asked to launch that invocation; use its transcript to confirm startup.
+The evidence follows the run logs' 90-day retention. Evidence-write failures
+are logged without weakening the routing guard. See
+[worker-routing.md](./worker-routing.md#overrides) for the comparison rules.
+
 ### Worker usage accounting
 
 After each implementation or code-repair worker exits, the dispatcher parses its structured stdout and writes `usage.json` beside that run's `stdout.log`. It also appends the numeric summary to `~/.config/moviecal/worker-usage.json`. Both files stay outside the repository. A failed or truncated transcript produces explicit `null` values and `partial: true`; accounting errors never block publication. The existing Linear PR-opened comment includes one compact `Usage:` line. Repair publication includes the same line.
