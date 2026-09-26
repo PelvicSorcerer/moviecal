@@ -36,6 +36,15 @@ export interface WatchlistMember {
   watchlistId: string;
 }
 
+/**
+ * A member row plus the account email behind it. Email is private metadata: it
+ * is resolved through the service-role-only auth lookup and is only ever
+ * produced by an operation that has already proved the actor owns the list.
+ */
+export interface WatchlistMemberProfile extends WatchlistMember {
+  email: string | null;
+}
+
 export interface WatchlistInviteLink {
   createdAt: string;
   createdByUserId: string;
@@ -134,6 +143,10 @@ export interface WatchlistRepository {
     watchlistId: string,
     movieId: number,
   ): Promise<WatchlistRow | null>;
+  findMembershipByIdForWatchlist(
+    watchlistId: string,
+    membershipId: string,
+  ): Promise<WatchlistMember | null>;
   findMembershipForUser(
     watchlistId: string,
     userId: string,
@@ -153,6 +166,9 @@ export interface WatchlistRepository {
     movieId: number,
   ): Promise<{ errorCode: string | null; row: WatchlistRow | null }>;
   listItemsForWatchlist(watchlistId: string): Promise<WatchlistRow[]>;
+  listMemberEmailsByUserId(
+    userIds: string[],
+  ): Promise<Record<string, string | null>>;
   listMembersForWatchlist(watchlistId: string): Promise<WatchlistMember[]>;
   listTrackedMovies(): Promise<WatchlistMovieRow[]>;
   listWatchlistsForUser(userId: string): Promise<WatchlistSummary[]>;

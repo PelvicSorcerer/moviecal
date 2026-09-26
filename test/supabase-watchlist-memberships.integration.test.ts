@@ -278,3 +278,131 @@ describe('createMembershipsAggregate — acceptInviteMembership (update path)', 
     expect(fromMock).toHaveBeenNthCalledWith(2, 'watchlist_memberships');
   });
 });
+
+describe('createMembershipsAggregate — findMembershipByIdForWatchlist', () => {
+  it('scopes the lookup to the watchlist and maps the row', async () => {
+    const fromMock = vi.fn(() => makeChain({ data: VALID_MEMBERSHIP_ROW, error: null }));
+    const adminClient = { from: fromMock } as unknown as ServerSupabaseClient;
+    const { findMembershipByIdForWatchlist } = createMembershipsAggregate({
+      adminClient,
+      userClient: adminClient,
+    });
+
+    const result = await findMembershipByIdForWatchlist('watchlist-1', 'membership-1');
+
+    expect(result?.id).toBe('membership-1');
+    expect(fromMock).toHaveBeenCalledWith('watchlist_memberships');
+
+    const chain = fromMock.mock.results[0].value;
+
+    expect(chain.eq).toHaveBeenNthCalledWith(1, 'watchlist_id', 'watchlist-1');
+    expect(chain.eq).toHaveBeenNthCalledWith(2, 'id', 'membership-1');
+  });
+
+  it('returns null when no row matches', async () => {
+    const adminClient = mockClient({ data: null, error: null });
+    const { findMembershipByIdForWatchlist } = createMembershipsAggregate({
+      adminClient,
+      userClient: adminClient,
+    });
+
+    await expect(
+      findMembershipByIdForWatchlist('watchlist-1', 'membership-1'),
+    ).resolves.toBeNull();
+  });
+
+  it('treats a non-uuid membership id as a miss rather than a data error', async () => {
+    const adminClient = mockClient({
+      data: null,
+      error: {
+        ...SUPABASE_ERROR,
+        code: '22P02',
+        message: 'invalid input syntax for type uuid',
+      },
+    });
+    const { findMembershipByIdForWatchlist } = createMembershipsAggregate({
+      adminClient,
+      userClient: adminClient,
+    });
+
+    await expect(
+      findMembershipByIdForWatchlist('watchlist-1', 'owner:user-1'),
+    ).resolves.toBeNull();
+  });
+
+  it('still surfaces any other Supabase error', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const adminClient = mockClient({ data: null, error: SUPABASE_ERROR });
+    const { findMembershipByIdForWatchlist } = createMembershipsAggregate({
+      adminClient,
+      userClient: adminClient,
+    });
+
+    await expect(
+      findMembershipByIdForWatchlist('watchlist-1', 'membership-1'),
+    ).rejects.toThrow(WatchlistDataError);
+    consoleSpy.mockRestore();
+  });
+});
+
+describe('createMembershipsAggregate — listMemberEmailsByUserId', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function adminClientWithUsers(getUserById: any): ServerSupabaseClient {
+    return {
+      auth: { admin: { getUserById } },
+      from: vi.fn(() => makeChain({ data: null, error: null })),
+    } as unknown as ServerSupabaseClient;
+  }
+
+  it('resolves each unique user id exactly once', async () => {
+    const getUserById = vi.fn(async (userId: string) => ({
+      data: { user: { email: `${userId}@moviecal.test` } },
+      error: null,
+    }));
+    const adminClient = adminClientWithUsers(getUserById);
+    const { listMemberEmailsByUserId } = createMembershipsAggregate({
+      adminClient,
+      userClient: adminClient,
+    });
+
+    const emails = await listMemberEmailsByUserId(['user-1', 'user-2', 'user-1']);
+
+    expect(emails).toEqual({
+      'user-1': 'user-1@moviecal.test',
+      'user-2': 'user-2@moviecal.test',
+    });
+    expect(getUserById).toHaveBeenCalledTimes(2);
+  });
+
+  it('maps an unreadable account to null instead of failing the whole listing', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const getUserById = vi.fn(async (userId: string) =>
+      userId === 'user-2'
+        ? { data: { user: null }, error: { message: 'User not found' } }
+        : { data: { user: { email: `${userId}@moviecal.test` } }, error: null },
+    );
+    const adminClient = adminClientWithUsers(getUserById);
+    const { listMemberEmailsByUserId } = createMembershipsAggregate({
+      adminClient,
+      userClient: adminClient,
+    });
+
+    await expect(listMemberEmailsByUserId(['user-1', 'user-2'])).resolves.toEqual({
+      'user-1': 'user-1@moviecal.test',
+      'user-2': null,
+    });
+    consoleSpy.mockRestore();
+  });
+
+  it('reads no account at all for an empty member list', async () => {
+    const getUserById = vi.fn();
+    const adminClient = adminClientWithUsers(getUserById);
+    const { listMemberEmailsByUserId } = createMembershipsAggregate({
+      adminClient,
+      userClient: adminClient,
+    });
+
+    await expect(listMemberEmailsByUserId([])).resolves.toEqual({});
+    expect(getUserById).not.toHaveBeenCalled();
+  });
+});

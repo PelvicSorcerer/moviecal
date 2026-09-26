@@ -16,6 +16,9 @@ export interface WatchlistMembershipLookupRow {
   watchlist_id: string;
 }
 
+/** Postgres `invalid_text_representation` — e.g. a non-uuid id in a uuid filter. */
+const INVALID_TEXT_REPRESENTATION = '22P02';
+
 export function assertMembershipRow(data: unknown): WatchlistMembershipRow {
   if (
     typeof data !== 'object' ||
@@ -158,6 +161,31 @@ export function createMembershipsAggregate(args: {
       return mapMembershipRow(assertMembershipRow(data));
     },
 
+    async findMembershipByIdForWatchlist(
+      watchlistId: string,
+      membershipId: string,
+    ): Promise<WatchlistMember | null> {
+      const { data, error } = await args.adminClient
+        .from('watchlist_memberships')
+        .select(watchlistMembershipSelect)
+        .eq('watchlist_id', watchlistId)
+        .eq('id', membershipId)
+        .maybeSingle();
+
+      if (error) {
+        // A caller-supplied membership id that is not a uuid — the synthetic
+        // `owner:<uuid>` id the member list exposes, or anything else crafted —
+        // is a lookup miss, not a server fault.
+        if (error.code === INVALID_TEXT_REPRESENTATION) {
+          return null;
+        }
+
+        throwSupabaseError(error);
+      }
+
+      return data ? mapMembershipRow(assertMembershipRow(data)) : null;
+    },
+
     async findMembershipForUser(
       watchlistId: string,
       userId: string,
@@ -174,6 +202,37 @@ export function createMembershipsAggregate(args: {
       }
 
       return data ? mapMembershipRow(assertMembershipRow(data)) : null;
+    },
+
+    /**
+     * Resolve account emails for member rows. This reads Supabase Auth through
+     * the service-role admin client, which is built server-side only
+     * (`createServerSupabaseServiceRoleClient`) and never shipped to a browser.
+     * Authorization is the caller's job: only
+     * `listSharedWatchlistMemberProfiles` reaches this, and only after it has
+     * proved the actor owns the list.
+     */
+    async listMemberEmailsByUserId(
+      userIds: string[],
+    ): Promise<Record<string, string | null>> {
+      const uniqueUserIds = [...new Set(userIds.filter(Boolean))];
+      const entries = await Promise.all(
+        uniqueUserIds.map(async (userId) => {
+          const { data, error } = await args.adminClient.auth.admin.getUserById(userId);
+
+          if (error) {
+            // One unreadable account must not take down member management for
+            // the whole list; the member still renders without an email.
+            console.error('[watchlist] Supabase auth user lookup failed.');
+
+            return [userId, null] as const;
+          }
+
+          return [userId, data.user?.email ?? null] as const;
+        }),
+      );
+
+      return Object.fromEntries(entries);
     },
 
     async listMembersForWatchlist(watchlistId: string): Promise<WatchlistMember[]> {

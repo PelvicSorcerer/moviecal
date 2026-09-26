@@ -52,6 +52,9 @@ export function createWatchlistRepository(
     async findItemByMovieIdForWatchlist() {
       return buildWatchlistRow();
     },
+    async findMembershipByIdForWatchlist(watchlistId, membershipId) {
+      return buildWatchlistMember({ id: membershipId, watchlistId });
+    },
     async findMembershipForUser() {
       return null;
     },
@@ -107,6 +110,11 @@ export function createWatchlistRepository(
     },
     async listItemsForWatchlist() {
       return [];
+    },
+    async listMemberEmailsByUserId(userIds) {
+      return Object.fromEntries(
+        userIds.map((userId) => [userId, `${userId}@moviecal.test`]),
+      );
     },
     async listMembersForWatchlist() {
       return [];
