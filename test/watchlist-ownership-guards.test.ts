@@ -67,6 +67,13 @@ function createOwnedSharedRepository() {
           ? { status: 'authorized' as const, watchlist: sharedWatchlist, canEdit: true }
           : { status: 'forbidden' as const };
       },
+      async findMembershipByIdForWatchlist(watchlistId, membershipId) {
+        return (
+          members.find(
+            (member) => member.watchlistId === watchlistId && member.id === membershipId,
+          ) ?? null
+        );
+      },
       async findMembershipForUser(watchlistId, userId) {
         return (
           members.find(

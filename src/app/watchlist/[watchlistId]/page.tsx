@@ -25,12 +25,11 @@ import { createSupabaseWatchlistRepository } from '../../../lib/supabase/watchli
 import {
   getSharedWatchlistInviteLinkStatus,
   getWatchlistDetail,
-  listSharedWatchlistMembers,
+  listSharedWatchlistMemberProfiles,
   WatchlistAccessError,
   WatchlistDataError,
   WatchlistNotFoundError,
-  type WatchlistMember,
-  type WatchlistSummary,
+  type WatchlistMemberProfile,
 } from '../../../lib/watchlist';
 import { WatchlistDetailClient } from '../watchlist-detail-client';
 import { SharedWatchlistPageClient } from './shared-watchlist-page-client';
@@ -51,29 +50,14 @@ interface MemberEntry {
   role: 'owner' | 'editor';
 }
 
-async function resolveUserEmailMap(userIds: string[]): Promise<Record<string, string | null>> {
-  const adminClient = createServerSupabaseServiceRoleClient();
-  const userEmailEntries = await Promise.all(
-    [...new Set(userIds)].map(async (userId) => {
-      const userResponse = await adminClient.auth.admin.getUserById(userId);
-
-      return [userId, userResponse.data.user?.email ?? null] as const;
-    }),
-  );
-
-  return Object.fromEntries(userEmailEntries);
-}
-
 function mapMemberEntries(args: {
   actorUserId: string;
-  emailsByUserId: Record<string, string | null>;
-  members: WatchlistMember[];
-  watchlist: WatchlistSummary;
+  members: WatchlistMemberProfile[];
 }): MemberEntry[] {
   return args.members.map((member) => ({
     acceptedAt: member.acceptedAt,
     canRemove: member.role !== 'owner',
-    email: args.emailsByUserId[member.userId] ?? null,
+    email: member.email,
     id: member.id,
     isCurrentUser: member.userId === args.actorUserId,
     isOwner: member.role === 'owner',
@@ -123,7 +107,7 @@ export default async function WatchlistDetailPage({
           && getE2EActiveInviteLink(cookieStore, watchlistId) !== null;
 
         if (ownerCanManage) {
-          const members = [
+          const members: WatchlistMemberProfile[] = [
             {
               acceptedAt: null,
               id: `owner:${watchlist.ownerUserId}`,
@@ -133,19 +117,14 @@ export default async function WatchlistDetailPage({
               watchlistId: watchlist.id,
             },
             ...listE2EWatchlistMembers(cookieStore, watchlistId),
-          ];
-          const emailsByUserId = Object.fromEntries(
-            members.map((member) => [
-              member.userId,
-              findE2EUserById(member.userId)?.email ?? null,
-            ]),
-          );
+          ].map((member) => ({
+            ...member,
+            email: findE2EUserById(member.userId)?.email ?? null,
+          }));
 
           memberEntries = mapMemberEntries({
             actorUserId: user.id,
-            emailsByUserId,
             members,
-            watchlist,
           });
         }
       }
@@ -165,20 +144,13 @@ export default async function WatchlistDetailPage({
         ownerCanManage = detail.watchlist.ownerUserId === user.id;
 
         if (ownerCanManage) {
-          const members = await listSharedWatchlistMembers({
-            actorUserId: user.id,
-            repository,
-            watchlistId,
-          });
-          const emailsByUserId = await resolveUserEmailMap(
-            members.map((member) => member.userId),
-          );
-
           memberEntries = mapMemberEntries({
             actorUserId: user.id,
-            emailsByUserId,
-            members,
-            watchlist: detail.watchlist,
+            members: await listSharedWatchlistMemberProfiles({
+              actorUserId: user.id,
+              repository,
+              watchlistId,
+            }),
           });
           activeInviteLinkExists = (
             await getSharedWatchlistInviteLinkStatus({

@@ -9,6 +9,7 @@ import type {
   ResolvedWatchlistInvite,
   WatchlistInviteLink,
   WatchlistMember,
+  WatchlistMemberProfile,
   WatchlistRepository,
   WatchlistSummary,
 } from './types';
@@ -268,16 +269,11 @@ export async function createSharedWatchlistInviteLink(args: {
   };
 }
 
-export async function listSharedWatchlistMembers(args: {
-  actorUserId: string;
+async function readMembersWithOwnerAnchor(args: {
   repository: WatchlistRepository;
-  watchlistId: string;
+  watchlist: WatchlistSummary;
 }): Promise<WatchlistMember[]> {
-  const watchlist = await requireOwnedSharedWatchlist({
-    actorUserId: args.actorUserId,
-    repository: args.repository,
-    watchlistId: args.watchlistId,
-  });
+  const { watchlist } = args;
   const members = await args.repository.listMembersForWatchlist(watchlist.id);
   const dedupedMembers = new Map<string, WatchlistMember>();
 
@@ -310,6 +306,57 @@ export async function listSharedWatchlistMembers(args: {
   });
 }
 
+export async function listSharedWatchlistMembers(args: {
+  actorUserId: string;
+  repository: WatchlistRepository;
+  watchlistId: string;
+}): Promise<WatchlistMember[]> {
+  const watchlist = await requireOwnedSharedWatchlist({
+    actorUserId: args.actorUserId,
+    repository: args.repository,
+    watchlistId: args.watchlistId,
+  });
+
+  return readMembersWithOwnerAnchor({
+    repository: args.repository,
+    watchlist,
+  });
+}
+
+/**
+ * Owner-only member listing that also resolves each member's account email.
+ *
+ * Member emails are the one piece of private metadata a shared list holds about
+ * accounts other than the actor's own, so the ownership check runs first and
+ * the email lookup is unreachable for an editor, a pending invitee, or an
+ * outsider — all three fail in `requireOwnedSharedWatchlist` before any account
+ * is read. Consumers that only need roles should keep using
+ * `listSharedWatchlistMembers`.
+ */
+export async function listSharedWatchlistMemberProfiles(args: {
+  actorUserId: string;
+  repository: WatchlistRepository;
+  watchlistId: string;
+}): Promise<WatchlistMemberProfile[]> {
+  const watchlist = await requireOwnedSharedWatchlist({
+    actorUserId: args.actorUserId,
+    repository: args.repository,
+    watchlistId: args.watchlistId,
+  });
+  const members = await readMembersWithOwnerAnchor({
+    repository: args.repository,
+    watchlist,
+  });
+  const emailsByUserId = await args.repository.listMemberEmailsByUserId(
+    members.map((member) => member.userId),
+  );
+
+  return members.map((member) => ({
+    ...member,
+    email: emailsByUserId[member.userId] ?? null,
+  }));
+}
+
 export async function removeSharedWatchlistMember(args: {
   actorUserId: string;
   membershipId: string;
@@ -334,9 +381,86 @@ export async function removeSharedWatchlistMember(args: {
     throw new WatchlistAccessError('Watchlist access denied.');
   }
 
-  const removed = await args.repository.removeMembershipFromWatchlist(
-    args.watchlistId,
+  // Resolve the target before deleting anything. Scoping the lookup to this
+  // watchlist means a membership id crafted from another list reads as "not
+  // found" rather than reaching the delete, and a row that still claims the
+  // owner role is refused even if the ownership anchor above disagreed with it.
+  const targetMembership = await args.repository.findMembershipByIdForWatchlist(
+    watchlist.id,
     args.membershipId,
+  );
+
+  if (!targetMembership) {
+    throw new WatchlistNotFoundError('Watchlist member not found.');
+  }
+
+  if (
+    targetMembership.role === 'owner'
+    || targetMembership.userId === watchlist.ownerUserId
+  ) {
+    throw new WatchlistAccessError('Watchlist access denied.');
+  }
+
+  const removed = await args.repository.removeMembershipFromWatchlist(
+    watchlist.id,
+    targetMembership.id,
+  );
+
+  if (!removed) {
+    throw new WatchlistNotFoundError('Watchlist member not found.');
+  }
+}
+
+/**
+ * An accepted editor removes their own membership from a shared list.
+ *
+ * The owner is refused: their membership row is the list's ownership anchor,
+ * and `can_edit_watchlist` reads memberships, so "leaving" would silently strip
+ * the owner's own edit access and leave the list with nobody able to manage it.
+ * Migration 20260924000000 refuses the same delete at the database boundary,
+ * including for the service-role client this repository uses.
+ */
+export async function leaveSharedWatchlist(args: {
+  actorUserId: string;
+  repository: WatchlistRepository;
+  watchlistId: string;
+}): Promise<void> {
+  // An outsider and a pending invitee both fail here, with the same error the
+  // rest of the domain gives them and no list metadata attached.
+  const access = await requireWatchlistAccess({
+    actorUserId: args.actorUserId,
+    repository: args.repository,
+    watchlistId: args.watchlistId,
+  });
+
+  if (access.watchlist.kind !== 'shared') {
+    throw new WatchlistAccessError('Watchlist access denied.');
+  }
+
+  if (access.watchlist.ownerUserId === args.actorUserId) {
+    throw new WatchlistAccessError(
+      'A watchlist owner cannot leave their own watchlist.',
+    );
+  }
+
+  const membership = await args.repository.findMembershipForUser(
+    access.watchlist.id,
+    args.actorUserId,
+  );
+
+  if (!membership || !membership.acceptedAt) {
+    throw new WatchlistNotFoundError('Watchlist member not found.');
+  }
+
+  // The actor is not the owner, so a row still holding the owner role here is
+  // inconsistent data rather than a membership this operation may delete.
+  if (membership.role === 'owner' || membership.userId !== args.actorUserId) {
+    throw new WatchlistAccessError('Watchlist access denied.');
+  }
+
+  const removed = await args.repository.removeMembershipFromWatchlist(
+    access.watchlist.id,
+    membership.id,
   );
 
   if (!removed) {
