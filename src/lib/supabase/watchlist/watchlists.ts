@@ -75,6 +75,32 @@ export function createWatchlistsAggregate(args: {
       return assertWatchlistSummary(data);
     },
 
+    async renameWatchlist({
+      name,
+      watchlistId,
+    }: {
+      name: string;
+      watchlistId: string;
+    }): Promise<WatchlistSummary | null> {
+      // Deliberately the actor's userClient: RLS and the MOV-330 update trigger
+      // (owner or accepted editor, shared lists, name column only) decide who
+      // may write, and a single UPDATE makes concurrent renames last-write-wins.
+      // A refused or vanished row simply matches nothing.
+      const { data, error } = await args.userClient
+        .from('watchlists')
+        .update({ name })
+        .eq('id', watchlistId)
+        .eq('kind', 'shared')
+        .select(watchlistSelect)
+        .maybeSingle();
+
+      if (error) {
+        throwSupabaseError(error);
+      }
+
+      return data ? assertWatchlistSummary(data) : null;
+    },
+
     async ensurePersonalWatchlist(userId: string): Promise<WatchlistSummary> {
       // RPC requires EXECUTE on ensure_personal_watchlist_for_user. When
       // userClient carries an authenticated JWT this is granted by the

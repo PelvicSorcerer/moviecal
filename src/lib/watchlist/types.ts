@@ -140,6 +140,18 @@ export interface WatchlistRepository {
     watchlistId: string,
     membershipId: string,
   ): Promise<boolean>;
+  /**
+   * Commits a new name for one shared watchlist and returns the row as
+   * committed, or null when no row was updated (missing, personal, or the
+   * acting user may not rename it). Implementations must write as the acting
+   * user, never with a service-role client, so the database's owner/accepted
+   * editor rules stay in force independently of the domain's own check.
+   * Concurrent calls are last-successful-write-wins.
+   */
+  renameWatchlist(args: {
+    name: string;
+    watchlistId: string;
+  }): Promise<WatchlistSummary | null>;
   upsertMovie(detail: NormalizedMovieDetail): Promise<{ id: number }>;
 }
 

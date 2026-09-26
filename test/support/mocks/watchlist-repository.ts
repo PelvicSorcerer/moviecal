@@ -127,6 +127,11 @@ export function createWatchlistRepository(
     async removeMembershipFromWatchlist() {
       return true;
     },
+    async renameWatchlist({ name, watchlistId }) {
+      return watchlistId === sharedWatchlist.id
+        ? { ...sharedWatchlist, name }
+        : null;
+    },
     async upsertMovie() {
       return { id: buildWatchlistRow().movie?.id ?? 42 };
     },

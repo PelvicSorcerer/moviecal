@@ -69,6 +69,42 @@ export async function createSharedWatchlist(args: {
   });
 }
 
+/**
+ * The one rename rule for shared lists, called by every transport (cookie and
+ * bearer routes). The owner and accepted editors may rename; pending invitees,
+ * outsiders, and personal lists are refused before anything is written, and
+ * the refusal carries no list metadata.
+ */
+export async function renameSharedWatchlist(args: {
+  actorUserId: string;
+  name: string;
+  repository: WatchlistRepository;
+  watchlistId: string;
+}): Promise<WatchlistSummary> {
+  const access = await requireWatchlistAccess({
+    actorUserId: args.actorUserId,
+    repository: args.repository,
+    requireEdit: true,
+    watchlistId: args.watchlistId,
+  });
+
+  if (access.watchlist.kind !== 'shared') {
+    throw new WatchlistAccessError('Watchlist access denied.');
+  }
+
+  const renamed = await args.repository.renameWatchlist({
+    name: normalizeSharedWatchlistName(args.name),
+    watchlistId: access.watchlist.id,
+  });
+
+  // Access was revoked (or the list removed) between the check and the write.
+  if (!renamed) {
+    throw new WatchlistAccessError('Watchlist access denied.');
+  }
+
+  return { ...renamed, canEdit: access.canEdit };
+}
+
 export async function resolveWatchlistInvite(args: {
   repository: WatchlistRepository;
   token: string;

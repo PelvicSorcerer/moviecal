@@ -34,6 +34,7 @@ function makeChain(result: { data: unknown; error: PostgrestError | null }) {
   const chain: Record<string, any> = {
     select: vi.fn().mockReturnThis(),
     insert: vi.fn().mockReturnThis(),
+    update: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     not: vi.fn().mockReturnThis(),
     is: vi.fn().mockReturnThis(),
@@ -237,6 +238,58 @@ describe('createWatchlistsAggregate — listWatchlistsForUser', () => {
     });
 
     await expect(listWatchlistsForUser('user-1')).rejects.toThrow(WatchlistDataError);
+    consoleSpy.mockRestore();
+  });
+});
+
+describe('createWatchlistsAggregate — renameWatchlist', () => {
+  const SHARED_ROW = { ...VALID_WATCHLIST_ROW, kind: 'shared', name: 'Renamed' };
+
+  it('updates only the name of the shared row through the actor client', async () => {
+    const chain = makeChain({ data: SHARED_ROW, error: null });
+    const userClient = { from: vi.fn(() => chain) } as unknown as ServerSupabaseClient;
+    const adminClient = { from: vi.fn() } as unknown as ServerSupabaseClient;
+    const { renameWatchlist } = createWatchlistsAggregate({ adminClient, userClient });
+
+    await expect(
+      renameWatchlist({ name: 'Renamed', watchlistId: 'watchlist-1' }),
+    ).resolves.toEqual({
+      canEdit: true,
+      id: 'watchlist-1',
+      kind: 'shared',
+      name: 'Renamed',
+      ownerUserId: 'user-1',
+    });
+    expect(userClient.from).toHaveBeenCalledWith('watchlists');
+    expect(chain.update).toHaveBeenCalledWith({ name: 'Renamed' });
+    expect(chain.eq).toHaveBeenCalledWith('id', 'watchlist-1');
+    expect(chain.eq).toHaveBeenCalledWith('kind', 'shared');
+    expect(adminClient.from).not.toHaveBeenCalled();
+  });
+
+  it('returns null when no row was updated', async () => {
+    const userClient = mockClient({ data: null, error: null });
+    const { renameWatchlist } = createWatchlistsAggregate({
+      adminClient: userClient,
+      userClient,
+    });
+
+    await expect(
+      renameWatchlist({ name: 'Renamed', watchlistId: 'watchlist-1' }),
+    ).resolves.toBeNull();
+  });
+
+  it('throws WatchlistDataError when the update fails', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const userClient = mockClient({ data: null, error: SUPABASE_ERROR });
+    const { renameWatchlist } = createWatchlistsAggregate({
+      adminClient: userClient,
+      userClient,
+    });
+
+    await expect(
+      renameWatchlist({ name: 'Renamed', watchlistId: 'watchlist-1' }),
+    ).rejects.toThrow(WatchlistDataError);
     consoleSpy.mockRestore();
   });
 });
