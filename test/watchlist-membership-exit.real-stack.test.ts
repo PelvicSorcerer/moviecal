@@ -22,7 +22,6 @@ import { createSupabaseWatchlistRepository } from '../src/lib/supabase/watchlist
 import {
   acceptWatchlistInvite,
   addWatchlistItem,
-  createSharedWatchlist,
   createSharedWatchlistInviteLink,
   getWatchlistDetail,
   leaveSharedWatchlist,
@@ -123,6 +122,16 @@ describe.skipIf(!supabaseReachable || !credentialsPresent)(
       return createSupabaseWatchlistRepository({ adminClient, userClient });
     }
 
+    // Seed through the admin client, as the other membership/RLS suites do.
+    // Authenticated list creation is a separate contract; exit probes below
+    // use real actor clients and the shared domain operations.
+    async function seedSharedList(name: string): Promise<string> {
+      const { data, error } = await adminClient.from('watchlists')
+        .insert({ kind: 'shared', name, owner_user_id: owner.userId }).select('id').single();
+      if (error || !data) throw new Error(`real-stack: list seed failed: ${error?.message}`);
+      return data.id;
+    }
+
     async function membershipIdFor(userId: string): Promise<string | null> {
       const { data, error } = await adminClient
         .from('watchlist_memberships')
@@ -182,13 +191,7 @@ describe.skipIf(!supabaseReachable || !credentialsPresent)(
     });
 
     beforeEach(async () => {
-      const watchlist = await createSharedWatchlist({
-        name: `MOV-374 ${randomUUID().slice(0, 8)}`,
-        repository: ownerRepository,
-        userId: owner.userId,
-      });
-
-      watchlistId = watchlist.id;
+      watchlistId = await seedSharedList(`MOV-374 ${randomUUID().slice(0, 8)}`);
 
       const { error: itemError } = await adminClient
         .from('watchlist_items')
@@ -297,28 +300,26 @@ describe.skipIf(!supabaseReachable || !credentialsPresent)(
     });
 
     it('rejects a valid membership id from another list without deleting it', async () => {
-      const other = await createSharedWatchlist({
-        name: 'Other MOV-374 list', repository: ownerRepository, userId: owner.userId,
-      });
+      const otherId = await seedSharedList('Other MOV-374 list');
       try {
         const otherInvite = await createSharedWatchlistInviteLink({
-          actorUserId: owner.userId, baseUrl: 'https://moviecal.test', repository: ownerRepository, watchlistId: other.id,
+          actorUserId: owner.userId, baseUrl: 'https://moviecal.test', repository: ownerRepository, watchlistId: otherId,
         });
         await acceptWatchlistInvite({
           actorUserId: editor.userId, repository: editorRepository,
           token: decodeURIComponent(new URL(otherInvite.inviteUrl).pathname.split('/').pop()!),
         });
         const membership = await adminClient.from('watchlist_memberships').select('id')
-          .eq('watchlist_id', other.id).eq('user_id', editor.userId).single();
+          .eq('watchlist_id', otherId).eq('user_id', editor.userId).single();
         expect(membership.error).toBeNull();
         await expect(removeSharedWatchlistMember({
           actorUserId: owner.userId, repository: ownerRepository, watchlistId, membershipId: membership.data!.id,
         })).rejects.toMatchObject({ message: 'Watchlist member not found.', status: 404 });
         await expect(getWatchlistDetail({
-          actorUserId: editor.userId, repository: editorRepository, watchlistId: other.id,
-        })).resolves.toMatchObject({ watchlist: { id: other.id } });
+          actorUserId: editor.userId, repository: editorRepository, watchlistId: otherId,
+        })).resolves.toMatchObject({ watchlist: { id: otherId } });
       } finally {
-        await adminClient.from('watchlists').delete().eq('id', other.id);
+        await adminClient.from('watchlists').delete().eq('id', otherId);
       }
     });
 
