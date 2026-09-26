@@ -101,6 +101,42 @@ export function createWatchlistsAggregate(args: {
       return data ? assertWatchlistSummary(data) : null;
     },
 
+    async deleteSharedWatchlistOwnedBy({
+      ownerUserId,
+      watchlistId,
+    }: {
+      ownerUserId: string;
+      watchlistId: string;
+    }): Promise<boolean> {
+      // Deliberately the RLS-scoped user client, not the service-role one. The
+      // "owners can delete shared watchlists" policy from migration
+      // 20260924000000 is then a second, independent refusal behind the
+      // domain's ownership check, and no privileged client is ever pointed at a
+      // cascading delete. The owner and kind predicates are repeated in the
+      // statement so the delete stays owner-scoped and personal-list-safe even
+      // for a caller that built this repository with an elevated client — the
+      // calendar-feed and cron paths do exactly that for their read-only work.
+      //
+      // One statement: watchlist_items, watchlist_memberships, and
+      // watchlist_invite_links all reference watchlists with ON DELETE CASCADE,
+      // so items, memberships, and stored invite-token hashes are removed in
+      // the same transaction and cannot be left orphaned.
+      const { data, error } = await args.userClient
+        .from('watchlists')
+        .delete()
+        .eq('id', watchlistId)
+        .eq('owner_user_id', ownerUserId)
+        .eq('kind', 'shared')
+        .select('id')
+        .maybeSingle();
+
+      if (error) {
+        throwSupabaseError(error);
+      }
+
+      return Boolean(data);
+    },
+
     async ensurePersonalWatchlist(userId: string): Promise<WatchlistSummary> {
       // RPC requires EXECUTE on ensure_personal_watchlist_for_user. When
       // userClient carries an authenticated JWT this is granted by the

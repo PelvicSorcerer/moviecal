@@ -5,6 +5,7 @@ import { normalizeSharedWatchlistName, requireWatchlistAccess } from './items';
 import type {
   AcceptedWatchlistInviteResult,
   CreatedWatchlistInviteLinkResult,
+  DeletedSharedWatchlistResult,
   ResolvedWatchlistInvite,
   WatchlistInviteLink,
   WatchlistMember,
@@ -103,6 +104,60 @@ export async function renameSharedWatchlist(args: {
   }
 
   return { ...renamed, canEdit: access.canEdit };
+}
+
+/**
+ * Permanently deletes a shared watchlist the actor owns, together with its
+ * items, memberships, and invite-link hashes.
+ *
+ * This is the single place the deletion invariants live. Cookie-session and
+ * bearer-token transports are expected to call it rather than reimplementing
+ * any part of the authorization or cascade contract:
+ *
+ * - **Owner only.** An accepted editor, an outsider, and the owner of a
+ *   *personal* list all fail before any write is attempted, and the refusal
+ *   carries nothing but a fixed message — no name, member, or item metadata.
+ * - **Personal lists are never deletable here.** `requireOwnedSharedWatchlist`
+ *   rejects `kind !== 'shared'`, and the persistence layer constrains the
+ *   statement to a shared row as well, so the owner's personal list survives a
+ *   request that targets it.
+ * - **Repeat deletion is a not-found.** Once the row is gone the access lookup
+ *   cannot resolve it, so a second call raises `WatchlistNotFoundError` (404)
+ *   rather than reporting a second success.
+ * - **Atomic, or nothing.** The repository removes the list and every dependent
+ *   row in one operation; a persistence layer that matched no row resolves
+ *   `false` and is surfaced as the same not-found response, never as a partial
+ *   delete.
+ *
+ * Former members lose access as a consequence of the membership rows going with
+ * the list: the next `listUserWatchlists` (and therefore the next private
+ * calendar-feed request) no longer sees it. See
+ * `docs/technical/calendar-feed-design.md`.
+ */
+export async function deleteSharedWatchlist(args: {
+  actorUserId: string;
+  repository: WatchlistRepository;
+  watchlistId: string;
+}): Promise<DeletedSharedWatchlistResult> {
+  const watchlist = await requireOwnedSharedWatchlist({
+    actorUserId: args.actorUserId,
+    repository: args.repository,
+    watchlistId: args.watchlistId,
+  });
+
+  const deleted = await args.repository.deleteSharedWatchlistOwnedBy({
+    ownerUserId: watchlist.ownerUserId,
+    watchlistId: watchlist.id,
+  });
+
+  if (!deleted) {
+    throw new WatchlistNotFoundError('Watchlist not found.');
+  }
+
+  return {
+    deleted: true,
+    watchlist,
+  };
 }
 
 export async function resolveWatchlistInvite(args: {

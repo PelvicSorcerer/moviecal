@@ -29,6 +29,17 @@ Use Supabase auth for all interactive user-scoped endpoints. Frontend code may u
 - `/watchlist/invite/[token]` is the authenticated invitation preview/acceptance page; it shows minimal shared-list context before the recipient joins.
 - Shared-list rename, list deletion, and editor self-leave are planned, not current endpoints. The additive `v1` API currently serves only personal watchlist operations; its shared-list expansion is tracked separately in Linear and documented in `docs/api/v1-contract.md` when shipped.
 
+## Shared-list deletion: one domain operation, two future transports
+
+Permanent owner-only deletion of a shared list already exists as a **shared-domain operation**, `deleteSharedWatchlist` in `src/lib/watchlist/shared.ts` (MOV-373). No route exposes it yet. The web cookie-session route and the native bearer route are expected to call it and map its errors, rather than owning any part of the authorization or cascade contract:
+
+- Success removes the list, its items, its memberships, and its stored invite-token hashes together, and returns the deleted list's summary so a transport can confirm what it removed.
+- An accepted editor, an outsider, and any attempt aimed at a personal list all raise `WatchlistAccessError` → `403` with the fixed message `Watchlist access denied.` — no name, member, or item metadata.
+- An unknown, already-deleted, or database-filtered target raises `WatchlistNotFoundError` → `404` with `Watchlist not found.` That is also the documented response to a **repeated** delete of the same list.
+- `handleDomainError` in `src/lib/api/response.ts` already produces those statuses, so a transport needs no bespoke error mapping.
+
+Former members lose access as a consequence of the cascade, and private calendar feeds reflect it on their next request — see `docs/technical/calendar-feed-design.md`.
+
 ## Server-only/protected endpoints
 
 - `GET /api/cron/refresh-releases` — protected Vercel Cron entrypoint for scheduled release-date refresh. It must be callable only by the configured scheduler or trusted server-side process.

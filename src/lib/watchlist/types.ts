@@ -86,6 +86,16 @@ export interface CreatedWatchlistInviteLinkResult {
   watchlist: WatchlistSummary;
 }
 
+/**
+ * Result of a permanent owner-only shared-watchlist deletion. `watchlist` is
+ * the summary as it stood immediately before the delete, so a consumer can
+ * confirm what it removed without reading a row that no longer exists.
+ */
+export interface DeletedSharedWatchlistResult {
+  deleted: true;
+  watchlist: WatchlistSummary;
+}
+
 export interface WatchlistRepository {
   createWatchlist(args: {
     kind: WatchlistKind;
@@ -96,6 +106,17 @@ export interface WatchlistRepository {
     watchlistId: string,
     itemId: string,
   ): Promise<boolean>;
+  /**
+   * Permanently deletes one shared watchlist together with its items,
+   * memberships, and invite-link hashes, as a single atomic persistence
+   * operation. Resolves `false` — never throws — when no row matched the
+   * owner-and-shared constraint, which is also how an already-deleted list and
+   * a list the caller does not own are reported.
+   */
+  deleteSharedWatchlistOwnedBy(args: {
+    ownerUserId: string;
+    watchlistId: string;
+  }): Promise<boolean>;
   ensurePersonalWatchlist(userId: string): Promise<WatchlistSummary>;
   acceptInviteMembership(args: {
     acceptedAt: string;

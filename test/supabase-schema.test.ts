@@ -16,6 +16,12 @@ const ownershipInvariantsSql = readFileSync(
   'supabase/migrations/20260924000000_mov_330_watchlist_ownership_invariants.sql',
   'utf8',
 );
+const roleGrantsSql = [
+  'supabase/migrations/20260709000002_issue_138_authenticated_role_grants.sql',
+  'supabase/migrations/20260710000000_issue_200_ensure_authenticated_grants.sql',
+]
+  .map((path) => readFileSync(path, 'utf8'))
+  .join('\n');
 
 describe('Supabase database types', () => {
   it('declares the personal and shared watchlist tables in the Database shape', () => {
@@ -211,6 +217,69 @@ describe('Watchlist ownership invariants migration (MOV-330)', () => {
     expect(body).toContain('actor_user_id is not null and actor_user_id <> target_user_id');
     expect(body).toContain(
       'ensure_personal_watchlist_for_user may only be called for the authenticated user',
+    );
+  });
+});
+
+/**
+ * MOV-373 — the persistence half of the shared-list deletion contract. The
+ * domain operation issues a single delete against `watchlists` and relies
+ * entirely on these schema facts for atomicity and authorization, so a later
+ * migration that dropped one of them would silently leave orphaned items,
+ * memberships, or still-resolvable invite hashes behind.
+ */
+describe('shared-list deletion persistence contract (MOV-373)', () => {
+  it.each(['watchlist_memberships', 'watchlist_invite_links'])(
+    'cascades public.%s from its watchlist',
+    (table) => {
+      const createIndex = migrationSql.indexOf(
+        `create table if not exists public.${table}`,
+      );
+      const definition = migrationSql.slice(
+        createIndex,
+        migrationSql.indexOf(');', createIndex),
+      );
+
+      expect(createIndex).toBeGreaterThan(-1);
+      expect(definition).toContain(
+        'watchlist_id uuid not null references public.watchlists (id) on delete cascade',
+      );
+    },
+  );
+
+  it('cascades public.watchlist_items from its watchlist', () => {
+    expect(migrationSql).toContain(
+      'add column if not exists watchlist_id uuid references public.watchlists (id) on delete cascade',
+    );
+  });
+
+  it('permits an authenticated delete only for a shared list the caller owns', () => {
+    const policyIndex = ownershipInvariantsSql.indexOf(
+      'create policy "owners can delete shared watchlists"',
+    );
+    const policy = ownershipInvariantsSql.slice(
+      policyIndex,
+      ownershipInvariantsSql.indexOf(';', policyIndex),
+    );
+
+    expect(policyIndex).toBeGreaterThan(-1);
+    expect(policy).toContain('for delete');
+    expect(policy).toContain('to authenticated');
+    expect(policy).toContain("kind = 'shared'");
+    expect(policy).toContain('public.is_watchlist_owner(id, auth.uid())');
+  });
+
+  it('keeps delete privilege on watchlists after MOV-330 narrowed update to name', () => {
+    expect(roleGrantsSql).toContain(
+      'grant select, insert, update, delete on table public.watchlists to authenticated;',
+    );
+    // MOV-330 revoked UPDATE and re-granted only `update (name)`. DELETE must
+    // stay granted or the owner-only deletion path could never run at all.
+    expect(ownershipInvariantsSql).toContain(
+      'revoke update on table public.watchlists from authenticated;',
+    );
+    expect(ownershipInvariantsSql).not.toContain(
+      'revoke delete on table public.watchlists',
     );
   });
 });

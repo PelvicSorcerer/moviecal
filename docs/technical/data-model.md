@@ -71,6 +71,14 @@ Ownership invariants (enforced in the database by `20260924000000_mov_330_watchl
 - `ensure_personal_watchlist_for_user()` refuses an authenticated caller that passes anyone else's id. A null `auth.uid()` — service role, cron, migrations, psql — remains the trusted server-only path.
 - The authenticated RPC helpers `is_watchlist_owner()`, `is_active_watchlist_member()`, and `can_edit_watchlist()` bind their user argument to `auth.uid()`, so callers cannot probe another user's ownership or membership.
 - `watchlist_invite_links` stores hashed invite tokens, not raw tokens. Invite links are bearer credentials and must not expose broader user or watchlist discovery.
+
+Shared-list deletion persistence contract (relied on by `deleteSharedWatchlist`, MOV-373):
+
+- Permanent deletion of a shared list is a **single** `DELETE` against `watchlists`. `watchlist_items`, `watchlist_memberships`, and `watchlist_invite_links` all reference `watchlists (id) ON DELETE CASCADE`, so items, memberships, and stored invite-token hashes are removed in the same transaction. There is no application-level multi-step teardown to leave half-finished, and no orphaned access can survive a partial failure.
+- The delete runs through the **RLS-scoped user client**, never the service-role client, so the `owners can delete shared watchlists` policy is an independent second refusal behind the domain's ownership check. `authenticated` keeps its `DELETE` privilege on `watchlists`; MOV-330 narrowed only `UPDATE`.
+- The statement additionally pins `owner_user_id` and `kind = 'shared'`, so it stays owner-scoped and personal-list-safe even when the repository was built with an elevated client — the calendar-feed and cron paths do exactly that for their read-only work.
+- A cascade is a referential action, not a user statement: it is not filtered by the child tables' RLS policies, and the membership-invariant trigger recognises it because the parent `watchlists` row is already gone from the transaction's snapshot when the child trigger fires. That is the same discriminator the account-deletion case uses.
+- A delete that matches no row (wrong owner, personal list, already deleted) affects nothing and is reported to the caller as not-found, never as a second success.
 - `watchlist_items.watchlist_id` is the real ownership link. `watchlist_items.user_id` remains as a temporary compatibility bridge for the current personal-watchlist app path and is null for shared rows.
 - Existing personal watchlist rows migrate by creating one owned personal watchlist per current user row set, then backfilling `watchlist_items.watchlist_id` without changing saved movies.
 - Store `release_date` on `movies` to make feed generation fast.

@@ -35,6 +35,7 @@ function makeChain(result: { data: unknown; error: PostgrestError | null }) {
     select: vi.fn().mockReturnThis(),
     insert: vi.fn().mockReturnThis(),
     update: vi.fn().mockReturnThis(),
+    delete: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     not: vi.fn().mockReturnThis(),
     is: vi.fn().mockReturnThis(),
@@ -205,6 +206,84 @@ describe('createWatchlistsAggregate — getWatchlistAccess', () => {
     await expect(getWatchlistAccess('user-1', 'watchlist-1')).rejects.toThrow(
       WatchlistDataError,
     );
+    consoleSpy.mockRestore();
+  });
+});
+
+describe('createWatchlistsAggregate — deleteSharedWatchlistOwnedBy (MOV-373)', () => {
+  function buildAggregate(result: { data: unknown; error: PostgrestError | null }) {
+    const chain = makeChain(result);
+    const userFrom = vi.fn(() => chain);
+    const adminFrom = vi.fn(() => makeChain({ data: null, error: null }));
+
+    return {
+      adminFrom,
+      chain,
+      userFrom,
+      aggregate: createWatchlistsAggregate({
+        adminClient: { from: adminFrom } as unknown as ServerSupabaseClient,
+        userClient: { from: userFrom } as unknown as ServerSupabaseClient,
+      }),
+    };
+  }
+
+  it('deletes through the RLS-scoped user client, never the service-role client', async () => {
+    const { adminFrom, userFrom, aggregate } = buildAggregate({
+      data: { id: 'watchlist-1' },
+      error: null,
+    });
+
+    await expect(
+      aggregate.deleteSharedWatchlistOwnedBy({
+        ownerUserId: 'user-1',
+        watchlistId: 'watchlist-1',
+      }),
+    ).resolves.toBe(true);
+
+    expect(userFrom).toHaveBeenCalledWith('watchlists');
+    expect(adminFrom).not.toHaveBeenCalled();
+  });
+
+  it('constrains the statement to the actor-owned shared row', async () => {
+    const { chain, aggregate } = buildAggregate({
+      data: { id: 'watchlist-1' },
+      error: null,
+    });
+
+    await aggregate.deleteSharedWatchlistOwnedBy({
+      ownerUserId: 'user-1',
+      watchlistId: 'watchlist-1',
+    });
+
+    expect(chain.delete).toHaveBeenCalledTimes(1);
+    expect(chain.eq.mock.calls).toEqual([
+      ['id', 'watchlist-1'],
+      ['owner_user_id', 'user-1'],
+      ['kind', 'shared'],
+    ]);
+  });
+
+  it('reports false when no row matched, without throwing', async () => {
+    const { aggregate } = buildAggregate({ data: null, error: null });
+
+    await expect(
+      aggregate.deleteSharedWatchlistOwnedBy({
+        ownerUserId: 'user-2',
+        watchlistId: 'watchlist-1',
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it('throws WatchlistDataError on a PostgrestError', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { aggregate } = buildAggregate({ data: null, error: SUPABASE_ERROR });
+
+    await expect(
+      aggregate.deleteSharedWatchlistOwnedBy({
+        ownerUserId: 'user-1',
+        watchlistId: 'watchlist-1',
+      }),
+    ).rejects.toThrow(WatchlistDataError);
     consoleSpy.mockRestore();
   });
 });
