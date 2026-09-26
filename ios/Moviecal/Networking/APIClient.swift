@@ -44,6 +44,71 @@ public final class APIClient {
         try await sendExpectingNoContent(request)
     }
 
+    // MARK: - Personal and shared lists
+
+    /// Every list the caller may read, following `nextCursor` to the end.
+    /// Inconsistent or duplicate entries fail the whole read rather than
+    /// showing data the contract does not allow.
+    public func fetchWatchlists() async throws -> [WatchlistSummary] {
+        var summaries: [WatchlistSummary] = []
+        var cursor: String?
+        for _ in 0..<Self.maxPages {
+            let request = try await makeRequest(
+                path: "/api/v1/watchlists",
+                method: "GET",
+                queryItems: cursor.map { [URLQueryItem(name: "cursor", value: $0)] }
+            )
+            let body: WatchlistSummaryPage = try await send(request)
+            summaries.append(contentsOf: body.watchlists)
+            guard let next = body.page.nextCursor else {
+                let ids = Set(summaries.map(\.id))
+                guard summaries.allSatisfy(\.isConsistent), ids.count == summaries.count else {
+                    throw APIClientError.decodingFailed(message: "Invalid watchlist summaries.")
+                }
+                return summaries
+            }
+            guard next != cursor else { break }
+            cursor = next
+        }
+        throw APIClientError.decodingFailed(message: "Watchlist pagination did not terminate.")
+    }
+
+    /// The list `watchlistId` and all of its items. A `404` means the list
+    /// does not exist or access was lost; the two are indistinguishable.
+    public func fetchWatchlistDetail(watchlistId: String) async throws -> WatchlistDetail {
+        // `appendingPathComponent` percent-encodes everything but `/`, which
+        // would let an id escape its path segment.
+        guard !watchlistId.isEmpty, !watchlistId.contains("/") else {
+            throw APIClientError.invalidRequest(message: "Invalid watchlist id.")
+        }
+
+        var watchlist: WatchlistSummary?
+        var items: [WatchlistItem] = []
+        var cursor: String?
+        for _ in 0..<Self.maxPages {
+            let request = try await makeRequest(
+                path: "/api/v1/watchlists/\(watchlistId)",
+                method: "GET",
+                queryItems: cursor.map { [URLQueryItem(name: "cursor", value: $0)] }
+            )
+            let body: WatchlistDetailPage = try await send(request)
+            guard body.watchlist.id == watchlistId, body.watchlist.isConsistent else {
+                throw APIClientError.decodingFailed(message: "Invalid watchlist detail.")
+            }
+            watchlist = body.watchlist
+            items.append(contentsOf: body.items)
+            guard let next = body.page.nextCursor else {
+                guard let watchlist else { break }
+                return WatchlistDetail(watchlist: watchlist, items: items)
+            }
+            guard next != cursor else { break }
+            cursor = next
+        }
+        throw APIClientError.decodingFailed(message: "Watchlist pagination did not terminate.")
+    }
+
+    private static let maxPages = 50
+
     // MARK: - Movie search
 
     public func searchMovies(query: String) async throws -> [MovieSearchResult] {

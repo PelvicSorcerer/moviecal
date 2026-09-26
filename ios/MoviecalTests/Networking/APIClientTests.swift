@@ -358,6 +358,92 @@ final class APIClientTests: XCTestCase {
     }
 }
 
+extension APIClientTests {
+    // MARK: - Personal and shared lists
+
+    func testFetchWatchlistsFollowsPaginationAndSendsBearerToken() async throws {
+        var requests: [URLRequest] = []
+        MockURLProtocol.requestHandler = { request in
+            requests.append(request)
+            let hasCursor = request.url?.query?.contains("cursor=page-2") == true
+            let body = hasCursor
+                ? WatchlistsFixtures.listBody([WatchlistsFixtures.summaryJSON("b", kind: "shared", role: "editor", ownerUserId: "user-2")])
+                : WatchlistsFixtures.listBody([WatchlistsFixtures.summaryJSON("a", kind: "personal", role: "owner")], nextCursor: "page-2")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (response, body)
+        }
+
+        let summaries = try await WatchlistsFixtures.makeClient().fetchWatchlists()
+
+        XCTAssertEqual(summaries.map(\.id), ["a", "b"])
+        XCTAssertEqual(summaries[1].role, .editor)
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[0].url?.path, "/api/v1/watchlists")
+        XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer test-access-token")
+    }
+
+    func testFetchWatchlistsRejectsUnknownRole() async {
+        WatchlistsFixtures.respond(body: WatchlistsFixtures.listBody([
+            WatchlistsFixtures.summaryJSON("a", kind: "shared", role: "viewer"),
+        ]))
+        do {
+            _ = try await WatchlistsFixtures.makeClient().fetchWatchlists()
+            XCTFail("Expected a decoding failure")
+        } catch APIClientError.decodingFailed {
+            // expected
+        } catch {
+            XCTFail("Unexpected error \(error)")
+        }
+    }
+
+    func testFetchWatchlistsRejectsDuplicateIds() async {
+        let personal = WatchlistsFixtures.summaryJSON("a", kind: "personal", role: "owner")
+        WatchlistsFixtures.respond(body: WatchlistsFixtures.listBody([personal, personal]))
+        do {
+            _ = try await WatchlistsFixtures.makeClient().fetchWatchlists()
+            XCTFail("Expected a decoding failure")
+        } catch APIClientError.decodingFailed {
+            // expected
+        } catch {
+            XCTFail("Unexpected error \(error)")
+        }
+    }
+
+    func testFetchWatchlistDetailDecodesAndMapsNotFound() async throws {
+        let summary = WatchlistsFixtures.summaryJSON("list-1", kind: "shared", role: "owner")
+        var capturedPath: String?
+        MockURLProtocol.requestHandler = { request in
+            capturedPath = request.url?.path
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (response, WatchlistsFixtures.detailBody(summary, items: [WatchlistsFixtures.itemJSON]))
+        }
+
+        let detail = try await WatchlistsFixtures.makeClient().fetchWatchlistDetail(watchlistId: "list-1")
+        XCTAssertEqual(capturedPath, "/api/v1/watchlists/list-1")
+        XCTAssertEqual(detail.watchlist.role, .owner)
+        XCTAssertEqual(detail.items.count, 1)
+
+        WatchlistsFixtures.respond(status: 404, body: #"{"error":"Watchlist not found."}"#.data(using: .utf8)!)
+        do {
+            _ = try await WatchlistsFixtures.makeClient().fetchWatchlistDetail(watchlistId: "list-1")
+            XCTFail("Expected notFound")
+        } catch APIClientError.notFound {
+            // expected
+        }
+    }
+
+    func testFetchWatchlistDetailRejectsPathEscapingId() async {
+        do {
+            _ = try await WatchlistsFixtures.makeClient().fetchWatchlistDetail(watchlistId: "a/b")
+            XCTFail("Expected invalidRequest")
+        } catch APIClientError.invalidRequest {
+            // expected
+        } catch {
+            XCTFail("Unexpected error \(error)")
+        }
+    }
+}
+
 private extension URLRequest {
     /// `httpBody` is nil for requests replayed through `URLProtocol`; the body
     /// is available on `httpBodyStream` instead.
