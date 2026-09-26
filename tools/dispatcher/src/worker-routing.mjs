@@ -117,6 +117,14 @@ export function resolveRouting(issue) {
   return { worker, model, ok: true, reason: null, upgradeConditions };
 }
 
+/** Preserve a worker:any attempt's provider binding; fresh claims retain Claude. */
+export function resolveDispatchWorker(issue, { boundWorker = null } = {}) {
+  const routing = resolveRouting(issue);
+  const isAny = parseRoutingLabels(issue.labels || []).worker === "any";
+  const bound = routing.ok && isAny && (boundWorker === "claude" || boundWorker === "codex");
+  return { ...routing, worker: bound ? boundWorker : routing.worker, isAny, available: true, bound };
+}
+
 // Both workers read their brief from stdin rather than a file path argument
 // (worker-spawn.mjs pipes it), since a stdin brief works identically whether
 // the worker binary reads from a real TTY-less pipe or a piped-in file.

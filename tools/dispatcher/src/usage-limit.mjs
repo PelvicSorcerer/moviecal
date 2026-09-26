@@ -320,8 +320,17 @@ export class UsageLimitStore extends JsonStateStore {
    * it promises a bounded resume. Omitting it (the clean-worktree path, and
    * every escalation) stores `resume: null`, which is also what clears a
    * previously-scheduled plan.
+   *
+   * `worker` (MOV-360) is the worker binary this attempt actually ran under.
+   * For a pinned issue it is redundant with `resolveRouting()`'s own answer,
+   * but for a `worker:any` issue it is the durable record of *which* worker a
+   * fresh claim picked -- so its scheduled retry or MOV-205 resume keeps using
+   * that same worker rather than being silently re-picked. Once a worker binds
+   * an issue it is never overwritten by a later `record()` call that omits it
+   * (a caller re-recording the same in-flight attempt should not have to keep
+   * repeating the binding); it is only ever cleared by `clear()`.
    */
-  record(issueId, { retryAt = null, evidence = null, consecutive, resume = null, now = new Date() } = {}) {
+  record(issueId, { retryAt = null, evidence = null, consecutive, resume = null, worker, now = new Date() } = {}) {
     return this.update((state) => {
       const previous = state[issueId];
       const record = {
@@ -329,6 +338,7 @@ export class UsageLimitStore extends JsonStateStore {
         consecutive: consecutive ?? (previous?.consecutive || 0) + 1,
         retryAt,
         evidence,
+        worker: worker !== undefined ? worker : previous?.worker ?? null,
         resume: resume ? { ...resume, scheduledAt: now.toISOString(), consumedAt: null } : null,
         observedAt: now.toISOString(),
       };

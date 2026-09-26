@@ -355,6 +355,10 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       // automatic-repair budget across a restart.
       "repairLedgerStatePath",
       "usageLimitStatePath",
+      // MOV-360: the worker-quota-pool cooldown record, not a credential —
+      // it mirrors usageLimitStatePath's own "dispatcher state, not a
+      // credential" reasoning, just scoped to one worker instead of one issue.
+      "workerCooldownStatePath",
       "workerUsageStatePath",
       "worktreesStatePath",
     ]);
@@ -394,6 +398,18 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
     expect(body).toMatch(/usageLimitStore:\s*new UsageLimitStore\(usageLimitStatePath\(\)\)/);
   });
 
+  // MOV-360: without this wiring line, ctx.workerCooldownStore is undefined and
+  // run-loop.mjs falls back to its no-op default, which reports every worker
+  // permanently open -- the whole worker-wide cooldown gate this issue exists
+  // to add would silently never engage in real dispatch, even though every
+  // unit test that wires a fake store directly still passes.
+  it("wires the durable worker-quota-pool cooldown store into every real run context", () => {
+    const body = bodyOf("buildRunContext", runContextSource);
+    expect(runContextSource).toMatch(/import \{ WorkerCooldownStore \} from "\.\/worker-cooldown\.mjs"/);
+    expect(runContextSource).toMatch(/workerCooldownStatePath/);
+    expect(body).toMatch(/workerCooldownStore:\s*new WorkerCooldownStore\(workerCooldownStatePath\(\)\)/);
+  });
+
   // MOV-205 gave dry-run a `usage limit:` line so a resume-pending issue is
   // diagnosable rather than looking like an ordinary worktree collision. That
   // is a *read*; the command's "no worktree, branch, or Linear state was
@@ -415,6 +431,19 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       /\.markStatus\s*\(/,
       /usageLimits\.record\s*\(/,
     ]) {
+      expect(mutating.test(body), `cmdDryRun calls ${mutating}`).toBe(false);
+    }
+  });
+
+  // MOV-360: dry-run must report which worker each issue would actually use
+  // -- including a quota-aware worker:any pick -- and each worker's cooldown
+  // state, without ever consuming a probe or writing to the durable store.
+  it("dry-run reports worker quota-pool cooldown state without recording or clearing anything", () => {
+    const body = bodyOf("cmdDryRun");
+    expect(body).toMatch(/new WorkerCooldownStore\(workerCooldownStatePath\(\)\)/);
+    expect(body).toMatch(/cooldowns\.state\(/);
+    expect(body).toMatch(/resolveDispatchWorker\(/);
+    for (const mutating of [/cooldowns\.record\s*\(/, /cooldowns\.clear\s*\(/]) {
       expect(mutating.test(body), `cmdDryRun calls ${mutating}`).toBe(false);
     }
   });

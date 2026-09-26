@@ -232,6 +232,46 @@ describe("UsageLimitStore", () => {
     expect(() => store.clear("MOV-404")).not.toThrow();
   });
 
+  // MOV-360: a `worker:any` issue's scheduled retry (or MOV-205 resume) must
+  // keep using the worker its first attempt actually ran under, never a
+  // silently re-picked one -- this is the durable half of that binding.
+  describe("worker binding (MOV-360)", () => {
+    it("persists the worker an attempt ran under", () => {
+      store.record("MOV-1", { retryAt: "2026-09-14T17:00:00.000Z", worker: "codex", now: NOW });
+      expect(store.get("MOV-1")).toMatchObject({ worker: "codex" });
+    });
+
+    it("preserves a previously-bound worker across a later record() call that omits it", () => {
+      store.record("MOV-1", { retryAt: "2026-09-14T17:00:00.000Z", worker: "codex", now: NOW });
+      store.record("MOV-1", { retryAt: null, consecutive: 2, now: NOW });
+      expect(store.get("MOV-1")).toMatchObject({ worker: "codex", consecutive: 2 });
+    });
+
+    it("lets a later record() call explicitly change the binding", () => {
+      store.record("MOV-1", { retryAt: "2026-09-14T17:00:00.000Z", worker: "codex", now: NOW });
+      store.record("MOV-1", { retryAt: null, worker: "claude", now: NOW });
+      expect(store.get("MOV-1").worker).toBe("claude");
+    });
+
+    it("defaults to no binding when never recorded", () => {
+      store.record("MOV-1", { retryAt: null, now: NOW });
+      expect(store.get("MOV-1").worker).toBeNull();
+    });
+
+    it("drops the binding on clear(), same as every other field", () => {
+      store.record("MOV-1", { retryAt: "2026-09-14T17:00:00.000Z", worker: "codex", now: NOW });
+      store.clear("MOV-1");
+      expect(store.get("MOV-1")).toBeNull();
+      store.record("MOV-1", { retryAt: null, now: NOW });
+      expect(store.get("MOV-1").worker).toBeNull();
+    });
+
+    it("survives a restart", () => {
+      store.record("MOV-1", { retryAt: "2026-09-14T17:00:00.000Z", worker: "codex", now: NOW });
+      expect(new UsageLimitStore(statePath).get("MOV-1").worker).toBe("codex");
+    });
+  });
+
   describe("retained-worktree resume plan (MOV-205)", () => {
     const PLAN = {
       worktreePath: "/worktrees/moviecal/MOV-1-thing",

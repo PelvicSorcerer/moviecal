@@ -9,6 +9,7 @@ import { AgentSessionBridge } from "../src/agent-session.mjs";
 import { NESTED_SANDBOX_CRASH } from "../src/failure-classification.mjs";
 import { CREDENTIAL_FAILURE } from "../src/credential-failure.mjs";
 import { UsageLimitStore } from "../src/usage-limit.mjs";
+import { worktreeName } from "../src/preflight.mjs";
 import { captureWorkerUsage, WorkerUsageStore } from "../src/worker-usage.mjs";
 
 const STATE_IDS = {
@@ -2579,6 +2580,367 @@ describe("runOnce", () => {
         expect(usageLimitStore.resumption("MOV-1", new Date("2026-09-14T18:00:00Z"))).toBeNull();
       });
     });
+  });
+});
+
+describe("worker-quota-pool cooldown (MOV-360)", () => {
+  const NOW = new Date("2026-09-14T12:00:00.000Z");
+  const USAGE_LIMIT_LOG = "Claude AI usage limit reached · resets 2026-09-14T17:00:00Z\n";
+
+  /** Minimal in-memory UsageLimitStore, including MOV-360's `worker` binding field. */
+  function fakeUsageLimitStore(initial = {}) {
+    const state = { ...initial };
+    return {
+      state,
+      cleared: [],
+      get: (id) => state[id] || null,
+      record(id, { retryAt, evidence, consecutive, worker, resume = null, now = new Date() } = {}) {
+        const previous = state[id];
+        state[id] = {
+          issue: id,
+          retryAt,
+          evidence,
+          consecutive: consecutive ?? (previous?.consecutive || 0) + 1,
+          worker: worker !== undefined ? worker : previous?.worker ?? null,
+          resume: resume ? { ...resume, consumedAt: null } : null,
+        };
+        return state[id];
+      },
+      clear(id) {
+        this.cleared.push(id);
+        delete state[id];
+      },
+      deferral(id, now) {
+        const record = state[id];
+        if (!record?.retryAt || now >= new Date(record.retryAt)) {
+          return { deferred: false, until: record?.retryAt ?? null, reason: null };
+        }
+        return { deferred: true, until: record.retryAt, reason: `awaiting the provider usage-limit reset at ${record.retryAt}` };
+      },
+      resumption(id, now) {
+        const record = state[id];
+        const plan = record?.resume;
+        if (!plan || plan.consumedAt || !record.retryAt) return null;
+        if (now < new Date(record.retryAt)) return null;
+        return { ...plan, issue: id, retryAt: record.retryAt, consecutive: record.consecutive || 0 };
+      },
+      consumeResume(id, { now }) {
+        const record = state[id];
+        if (!record?.resume || record.resume.consumedAt) return null;
+        record.resume = { ...record.resume, consumedAt: now.toISOString() };
+        record.retryAt = null;
+        return record;
+      },
+    };
+  }
+
+  /** Minimal in-memory WorkerCooldownStore with the same surface run-loop.mjs uses. */
+  function fakeWorkerCooldownStore(initial = {}) {
+    const records = { ...initial };
+    return {
+      records,
+      recordCalls: [],
+      clearCalls: [],
+      get(worker) {
+        return records[worker] || null;
+      },
+      record(worker, { resetAt, evidence = null, now = new Date() } = {}) {
+        records[worker] = { worker, resetAt, evidence, updatedAt: now.toISOString() };
+        this.recordCalls.push({ worker, resetAt, evidence });
+        return records[worker];
+      },
+      clear(worker) {
+        this.clearCalls.push(worker);
+        delete records[worker];
+      },
+      state(worker, now = new Date()) {
+        const record = records[worker];
+        if (!record?.resetAt) return { worker, cooling: false, probeOwed: false, resetAt: null, evidence: null };
+        const reset = new Date(record.resetAt);
+        if (now.getTime() < reset.getTime()) {
+          return { worker, cooling: true, probeOwed: false, resetAt: record.resetAt, evidence: record.evidence };
+        }
+        return { worker, cooling: false, probeOwed: true, resetAt: record.resetAt, evidence: record.evidence };
+      },
+    };
+  }
+
+  let tmpLogRoot;
+  beforeEach(() => {
+    tmpLogRoot = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-cooldown-run-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpLogRoot, { recursive: true, force: true });
+  });
+
+  function withLog(contents, name = worktreeName(ISSUE.identifier, ISSUE.title)) {
+    const logDir = path.join(tmpLogRoot, name);
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.writeFileSync(path.join(logDir, "stdout.log"), contents);
+    return logDir;
+  }
+
+  it("holds a claude-pinned issue back silently while claude is cooling, before preflight or the worktree manager are ever touched", async () => {
+    const workerCooldownStore = fakeWorkerCooldownStore({
+      claude: { worker: "claude", resetAt: "2026-09-14T17:00:00.000Z", evidence: "5-hour session limit" },
+    });
+    const ctx = baseCtx({ workerCooldownStore, now: () => NOW });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result).toMatchObject({ outcome: "deferred-worker-cooldown", retryAt: "2026-09-14T17:00:00.000Z" });
+    expect(ctx.worktreeManager.createCalls).toEqual([]);
+    expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+    expect(ctx.linearClient.calls).toEqual([]);
+  });
+
+  it("lets a codex-pinned issue dispatch normally during a claude cooldown", async () => {
+    const workerCooldownStore = fakeWorkerCooldownStore({
+      claude: { worker: "claude", resetAt: "2026-09-14T17:00:00.000Z" },
+    });
+    const ctx = baseCtx({ workerCooldownStore, now: () => NOW });
+    const issue = { ...ISSUE, labels: [...ISSUE.labels, "worker:codex"] };
+
+    const [result] = await runOnce([issue], ctx);
+
+    expect(result.outcome).toBe("in-review");
+    expect(ctx.worktreeManager.createCalls).toHaveLength(1);
+    expect(ctx.worktreeManager.createCalls[0]).toMatchObject({ worker: "codex" });
+  });
+
+  it("lets a claude-pinned issue dispatch normally during a codex cooldown (the symmetric case)", async () => {
+    const workerCooldownStore = fakeWorkerCooldownStore({
+      codex: { worker: "codex", resetAt: "2026-09-14T17:00:00.000Z" },
+    });
+    const ctx = baseCtx({ workerCooldownStore, now: () => NOW });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result.outcome).toBe("in-review");
+    expect(ctx.worktreeManager.createCalls[0]).toMatchObject({ worker: "claude" });
+  });
+
+  it("defers a fresh worker:any issue while claude is cooling without fallback", async () => {
+    const workerCooldownStore = fakeWorkerCooldownStore({
+      claude: { worker: "claude", resetAt: "2026-09-14T17:00:00.000Z" },
+    });
+    const ctx = baseCtx({ workerCooldownStore, now: () => NOW });
+    const issue = { ...ISSUE, labels: [...ISSUE.labels, "worker:any"] };
+
+    const [result] = await runOnce([issue], ctx);
+
+    expect(result.outcome).toBe("deferred-worker-cooldown");
+    expect(ctx.worktreeManager.createCalls).toEqual([]);
+    expect(ctx.linearClient.calls).toEqual([]);
+  });
+
+  it("leaves a fresh worker:any issue queued without a claim when both worker pools are cooling", async () => {
+    const workerCooldownStore = fakeWorkerCooldownStore({
+      claude: { worker: "claude", resetAt: "2026-09-14T17:00:00.000Z" },
+      codex: { worker: "codex", resetAt: "2026-09-14T18:00:00.000Z" },
+    });
+    const ctx = baseCtx({ workerCooldownStore, now: () => NOW });
+    const issue = { ...ISSUE, labels: [...ISSUE.labels, "worker:any"] };
+
+    const [result] = await runOnce([issue], ctx);
+
+    expect(result.outcome).toBe("deferred-worker-cooldown");
+    expect(ctx.worktreeManager.createCalls).toEqual([]);
+    expect(ctx.linearClient.calls).toEqual([]);
+  });
+
+  it("keeps a worker:any issue bound to the worker its earlier attempt used, even though the other worker is fully open", async () => {
+    const usageLimitStore = fakeUsageLimitStore({
+      "MOV-1": { issue: "MOV-1", worker: "codex", consecutive: 1, retryAt: null },
+    });
+    const workerCooldownStore = fakeWorkerCooldownStore(); // both open
+    const ctx = baseCtx({ usageLimitStore, workerCooldownStore, now: () => NOW });
+    const issue = { ...ISSUE, labels: [...ISSUE.labels, "worker:any"] };
+
+    const [result] = await runOnce([issue], ctx);
+
+    expect(result.outcome).toBe("in-review");
+    expect(ctx.worktreeManager.createCalls[0]).toMatchObject({ worker: "codex" });
+  });
+
+  it("admits exactly one probe after reset, preferring a due per-issue retry over a fresh worker:any claim listed earlier in the batch", async () => {
+    const PAST_RESET = "2026-09-14T11:00:00.000Z"; // already before NOW -- reset has passed
+    const usageLimitStore = fakeUsageLimitStore({
+      "MOV-1": { issue: "MOV-1", worker: "claude", consecutive: 1, retryAt: PAST_RESET },
+    });
+    const workerCooldownStore = fakeWorkerCooldownStore({ claude: { worker: "claude", resetAt: PAST_RESET } });
+    const ctx = baseCtx({ usageLimitStore, workerCooldownStore, now: () => NOW });
+    const freshIssue = {
+      ...ISSUE,
+      id: "id-fresh",
+      identifier: "MOV-FRESH",
+      title: "A fresh any issue",
+      labels: [...ISSUE.labels, "worker:any"],
+    };
+
+    const [freshResult, dueResult] = await runOnce([freshIssue, ISSUE], ctx);
+
+    expect(dueResult).toMatchObject({ issue: "MOV-1", outcome: "in-review" });
+    expect(freshResult).toMatchObject({ issue: "MOV-FRESH", outcome: "deferred-worker-cooldown" });
+    expect(freshResult.reason).toMatch(/single post-reset probe/);
+    expect(ctx.worktreeManager.createCalls.map((c) => c.id)).toEqual(["MOV-1"]);
+  });
+
+  it("does not give an undelegated due retry the provider probe", async () => {
+    const pastReset = "2026-09-14T11:00:00.000Z";
+    const withdrawn = { ...ISSUE, id: "withdrawn", identifier: "MOV-WITHDRAWN", delegate: null };
+    const ctx = baseCtx({
+      now: () => NOW,
+      usageLimitStore: fakeUsageLimitStore({ "MOV-WITHDRAWN": { worker: "claude", retryAt: pastReset } }),
+      workerCooldownStore: fakeWorkerCooldownStore({ claude: { resetAt: pastReset } }),
+    });
+    const [, eligible] = await runOnce([withdrawn, ISSUE], ctx);
+    expect(eligible.outcome).toBe("in-review");
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not spend a host-wide breaker probe on a quota-deferred issue", async () => {
+    const open = new Set([CREDENTIAL_FAILURE]);
+    const breaker = { isOpen: (name) => open.has(name), trip: (name) => open.add(name), clear: (name) => open.delete(name) };
+    const ctx = baseCtx({
+      now: () => NOW, circuitBreaker: breaker,
+      workerCooldownStore: fakeWorkerCooldownStore({ claude: { resetAt: "2026-09-14T17:00:00.000Z" } }),
+    });
+    const codex = { ...ISSUE, id: "codex-probe", identifier: "MOV-CODEX-PROBE", labels: [...ISSUE.labels, "worker:codex"] };
+    const [held, probe] = await runOnce([ISSUE, codex], ctx);
+    expect(held.outcome).toBe("deferred-worker-cooldown");
+    expect(probe.outcome).toBe("in-review");
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the worker cooldown once the post-reset probe completes cleanly", async () => {
+    const PAST_RESET = "2026-09-14T11:00:00.000Z";
+    const workerCooldownStore = fakeWorkerCooldownStore({ claude: { worker: "claude", resetAt: PAST_RESET } });
+    const ctx = baseCtx({ workerCooldownStore, now: () => NOW });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result.outcome).toBe("in-review");
+    expect(workerCooldownStore.clearCalls).toContain("claude");
+    expect(workerCooldownStore.get("claude")).toBeNull();
+  });
+
+  it("refreshes the worker cooldown to a newly reported reset even though the probing issue itself escalates on a second consecutive limit", async () => {
+    const PAST_RESET = "2026-09-14T11:00:00.000Z";
+    const NEW_RESET_LOG = "Claude AI usage limit reached · resets 2026-09-14T20:00:00Z\n";
+    const usageLimitStore = fakeUsageLimitStore({
+      "MOV-1": { issue: "MOV-1", worker: "claude", consecutive: 1, retryAt: PAST_RESET },
+    });
+    const workerCooldownStore = fakeWorkerCooldownStore({ claude: { worker: "claude", resetAt: PAST_RESET } });
+    const logDir = withLog(NEW_RESET_LOG);
+    const ctx = baseCtx({
+      logRoot: tmpLogRoot,
+      usageLimitStore,
+      workerCooldownStore,
+      now: () => NOW,
+      spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+    });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result.outcome).toBe("worker-failed");
+    expect(result.usageLimit).toMatch(/second consecutive/);
+    const lastMove = ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1);
+    expect(lastMove.stateId).toBe("state-needs-human");
+    expect(workerCooldownStore.get("claude")).toMatchObject({ resetAt: "2026-09-14T20:00:00.000Z" });
+  });
+
+  it("stops a second same-batch, same-worker issue once an earlier one discovers a new limit mid-batch", async () => {
+    const usageLimitStore = fakeUsageLimitStore();
+    const workerCooldownStore = fakeWorkerCooldownStore(); // both open at batch start
+    const issue2 = { ...ISSUE, id: "id-2", identifier: "MOV-2", title: "Second thing" };
+    const limitLogDir = withLog(USAGE_LIMIT_LOG);
+    const cleanLogDir = withLog("", worktreeName(issue2.identifier, issue2.title));
+    const spawnWorkerFn = vi.fn(async ({ cwd }) =>
+      cwd.includes("MOV-1") ? { exitCode: 1, logDir: limitLogDir } : { exitCode: 0, logDir: cleanLogDir },
+    );
+    const ctx = baseCtx({
+      logRoot: tmpLogRoot,
+      usageLimitStore,
+      workerCooldownStore,
+      concurrencyLimit: 1,
+      spawnWorkerFn,
+      now: () => NOW,
+    });
+
+    const [result1, result2] = await runOnce([ISSUE, issue2], ctx);
+
+    expect(result1.outcome).toBe("usage-limit-deferred");
+    expect(result2).toMatchObject({ issue: "MOV-2", outcome: "deferred-worker-cooldown" });
+    expect(result2.reason).toMatch(/started earlier in this batch/);
+    expect(spawnWorkerFn).toHaveBeenCalledTimes(1);
+    expect(workerCooldownStore.get("claude")).toMatchObject({ resetAt: "2026-09-14T17:00:00.000Z" });
+  });
+
+  it("never touches the worker cooldown for a usage-limit message whose reset time cannot be parsed", async () => {
+    const workerCooldownStore = fakeWorkerCooldownStore();
+    const logDir = withLog("session limit reached, resetting at some point\n");
+    const ctx = baseCtx({
+      logRoot: tmpLogRoot,
+      workerCooldownStore,
+      now: () => NOW,
+      spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+    });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result.outcome).toBe("worker-failed");
+    expect(workerCooldownStore.recordCalls).toEqual([]);
+    expect(workerCooldownStore.clearCalls).toEqual([]);
+    expect(workerCooldownStore.get("claude")).toBeNull();
+  });
+
+  it("clears a stale worker cooldown when an attempt fails for a reason unrelated to usage limits (the attempt reached the worker)", async () => {
+    const workerCooldownStore = fakeWorkerCooldownStore({
+      claude: { worker: "claude", resetAt: "2026-09-14T05:00:00.000Z" }, // already past -- probe owed
+    });
+    const logDir = withLog("FAIL test/widget.test.ts — expected 1 to be 2\n");
+    const ctx = baseCtx({
+      logRoot: tmpLogRoot,
+      workerCooldownStore,
+      now: () => NOW,
+      spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir })),
+    });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result.outcome).toBe("worker-failed");
+    expect(workerCooldownStore.clearCalls).toContain("claude");
+    expect(workerCooldownStore.get("claude")).toBeNull();
+  });
+
+  it("clears a worker's cooldown when its attempt times out -- a session that ran this long proves quota is available", async () => {
+    vi.useFakeTimers();
+    try {
+      const workerCooldownStore = fakeWorkerCooldownStore({
+        claude: { worker: "claude", resetAt: "2026-09-14T05:00:00.000Z" },
+      });
+      const spawnWorkerFn = vi.fn(() => new Promise(() => {}));
+      const ctx = baseCtx({ workerCooldownStore, spawnWorkerFn, workerTimeoutMs: 1000, now: () => NOW });
+
+      const runPromise = runOnce([ISSUE], ctx);
+      await vi.advanceTimersByTimeAsync(1000);
+      const [result] = await runPromise;
+
+      expect(result.outcome).toBe("timeout");
+      expect(workerCooldownStore.clearCalls).toContain("claude");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("unwired worker-cooldown store keeps today's per-issue-only behaviour exactly", async () => {
+    const ctx = baseCtx({ now: () => NOW });
+    expect(ctx.workerCooldownStore).toBeUndefined();
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result.outcome).toBe("in-review");
   });
 });
 
