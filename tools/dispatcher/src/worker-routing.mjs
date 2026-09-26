@@ -5,6 +5,7 @@
 // live Linear connection or a real worktree.
 
 import { turnBudgetForTier } from "./turn-budget.mjs";
+import { trialRoutingReason } from "./worker-trial.mjs";
 
 export const WORKERS = ["claude", "codex"];
 export const MODEL_TIERS = ["cheap", "default", "strong"];
@@ -87,8 +88,10 @@ export function parseRoutingLabels(labels = []) {
  * risk — are advisory context a human supplies via labels/description; this
  * function does not attempt to infer task shape from issue text).
  *
- * Default worker is 'claude' (either is only used when explicitly labeled
- * worker:any or worker:codex). Default model tier is 'default'; 'cheap' and
+ * Default worker is 'claude': an unlabeled or worker:any issue resolves to
+ * Claude here (no quota balancing), and only an explicit worker:codex label
+ * selects Codex -- except during the bounded MOV-383 trial, which
+ * resolveDispatchWorker() layers on top for fresh worker:any claims. Default model tier is 'default'; 'cheap' and
  * 'strong' both require the human to have applied the model:cheap or
  * model:strong label explicitly (strong further requires an upgrade
  * condition — see resolveRouting's return value).
@@ -117,12 +120,43 @@ export function resolveRouting(issue) {
   return { worker, model, ok: true, reason: null, upgradeConditions };
 }
 
-/** Preserve a worker:any attempt's provider binding; fresh claims retain Claude. */
-export function resolveDispatchWorker(issue, { boundWorker = null } = {}) {
+/**
+ * The one dispatch-time worker decision, shared by the run loop and previews.
+ *
+ * A worker:any attempt keeps its provider binding (a prior usage-limit record,
+ * else its recorded MOV-383 trial assignment) for its whole life. Only a fresh
+ * worker:any claim consults the trial: while it is active the claim is a
+ * `trial.pending` Codex candidate (the run loop admits it under the lock right
+ * before creating the worktree); otherwise -- disabled, expired, exhausted --
+ * it keeps the baseline Claude route. An invalid trial config is a
+ * `configError`, never a silent fallback. Explicit pins and unlabeled issues
+ * never consult the trial.
+ *
+ * @param {{trial?: {state: object, assignment: object|null}|null}} [opts]
+ */
+export function resolveDispatchWorker(issue, { boundWorker = null, trial = null } = {}) {
   const routing = resolveRouting(issue);
   const isAny = parseRoutingLabels(issue.labels || []).worker === "any";
-  const bound = routing.ok && isAny && (boundWorker === "claude" || boundWorker === "codex");
-  return { ...routing, worker: bound ? boundWorker : routing.worker, isAny, available: true, bound };
+  const assigned = trial?.assignment?.worker;
+  const binding = [boundWorker, assigned].find((worker) => worker === "claude" || worker === "codex") ?? null;
+  const bound = routing.ok && isAny && binding !== null;
+  const result = { ...routing, worker: bound ? binding : routing.worker, isAny, available: true, bound, trial: null, configError: null };
+  if (!routing.ok || !isAny) return result;
+  if (bound) {
+    if (trial?.assignment && trial.assignment.worker === binding) {
+      result.trial = { trialId: trial.assignment.trialId, pending: false, routingReason: trial.assignment.reason, assignedAt: trial.assignment.assignedAt };
+    }
+    return result;
+  }
+  const state = trial?.state;
+  if (state?.status === "invalid") {
+    return { ...result, ok: false, worker: null, configError: state.error, reason: `worker trial configuration is invalid: ${state.error}` };
+  }
+  if (state?.status === "active") {
+    result.worker = "codex";
+    result.trial = { trialId: state.trialId, pending: true, routingReason: trialRoutingReason(state.trialId), assignedAt: null };
+  }
+  return result;
 }
 
 // Both workers read their brief from stdin rather than a file path argument

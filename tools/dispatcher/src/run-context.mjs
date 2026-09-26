@@ -19,6 +19,8 @@ import {
   circuitBreakerStatePath,
   usageLimitStatePath,
   workerCooldownStatePath,
+  workerTrialConfigPath,
+  workerTrialAssignmentsPath,
   workerUsageStatePath,
   repairLedgerStatePath,
   envLocalPath,
@@ -39,6 +41,7 @@ import { WorktreeManager } from "./worktree-manager.mjs";
 import { CircuitBreakerStore } from "./circuit-breaker.mjs";
 import { UsageLimitStore } from "./usage-limit.mjs";
 import { WorkerCooldownStore } from "./worker-cooldown.mjs";
+import { WorkerTrialStore } from "./worker-trial.mjs";
 import { WorkerUsageStore, captureWorkerUsage, DISPATCHER_ORIGIN } from "./worker-usage.mjs";
 import { RepairLedger } from "./repair-ledger.mjs";
 import { buildIsIssueSatisfied } from "./dependency-gate.mjs";
@@ -97,7 +100,7 @@ export async function checkIosRunnerOnline() {
  * ledger. Only this live wiring stamps `origin: "dispatcher"`, which is what
  * the trial export keys on to tell real attempts from fixtures.
  */
-export async function buildRunContext(linearClient, teamKey, issues, { repairLockHeld = false, workerUsageStore = null } = {}) {
+export async function buildRunContext(linearClient, teamKey, issues, { repairLockHeld = false, workerUsageStore = null, workerTrialStore = null } = {}) {
   const usageStore = workerUsageStore || new WorkerUsageStore(workerUsageStatePath());
   const states = await linearClient.workflowStates(teamKey);
   const stateId = (name) => {
@@ -133,6 +136,9 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     // whose provider quota a *different* issue's attempt already found
     // exhausted -- independent of usageLimitStore's per-issue retry history.
     workerCooldownStore: new WorkerCooldownStore(workerCooldownStatePath()),
+    // MOV-383: disabled unless an operator activates it; admission is written
+    // only from the run loop, which holds the dispatcher lock.
+    workerTrialStore: workerTrialStore || new WorkerTrialStore({ configPath: workerTrialConfigPath(), ledgerPath: workerTrialAssignmentsPath() }),
     captureWorkerUsageFn: (logDir, context) => captureWorkerUsage(logDir, { ...context, origin: DISPATCHER_ORIGIN }, { store: usageStore }),
     // MOV-179: advisory-only diagnosis for the residual "unrecognized
     // failure" escalation bucket. diagnoseUnrecognizedFailure itself already

@@ -13,7 +13,7 @@ Only workers that can execute against a real local git worktree on this Mac are 
 | Worker | Invocation | Notes |
 |---|---|---|
 | `claude` | `claude -p --model <id>` | Primary worker. Full local tool access, MCP, worktree-aware |
-| `codex` | `codex --sandbox workspace-write exec --model <id> -c model_reasoning_effort=<tier>` | Secondary worker. Independent quota pool — useful when Claude is throttled, and a real vendor-neutrality check on the worker-adapter interface. See below for the tier→effort/model mapping |
+| `codex` | `codex --sandbox workspace-write exec --model <id> -c model_reasoning_effort=<tier>` | Secondary worker. Independent quota pool and a real vendor-neutrality check on the worker-adapter interface; used only when pinned with `worker:codex` (or during the `worker:any` trial below). See below for the tier→effort/model mapping |
 
 Cursor Cloud Agent and GitHub Copilot coding agent are **not** viable dispatch targets for this pipeline: both execute in a cloud VM with no path to this Mac's worktrees. They may still be useful as an editor/IDE completion tool, but that is a separate decision from this repo's agent-dispatch architecture and is not covered by this document.
 
@@ -95,7 +95,7 @@ Moving up a tier requires citing the specific condition, either in the Linear is
 ## Overrides
 
 - `worker:claude` / `worker:codex` — pins the worker binary. Pinned workers are never changed, including by the quota-pool cooldown below.
-- `worker:any` — currently uses Claude for fresh claims; a prior attempt retains its recorded worker. Temporary selection changes are tracked in [MOV-383](https://linear.app/moviecal/issue/MOV-383) and require the trial release gate in [MOV-384](https://linear.app/moviecal/issue/MOV-384). The no-label default is **not** `worker:any`: it is a pin to Claude, same as an explicit `worker:claude` label, per the routing table above.
+- `worker:any` — the baseline is **Claude** for fresh claims: there is no quota-based or load-balanced selection, and a cooldown never moves a claim between workers. A prior attempt retains its recorded worker. The only exception is the bounded, disabled-by-default Codex trial below ([MOV-383](https://linear.app/moviecal/issue/MOV-383); live activation requires the release gate in [MOV-384](https://linear.app/moviecal/issue/MOV-384)). The no-label default is **not** `worker:any`: it is a pin to Claude, same as an explicit `worker:claude` label, per the routing table above.
 - `model:cheap` / `model:default` / `model:strong` — pins the model tier.
 
 A human-applied label always overrides the default routing table above. There is no silent fallback: if a requested worker or model is unavailable, the dispatcher stops and moves the issue to `Blocked` rather than substituting a different one.
@@ -105,10 +105,39 @@ A human-applied label always overrides the default routing table above. There is
 A worker binary's provider usage limit is a fact about that *worker*, not about any one issue. `docs/operators/local-execution.md` §Worktree lifecycle already covers the per-issue side of this (MOV-151/192/205's bounded one-retry-or-resume). This section is the dispatch-wide side: once a worker hits a recognized, reset-bearing provider usage limit, `dispatcher run` pauses dispatch of *every* issue that would use that same worker — pinned or `worker:any` — until the reported reset passes, so one exhausted quota window cannot burn through the rest of the `Ready for Agent` queue one issue at a time, the way it did on 2026-09-25 (`tools/dispatcher/src/worker-cooldown.mjs`).
 
 - **Scope.** Two independent cooldowns, one per worker (`claude`, `codex`), persisted at `~/.config/moviecal/worker-cooldowns.json` (mode 700, alongside the rest of `~/.config/moviecal/`) so a restart does not lose the wait. A cooldown on one worker never affects the other — a Codex-pinned issue keeps dispatching normally while Claude is cooling down, and symmetrically.
-- **`worker:any` binding.** Fresh issues retain the current Claude default, and wait if Claude is cooling down. The cooldown never switches them to Codex. A scheduled retry or retained-worktree resume keeps the provider recorded on its per-issue usage-limit record. Fresh-issue selection changes belong to MOV-383; the live trial remains held for explicit operator approval.
+- **`worker:any` binding.** Fresh issues retain the current Claude default, and wait if Claude is cooling down. The cooldown never switches them to Codex. A scheduled retry or retained-worktree resume keeps the provider recorded on its per-issue usage-limit record. While the MOV-383 trial below is active, a fresh `worker:any` issue resolves to Codex through this same resolver, so a Codex cooldown/probe gate applies to it: it stays queued (no assignment slot is consumed) rather than falling back to Claude.
 - **After the reset.** Exactly one issue using the cooled worker is admitted as a probe once its reported reset has passed — preferring a due per-issue retry/resume for that worker over a fresh claim, when one is eligible in the same batch. A clean probe closes the cooldown; a new recognized limit refreshes it to the newly reported reset instead, even when the probing issue itself has exhausted its own one-retry allowance and escalates to `Needs Human Decision`.
 - **What it never does.** Gate reconciliation, parent-completion/priority-propagation passes, promotion, or read-only CI observation — all of those keep running during a cooldown. Move an unrelated issue to `Blocked` or `Needs Human Decision` — the cooldown is a dispatch gate, not an escalation. Mask or invent a reset: an unrecognized failure, a credential failure, or a usage-limit message whose reset cannot be trusted (unparseable, or further out than `usage-limit.mjs`'s `MAX_USAGE_LIMIT_DEFERRAL_MS`) never touches the cooldown either way.
 - **Operator visibility.** `dispatcher dry-run` prints each worker's live cooldown state (`open` / `COOLING until <reset>` / `PROBE OWED`) and, per issue, the worker it would actually use — including the unchanged default or an existing worker binding — without consuming a probe or writing anything. `dispatcher doctor` reports the same per-worker state as an informational check. Both are read-only views of the same store `dispatcher run` gates on.
+
+## Temporary `worker:any` → Codex trial (MOV-383)
+
+A bounded, **disabled-by-default** switch for the Sol-vs-Sonnet data-gathering trial ([MOV-384](https://linear.app/moviecal/issue/MOV-384) owns cohort selection, live activation and rollback; this feature was delivered inactive and is not activated by merging it). While active, a *fresh* `worker:any` issue resolves to Codex at **every** tier — the tier and its pinned model/effort are untouched (default = GPT-6 Sol at `medium`; cheap/strong Codex runs are supplemental data, not default-tier Sol-vs-Sonnet evidence). Nothing else changes: explicit `worker:claude` / `worker:codex` pins keep precedence, an issue with no worker label keeps its ordinary Claude route, and eligibility, upgrade validation (`model:strong` still needs an `upgrade:*` label), concurrency, cooldown, verification and security gates all apply as usual. Missing or refused Codex/model follows the existing failure path — never a silent Claude substitution.
+
+**State.** Two files under `~/.config/moviecal/` (outside the repo): `worker-trial.json` (config: `enabled`, `trialId`, `activatedAt`, `expiresAt` in explicit UTC, `maxAssignments`) and `worker-trial-assignments.json` (append-only ledger, one record per distinct issue: trial ID, requested worker `any`, resolved worker, tier, routing reason, assignment time). No file means disabled. Activation requires an `expiresAt` in the future and at most 14 days out, and `maxAssignments` from 1 to 30. There is no polling and no recurring automation; the deadline and cap are re-read before *every* new assignment, so expiry and exhaustion take effect without a deploy or daemon restart.
+
+**Activate** (only after the MOV-384 release; record it on that issue):
+
+```sh
+node tools/dispatcher/bin/dispatcher.mjs trial activate --id <trialId> --expires 2026-10-05T00:00:00Z --max-assignments 20
+node tools/dispatcher/bin/dispatcher.mjs trial status     # also shown by `dry-run` and `doctor`
+```
+
+**Early stop** — disables *future* assignments only. It keeps the config and every ledger record and does not touch running work:
+
+```sh
+node tools/dispatcher/bin/dispatcher.mjs trial stop
+```
+
+**States.** `dry-run`, `doctor` and `trial status` report `disabled`, `active` (with `assigned/max`), `expired`, `exhausted` or `invalid`, and `dry-run` prints each issue's resolved route with the same resolver `dispatcher run` uses. Previews never consume an assignment. In the live loop the assignment is admitted under the dispatcher's singleton lock immediately before the worktree is created; if the trial ended between batch start and admission, the issue is deferred (`deferred-worker-trial-ended`) and re-resolved under the baseline on the next poll — the loop never reselects a different worker mid-dispatch. When disabled, expired or exhausted, new `worker:any` issues return to the Claude baseline.
+
+**Invalid config.** An active config that is malformed, has an expiry beyond 14 days, or a cap above 30 is reported by `doctor`/`dry-run` and makes every fresh `worker:any` issue report `config-error` and stay queued — no dispatch and no fallback to Claude. Fix the file or run `trial stop`. Pinned and unlabeled issues are unaffected.
+
+**Existing work keeps its worker.** A running attempt, retained-worktree resume, budget continuation, PR repair, or retry of an issue that already has a ledger record keeps the recorded worker/model/effort and trial attribution, and does not consume another slot, even after the trial ends or is stopped. The trial toggle and deadline never switch an existing issue's worker; an operator changes it only through an explicit `worker:*` label (the existing recovery workflow).
+
+**Attribution.** The trial ID, requested worker (`any`), resolved worker, routing reason and assignment time are written to the run `manifest.json` (`trial`), the worktree registry entry, and each usage record (`trial`, exported by `dispatcher usage export`, with `trialIds` per issue). They are `null` for attempts outside the trial.
+
+**Rollback.** `trial stop` (or waiting for expiry/exhaustion) restores the baseline for new claims immediately. Issues already assigned to Codex finish there; to move one, relabel it `worker:claude` and requeue it through the normal recovery workflow. Deleting `worker-trial.json` is equivalent to disabled but loses the config record — prefer `stop`.
 
 ## Subagents
 

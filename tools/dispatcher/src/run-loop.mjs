@@ -20,6 +20,7 @@ import { classifyCredentialFailure, CREDENTIAL_FAILURE } from "./credential-fail
 import { classifyUsageLimitFailure, decideUsageLimitOutcome, MAX_USAGE_LIMIT_DEFERRAL_MS } from "./usage-limit.mjs";
 import { admitBudgetContinuation, admitUsageLimitResume } from "./usage-limit-resume.mjs";
 import { WORKERS as WORKER_POOLS } from "./worker-cooldown.mjs";
+import { trialAttribution } from "./worker-trial.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
 import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-signals.mjs";
@@ -83,6 +84,7 @@ export async function runOnce(issues, ctx) {
     circuitBreaker = { isOpen: () => false, trip: () => {}, clear: () => {} },
     workerCooldownStore = NO_WORKER_COOLDOWN_STORE,
     usageLimitStore = NO_USAGE_LIMIT_STORE,
+    workerTrialStore = null,
     now = () => new Date(),
   } = ctx;
 
@@ -102,8 +104,12 @@ export async function runOnce(issues, ctx) {
   // worker; it never changes a fresh worker:any claim's Claude default.
   const nowTs = now();
   const cooldownAtStart = Object.fromEntries(WORKER_POOLS.map((worker) => [worker, workerCooldownStore.state(worker, nowTs)]));
+  // MOV-383: with no trial store wired (or the trial disabled) this is exactly
+  // the prior policy. Admission itself is re-evaluated per assignment below.
+  const trialState = workerTrialStore ? workerTrialStore.state(nowTs) : null;
   const resolvedWorkers = issues.map((issue) => resolveDispatchWorker(issue, {
     boundWorker: usageLimitStore.get(issue.identifier)?.worker ?? null,
+    trial: trialState ? { state: trialState, assignment: workerTrialStore.get(issue.identifier) } : null,
   }));
 
   // Admit one eligible post-reset probe, preferring a due retry or resume.
@@ -161,6 +167,12 @@ export async function runOnce(issues, ctx) {
 
       // Gate silently before taking a concurrency slot or host-breaker probe.
       const resolvedWorker = resolvedWorkers[index];
+      if (resolvedWorker.configError) {
+        // MOV-383: an invalid active-trial config is a visible error, never a
+        // silent Claude fallback; the issue stays queued untouched.
+        results[index] = { issue: issue.identifier, outcome: "config-error", reason: resolvedWorker.reason };
+        return;
+      }
       const resolvedWorkerName = resolvedWorker.worker;
       if (resolvedWorkerName) {
         const cooldown = cooldownAtStart[resolvedWorkerName];
@@ -229,7 +241,7 @@ export async function runOnce(issues, ctx) {
         }
       }
       try {
-        results[index] = await processIssue(issue, { ...ctx, resolvedWorker: liveWorkerName });
+        results[index] = await processIssue(issue, { ...ctx, resolvedWorker: liveWorkerName, resolvedTrial: resolvedWorker.trial });
       } finally {
         release();
         // MOV-166: this issue is no longer a live attempt an inbound signal
@@ -492,6 +504,8 @@ async function dispatchIssue(issue, ctx) {
     iosSimLeaseId = null,
     // Preserve the provider binding computed at batch start.
     resolvedWorker = null,
+    resolvedTrial = null,
+    workerTrialStore = null,
     captureWorkerUsageFn = () => null,
   } = ctx;
 
@@ -650,6 +664,10 @@ async function dispatchIssue(issue, ctx) {
   // no branch deletion on the resume path" checkable by reading one block.
   let entry;
   let resume = null;
+  // MOV-383: attribution follows the *recorded* assignment, so retries,
+  // resumes and continuations of a trial-assigned issue stay attributed after
+  // the trial ends. It never selects a worker -- routing.worker is already set.
+  let trial = resolvedTrial && !resolvedTrial.pending ? trialAttribution(workerTrialStore?.get(issue.identifier)) : null;
   if (resumePlan) {
     const admission = admitUsageLimitResume({
       issueId: issue.identifier,
@@ -727,8 +745,27 @@ async function dispatchIssue(issue, ctx) {
       consecutive: resumePlan.consecutive || 1,
     };
   } else {
+    // MOV-383: a fresh trial claim is admitted here, under the dispatcher's
+    // lock and immediately before it becomes a worktree, re-reading expiry and
+    // the cap from the durable files. An issue that already has an assignment
+    // is returned unchanged (no second slot). If the trial ended since this
+    // batch resolved, the issue is deferred rather than silently re-routed to a
+    // worker whose cooldown gate was never checked; the next poll resolves it
+    // afresh under the baseline policy.
+    if (resolvedTrial?.pending && workerTrialStore) {
+      const admission = workerTrialStore.admit(issue, { tier: routing.model, now: now() });
+      if (!admission.admitted) {
+        return {
+          issue: issue.identifier,
+          outcome: "deferred-worker-trial-ended",
+          reason: `worker trial is ${admission.state.status}; this issue will be routed under the baseline policy on the next poll`,
+        };
+      }
+      trial = trialAttribution(admission.record);
+    }
     entry = worktreeManager.create({
       id: issue.identifier,
+      trial,
       name,
       branch,
       worker: routing.worker,
@@ -813,6 +850,7 @@ async function dispatchIssue(issue, ctx) {
         workerCooldownStore,
         diagnoseFailureFn,
         steeringEnabled,
+        trial,
         now,
         logger,
       },
@@ -918,6 +956,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     now,
     logger,
     iosSimLeaseId = null,
+    trial = null,
     captureWorkerUsageFn = () => null,
     readWorkerProgressFn = readWorkerProgress,
     hasWorkerProgressFn = hasWorkerProgress,
@@ -1029,6 +1068,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
         }
       },
       iosSimLeaseId,
+      trial,
       // `spawnWorker()` invokes this before the brief can start work. The
       // stored pid is also the detached process-group id, allowing a
       // replacement dispatcher to terminate the complete worker tree before
@@ -1050,6 +1090,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
       worker: routing.worker,
       ...usageContextFromInvocation(invocation, routing.worker),
       tier: routing.model,
+      trial,
       observedTurns,
       terminationReason,
       exitOutcome: result.exitCode === 0 ? "exited-0" : `exited-${result.exitCode}`,

@@ -19,6 +19,10 @@
 //                                     `dispatcher run` connects out to it (agent-stream-client.mjs)
 //                                     but this command still runs fully offline, exercising the
 //                                     identical normalization/trust/stop path with no network at all
+//   dispatcher trial status|activate|stop
+//                                  - MOV-383: inspect, bound-activate (--id, --expires,
+//                                     --max-assignments <=30) or early-stop the
+//                                     worker:any -> Codex trial; disabled by default
 //   dispatcher gc                  - prune merged/stale worktrees and old run logs
 //   dispatcher promote [--dry-run] - move Backlog/Blocked issues that meet the
 //                                     readiness contract into Ready for Agent
@@ -60,6 +64,8 @@ import {
   worktreesStatePath,
   usageLimitStatePath,
   workerCooldownStatePath,
+  workerTrialConfigPath,
+  workerTrialAssignmentsPath,
   workerUsageStatePath,
   repairLedgerStatePath,
   masterIncidentLedgerStatePath,
@@ -96,6 +102,7 @@ import { getAppToken } from "../src/linear-app-auth.mjs";
 import { evaluatePreflight, worktreeName, branchName } from "../src/preflight.mjs";
 import { resolveRouting, resolveDispatchWorker, workerInvocation, modelIdForTier, claudeEffortForTier, claudeModelDoesNotSupportEffort } from "../src/worker-routing.mjs";
 import { WorkerCooldownStore, WORKERS as WORKER_POOLS } from "../src/worker-cooldown.mjs";
+import { WorkerTrialStore, describeTrialState } from "../src/worker-trial.mjs";
 import { inferExecutionRoute, resolveExecutionRoute } from "../src/execution-routing.mjs";
 import {
   describeDelegate,
@@ -326,6 +333,13 @@ async function cmdDoctor() {
     }
   }
 
+  // MOV-383: bounded worker:any -> Codex trial. Read-only; an invalid config
+  // fails the check because dispatch refuses fresh worker:any issues until fixed.
+  {
+    const state = buildWorkerTrialStore().state(new Date());
+    checks.push({ name: "worker:any trial routing", ok: state.status !== "invalid", detail: describeTrialState(state) });
+  }
+
   // claude / codex on PATH
   for (const bin of ["claude", "codex"]) {
     const which = tryRun(() => execFileSync("which", [bin], { encoding: "utf8" }).trim());
@@ -416,6 +430,51 @@ function printChecks(checks) {
   }
 }
 
+function buildWorkerTrialStore() {
+  return new WorkerTrialStore({ configPath: workerTrialConfigPath(), ledgerPath: workerTrialAssignmentsPath() });
+}
+
+/**
+ * MOV-383: `dispatcher trial status|activate|stop`. Activation and early stop
+ * touch only the trial config file: stop never deletes an assignment record or
+ * disturbs running work, and neither needs (or contends for) the run lock.
+ */
+function cmdTrial(args) {
+  const [action, ...flags] = args;
+  const store = buildWorkerTrialStore();
+  const flag = (name) => {
+    const i = flags.indexOf(name);
+    return i === -1 ? undefined : flags[i + 1];
+  };
+  try {
+    if (action === "status") {
+      const state = store.state(new Date());
+      console.log(JSON.stringify(state, null, 2));
+      console.log(describeTrialState(state));
+      return state.status === "invalid" ? 1 : 0;
+    }
+    if (action === "activate") {
+      const max = flag("--max-assignments");
+      const state = store.activate({
+        trialId: flag("--id"),
+        expiresAt: flag("--expires"),
+        maxAssignments: max === undefined ? undefined : Number(max),
+      });
+      console.log(describeTrialState(state));
+      return 0;
+    }
+    if (action === "stop") {
+      console.log(describeTrialState(store.stop()));
+      return 0;
+    }
+  } catch (error) {
+    console.error(`trial ${action} failed: ${error.message}`);
+    return 1;
+  }
+  console.error("Usage: dispatcher trial status | activate --id <trialId> --expires <ISO UTC, e.g. 2026-10-05T00:00:00Z> --max-assignments <1-30> | stop");
+  return 1;
+}
+
 async function cmdDryRun({ fixturePath } = {}) {
   let issues;
   if (fixturePath) {
@@ -443,9 +502,15 @@ async function cmdDryRun({ fixturePath } = {}) {
   const cooldowns = new WorkerCooldownStore(workerCooldownStatePath());
   const cooldownSnapshot = Object.fromEntries(WORKER_POOLS.map((worker) => [worker, cooldowns.state(worker)]));
   const dispatcherDelegate = resolveDispatcherDelegate();
+  // MOV-383: read-only snapshot of the same trial policy `dispatcher run` uses.
+  // Previewing never admits, so it never consumes an assignment slot.
+  const trials = buildWorkerTrialStore();
+  const trialState = trials.state(new Date());
 
+  console.log(`worker:any trial: ${describeTrialState(trialState)}\n`);
   console.log(`${issues.length} issue(s) in Ready for Agent:\n`);
   let routingError = false;
+  const trialConfigError = trialState.status === "invalid";
   for (const issue of issues) {
     const routing = resolveRouting(issue);
     // MOV-360: the actual dispatch-time worker decision -- pinned as-is, or
@@ -454,6 +519,7 @@ async function cmdDryRun({ fixturePath } = {}) {
     // kept only for its `model`/`ok` fields; this is what "worker:" prints.
     const resolvedWorker = resolveDispatchWorker(issue, {
       boundWorker: usageLimits.get(issue.identifier)?.worker ?? null,
+      trial: { state: trialState, assignment: trials.get(issue.identifier) },
     });
     const execution = resolveExecutionRoute(issue);
     const eligibility = evaluateLocalDispatch(issue, { expectedDelegate: dispatcherDelegate });
@@ -478,10 +544,18 @@ async function cmdDryRun({ fixturePath } = {}) {
     console.log(`  worktree: ${path.join(worktreeRoot(), name)}`);
     console.log(`  branch:   ${branch}`);
     const workerNote = resolvedWorker.bound ? " [bound to prior worker:any attempt]" : "";
-    console.log(`  worker:   ${resolvedWorker.worker} (model: ${routing.model})${routing.ok ? "" : `  [ROUTING BLOCKED: ${routing.reason}]`}${workerNote}`);
+    if (resolvedWorker.configError) {
+      console.log(`  worker:   NOT DISPATCHED — ${resolvedWorker.reason}`);
+    } else {
+      console.log(`  worker:   ${resolvedWorker.worker} (model: ${routing.model})${routing.ok ? "" : `  [ROUTING BLOCKED: ${routing.reason}]`}${workerNote}`);
+    }
+    if (resolvedWorker.trial) {
+      const t = resolvedWorker.trial;
+      console.log(`  trial:    ${t.trialId} — requested worker:any, resolved ${resolvedWorker.worker}, ${t.pending ? "would be assigned at dispatch" : `assigned ${t.assignedAt}`}; ${t.routingReason}`);
+    }
     const quota = cooldownSnapshot[resolvedWorker.worker];
     if (quota?.cooling || quota?.probeOwed) console.log(`  worker cooldown: ${quota.cooling ? "COOLING" : "PROBE OWED"} until ${quota.resetAt}`);
-    if (routing.ok) {
+    if (routing.ok && !resolvedWorker.configError) {
       const planned = tryRun(() => workerInvocation(resolvedWorker.worker, routing.model));
       if (planned.ok) {
         const args = planned.value.args;
@@ -542,7 +616,7 @@ async function cmdDryRun({ fixturePath } = {}) {
     `Cloud-routed (not executable here; the cloud adapter is not enabled): ${cloud.length}${cloud.length ? ` (${cloud.map((i) => i.identifier).join(", ")})` : ""}`,
   );
   console.log("Dry run only — no worktree, branch, or Linear state was changed.");
-  return routingError ? 1 : 0;
+  return routingError || trialConfigError ? 1 : 0;
 }
 
 function cmdGc() {
@@ -1323,6 +1397,9 @@ async function main() {
       console.log(JSON.stringify({ readOnly: true, recentRuns: runs.slice(-20).reverse(), byTier: aggregateUsage(runs, "tier"), byModel: aggregateUsage(runs, "modelId") }, null, 2));
       break;
     }
+    case "trial":
+      process.exitCode = cmdTrial(rest);
+      break;
     case "doctor":
       process.exitCode = await cmdDoctor();
       break;
@@ -1389,7 +1466,7 @@ async function main() {
     }
     default:
       console.error(
-        "Usage: dispatcher <doctor|health|usage|dry-run|shadow|agent-signal|gc|promote|priorities|audit-issues|reconcile-parents|repair|master-ci|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
+        "Usage: dispatcher <doctor|health|usage|trial|dry-run|shadow|agent-signal|gc|promote|priorities|audit-issues|reconcile-parents|repair|master-ci|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
       );
       process.exitCode = 1;
   }
