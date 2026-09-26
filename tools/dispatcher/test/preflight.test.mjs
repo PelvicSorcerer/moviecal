@@ -77,7 +77,7 @@ describe("evaluatePreflight", () => {
   it("does not gate non-iOS projects on runner availability", () => {
     const context = baseContext({ iosRunnerOnline: false });
     const result = evaluatePreflight(
-      { labels: [], blockedByIds: [], project: "Calendar Feed" },
+      { labels: [], blockedByIds: [], project: "Web Shared Watchlists" },
       context,
     );
     expect(result.ok).toBe(true);

@@ -10,6 +10,9 @@ for shipping a native iOS app to the App Store.
   implementation queue; Linear issues, projects, and native blocking relations
   own live scope and status. See `AGENTS.md` and
   `docs/governance/linear-information-architecture.md`.
+- Decision D6 (first TestFlight scope) was amended by MOV-368 and is the
+  current scope. Sections marked "(historical)" record the original Phase 0
+  plan and are not current scope.
 - The governance proposals and original next actions later in this document
   record the Phase 0 plan. Current execution rules are in
   `docs/operators/local-execution.md` and current verification lanes are in
@@ -56,7 +59,7 @@ is a second (later third) presentation surface over one shared contract.
 | D3 | Calendar integration | **Hybrid, sequenced: subscribed `.ics` feed in App Store v1; EventKit as a fast follow** | Subscribed feed is the most resilient path (survives app deletion, iOS-managed refresh, auto-reflects cron release-date changes, no event-writing code) and reuses 100% of existing feed work. EventKit adds features (per-event alerts, custom calendar, offline, immediate updates) but is less resilient on its own. Hybrid maximizes both; sequencing keeps the first submission small. |
 | D4 | App authentication | **Email/password now (existing Supabase auth); Sign in with Apple before App Store launch** | Reuses existing Supabase email/password immediately. The client obtains the Supabase JWT via `supabase-swift` and passes it as the `v1` bearer token — no new backend auth endpoint. SIWA is added before launch to satisfy App Review expectations and first-party feel. |
 | D5 | iOS build/test CI | **Self-hosted GitHub Actions runner on the user's Mac** for the iOS verification lane | Runs iOS build + XCTest + XCUITest as a native GitHub Actions workflow, so iOS results appear as normal PR status checks alongside the Linux lanes and are covered by the existing `check:branch-ci` drift mechanism — one unified CI and governance model, which resolves the "integrate GitHub Actions and Xcode Cloud" goal in Actions' favor. Trade-offs: the Mac must be online to service the queue, and self-hosted runners require hardening against untrusted fork-PR code (see security note). Release signing / TestFlight upload is a separate Phase 5 concern (fastlane or Xcode Cloud), independent of this CI choice. |
-| D6 | First App Store version scope | **Personal-watchlist parity** (search, add/remove, calendar subscribe for the personal list) | Smallest initial API gap, fastest to TestFlight. Shared watchlists are a fast follow after the first App Store build; their future endpoints can extend the additive `/api/v1` contract. |
+| D6 | First TestFlight build scope | **Personal-watchlist parity plus native Shared Watchlists** (search, add/remove, calendar subscribe for the personal list, and the native shared-watchlist experience). The first TestFlight build requires completed iOS Shared Watchlists and the Core & API capability it depends on; it does **not** require completion of Web Shared Watchlists. | **Amended (MOV-368):** the original decision made shared watchlists a fast follow after the first build. Shared Watchlists is now required before the first TestFlight build so beta testers exercise the collaboration experience the release exists to validate. Web collaboration is a separate finite project and does not gate the beta. Shared-list endpoints extend the additive `/api/v1` contract. Linear encodes this as the finite `First iOS TestFlight beta` initiative (iOS Companion App, Shared Watchlists Core & API, iOS Shared Watchlists). |
 
 ## Human-only prerequisites (start now — they have lead time)
 
@@ -84,6 +87,7 @@ time, so begin them in parallel with backend work:
 - **Phase 1** is the bridge: it is ordinary backend work your agents execute
   under existing governance while Apple enrollment processes.
 - **Phase 3** ships the subscribed-feed calendar (D3); EventKit lands after v1.
+  Native Shared Watchlists also lands before the first TestFlight build (D6).
 - **Phase 4** is where "behaves like an Apple app" is earned: Dynamic Type, dark
   mode, VoiceOver/accessibility, Sign in with Apple (D4), App Intents/Shortcuts,
   widgets, haptics, and proper empty/error/loading states. Budget real time here.
@@ -189,9 +193,12 @@ self-hosted macOS runner lane and a repo-wide dependency-field contract.
 
 ## Original next actions (historical)
 
-This was the Phase 0 handoff list. Use Linear for current work state; the iOS
-Companion App's personal feature parity is complete, release engineering remains
-open, and the separate iOS Shared Watchlists project owns the fast follow.
+This was the Phase 0 handoff list, written when shared watchlists were a fast
+follow; D6 has since been amended so native Shared Watchlists gates the first
+TestFlight build. Use Linear for current work state; the iOS Companion App's
+personal feature parity is complete, release engineering remains open, and the
+separate iOS Shared Watchlists project owns the native shared experience the
+first TestFlight build requires.
 
 1. Keep the operator docs and queue tooling aligned with the ratified iOS policy (ongoing).
 2. Complete Phase 2 iOS skeleton:
