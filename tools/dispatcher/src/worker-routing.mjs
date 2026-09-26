@@ -128,13 +128,15 @@ export function resolveRouting(issue) {
  * worker:any claim consults the trial: while it is active the claim is a
  * `trial.pending` Codex candidate (the run loop admits it under the lock right
  * before creating the worktree); otherwise -- disabled, expired, exhausted --
- * it keeps the baseline Claude route. An invalid trial config is a
+ * it requests the baseline Claude route. Fresh claims may use the other worker
+ * when cooldownOpen rejects the requested worker. Bindings and pins never switch.
+ * An invalid trial config is a
  * `configError`, never a silent fallback. Explicit pins and unlabeled issues
  * never consult the trial.
  *
  * @param {{trial?: {state: object, assignment: object|null}|null}} [opts]
  */
-export function resolveDispatchWorker(issue, { boundWorker = null, trial = null } = {}) {
+export function resolveDispatchWorker(issue, { boundWorker = null, trial = null, cooldownOpen = () => true } = {}) {
   const routing = resolveRouting(issue);
   const isAny = parseRoutingLabels(issue.labels || []).worker === "any";
   const assigned = trial?.assignment?.worker;
@@ -156,7 +158,30 @@ export function resolveDispatchWorker(issue, { boundWorker = null, trial = null 
     result.worker = "codex";
     result.trial = { trialId: state.trialId, pending: true, routingReason: trialRoutingReason(state.trialId), assignedAt: null };
   }
+  result.requestedWorker = result.worker;
+  if (!cooldownOpen(result.worker)) {
+    const alternative = result.worker === "claude" ? "codex" : "claude";
+    if (cooldownOpen(alternative)) {
+      result.worker = alternative;
+      result.trial = null; // A cooldown fallback is not a Codex trial assignment.
+      result.reason = `requested ${result.requestedWorker} worker unavailable; using ${alternative}`;
+    } else {
+      result.available = false;
+    }
+  }
   return result;
+}
+
+/** Reserve reset probes for eligible requested routes, giving due retries first choice.
+ * Both previews and dispatch use this policy; an unreserved alternative probe can
+ * be claimed by a fresh fallback at admission. This function never writes state.
+ */
+export function workerProbeWinners(issues, routes, cooldowns, { eligible, due }) {
+  return Object.fromEntries(["claude", "codex"].map((worker) => {
+    if (!cooldowns[worker]?.probeOwed) return [worker, null];
+    const candidates = issues.filter((issue, index) => routes[index].ok && routes[index].worker === worker && eligible(issue));
+    return [worker, (candidates.find(due) ?? candidates[0])?.id ?? null];
+  }));
 }
 
 // Both workers read their brief from stdin rather than a file path argument
