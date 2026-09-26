@@ -100,7 +100,8 @@ import {
 import { LinearClient } from "../src/linear-client.mjs";
 import { getAppToken } from "../src/linear-app-auth.mjs";
 import { evaluatePreflight, worktreeName, branchName } from "../src/preflight.mjs";
-import { resolveRouting, resolveDispatchWorker, workerInvocation, modelIdForTier, claudeEffortForTier, claudeModelDoesNotSupportEffort } from "../src/worker-routing.mjs";
+import { describeWorkerBudget } from "../src/turn-budget.mjs";
+import { resolveRouting,resolveDispatchWorker, workerInvocation, modelIdForTier, claudeEffortForTier, claudeModelDoesNotSupportEffort } from "../src/worker-routing.mjs";
 import { WorkerCooldownStore, WORKERS as WORKER_POOLS } from "../src/worker-cooldown.mjs";
 import { WorkerTrialStore, describeTrialState } from "../src/worker-trial.mjs";
 import { inferExecutionRoute, resolveExecutionRoute } from "../src/execution-routing.mjs";
@@ -292,6 +293,12 @@ async function cmdDoctor() {
       ? "enabled (MOVIECAL_AGENT_SESSION_STEERING) — a trusted follow-up prompt is written to the running Claude worker's next turn; Codex attempts stay record-only"
       : "off (default) — a trusted follow-up prompt is recorded as a prompt-received lifecycle event, not delivered live",
   });
+
+  // Per-run budget (MOV-367/MOV-387): unit, limits and wrap-up possibility per worker.
+  for (const worker of ["claude", "codex"]) {
+    const budget = describeWorkerBudget(worker, { steeringEnabled: agentSessionSteeringEnabled() });
+    checks.push({ name: `${worker} run budget`, ok: budget.ok, detail: budget.detail });
+  }
 
   // Issue-completeness contract (MOV-303/MOV-307). Informational: `report` is
   // the shipped default and is not a misconfiguration, so this never fails

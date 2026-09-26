@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { budgetHandoffSections, readWorkerProgress, turnBudgetForTier, wrapUpAt } from "../src/turn-budget.mjs";
+import { budgetForWorker, budgetHandoffSections, codexItemBudgetForTier, describeWorkerBudget, readWorkerProgress, turnBudgetForTier, wrapUpAt } from "../src/turn-budget.mjs";
 import { makeAssistantTurnCounter } from "../src/worker-spawn.mjs";
 import { admitBudgetContinuation } from "../src/usage-limit-resume.mjs";
 import { workerInvocation } from "../src/worker-routing.mjs";
@@ -33,9 +33,37 @@ describe("turn budget", () => {
     countClaude(Buffer.from('{"type":"assistant","message":{"role":"assistant","id":"a"}}\n{"type":"assis'));
     countClaude(Buffer.from('tant","message":{"role":"assistant","id":"a"}}\n{"type":"assistant","message":{"role":"assistant","id":"b"}}\n{"type":"result","num_turns":2}\n'));
     expect(claude).toEqual([1, 2]);
+  });
+
+  it("counts Codex completed work items, not the single turn.completed", () => {
+    const item = (type, phase = "item.completed") => JSON.stringify({ type: phase, item: { type } }) + "\n";
     const codex = [];
-    makeAssistantTurnCounter("codex", (n) => codex.push(n))('{"type":"turn.completed"}\n{"type":"turn.completed"}\n');
-    expect(codex).toEqual([1, 2]);
+    const count = makeAssistantTurnCounter("codex", (n) => codex.push(n));
+    count(Buffer.from(
+      item("command_execution", "item.started") + item("command_execution") + item("reasoning") + item("file_change") +
+      "not json\n{broken\n" + item("mcp_tool_call") + item("agent_message") + '{"type":"turn.completed"}\n',
+    ));
+    expect(codex).toEqual([1, 2, 3, 4]);
+    const single = [];
+    makeAssistantTurnCounter("codex", (n) => single.push(n))('{"type":"turn.completed"}\n');
+    expect(single).toEqual([]);
+  });
+
+  it("parses Codex budgets, fails loudly on invalid values, and reports units in doctor", () => {
+    expect(codexItemBudgetForTier("default", {})).toBe(150);
+    expect(codexItemBudgetForTier("cheap", { MOVIECAL_CODEX_TURN_BUDGET_CHEAP: "12" })).toBe(12);
+    expect(budgetForWorker("claude", "default", { MOVIECAL_CODEX_TURN_BUDGET_DEFAULT: "1" })).toBe(150);
+    for (const invalid of ["0", "-1", "1.5", "abc", ""]) {
+      expect(() => codexItemBudgetForTier("strong", { MOVIECAL_CODEX_TURN_BUDGET_STRONG: invalid })).toThrow(/invalid MOVIECAL_CODEX_TURN_BUDGET_STRONG/);
+    }
+    expect(() => workerInvocation("codex", "default", {})).not.toThrow();
+    const codex = describeWorkerBudget("codex", { env: {}, steeringEnabled: true });
+    expect(codex).toMatchObject({ ok: true });
+    expect(codex.detail).toContain("codex-items");
+    expect(codex.detail).toContain("no wrap-up (no steering channel)");
+    expect(describeWorkerBudget("claude", { env: {}, steeringEnabled: true }).detail).toContain("wrap-up possible");
+    expect(describeWorkerBudget("claude", { env: {}, steeringEnabled: false }).detail).toContain("claude-assistant-turns");
+    expect(describeWorkerBudget("codex", { env: { MOVIECAL_CODEX_TURN_BUDGET_DEFAULT: "x" } }).ok).toBe(false);
   });
 
   it("bounds and redacts worker-written progress and renders absent progress explicitly", () => {
@@ -50,8 +78,9 @@ describe("turn budget", () => {
       expect(excerpt).not.toContain("```");
       expect(excerpt).toContain("[truncated]");
       expect(excerpt.length).toBeLessThan(4200);
-      const sections = budgetHandoffSections({ budget: 8, attempts: ["3 turns", "8 turns"], verify: "failed", changedPaths: ["a.ts"], progress: "Progress file missing.", worktreePath: dir });
+      const sections = budgetHandoffSections({ budget: 8, attempts: ["3 turns", "8 turns"], verify: "failed", changedPaths: ["a.ts"], progress: "Progress file missing.", worktreePath: dir, unit: "codex-items" });
       expect(sections.join("\n")).toContain("Progress file missing.");
+      expect(sections[0]).toContain("unit: codex-items");
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 

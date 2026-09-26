@@ -4,7 +4,7 @@
 // Pure functions only — no I/O — so this is fully unit-testable without a
 // live Linear connection or a real worktree.
 
-import { turnBudgetForTier } from "./turn-budget.mjs";
+import { budgetForWorker } from "./turn-budget.mjs";
 import { trialRoutingReason } from "./worker-trial.mjs";
 
 export const WORKERS = ["claude", "codex"];
@@ -195,7 +195,7 @@ export function resolveDispatchWorker(issue, { boundWorker = null, trial = null 
  *   process is allowed to do.
  */
 export function workerInvocation(worker, model, { steering = false } = {}) {
-  turnBudgetForTier(model); // validate env overrides on every routing surface, including dry-run
+  budgetForWorker(worker, model); // validate env overrides on every routing surface, including dry-run
   if (worker === "claude") {
     const modelId = modelIdForTier("claude", model);
     const effort = claudeEffortForTier(model, modelId);
