@@ -597,6 +597,13 @@ describe("worker-quota-pool cooldown across the real dispatcher wiring (MOV-360)
     expect(manager.createCalls.find((c) => c.id === "MOV-ANY").worker).toBe("codex");
     expect(manager.createCalls.find((c) => c.id === "MOV-CX").worker).toBe("codex");
 
+    // MOV-388: each worker's stdin brief carries its own exploration variant.
+    const briefFor = (id) => ctx.spawnWorkerFn.mock.calls.find(([arg]) => arg.cwd.includes(id))[0].brief;
+    expect(briefFor("MOV-C1")).toContain("`Grep`/`Glob`");
+    expect(briefFor("MOV-C1")).not.toContain("rg -n");
+    expect(briefFor("MOV-CX")).toContain("`rg -n` / `rg --files`");
+    expect(briefFor("MOV-CX")).not.toMatch(/Grep|Glob|subagent/);
+
     // The cooldown this batch produced is real, persisted state -- a fresh
     // store over the same on-disk path (a restarted daemon) still sees it.
     const restarted = new WorkerCooldownStore(`${TMP_ROOT}/worker-cooldowns.json`);

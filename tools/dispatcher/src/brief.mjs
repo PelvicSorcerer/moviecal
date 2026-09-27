@@ -39,11 +39,20 @@ function repositoryContextLines(context) {
   ];
 }
 
-function explorationLines(context) {
+// MOV-388: the same intent (search before reading, read ranges, no re-reads,
+// keep broad searches out of the main context) in each worker's own tools.
+// Claude workers run with --safe-mode, so only built-in subagents exist.
+const EXPLORATION_GUIDANCE = {
+  claude: "Locate code with `Grep`/`Glob` before opening files. For large files, read only relevant line ranges (`offset`/`limit`). Avoid re-reading a file unless it has changed since your last read. For broad searches across many files, delegate to the built-in `Explore` subagent so those reads stay out of your main context.",
+  codex: "Locate code with `rg -n` / `rg --files` before opening files. For large files, read only the relevant line ranges (`sed -n 'START,ENDp' file` or `rg -n -C 5 pattern file`); never `cat` a large file whole. Avoid re-printing a file you have already seen unless it has changed since.",
+};
+
+function explorationLines(context, worker) {
+  const guidance = worker === "codex" ? EXPLORATION_GUIDANCE.codex : EXPLORATION_GUIDANCE.claude;
   return [
     "## Explore efficiently",
     "",
-    "Locate code with `Grep`/`Glob` before opening files. For large files, read only relevant line ranges (`offset`/`limit`). Avoid re-reading a file unless it has changed since your last read. For broad searches across many files, delegate to the repo's `explore` subagent in `.claude/agents/` so those reads stay out of your main context.",
+    guidance,
     "",
     ...(context?.likelyStartingPoints?.length ? [
       "### Likely starting points",
@@ -136,7 +145,7 @@ export function generateBrief(issue, { branch, worktreePath, worker, model, upgr
   lines.push("");
   lines.push(...resumeLines(resume));
   lines.push(...repositoryContextLines(repositoryContext));
-  lines.push(...explorationLines(repositoryContext));
+  lines.push(...explorationLines(repositoryContext, worker));
   lines.push(...iterativeVerificationLines());
   lines.push(...iosWorkerLeaseLines(issue));
   lines.push(...iosVerificationLines(issue, repositoryContext));
@@ -272,7 +281,7 @@ export function generateRepairBrief(issue, {
     `Repair attempt: ${attempt}${budget ? ` of at most ${budget} for this pull request` : ""}`,
     "",
     ...repositoryContextLines(repositoryContext),
-    ...explorationLines(repositoryContext),
+    ...explorationLines(repositoryContext, worker),
     ...iterativeVerificationLines(),
     "## What you are being asked to do",
     "",
