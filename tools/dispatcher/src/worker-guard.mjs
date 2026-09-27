@@ -338,8 +338,10 @@ export function auditWorkerTranscript(jsonl, { mode = "implementation" } = {}) {
     if (action.kind === "command") {
       const classified = classifyAction(action.value, { workerMode: mode });
       if (classified.verdict !== "allow") {
-        const finding = { action: action.value, reason: classified.reason, category: classified.category, outcome: action.outcome };
-        if (classified.category === "scope" && action.outcome === "denied") warnings.push(finding);
+        const finding = { action: action.value, reason: classified.reason, category: classified.category, verdict: classified.verdict, outcome: action.outcome };
+        // MOV-400: naming a protected path without writing it is a warning
+        // whatever its outcome. The sandbox and auditChangedPaths enforce it.
+        if (classified.verdict === "warn" || (classified.category === "scope" && action.outcome === "denied")) warnings.push(finding);
         else violations.push(finding);
       }
     }
@@ -480,6 +482,7 @@ function statusPaths(output) {
 export function auditWorkerResult({ worktreePath, branch, logDir, mode = "implementation", baseRef = "origin/master", runner = defaultRunner, fsImpl = fs } = {}) {
   const violations = [];
   let actions = [];
+  let warnings = [];
   const actualBranch = String(runner("git", ["branch", "--show-current"], { cwd: worktreePath })).trim();
   if (actualBranch !== branch) {
     violations.push({ action: actualBranch || "detached HEAD", reason: `worker left assigned branch ${branch}` });
@@ -495,9 +498,10 @@ export function auditWorkerResult({ worktreePath, branch, logDir, mode = "implem
   } else {
     const transcript = auditWorkerTranscript(fsImpl.readFileSync(stdoutPath, "utf8"), { mode });
     actions = transcript.actions;
+    warnings = transcript.warnings;
     violations.push(...transcript.violations);
   }
-  return { ok: violations.length === 0, mode, baseRef, branch, actualBranch, committed, dirty, actions, violations };
+  return { ok: violations.length === 0, mode, baseRef, branch, actualBranch, committed, dirty, actions, warnings, violations };
 }
 
 /** Persist an audit record outside the worker-writable worktree. */

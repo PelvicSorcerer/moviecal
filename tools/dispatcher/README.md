@@ -56,7 +56,7 @@ tools/dispatcher/
     linear-client.mjs        minimal Linear GraphQL client (fetch-based)
     preflight.mjs            preflight gate logic (pure) + branch/worktree naming
     worker-routing.mjs       worker + model routing rubric (pure)
-    security-policy.mjs      hard-deny / needs-human command classification (pure)
+    security-policy.mjs      hard-deny / needs-human / warn command classification (pure)
     worker-guard.mjs         shared sandbox, credential stripping, transcript/diff audit, repair admission
     worker-publish.mjs       trusted non-force push and draft-PR creation after a clean audit
     worktree-manager.mjs     git worktree lifecycle + JSON state bookkeeping

@@ -6,18 +6,25 @@
 // trusted dispatcher process.
 
 // Word-only stand-ins for escaped shell operators: the placeholder itself
-// must contain none of `;`, `|`, `&`, or shellSegments' split below would
+// must contain none of `;`, `|`, `&`, `<`, `>`, or shellSegments' split below would
 // re-split on the placeholder's own text and undo the escaping it exists to
 // provide (MOV-244 hit this with a quoted `\|` inside a `grep` pattern).
-const ESCAPED_OPERATOR_PLACEHOLDERS = { ";": "__escaped_semicolon__", "|": "__escaped_pipe__", "&": "__escaped_amp__" };
+const ESCAPED_OPERATOR_PLACEHOLDERS = {
+  ";": "__escaped_semicolon__",
+  "|": "__escaped_pipe__",
+  "&": "__escaped_amp__",
+  "<": "__escaped_lt__",
+  ">": "__escaped_gt__",
+};
 
-// Quoted operators are literal arguments (for example grep -E "a|b"),
-// not shell boundaries. Keep substitutions and shell-wrapper bodies visible
-// to the conservative audit rather than trying to parse executable shell code.
+// Quoted operators are literal arguments (for example grep -E "a|b", or the
+// comparison in awk '$3 > $2'), not shell boundaries or redirects. Keep
+// substitutions and shell-wrapper bodies visible to the conservative audit
+// rather than trying to parse executable shell code.
 function protectQuotedOperators(text) {
-  if (/\$\(|`/.test(text) || /\b(?:sh|bash|zsh)\s+-c\b/.test(text)) return text;
+  if (/\$\(|`/.test(text) || /\b(?:sh|bash|zsh)\s+-c\b|\beval\b/.test(text)) return text;
   return text.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, (quoted) =>
-    quoted.replace(/[;|&]/g, (operator) => ESCAPED_OPERATOR_PLACEHOLDERS[operator]),
+    quoted.replace(/[;|&<>]/g, (operator) => ESCAPED_OPERATOR_PLACEHOLDERS[operator]),
   );
 }
 
@@ -29,7 +36,7 @@ function canonicalize(text, { lines = false } = {}) {
     // An escaped shell operator is literal data, not a command separator. Keep
     // it distinct while normalizing so a regex such as `foo\\|git` cannot be
     // mistaken for a pipeline that invokes Git.
-    .replace(/\\([;|&])/g, (_, operator) => ESCAPED_OPERATOR_PLACEHOLDERS[operator])
+    .replace(/\\([;|&<>])/g, (_, operator) => ESCAPED_OPERATOR_PLACEHOLDERS[operator])
     .replace(/\\\s/g, " ")
     .replace(/["'`]/g, "");
   return (lines ? normalized.replace(/[^\S\n]+/g, " ").replace(/\s*\n\s*/g, "\n") : normalized.replace(/\s+/g, " "))
@@ -374,35 +381,27 @@ function isCredentialOperation(segment) {
   return /\bnpm\b[^\n]*(?:secret|credential|token|password)/.test(withoutRunInvocation);
 }
 
-// Protected repository paths are protected from modification, not from the
-// orientation reads every worker must make before acting. Keep this list small
-// and intentionally boring: an unknown command mentioning a protected path is
-// a safety denial, while these commands can only inspect it. `sed -i` is the
-// important exception because it mutates in place.
+// --- Protected paths (MOV-400) ---------------------------------------------
+//
+// Two layers enforce protected paths without reading command text: the
+// Seatbelt profile from buildWorkerSandboxProfile denies every write to them,
+// and auditChangedPaths fails publication when one appears in the worker's
+// diff, however it was written. The command audit therefore blocks only a
+// command that clearly *writes* a protected path, so intent still surfaces
+// when the sandbox stopped it. A command that merely names one is an audit
+// warning, and a known read-only inspection is not reported at all.
+//
+// Write detection is lexical and deliberately generous: a redirect target, a
+// `tee` operand, an in-place `sed`/`perl`/`awk` edit, a `cp`/`ln` destination,
+// any `mv`/`rm`/editor operand, or a mutating `find`. When the written operand
+// is only a variable (`"$f"`), a find/xargs placeholder, or input from `xargs`,
+// it counts as a write of every protected path the action names. What it
+// misses is still stopped by the sandbox and the diff audit.
+
+// Known read-only inspections of a protected path are not reported. Keep this
+// list small and boring; anything else that names a path without writing it
+// is a warning, not a denial.
 const READ_ONLY_PATH_COMMANDS = /^(?:cat|head|tail|grep|rg|ls|stat|sed|find)\b/;
-
-function writesProtectedPath(segment, pathRule) {
-  // A protected path on the right of a shell redirect is a write even when the
-  // command on the left is ordinarily read-only (for example,
-  // `cat README.md > AGENTS.md`).
-  if (new RegExp(`(?:^|\\s)\\d?(?:>>|>)\\s*${pathRule.source}`).test(segment)) return true;
-  // `sed` is read-only unless explicitly asked to edit in place.
-  if (/^(?:sed)\b[^\n]*(?:\s-[a-z]*i[a-z]*(?:\s|$)|\s--in-place(?:=|\s|$))/.test(segment)) return true;
-  // `find` only ever mutates through one of its action primaries: -exec/-ok
-  // (and their -dir variants) run an arbitrary command, -delete removes
-  // matches, and -fprint*/-fls write results to a file. A protected path can
-  // otherwise appear anywhere in a `find` invocation — as a match target
-  // (`-name`) or a comparison argument (`-newer`) — without ever being
-  // written to.
-  return /^find\b[^\n]*(?:^|\s)-(?:exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)\b/.test(segment);
-}
-
-function isReadOnlyProtectedPathInspection(normalized, pathRule) {
-  const references = shellSegments(normalized).filter((segment) => pathRule.test(segment));
-  return references.length > 0 && references.every(
-    (segment) => READ_ONLY_PATH_COMMANDS.test(segment) && !writesProtectedPath(segment, pathRule),
-  );
-}
 
 // A repair worker must still be able to read and run the paths repair mode
 // marks read-only (tests, dispatcher code, governance docs, test config) —
@@ -416,11 +415,121 @@ function writesTestSnapshot(segment) {
   return /^(?:npx\s+)?(?:vitest|playwright)\b[^\n]*\s(?:-u|--update(?:-snapshots)?)\b/.test(segment);
 }
 
-function isReadOnlyRepairInspection(normalized, pathRule) {
-  const references = shellSegments(normalized).filter((segment) => pathRule.test(segment));
-  return references.length > 0 && references.every(
-    (segment) => REPAIR_READ_ONLY_COMMANDS.test(segment) && !writesProtectedPath(segment, pathRule) && !writesTestSnapshot(segment),
+// Commands that change every file operand they are given.
+const OPERAND_WRITERS = /^(?:rm|rmdir|unlink|mv|touch|truncate|chmod|chown|chgrp|chflags|xattr|mkdir|shred|srm|trash|tee|edit|ed|ex|vi|vim|nvim|nano|emacs|pico)$/;
+// Commands that write only their destination: `-t DIR`, else the last operand.
+const DESTINATION_WRITERS = /^(?:cp|ln|install|rsync|ditto)$/;
+// Words that run the command after them. Their own options are skipped.
+const COMMAND_WRAPPERS = /^(?:do|then|else|elif|if|while|until|!|\{|time|nohup|command|builtin|exec|eval|sudo|doas|env|nice|timeout|sh|bash|zsh|dash|ksh)$/;
+// xargs options that take a separate argument (lowercased by canonicalize).
+const XARGS_ARGUMENT_OPTIONS = /^-(?:[ilnpsedaj]|-(?:max-args|max-lines|max-procs|delimiter|eof|arg-file|replace))$/;
+// A find primary that runs a command, deletes, or writes a file.
+const FIND_MUTATION = /(?:^|\s)-(?:exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)\b/;
+// An operand that is only a variable or a placeholder: its value is unknown.
+const INDIRECT_OPERAND = /^(?:\$(?:\{?[a-z_][a-z0-9_]*\}?|\d|@|\*)|\{\})$/;
+const REDIRECTION = /(?:\d+)?(>>|>\||>&|>|<>|<<<|<<-?|<&|<)\s*([^\s<>]*)/g;
+
+function pathToken(token) {
+  return token.replace(/^\(+/, "").replace(/\)+$/, "").replace(/^(?:\.\/)+/, "");
+}
+
+function isWriter(word) {
+  const name = basename(pathToken(word));
+  return OPERAND_WRITERS.test(name) || DESTINATION_WRITERS.test(name) || /^(?:sed|perl|g?awk|dd|find)$/.test(name);
+}
+
+// Skip wrappers (`do`, `sudo`, `sh -c`, `xargs -n1` …) to reach the command a
+// segment actually runs. `viaXargs` means operands also arrive on stdin;
+// `placeholder` means xargs substitutes them explicitly (`-I{}`).
+function effectiveCommand(words) {
+  let index = 0;
+  let viaXargs = false;
+  let placeholder = false;
+  while (index < words.length) {
+    const word = pathToken(words[index]);
+    if (/^[a-z_][a-z0-9_]*=/.test(word) || word === "") {
+      index += 1;
+    } else if (basename(word) === "xargs") {
+      viaXargs = true;
+      index += 1;
+      while (index < words.length && words[index].startsWith("-")) {
+        if (/^-(?:i|j)|^--replace/.test(words[index])) placeholder = true;
+        const takesArgument = XARGS_ARGUMENT_OPTIONS.test(words[index]);
+        index += 1;
+        if (takesArgument && index < words.length && !isWriter(words[index])) index += 1;
+      }
+    } else if (COMMAND_WRAPPERS.test(basename(word))) {
+      const wrapper = basename(word);
+      index += 1;
+      while (index < words.length && (words[index].startsWith("-") || /^[a-z_][a-z0-9_]*=/.test(words[index])
+        || ((wrapper === "nice" || wrapper === "timeout") && /^[\d.]+[smhd]?$/.test(words[index])))) index += 1;
+    } else {
+      break;
+    }
+  }
+  return { name: index < words.length ? basename(pathToken(words[index])) : null, args: words.slice(index + 1), viaXargs, placeholder };
+}
+
+// The operands one shell segment writes. Redirect targets are writes whatever
+// the command; the command's own write positions are added on top.
+function segmentWriteTargets(segment) {
+  const targets = [];
+  const bare = segment.replace(REDIRECTION, (_match, operator, target) => {
+    const fdDuplicate = operator === ">&" && /^(?:\d+|-)?$/.test(target);
+    if ((operator.startsWith(">") || operator === "<>") && !fdDuplicate) targets.push(target);
+    return " ";
+  });
+  const words = bare.split(" ").filter(Boolean);
+  const { name, args, viaXargs, placeholder } = effectiveCommand(words);
+  if (!name) return targets;
+  const operands = args.filter((arg) => !arg.startsWith("-"));
+  // Arguments from stdin are appended after the written command's own.
+  if (viaXargs && !placeholder) operands.push("{}");
+
+  if (name === "find") {
+    // A mutating find names its targets anywhere: a start directory, a
+    // `-name` match, or the file a `-fprint` writes. Its `{}` is find's own
+    // match, already covered by those names.
+    if (FIND_MUTATION.test(segment)) targets.push(...args.filter((arg) => arg !== "{}"));
+  } else if (OPERAND_WRITERS.test(name) || args.some((arg) => arg === "--write" || arg === "--fix")) {
+    targets.push(...operands);
+  } else if (DESTINATION_WRITERS.test(name)) {
+    const target = args.findIndex((arg) => arg === "-t" || arg === "--target-directory");
+    const inline = args.find((arg) => arg.startsWith("--target-directory="));
+    if (inline) targets.push(inline.slice("--target-directory=".length));
+    else if (target !== -1 && target + 1 < args.length) targets.push(args[target + 1]);
+    else if (operands.length > 1 || viaXargs) targets.push(operands.at(-1));
+  } else if ((name === "sed" && args.some((arg) => /^(?:-[a-z]*i|--in-place)/.test(arg)))
+    || (name === "perl" && args.some((arg) => /^-[a-z]*i/.test(arg)))
+    || (/^g?awk$/.test(name) && args.includes("inplace"))) {
+    targets.push(...operands);
+  } else if (name === "dd") {
+    targets.push(...args.filter((arg) => arg.startsWith("of=")).map((arg) => arg.slice(3)));
+  }
+  return targets;
+}
+
+function namesPath(token, rule) {
+  return rule.token.test(pathToken(token));
+}
+
+// A bare word such as `test` is a mention only in a write position; anywhere
+// else it must look like a path (`docs/product`, `.claude`).
+function mentionsPath(text, rule) {
+  return rule.re.test(text) || text.split(/[\s;|&<>]+/).some((word) => /[./]/.test(word) && namesPath(word, rule));
+}
+
+function writesProtectedPath(normalized, rule, workerMode) {
+  const mentioned = mentionsPath(normalized, rule);
+  return shellSegments(normalized).some((segment) =>
+    (workerMode === "repair" && rule.repair && mentionsPath(segment, rule) && writesTestSnapshot(segment))
+    || segmentWriteTargets(segment).some((target) => namesPath(target, rule) || (mentioned && INDIRECT_OPERAND.test(pathToken(target)))),
   );
+}
+
+function isReadOnlyInspection(normalized, rule, readOnlyCommands) {
+  const references = shellSegments(normalized).filter((segment) => mentionsPath(segment, rule));
+  return references.length > 0 && references.every((segment) => readOnlyCommands.test(segment));
 }
 
 // A scope rule protects the dispatcher's ownership of an operational tool.
@@ -468,21 +577,24 @@ export const COMMAND_RULES = [
   { re: /\b(?:ssh|scp|sftp)\b/, reason: "direct SSH transport is not available to workers", category: "scope" },
 ];
 
+// `re` finds a mention anywhere in the action; `token` matches one written
+// operand. `reason` is the hard-deny for a detected write, and `path` names
+// the protected path in the warning for a mention.
 export const PATH_RULES = [
-  { re: /(?:^|\s)\.github\/workflows\//, reason: "modifies .github/workflows/**", category: "safety" },
-  { re: /(?:^|\s)agents\.md\b/, reason: "edits AGENTS.md", category: "safety" },
-  { re: /\.github\/copilot-instructions\.md\b/, reason: "edits .github/copilot-instructions.md", category: "safety" },
-  { re: /(?:^|\s)docs\/product\//, reason: "edits docs/product/**", category: "safety" },
-  { re: /(?:^|\s)\.claude\//, reason: "edits worker permission policy", category: "safety" },
-  { re: /(?:^|\s)\.codex\//, reason: "edits worker sandbox policy", category: "safety" },
+  { re: /(?:^|\s)\.github\/workflows\//, token: /^\.github\/workflows(?:\/|$)/, path: ".github/workflows/**", reason: "modifies .github/workflows/**", category: "safety" },
+  { re: /(?:^|\s)agents\.md\b/, token: /^agents\.md$/, path: "AGENTS.md", reason: "edits AGENTS.md", category: "safety" },
+  { re: /\.github\/copilot-instructions\.md\b/, token: /(?:^|\/)\.github\/copilot-instructions\.md$/, path: ".github/copilot-instructions.md", reason: "edits .github/copilot-instructions.md", category: "safety" },
+  { re: /(?:^|\s)docs\/product\//, token: /^docs\/product(?:\/|$)/, path: "docs/product/**", reason: "edits docs/product/**", category: "safety" },
+  { re: /(?:^|\s)\.claude\//, token: /^\.claude(?:\/|$)/, path: ".claude/**", reason: "edits worker permission policy", category: "safety" },
+  { re: /(?:^|\s)\.codex\//, token: /^\.codex(?:\/|$)/, path: ".codex/**", reason: "edits worker sandbox policy", category: "safety" },
 ];
 
 const REPAIR_ONLY_RULES = [
-  { re: /(?:^|\s)(?:test|tests|e2e)\//, reason: "repair workers cannot change tests" },
-  { re: /(?:^|\s)docs\/(?:governance|operators|planning)\//, reason: "repair workers cannot change governance" },
-  { re: /(?:^|\s)tools\/dispatcher\//, reason: "repair workers cannot change their dispatcher guard" },
-  { re: /(?:^|\s)(?:package(?:-lock)?\.json|(?:playwright|vitest(?:\.[\w-]+)?)\.config\.[cm]?[jt]s)\b/, reason: "repair workers cannot change test execution configuration" },
-];
+  { re: /(?:^|\s)(?:test|tests|e2e)\//, token: /^(?:test|tests|e2e)(?:\/|$)/, path: "test/**, tests/** or e2e/**", reason: "repair workers cannot change tests" },
+  { re: /(?:^|\s)docs\/(?:governance|operators|planning)\//, token: /^docs\/(?:governance|operators|planning)(?:\/|$)/, path: "governance docs", reason: "repair workers cannot change governance" },
+  { re: /(?:^|\s)tools\/dispatcher\//, token: /^tools\/dispatcher(?:\/|$)/, path: "tools/dispatcher/**", reason: "repair workers cannot change their dispatcher guard" },
+  { re: /(?:^|\s)(?:package(?:-lock)?\.json|(?:playwright|vitest(?:\.[\w-]+)?)\.config\.[cm]?[jt]s)\b/, token: /^(?:package(?:-lock)?\.json|(?:playwright|vitest(?:\.[\w-]+)?)\.config\.[cm]?[jt]s)$/, path: "test execution configuration", reason: "repair workers cannot change test execution configuration" },
+].map((rule) => ({ ...rule, category: "safety", repair: true }));
 
 const HUMAN_DECISION_PATTERNS = [
   { re: /(?:^|\s)supabase\/migrations\//, reason: "database migration touching existing tables — needs human review" },
@@ -497,27 +609,34 @@ function classifyNormalized({ command: normalized, script, hasSubstitution }, wo
     const subject = credential ? normalized : script;
     if ((test ? test(subject) : re.test(subject))) return { verdict: "hard-deny", reason, category };
   }
-  for (const { re, reason, category } of PATH_RULES) {
-    if (re.test(normalized) && (hasSubstitution || !isReadOnlyProtectedPathInspection(normalized, re))) {
-      return { verdict: "hard-deny", reason, category };
+  // A write blocks. A command substitution is shell the audit cannot read, so
+  // one that shares an action with a protected path stays blocking too. A
+  // plain mention is only a warning: see "Protected paths" above.
+  let warning = null;
+  const pathRules = workerMode === "repair" ? [...PATH_RULES, ...REPAIR_ONLY_RULES] : PATH_RULES;
+  for (const rule of pathRules) {
+    const mentioned = mentionsPath(normalized, rule);
+    if (writesProtectedPath(normalized, rule, workerMode) || (hasSubstitution && rule.re.test(normalized))) {
+      return { verdict: "hard-deny", reason: rule.reason, category: rule.category };
     }
-  }
-  if (workerMode === "repair") {
-    for (const { re, reason } of REPAIR_ONLY_RULES) {
-      if (re.test(normalized) && (hasSubstitution || !isReadOnlyRepairInspection(normalized, re))) {
-        return { verdict: "hard-deny", reason, category: "safety" };
-      }
+    const readOnlyCommands = rule.repair ? REPAIR_READ_ONLY_COMMANDS : READ_ONLY_PATH_COMMANDS;
+    if (!warning && mentioned && !isReadOnlyInspection(normalized, rule, readOnlyCommands)) {
+      warning = { verdict: "warn", reason: `names protected path ${rule.path} without writing it`, category: rule.category };
     }
   }
   for (const { re, reason } of HUMAN_DECISION_PATTERNS) {
     if (re.test(normalized)) return { verdict: "needs-human", reason, category: "safety" };
   }
-  return { verdict: "allow", reason: null, category: null };
+  return warning ?? { verdict: "allow", reason: null, category: null };
 }
 
-const VERDICT_SEVERITY = { allow: 0, "needs-human": 1, "hard-deny": 2 };
+const VERDICT_SEVERITY = { allow: 0, warn: 1, "needs-human": 2, "hard-deny": 3 };
 
-/** Classify a structured tool command or file path. */
+/**
+ * Classify a structured tool command or file path. The verdict is `allow`,
+ * `warn` (names a protected path without writing it), `needs-human`, or
+ * `hard-deny`.
+ */
 export function classifyAction(text, { workerMode = "implementation" } = {}) {
   const raw = String(text || "");
   const unwrapped = unwrapShellWrapper(raw) ?? raw;
