@@ -7,6 +7,7 @@
 // logic — which is the part worth getting right — is fully unit-testable
 // with fakes. See bin/dispatcher.mjs for how real dependencies are wired up.
 
+import fs from "node:fs";
 import path from "node:path";
 import { evaluatePreflight, worktreeName, branchName, resolveWorkflowEditAuthorization, IOS_COMPANION_APP_PROJECT } from "./preflight.mjs";
 import { confirmRoutingUnchanged, resolveRouting, resolveDispatchWorker, workerProbeWinners, workerInvocation } from "./worker-routing.mjs";
@@ -72,6 +73,37 @@ import { budgetUnitForWorker } from "./budget-unit.mjs";
  * @param {(args: {exitCode: number, logTail: string, auditText: string}) => Promise<{ok: true, confident: boolean, diagnosis: string, evidence: string|null}|{ok: false, reason: string}>} [ctx.diagnoseFailureFn] - MOV-179: advisory-only, single bounded call that writes a grounded diagnosis into the residual "unrecognized failure" `Needs Human Decision` comment (worker-diagnosis.mjs). Never changes whether or how an issue escalates -- any failure, rejection, or missing wiring falls back to today's plain comment. Only called for failures with no dedicated classification of their own (not rate-limit, not credential-failure, not a security-policy block); defaults to a no-op that always reports no diagnosis
  * @returns {Promise<Array<{issue: string, outcome: string, [key: string]: unknown}>>}
  */
+// MOV-180/MOV-299/MOV-402: one comment per recognized nested-sandbox signature
+// (failure-classification.mjs). Each states the evidence it was based on.
+const NESTED_SANDBOX_VARIANTS = {
+  "exit-71": {
+    reason: (exitCode) => `worker exited ${exitCode} with the nested-sandbox-crash signature`,
+    headline: "**Environment failure, not a task failure: nested macOS sandbox crash (MOV-180).**",
+    explanation: () => "This run failed before it could do any real work: the harness's own tool sandbox could not apply a second Seatbelt profile inside the one `worker-guard.mjs` already applies to the worker process (`sandbox_apply: Operation not permitted`, exit 71). Every worker on this Mac fails identically while this condition holds — it is not specific to this issue, and re-running it here will not help.",
+    recovery: ": a clean `launchctl bootout` + `launchctl bootstrap` of `com.moviecal.dispatcher` (`launchctl kickstart -k` is not sufficient)",
+  },
+  "native-command": {
+    reason: (exitCode) => `worker exited ${exitCode}; its local command could not start (sandbox_apply: Operation not permitted) and no local command succeeded`,
+    headline: "**Environment failure, not a task failure: the worker's local sandbox could not start a command (MOV-402).**",
+    explanation: (exitCode) => `This run did no local work: the worker's own structured transcript shows a local command that \`sandbox-exec\` refused to start (\`sandbox_apply: Operation not permitted\`), and no local command or file change succeeded at any point (worker exit ${exitCode}). The security audit still records that command as attempted; that is not evidence the sandbox works. Every worker on this Mac may fail identically while this condition holds — it is not specific to this issue, and re-running it here will not help.`,
+    recovery: "",
+  },
+  "agent-report": {
+    reason: (exitCode) => `worker exited ${exitCode} with sandbox_apply: Operation not permitted before an executed tool action`,
+    headline: "**Environment failure, not a task failure: nested macOS sandbox crash (MOV-299).**",
+    explanation: (exitCode) => `This run failed before it could do any real work: the worker reported \`sandbox_apply: Operation not permitted\` before an executed tool action (worker exit ${exitCode}). Every worker on this Mac may fail identically while this condition holds — it is not specific to this issue, and re-running it here will not help.`,
+    recovery: "",
+  },
+};
+
+function readTranscript(logDir) {
+  try {
+    return fs.readFileSync(path.join(logDir, "stdout.log"), "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
 // MOV-180/MOV-177: the host-wide breakers that gate *dispatch* (never the
 // rest of a poll cycle — reconcile/parent/priority-propagation/promote all
 // run as separate calls in bin/dispatcher.mjs's cmdRunOnce that never consult
@@ -1302,8 +1334,6 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     return { issue: issue.identifier, outcome: "security-blocked", violations: securityReport.violations };
   }
 
-  verificationEvidence = captureVerificationEvidenceFn(logDir);
-
   // A native harness can prove that a scope-only command never reached the
   // shell, and a command that only named a protected path changed nothing the
   // diff audit could see (MOV-400). Keep both visible, but do not let them
@@ -1334,64 +1364,51 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     });
   }
 
-  // MOV-299: Codex can narrate a first-tool sandbox refusal and exit 0. Run
-  // this dedicated host-failure check before the ordinary nonzero-exit gate;
-  // its classifier requires both the structured report and no audited tool
-  // activity, so an arbitrary zero-change/zero-exit result still follows the
-  // normal publication path below.
+  // MOV-299/MOV-402: Codex can hit a first-tool sandbox refusal and still
+  // exit 0. Run this dedicated host-failure check before the ordinary
+  // nonzero-exit gate, before readiness evidence is captured, and before the
+  // breaker-clearing success path below. It reads the full structured
+  // transcript for local startup evidence rather than the security audit's
+  // `executed` outcome, which records attempts, not proof a command started.
   const tail = tailLogs(logDir, 50);
   const classification = classifyWorkerFailure({
     exitCode: spawnResult.exitCode,
     logTail: tail,
+    transcript: readTranscript(logDir),
     toolActions: securityReport.actions,
   });
 
   if (classification?.category === NESTED_SANDBOX_CRASH) {
-    // MOV-180/MOV-299: this is an environment-wide fault, not a task failure
-    // — every worker on this Mac hits it identically while it holds. Requeue
-    // the issue for a later retry instead of leaving it looking like a real
-    // per-issue failure in Needs Human Decision, and stop dispatching anything
-    // else until the condition is confirmed cleared.
-    const legacyNestedSandboxCrash = spawnResult.exitCode === 71;
-    circuitBreaker.trip(
-      NESTED_SANDBOX_CRASH,
-      legacyNestedSandboxCrash
-        ? `worker exited ${spawnResult.exitCode} with the nested-sandbox-crash signature`
-        : `worker exited ${spawnResult.exitCode} with sandbox_apply: Operation not permitted before an executed tool action`,
-    );
+    // MOV-180/MOV-299/MOV-402: this is an environment-wide fault, not a task
+    // failure — every worker on this Mac hits it identically while it holds.
+    // Requeue the issue for a later retry instead of leaving it looking like a
+    // real per-issue failure in Needs Human Decision, and stop dispatching
+    // anything else until the condition is confirmed cleared. Returning here
+    // also means this attempt never clears a breaker, records readiness
+    // evidence, asks for an advisory diagnosis, or publishes.
+    const variant = NESTED_SANDBOX_VARIANTS[classification.signature] ?? NESTED_SANDBOX_VARIANTS["agent-report"];
+    circuitBreaker.trip(NESTED_SANDBOX_CRASH, variant.reason(spawnResult.exitCode));
     worktreeManager.markStatus(issue.identifier, "failed");
     await publisher.publish("error", {
       stateId: stateIds.readyForAgent,
       summary: "Worker hit a host-wide nested-sandbox crash, not a task failure. Requeued to Ready for Agent; dispatch is paused until the Mac is fixed.",
-      headline: legacyNestedSandboxCrash
-        ? "**Environment failure, not a task failure: nested macOS sandbox crash (MOV-180).**"
-        : "**Environment failure, not a task failure: nested macOS sandbox crash (MOV-299).**",
-      sections: legacyNestedSandboxCrash
-        ? [
-            "This run failed before it could do any real work: the harness's own tool sandbox could not apply a second Seatbelt profile inside the one `worker-guard.mjs` already applies to the worker process (`sandbox_apply: Operation not permitted`, exit 71). Every worker on this Mac fails identically while this condition holds — it is not specific to this issue, and re-running it here will not help.",
-            "",
-            "This issue has been moved back to `Ready for Agent` rather than `Needs Human Decision`, and the dispatcher has stopped starting any further issue until the condition is confirmed cleared. See docs/operators/local-execution.md §Security model for the manual recovery procedure: a clean `launchctl bootout` + `launchctl bootstrap` of `com.moviecal.dispatcher` (`launchctl kickstart -k` is not sufficient).",
-            "",
-            "```",
-            tail,
-            "```",
-            "",
-            `Full run log: \`${logDir}\``,
-          ]
-        : [
-            `This run failed before it could do any real work: the worker reported \`sandbox_apply: Operation not permitted\` before an executed tool action (worker exit ${spawnResult.exitCode}). Every worker on this Mac may fail identically while this condition holds — it is not specific to this issue, and re-running it here will not help.`,
-            "",
-            "This issue has been moved back to `Ready for Agent` rather than `Needs Human Decision`, and the dispatcher has stopped starting any further issue until the condition is confirmed cleared. See docs/operators/local-execution.md §Security model for the manual recovery procedure.",
-            "",
-            "```",
-            tail,
-            "```",
-            "",
-            `Full run log: \`${logDir}\``,
-          ],
+      headline: variant.headline,
+      sections: [
+        variant.explanation(spawnResult.exitCode),
+        "",
+        `This issue has been moved back to \`Ready for Agent\` rather than \`Needs Human Decision\`, and the dispatcher has stopped starting any further issue until the condition is confirmed cleared. The retained worktree is \`${entry.path}\`. See docs/operators/local-execution.md §Security model for the manual recovery procedure${variant.recovery}.`,
+        "",
+        "```",
+        tail,
+        "```",
+        "",
+        `Full run log: \`${logDir}\``,
+      ],
     });
-    return { issue: issue.identifier, outcome: "nested-sandbox-crash", exitCode: spawnResult.exitCode };
+    return { issue: issue.identifier, outcome: "nested-sandbox-crash", exitCode: spawnResult.exitCode, signature: classification.signature };
   }
+
+  verificationEvidence = captureVerificationEvidenceFn(logDir);
 
   // Auth and quota failures keep their existing precedence even if the last
   // model event happened to cross the turn threshold before the process quit.
