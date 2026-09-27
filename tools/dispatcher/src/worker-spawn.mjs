@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { Transform } from "node:stream";
+import { isCodexWorkItemEvent } from "./budget-unit.mjs";
 import {
   buildWorkerSandboxProfile,
   guardedInvocation,
@@ -90,7 +91,11 @@ function makeTurnBoundaryParser(onTurnComplete) {
   };
 }
 
-/** Count live model responses without a CLI turn-limit flag or transcript reread. */
+/**
+ * Count live budget units without a CLI turn-limit flag or transcript reread:
+ * Claude assistant messages (once per id), or completed Codex work items
+ * (`codex exec` reports a whole run as one `turn.completed`, MOV-387).
+ */
 export function makeAssistantTurnCounter(worker, onTurn) {
   let carry = "";
   let turns = 0;
@@ -106,7 +111,7 @@ export function makeAssistantTurnCounter(worker, onTurn) {
         const id = event.message.id;
         if (id && seen.has(id)) continue;
         if (id) seen.add(id);
-      } else if (!(worker === "codex" && event?.type === "turn.completed")) {
+      } else if (!(worker === "codex" && isCodexWorkItemEvent(event))) {
         continue;
       }
       turns += 1;

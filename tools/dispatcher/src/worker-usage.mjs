@@ -11,6 +11,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { JsonStateStore } from "./state-store.mjs";
+import { budgetUnitForWorker, isCodexWorkItemEvent } from "./budget-unit.mjs";
 import { evaluateClaudeInit, isClaudeInitEvent } from "./worker-startup-check.mjs";
 
 export const USAGE_SCHEMA_VERSION = 2;
@@ -131,6 +132,7 @@ export function parseWorkerUsage(transcript, {
     tier: identifier(tier), reasoningEffort: identifier(reasoningEffort),
     trial: sanitizeTrial(trial),
     startedAt: timestamp(startedAt), endedAt: timestamp(endedAt),
+    budgetUnit: budgetUnitForWorker(worker), budgetCount: null,
     turns: null, turnsSource: null, durationMs: wall, wallDurationMs: wall, durationSource: wall === null ? null : "manifest-wall-clock",
     costUsd: null, costSource: null, costEstimateUsd: null,
     inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, thinkingTokens: null,
@@ -147,6 +149,7 @@ export function parseWorkerUsage(transcript, {
   let initEvent = null;
   const codexUsageEvents = [];
   let codexFailed = false;
+  let codexItems = 0;
   const seenCommands = new Set();
   const toolNames = new Map();
   let malformed = false;
@@ -156,6 +159,7 @@ export function parseWorkerUsage(transcript, {
     try { event = JSON.parse(line); } catch { malformed = true; continue; }
     if (!event || typeof event !== "object") continue;
     if (worker === "claude" && event.type === "result") result = event;
+    if (worker === "codex" && isCodexWorkItemEvent(event)) codexItems += 1;
     if (worker === "claude" && !initEvent && isClaudeInitEvent(event)) initEvent = event;
     if (worker === "codex" && (event.type === "turn.completed" || event.type === "thread.completed")) {
       if (event.usage && typeof event.usage === "object") codexUsageEvents.push(event.usage);
@@ -237,7 +241,10 @@ export function parseWorkerUsage(transcript, {
     summary.usageAggregation = folded.aggregation;
     summary.partial = malformed || codexFailed || folded.events === 0;
   }
-  if (summary.turns === null && number(observedTurns) !== null && observedTurns > 0) {
+  if (worker === "codex") summary.budgetCount = codexItems > 0 ? codexItems : number(observedTurns);
+  else if (worker === "claude") summary.budgetCount = summary.turns ?? number(observedTurns);
+  // A Codex observed count is work items, not turns, so it never stands in for `turns`.
+  if (summary.turns === null && worker !== "codex" && number(observedTurns) !== null && observedTurns > 0) {
     summary.turns = observedTurns;
     summary.turnsSource = "dispatcher-observed";
   } else if (summary.turns !== null) {
@@ -314,7 +321,8 @@ export function formatUsageLine(usage) {
   if (!usage) return "Usage: unavailable.";
   const fields = [usage.modelId || usage.worker || "unknown model", `(${usage.tier || "unknown tier"})`];
   if (usage.reasoningEffort) fields.push(`effort: ${usage.reasoningEffort}`);
-  if (usage.turns != null) fields.push(`${usage.turns} turns`);
+  if (usage.budgetUnit === "codex-items" && usage.budgetCount != null) fields.push(`${usage.budgetCount} work items (unit: ${usage.budgetUnit})`);
+  else if (usage.turns != null) fields.push(`${usage.turns} turns${usage.budgetUnit ? ` (unit: ${usage.budgetUnit})` : ""}`);
   if (usage.durationMs != null) fields.push(`${Math.round(usage.durationMs / 60000)}m`);
   if (usage.costUsd != null) fields.push(`~$${usage.costUsd.toFixed(2)} API-equivalent`);
   if (usage.cacheReadTokens != null) fields.push(`${(usage.cacheReadTokens / 1e6).toFixed(1)}M cache-read`);

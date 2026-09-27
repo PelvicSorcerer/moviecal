@@ -68,7 +68,28 @@ Overrides accept `low`, `medium`, `high`, `xhigh`, `max`, or `none`; `none` omit
 
 Overrides must be positive safe integers; an invalid value stops routing before a worktree or worker is started. These are initial guardrails above the observed medians, allowing ordinary runs room to finish. The 2026-09-25 most expensive runs took 130–200 turns, so the **250-turn strong default would not have stopped them**. It limits still longer runs while avoiding a sudden cutoff near the strong-tier median; review and lower these values using [MOV-363](https://linear.app/moviecal/issue/MOV-363/record-per-run-worker-usage-and-report-it-on-the-issue) per-run usage data after live experience. A 45-minute wall-clock timeout remains an independent backstop.
 
-The dispatcher counts Claude assistant messages from its live `stream-json` output and Codex `turn.completed` events from `--json`; neither uses a CLI turn-limit flag. If Codex emits no completed-turn events, its wall-clock timeout is the only runtime cap. At 85% of the budget, an opted-in Claude steering session receives one wrap-up prompt asking for `WORKER_PROGRESS.md`. Without steering, there is no prompt. At 100%, the dispatcher reaps the process group, retains the worktree, and tries one fresh-process continuation on the same worker and branch after worktree admission. A second budget stop, or failed admission, hands the retained worktree to a human with one summary comment. See `docs/operators/local-execution.md` for the continuation and handoff details.
+#### Budget units (MOV-387)
+
+The two workers are budgeted in different units, and usage records (`budgetUnit`, `budgetCount`) and the budget handoff comment name the unit so they are never compared as equal:
+
+| Worker | Unit | What is counted |
+|---|---|---|
+| `claude` | `claude-assistant-turns` | assistant messages in the live `stream-json` output, once per message id |
+| `codex` | `codex-items` | completed `command_execution`, `file_change`, `mcp_tool_call` and `agent_message` items in `codex exec --json` (`reasoning` is not counted) |
+
+In Codex a "turn" is one prompt-to-final-answer cycle, and `codex exec` takes a single prompt, so a whole run is expected to emit one `turn.completed` with all work reported as `item.*` events. Counting `turn.completed` would therefore never trip the budget. Codex is budgeted on completed work items instead; `turn.completed` is still used for token usage.
+
+**Measurement status: not yet confirmed.** The authoring worker had no real Codex `--json` export available, so the one-turn-per-run behaviour and per-type item counts are inferred from Codex's documented event model, not measured, and the defaults below are not yet derived from MOV-382 exports. Before relying on them, count `turn.completed` and each `item.completed` type in a completed run's `stdout.log`, record the numbers here, and set the defaults to about 3× the per-tier median. If a run really does emit one `turn.completed` per step, revert the counter to `turn.completed` and keep only the tests and docs.
+
+| Tier | Codex initial budget (items, unmeasured) | Environment override |
+|---|---:|---|
+| `cheap` | 60 | `MOVIECAL_CODEX_TURN_BUDGET_CHEAP` |
+| `default` | 150 | `MOVIECAL_CODEX_TURN_BUDGET_DEFAULT` |
+| `strong` | 300 | `MOVIECAL_CODEX_TURN_BUDGET_STRONG` |
+
+Overrides follow the same rule as the Claude ones (positive safe integer, otherwise routing fails before a worktree is created); only the routed worker's own overrides are validated. `dispatcher doctor` prints each worker's unit, per-tier limits and whether a wrap-up is possible. Codex has no steering channel, so it never gets the wrap-up prompt and its continuation brief says no progress file may exist and points at the diff summary.
+
+The dispatcher counts these units from live worker output; neither uses a CLI turn-limit flag. At 85% of the budget, an opted-in Claude steering session receives one wrap-up prompt asking for `WORKER_PROGRESS.md`. Without steering (always for Codex), there is no prompt. At 100%, the dispatcher reaps the process group, retains the worktree, and tries one fresh-process continuation on the same worker and branch after worktree admission. A second budget stop, or failed admission, hands the retained worktree to a human with one summary comment. See `docs/operators/local-execution.md` for the continuation and handoff details.
 
 For Codex, the tier maps to a `model_reasoning_effort` value passed via `-c`, and an explicit `--model` ID resolved by `codexModelIdForTier()` in `tools/dispatcher/src/worker-routing.mjs`:
 
