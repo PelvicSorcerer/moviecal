@@ -276,6 +276,14 @@ describe("worker guard", () => {
     }
   });
 
+  it("audits a heredoc's opener but not its file-content body (MOV-398)", () => {
+    const heredoc = (id, command) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "Bash", input: { command } }] } });
+    const dataOnly = heredoc("tool-3", "cat > test/list.integration.test.ts <<'EOF'\nimport { createClient } from \"@supabase/supabase-js\";\nconst token = \"test-token\";\nEOF");
+    expect(auditWorkerTranscript(dataOnly)).toMatchObject({ ok: true, warnings: [], violations: [] });
+    const protectedTarget = heredoc("tool-4", "cat > AGENTS.md <<'EOF'\n# Replaced\nEOF");
+    expect(auditWorkerTranscript(protectedTarget)).toMatchObject({ ok: false, violations: [{ reason: "edits AGENTS.md", category: "safety" }] });
+  });
+
   it("blocks protected diffs even if a tool transcript hid the write construction", () => {
     expect(auditChangedPaths(["src/app/page.tsx"], { mode: "repair" }).ok).toBe(true);
     expect(auditChangedPaths(["test/page.test.ts", ".github/workflows/verify.yml"], { mode: "repair" })).toMatchObject({
