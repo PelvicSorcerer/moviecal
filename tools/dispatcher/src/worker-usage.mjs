@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { JsonStateStore } from "./state-store.mjs";
 import { budgetUnitForWorker, isCodexWorkItemEvent } from "./budget-unit.mjs";
+import { evaluateClaudeInit, isClaudeInitEvent } from "./worker-startup-check.mjs";
 
 export const USAGE_SCHEMA_VERSION = 2;
 /** Origin stamped by the live dispatcher wiring only; fixtures and tests never set it. */
@@ -140,8 +141,12 @@ export function parseWorkerUsage(transcript, {
     exitOutcome: identifier(exitOutcome), terminationReason: identifier(terminationReason), providerStatus: null,
     verifyRuns: 0, toolCalls: {}, toolResultChars: {}, partial: true,
     availability: {}, availabilityNotes: {},
+    // MOV-386: the effective permission mode and tool set from Claude's own
+    // system/init event, against what workerInvocation() requested.
+    startupCheck: null,
   };
   let result = null;
+  let initEvent = null;
   const codexUsageEvents = [];
   let codexFailed = false;
   let codexItems = 0;
@@ -155,6 +160,7 @@ export function parseWorkerUsage(transcript, {
     if (!event || typeof event !== "object") continue;
     if (worker === "claude" && event.type === "result") result = event;
     if (worker === "codex" && isCodexWorkItemEvent(event)) codexItems += 1;
+    if (worker === "claude" && !initEvent && isClaudeInitEvent(event)) initEvent = event;
     if (worker === "codex" && (event.type === "turn.completed" || event.type === "thread.completed")) {
       if (event.usage && typeof event.usage === "object") codexUsageEvents.push(event.usage);
       if (event.type === "turn.completed") {
@@ -207,6 +213,7 @@ export function parseWorkerUsage(transcript, {
       }
     }
   }
+  if (worker === "claude") summary.startupCheck = evaluateClaudeInit(initEvent);
   if (worker === "claude" && result) {
     summary.turns = number(result.num_turns);
     const providerDuration = number(result.duration_ms);

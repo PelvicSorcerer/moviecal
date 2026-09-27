@@ -56,6 +56,21 @@ export const CLAUDE_WORKER_PERMISSION_DENIES = [
   "Edit(.codex/**)",
 ];
 
+// MOV-386: the complete built-in tool set a dispatched Claude worker (and a
+// repair worker, which shares workerInvocation()) may see. It is passed both
+// as the available set (`--tools`, so nothing else -- Workflow, Cron*,
+// ScheduleWakeup, RemoteTrigger, SendMessage, PushNotification, WebFetch,
+// WebSearch, Enter/ExitWorktree, DesignSync, Monitor -- is loaded at all) and
+// as the permission allowlist (`--allowedTools`). The deny list above still
+// applies on top: Claude evaluates deny before allow, so `Bash(git*)` refuses
+// a Git command even though `Bash` is allowed. `Task` stays so a worker can
+// delegate a broad search to a built-in subagent, which inherits this
+// session's tool set, permission mode, and denies.
+export const CLAUDE_WORKER_TOOLS = Object.freeze(["Read", "Edit", "Write", "Glob", "Grep", "Bash", "NotebookEdit", "Task"]);
+
+/** The only permission mode a headless Claude worker may run in (see workerInvocation()). */
+export const CLAUDE_WORKER_PERMISSION_MODE = "default";
+
 export const CLAUDE_WORKER_SETTINGS = {
   permissions: { deny: CLAUDE_WORKER_PERMISSION_DENIES },
   // Claude's own inner sandbox cannot nest within worker-guard.mjs's
@@ -65,6 +80,35 @@ export const CLAUDE_WORKER_SETTINGS = {
 
 const WORKER_LABEL_RE = /^worker:(claude|codex|any)$/;
 const MODEL_LABEL_RE = /^model:(cheap|default|strong)$/;
+
+const UPGRADE_LABEL_RE = /^upgrade:(multi-system|ambiguous-spec|security-critical|prior-failure|architecture)$/;
+
+/** Bounded routing inputs, independent of label ordering and unrelated labels. */
+export function routingInputs(issue) {
+  const labels = issue.labels || [];
+  const selection = (prefix, pattern) => {
+    const matches = labels.filter((label) => label.startsWith(prefix));
+    return {
+      values: [...new Set(matches.filter((label) => pattern.test(label)))].sort(),
+      count: Math.min(matches.length, 2),
+      invalid: matches.some((label) => !pattern.test(label)),
+    };
+  };
+  return {
+    worker: selection("worker:", WORKER_LABEL_RE),
+    model: selection("model:", MODEL_LABEL_RE),
+    upgrades: [...new Set(labels.filter((label) => UPGRADE_LABEL_RE.test(label)))].sort(),
+  };
+}
+
+/** A changed route must go through batch quota/trial admission on a later poll. */
+export function confirmRoutingUnchanged(issue, fresh) {
+  const poll = routingInputs(issue);
+  const refreshed = routingInputs(fresh);
+  const invalid = [refreshed.worker, refreshed.model].some((selection) => selection.invalid || selection.count > 1);
+  const unchanged = JSON.stringify(poll) === JSON.stringify(refreshed);
+  return { poll, refreshed, ok: unchanged && !invalid && resolveRouting(fresh).ok };
+}
 
 /**
  * Parse worker/model overrides out of a Linear issue's label list.
@@ -104,7 +148,7 @@ export function resolveRouting(issue) {
   const model = modelOverride || "default";
 
   const upgradeConditions = labels
-    .filter((l) => l.startsWith("upgrade:"))
+    .filter((l) => UPGRADE_LABEL_RE.test(l))
     .map((l) => l.slice("upgrade:".length));
 
   if (model === "strong" && upgradeConditions.length === 0) {
@@ -128,13 +172,15 @@ export function resolveRouting(issue) {
  * worker:any claim consults the trial: while it is active the claim is a
  * `trial.pending` Codex candidate (the run loop admits it under the lock right
  * before creating the worktree); otherwise -- disabled, expired, exhausted --
- * it keeps the baseline Claude route. An invalid trial config is a
+ * it requests the baseline Claude route. Fresh claims may use the other worker
+ * when cooldownOpen rejects the requested worker. Bindings and pins never switch.
+ * An invalid trial config is a
  * `configError`, never a silent fallback. Explicit pins and unlabeled issues
  * never consult the trial.
  *
  * @param {{trial?: {state: object, assignment: object|null}|null}} [opts]
  */
-export function resolveDispatchWorker(issue, { boundWorker = null, trial = null } = {}) {
+export function resolveDispatchWorker(issue, { boundWorker = null, trial = null, cooldownOpen = () => true } = {}) {
   const routing = resolveRouting(issue);
   const isAny = parseRoutingLabels(issue.labels || []).worker === "any";
   const assigned = trial?.assignment?.worker;
@@ -156,30 +202,46 @@ export function resolveDispatchWorker(issue, { boundWorker = null, trial = null 
     result.worker = "codex";
     result.trial = { trialId: state.trialId, pending: true, routingReason: trialRoutingReason(state.trialId), assignedAt: null };
   }
+  result.requestedWorker = result.worker;
+  if (!cooldownOpen(result.worker)) {
+    const alternative = result.worker === "claude" ? "codex" : "claude";
+    if (cooldownOpen(alternative)) {
+      result.worker = alternative;
+      result.trial = null; // A cooldown fallback is not a Codex trial assignment.
+      result.reason = `requested ${result.requestedWorker} worker unavailable; using ${alternative}`;
+    } else {
+      result.available = false;
+    }
+  }
   return result;
+}
+
+/** Reserve reset probes for eligible requested routes, giving due retries first choice.
+ * Both previews and dispatch use this policy; an unreserved alternative probe can
+ * be claimed by a fresh fallback at admission. This function never writes state.
+ */
+export function workerProbeWinners(issues, routes, cooldowns, { eligible, due }) {
+  return Object.fromEntries(["claude", "codex"].map((worker) => {
+    if (!cooldowns[worker]?.probeOwed) return [worker, null];
+    const candidates = issues.filter((issue, index) => routes[index].ok && routes[index].worker === worker && eligible(issue));
+    return [worker, (candidates.find(due) ?? candidates[0])?.id ?? null];
+  }));
 }
 
 // Both workers read their brief from stdin rather than a file path argument
 // (worker-spawn.mjs pipes it), since a stdin brief works identically whether
 // the worker binary reads from a real TTY-less pipe or a piped-in file.
 //
-// Claude's `-p` (print/non-interactive) mode starts in Manual permission mode
-// on every plan -- with no explicit mode set, a tool call that would need
-// approval genuinely blocks waiting for an answer that can never come in a
-// headless subprocess with no TTY (verified directly against the CLI version
-// installed on this Mac, 2.1.208). `--permission-mode dontAsk` is the fix:
-// it auto-denies anything not already covered by permissions.allow in
-// the base project allow list, the worker-only deny list below, or the
-// built-in read-only command set, instead of
-// prompting -- so an unmatched call fails cleanly rather than hanging. (A
-// newer, more precise combination -- `acceptEdits` plus `--permission-prompts
-// none` -- requires Claude Code v2.1.259+; the installed version rejects
-// `--permission-prompts` as an unknown option, so this uses the
-// version-compatible single flag instead.) Permission rules (including the
-// deny list in CLAUDE_WORKER_SETTINGS) are enforced by Claude Code's own
-// harness code, not by the model choosing to comply -- see
-// docs/operators/local-execution.md §Security model for what that boundary
-// does and does not cover.
+// Claude's headless workers must never wait for a person to approve a call.
+// On installed Claude Code 2.1.282, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 forces
+// default mode unconditionally, even with --allowedTools. Keep the credential
+// scrub and request default explicitly; --permission-prompts none (>=2.1.259)
+// automatically denies anything that would otherwise prompt. Older CLIs fail
+// on the unsupported flag; there is no fallback that can wait for approval.
+// --tools restricts availability and --allowedTools preapproves the same set;
+// the worker-only denies and outer OS guard remain authoritative. The startup
+// event confirms mode and tools; it does not report permission-prompts, whose
+// value is preserved in the manifest and proven by a live unapproved-call probe.
 /**
  * @param {"claude"|"codex"} worker
  * @param {"cheap"|"default"|"strong"} model
@@ -189,8 +251,9 @@ export function resolveDispatchWorker(issue, { boundWorker = null, trial = null 
  *   option). Claude only -- Codex has no equivalent interactive protocol, so
  *   `opts.steering` is silently ignored for it; the returned invocation is
  *   identical either way. Every existing safety flag
- *   (`--permission-mode dontAsk`, `--safe-mode`, `--strict-mcp-config`, the
- *   sandbox-disabling `--settings`) is unaffected -- steering only changes
+ *   (`--permission-mode default`, `--permission-prompts none`,
+ *   `--tools`/`--allowedTools`, `--safe-mode`,
+ *   `--strict-mcp-config`, the sandbox-disabling `--settings`) is unaffected -- steering only changes
  *   how additional conversational turns reach the process, never what the
  *   process is allowed to do.
  */
@@ -208,7 +271,15 @@ export function workerInvocation(worker, model, { steering = false } = {}) {
         modelId,
         ...(effort ? ["--effort", effort] : []),
         "--permission-mode",
-        "dontAsk",
+        CLAUDE_WORKER_PERMISSION_MODE,
+        "--permission-prompts",
+        "none",
+        // Each list is one comma-separated value so these variadic options
+        // can never absorb a following argument.
+        "--tools",
+        CLAUDE_WORKER_TOOLS.join(","),
+        "--allowedTools",
+        CLAUDE_WORKER_TOOLS.join(","),
         "--setting-sources",
         "project",
         "--safe-mode",

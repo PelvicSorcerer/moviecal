@@ -56,10 +56,40 @@ describe("generateBrief", () => {
     expect(brief).toContain("## Explore efficiently");
     expect(brief).toContain("`Grep`/`Glob`");
     expect(brief).toContain("`offset`/`limit`");
-    expect(brief).toContain("`explore` subagent");
+    expect(brief).toContain("built-in `Explore` subagent");
     expect(brief).toContain("`src/long.ts` — 401 lines (read by range)");
     expect(brief).not.toContain("file contents");
     expect(generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude" })).not.toContain("Likely starting points");
+  });
+
+  it("renders exploration guidance per worker for implementation and repair briefs (MOV-388)", () => {
+    const repositoryContext = { likelyStartingPoints: [{ path: "src/long.ts", lines: 401, readByRange: true }] };
+    const opts = { branch: "b", worktreePath: "/tmp/wt", repositoryContext };
+    const claudeBriefs = [
+      generateBrief(issue, { ...opts, worker: "claude" }),
+      generateRepairBrief(issue, { ...opts, worker: "claude", prNumber: 42 }),
+    ];
+    const codexBriefs = [
+      generateBrief(issue, { ...opts, worker: "codex" }),
+      generateRepairBrief(issue, { ...opts, worker: "codex", prNumber: 42 }),
+    ];
+    for (const brief of claudeBriefs) {
+      expect(brief).toContain("`Grep`/`Glob`");
+      expect(brief).toContain("`offset`/`limit`");
+      expect(brief).toContain("built-in `Explore` subagent");
+      expect(brief).not.toContain("rg -n");
+      expect(brief).not.toContain("sed -n");
+    }
+    for (const brief of codexBriefs) {
+      expect(brief).toContain("`rg -n` / `rg --files`");
+      expect(brief).toContain("sed -n 'START,ENDp' file");
+      expect(brief).toContain("never `cat` a large file whole");
+      expect(brief).not.toMatch(/Grep|Glob|offset|subagent|Explore\b(?! efficiently)/);
+    }
+    for (const brief of [...claudeBriefs, ...codexBriefs]) {
+      expect(brief).not.toContain(".claude/agents");
+      expect(brief).toContain("`src/long.ts` — 401 lines (read by range)");
+    }
   });
 
   it("includes the issue identifier, title, and Linear URL", () => {

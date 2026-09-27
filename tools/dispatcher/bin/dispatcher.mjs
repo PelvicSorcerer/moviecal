@@ -101,7 +101,7 @@ import { LinearClient } from "../src/linear-client.mjs";
 import { getAppToken } from "../src/linear-app-auth.mjs";
 import { evaluatePreflight, worktreeName, branchName } from "../src/preflight.mjs";
 import { describeWorkerBudget } from "../src/turn-budget.mjs";
-import { resolveRouting,resolveDispatchWorker, workerInvocation, modelIdForTier, claudeEffortForTier, claudeModelDoesNotSupportEffort } from "../src/worker-routing.mjs";
+import { resolveRouting, resolveDispatchWorker, workerProbeWinners, workerInvocation, modelIdForTier, claudeEffortForTier, claudeModelDoesNotSupportEffort } from "../src/worker-routing.mjs";
 import { WorkerCooldownStore, WORKERS as WORKER_POOLS } from "../src/worker-cooldown.mjs";
 import { WorkerTrialStore, describeTrialState } from "../src/worker-trial.mjs";
 import { inferExecutionRoute, resolveExecutionRoute } from "../src/execution-routing.mjs";
@@ -137,6 +137,7 @@ import { AgentStreamClient } from "../src/agent-stream-client.mjs";
 import { previewRepairPass, runRepairPass } from "../src/repair-run.mjs";
 import { RepairLedger } from "../src/repair-ledger.mjs";
 import { WorkerUsageStore, aggregateUsage, buildUsageExport, parseUsageExportArgs } from "../src/worker-usage.mjs";
+import { describeClaudeStartupCheck } from "../src/worker-startup-check.mjs";
 import { PrAutonomyLedger, runPrAutonomyPass } from "../src/pr-autonomy.mjs";
 import { MasterIncidentLedger } from "../src/master-incident-ledger.mjs";
 import { runMasterCiPass, reconcileMasterIncidents, previewMasterCiPass } from "../src/master-ci-observer.mjs";
@@ -347,6 +348,16 @@ async function cmdDoctor() {
     checks.push({ name: "worker:any trial routing", ok: state.status !== "invalid", detail: describeTrialState(state) });
   }
 
+  // MOV-386: the last effective Claude worker permission mode and tool set,
+  // read from the usage ledger (each run's own system/init event). Read-only;
+  // a recorded mismatch fails the check so it cannot go unnoticed.
+  {
+    const runs = tryRun(() => new WorkerUsageStore(workerUsageStatePath()).recent());
+    checks.push(runs.ok
+      ? describeClaudeStartupCheck(runs.value)
+      : { name: "Claude worker startup mode and tools", ok: false, detail: `could not read the worker usage ledger: ${runs.error}` });
+  }
+
   // claude / codex on PATH
   for (const bin of ["claude", "codex"]) {
     const which = tryRun(() => execFileSync("which", [bin], { encoding: "utf8" }).trim());
@@ -514,6 +525,20 @@ async function cmdDryRun({ fixturePath } = {}) {
   const trials = buildWorkerTrialStore();
   const trialState = trials.state(new Date());
 
+  const requestedRoutes = issues.map((issue) => resolveDispatchWorker(issue, {
+    boundWorker: usageLimits.get(issue.identifier)?.worker ?? null,
+    trial: { state: trialState, assignment: trials.get(issue.identifier) },
+  }));
+  const previewNow = new Date();
+  const probeWinners = workerProbeWinners(issues, requestedRoutes, cooldownSnapshot, {
+    eligible: (issue) => evaluateLocalDispatch(issue, { expectedDelegate: dispatcherDelegate }).eligible &&
+      !usageLimits.deferral(issue.identifier, previewNow)?.deferred,
+    due: (issue) => {
+      const record = usageLimits.get(issue.identifier);
+      return (Boolean(record?.retryAt) && new Date(record.retryAt) <= previewNow) || Boolean(usageLimits.resumption(issue.identifier, previewNow));
+    },
+  });
+
   console.log(`worker:any trial: ${describeTrialState(trialState)}\n`);
   console.log(`${issues.length} issue(s) in Ready for Agent:\n`);
   let routingError = false;
@@ -527,7 +552,13 @@ async function cmdDryRun({ fixturePath } = {}) {
     const resolvedWorker = resolveDispatchWorker(issue, {
       boundWorker: usageLimits.get(issue.identifier)?.worker ?? null,
       trial: { state: trialState, assignment: trials.get(issue.identifier) },
+      cooldownOpen: (worker) => !cooldownSnapshot[worker].cooling &&
+        (!cooldownSnapshot[worker].probeOwed || probeWinners[worker] === null || probeWinners[worker] === issue.id),
     });
+    if (resolvedWorker.available && cooldownSnapshot[resolvedWorker.worker]?.probeOwed &&
+        (probeWinners[resolvedWorker.worker] === null || probeWinners[resolvedWorker.worker] === issue.id) &&
+        evaluateLocalDispatch(issue, { expectedDelegate: dispatcherDelegate }).eligible &&
+        !usageLimits.deferral(issue.identifier, previewNow)?.deferred) probeWinners[resolvedWorker.worker] = issue.id;
     const execution = resolveExecutionRoute(issue);
     const eligibility = evaluateLocalDispatch(issue, { expectedDelegate: dispatcherDelegate });
     const name = worktreeName(issue.identifier, issue.title);
@@ -556,6 +587,9 @@ async function cmdDryRun({ fixturePath } = {}) {
     } else {
       console.log(`  worker:   ${resolvedWorker.worker} (model: ${routing.model})${routing.ok ? "" : `  [ROUTING BLOCKED: ${routing.reason}]`}${workerNote}`);
     }
+    if (resolvedWorker.requestedWorker) console.log(`  requested worker: ${resolvedWorker.requestedWorker}`);
+    if (resolvedWorker.requestedWorker && resolvedWorker.requestedWorker !== resolvedWorker.worker) console.log(`  fallback: ${resolvedWorker.reason}`);
+    if (!resolvedWorker.available) console.log("  dispatch: QUEUED — neither worker quota gate is available");
     if (resolvedWorker.trial) {
       const t = resolvedWorker.trial;
       console.log(`  trial:    ${t.trialId} — requested worker:any, resolved ${resolvedWorker.worker}, ${t.pending ? "would be assigned at dispatch" : `assigned ${t.assignedAt}`}; ${t.routingReason}`);

@@ -13,6 +13,7 @@
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { writeRoutingEvidence } from "./routing-evidence.mjs";
 import {
   worktreeRoot,
   worktreesStatePath,
@@ -140,6 +141,7 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     // only from the run loop, which holds the dispatcher lock.
     workerTrialStore: workerTrialStore || new WorkerTrialStore({ configPath: workerTrialConfigPath(), ledgerPath: workerTrialAssignmentsPath() }),
     captureWorkerUsageFn: (logDir, context) => captureWorkerUsage(logDir, { ...context, origin: DISPATCHER_ORIGIN }, { store: usageStore }),
+    writeRoutingEvidenceFn: writeRoutingEvidence,
     // MOV-179: advisory-only diagnosis for the residual "unrecognized
     // failure" escalation bucket. diagnoseUnrecognizedFailure itself already
     // fails safe (missing ANTHROPIC_API_KEY, network error, timeout, bad
