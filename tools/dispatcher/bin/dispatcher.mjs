@@ -23,6 +23,10 @@
 //                                  - MOV-383: inspect, bound-activate (--id, --expires,
 //                                     --max-assignments <=30) or early-stop the
 //                                     worker:any -> Codex trial; disabled by default
+//   dispatcher breaker status|probe-now <name>
+//                                  - MOV-403: show each dispatch breaker's adapter, evidence
+//                                     and next probe time, or authorize one early recovery
+//                                     probe (keeps all persisted state and history)
 //   dispatcher gc                  - prune merged/stale worktrees and old run logs
 //   dispatcher promote [--dry-run] - move Backlog/Blocked issues that meet the
 //                                     readiness contract into Ready for Agent
@@ -96,7 +100,9 @@ import {
   RUN_LOG_RETENTION_DAYS,
   REPO_ROOT,
   dispatcherLockPath,
+  circuitBreakerStatePath,
 } from "../src/config.mjs";
+import { CircuitBreakerStore, describeBreakers, runBreakerCommand } from "../src/circuit-breaker.mjs";
 import { LinearClient } from "../src/linear-client.mjs";
 import { getAppToken } from "../src/linear-app-auth.mjs";
 import { evaluatePreflight, worktreeName, branchName } from "../src/preflight.mjs";
@@ -112,7 +118,7 @@ import {
 } from "../src/dispatch-eligibility.mjs";
 import { DispatcherLock, WorktreeManager } from "../src/worktree-manager.mjs";
 import { UsageLimitStore } from "../src/usage-limit.mjs";
-import { runOnce } from "../src/run-loop.mjs";
+import { runOnce, DISPATCH_BREAKERS } from "../src/run-loop.mjs";
 import {
   buildRunContext,
   RUN_STATE_NAMES,
@@ -421,6 +427,17 @@ async function cmdDoctor() {
     ok: runnerCheck.ok,
     detail: runnerCheck.ok ? `${IOS_RUNNER_NAME} online` : runnerCheck.error,
   });
+
+  // MOV-403: an open dispatch breaker is a failed check naming its adapter,
+  // evidence and actual next probe time. Read-only.
+  const breakerCheck = tryRun(() => describeBreakers(new CircuitBreakerStore(circuitBreakerStatePath()), DISPATCH_BREAKERS));
+  if (!breakerCheck.ok) {
+    checks.push({ name: "dispatch circuit breakers", ok: false, detail: breakerCheck.error });
+  } else {
+    for (const entry of breakerCheck.value) {
+      checks.push({ name: `dispatch breaker ${entry.name}`, ok: !entry.open, detail: entry.line });
+    }
+  }
 
   printChecks(checks);
   return checks.every((c) => c.ok) ? 0 : 1;
@@ -1453,6 +1470,9 @@ async function main() {
       process.exitCode = await cmdDryRun({ fixturePath });
       break;
     }
+    case "breaker":
+      process.exitCode = runBreakerCommand(rest, new CircuitBreakerStore(circuitBreakerStatePath()), DISPATCH_BREAKERS);
+      break;
     case "gc":
       cmdGc();
       break;
@@ -1507,7 +1527,7 @@ async function main() {
     }
     default:
       console.error(
-        "Usage: dispatcher <doctor|health|usage|trial|dry-run|shadow|agent-signal|gc|promote|priorities|audit-issues|reconcile-parents|repair|master-ci|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
+        "Usage: dispatcher <doctor|health|usage|trial|breaker|dry-run|shadow|agent-signal|gc|promote|priorities|audit-issues|reconcile-parents|repair|master-ci|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
       );
       process.exitCode = 1;
   }
