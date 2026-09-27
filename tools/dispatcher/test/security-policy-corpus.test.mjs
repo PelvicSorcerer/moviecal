@@ -4,7 +4,8 @@ import { classifyAction, shellView } from "../src/security-policy.mjs";
 // MOV-398: commands that blocked publication in error, and the controls that
 // must stay fail-closed. Add every future false positive to FALSE_POSITIVES
 // with the reason it was blocked under, and a matching control when the fix
-// narrows a rule.
+// narrows a rule. Protected-path reads and writes (MOV-400) have their own
+// pair of lists below.
 
 // Reconstructed from the audit records of the four issues parked in
 // Needs Human Decision on master at 4e17355. None changed a protected path.
@@ -201,6 +202,88 @@ describe("MOV-398 negative-control corpus", () => {
 
   it("keeps the needs-human classification for an opener that targets an auth route", () => {
     expect(classifyAction("cat > src/app/auth/sign-in/route.ts <<'EOF'\nexport {};\nEOF").verdict).toBe("needs-human");
+  });
+});
+
+// MOV-400: naming a protected path is not a safety event. The sandbox denies
+// every write to it and auditChangedPaths blocks any change to it, so a
+// command that only names one is a warning. These blocked publication before.
+const PROTECTED_PATH_READS = [
+  ["MOV-334", 'for f in docs/planning/milestones.md docs/product/product-brief.md AGENTS.md; do grep -n -i "rename" "$f"; done'],
+  ["MOV-386", "wc -l AGENTS.md docs/operators/local-execution.md docs/operators/worker-routing.md"],
+  ["MOV-392", "wc -l AGENTS.md"],
+  ["awk", "awk 'NR<=40' AGENTS.md"],
+  ["awk comparison", "awk '$3 > $2 {print}' docs/product/product-brief.md"],
+  ["xargs", "echo AGENTS.md docs/product/product-brief.md | xargs wc -l"],
+  ["xargs placeholder", "ls docs/product | xargs -I{} wc -l docs/product/{}"],
+  ["while read", "printf '%s\\n' AGENTS.md docs/product/product-brief.md | while read -r f; do wc -l \"$f\"; done"],
+  ["cp source", "cp AGENTS.md /tmp/agents-orientation.md"],
+  ["loop copy out", 'for f in AGENTS.md docs/product/product-brief.md; do cp "$f" /tmp/; done'],
+];
+
+// A command that writes a protected path stays a blocking violation, so intent
+// is still caught when the sandbox stops it.
+const PROTECTED_PATH_WRITES = [
+  ["cat README.md > AGENTS.md", "edits AGENTS.md"],
+  ["echo x>AGENTS.md", "edits AGENTS.md"],
+  ["echo note >> docs/product/product-brief.md", "edits docs/product/**"],
+  ["cat README.md 2>&1 > .claude/settings.json", "edits worker permission policy"],
+  ["sed -i '' 's/a/b/' AGENTS.md", "edits AGENTS.md"],
+  ["sed --in-place 's/a/b/' docs/product/product-brief.md", "edits docs/product/**"],
+  ["perl -pi -e 's/a/b/' AGENTS.md", "edits AGENTS.md"],
+  ["tee AGENTS.md < README.md", "edits AGENTS.md"],
+  ["echo x | tee -a .codex/config.toml", "edits worker sandbox policy"],
+  ["cp README.md AGENTS.md", "edits AGENTS.md"],
+  ["cp notes.md ./docs/product/product-brief.md", "edits docs/product/**"],
+  ["cp -t .claude/ settings.json", "edits worker permission policy"],
+  ["mv AGENTS.md AGENTS.old", "edits AGENTS.md"],
+  ["mv draft.yml .github/workflows/verify.yml", "modifies .github/workflows/**"],
+  ["rm AGENTS.md", "edits AGENTS.md"],
+  ["rm -rf docs/product", "edits docs/product/**"],
+  ["touch .github/copilot-instructions.md", "edits .github/copilot-instructions.md"],
+  ["dd if=/dev/zero of=AGENTS.md count=1", "edits AGENTS.md"],
+  ["npx prettier --write docs/product/product-brief.md", "edits docs/product/**"],
+  ["find . -name AGENTS.md -delete", "edits AGENTS.md"],
+  ["find docs/product -name '*.md' -exec sed -i s/a/b/ {} +", "edits docs/product/**"],
+  // Wrapped, looped or piped writes whose operand comes from elsewhere.
+  ["sudo sh -c 'echo x > AGENTS.md'", "edits AGENTS.md"],
+  ['eval "cp README.md AGENTS.md"', "edits AGENTS.md"],
+  ['for f in AGENTS.md; do rm "$f"; done', "edits AGENTS.md"],
+  ['for f in docs/product/*.md; do echo x > "$f"; done', "edits docs/product/**"],
+  ["echo AGENTS.md | xargs rm", "edits AGENTS.md"],
+  ["ls docs/product | xargs -I{} cp README.md docs/product/{}", "edits docs/product/**"],
+  ["grep -rl x docs/product | while read -r f; do sed -i '' s/a/b/ \"$f\"; done", "edits docs/product/**"],
+  // A command substitution is shell the audit cannot read.
+  ["wc -l $(ls AGENTS.md)", "edits AGENTS.md"],
+];
+
+describe("MOV-400 protected-path corpus", () => {
+  it.each(PROTECTED_PATH_READS)("warns without blocking the %s read", (_idiom, command) => {
+    expect(classifyAction(command)).toMatchObject({ verdict: "warn", category: "safety", reason: expect.stringMatching(/^names protected path .+ without writing it$/) });
+  });
+
+  it.each(PROTECTED_PATH_WRITES)("still blocks a write: %j", (command, reason) => {
+    expect(classifyAction(command)).toMatchObject({ verdict: "hard-deny", reason, category: "safety" });
+  });
+
+  it("keeps known read-only inspections silent", () => {
+    expect(classifyAction("cat AGENTS.md")).toEqual({ verdict: "allow", reason: null, category: null });
+    expect(classifyAction("grep -n 'x > AGENTS.md' README.md")).toEqual({ verdict: "allow", reason: null, category: null });
+  });
+
+  it("warns for a repair-only path a repair worker names and blocks one it writes", () => {
+    expect(classifyAction("wc -l test/auth.test.ts tools/dispatcher/src/brief.mjs", { workerMode: "repair" })).toMatchObject({ verdict: "warn" });
+    expect(classifyAction("for f in test/*.test.ts; do rm $f; done", { workerMode: "repair" })).toMatchObject({ verdict: "hard-deny", reason: "repair workers cannot change tests" });
+    expect(classifyAction("mv package.json package.old.json", { workerMode: "repair" })).toMatchObject({ verdict: "hard-deny", reason: "repair workers cannot change test execution configuration" });
+    // A bare `test` is the shell builtin unless it is the operand written.
+    expect(classifyAction("for f in *.tmp; do test -f $f && rm $f; done", { workerMode: "repair" }).verdict).toBe("allow");
+    expect(classifyAction("rm -rf test", { workerMode: "repair" })).toMatchObject({ verdict: "hard-deny", reason: "repair workers cannot change tests" });
+  });
+
+  it("does not let a warning outrank a later needs-human or hard-deny rule", () => {
+    expect(classifyAction("wc -l AGENTS.md; cp notes.ts src/app/auth/notes.ts").verdict).toBe("needs-human");
+    expect(classifyAction("wc -l AGENTS.md; cp README.md .claude/settings.json")).toMatchObject({ verdict: "hard-deny", reason: "edits worker permission policy" });
+    expect(classifyAction("wc -l AGENTS.md && gh pr view 1")).toMatchObject({ verdict: "hard-deny", category: "scope" });
   });
 });
 

@@ -284,6 +284,63 @@ describe("worker guard", () => {
     expect(auditWorkerTranscript(protectedTarget)).toMatchObject({ ok: false, violations: [{ reason: "edits AGENTS.md", category: "safety" }] });
   });
 
+  it("records a command that names a protected path without writing it as a warning, whatever its outcome (MOV-400)", () => {
+    const bash = (id, command) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "Bash", input: { command } }] } });
+    const executed = (id) => JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: "12 AGENTS.md" }] } });
+    const transcript = [
+      bash("tool-5", "wc -l AGENTS.md"),
+      executed("tool-5"),
+      bash("tool-6", 'for f in docs/product/product-brief.md; do grep -n rename "$f"; done'),
+      executed("tool-6"),
+    ].join("\n");
+    expect(auditWorkerTranscript(transcript)).toMatchObject({
+      ok: true,
+      violations: [],
+      warnings: [
+        { action: "wc -l AGENTS.md", reason: "names protected path AGENTS.md without writing it", category: "safety", verdict: "warn", outcome: "executed" },
+        { reason: "names protected path docs/product/** without writing it", verdict: "warn", outcome: "executed" },
+      ],
+    });
+    const write = [bash("tool-7", "cp README.md AGENTS.md"), JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tool-7", is_error: true, content: "Operation not permitted" }] } })].join("\n");
+    expect(auditWorkerTranscript(write)).toMatchObject({ ok: false, warnings: [], violations: [{ reason: "edits AGENTS.md", verdict: "hard-deny", outcome: "denied" }] });
+  });
+
+  it("carries transcript warnings into the audit result so security-audit.json records them (MOV-400)", () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-guard-"));
+    fs.writeFileSync(path.join(tmpDir, "stdout.log"), JSON.stringify({
+      type: "item.completed",
+      item: { type: "command_execution", command: "wc -l AGENTS.md", exit_code: 0 },
+    }) + "\n");
+    const runner = (_command, args) => {
+      if (args[0] === "branch") return "agent/MOV-1-fix\n";
+      if (args[0] === "diff") return "src/app/page.tsx\n";
+      if (args[0] === "status") return "";
+      throw new Error(`unexpected ${args.join(" ")}`);
+    };
+    expect(auditWorkerResult({ worktreePath: "/tmp/wt", branch: "agent/MOV-1-fix", logDir: tmpDir, runner })).toMatchObject({
+      ok: true,
+      violations: [],
+      warnings: [{ action: "wc -l AGENTS.md", verdict: "warn", outcome: "executed" }],
+    });
+  });
+
+  it.each([
+    ["AGENTS.md", '(literal "/tmp/worktree/AGENTS.md")'],
+    [".github/copilot-instructions.md", '(literal "/tmp/worktree/.github/copilot-instructions.md")'],
+    [".github/workflows/verify.yml", '(subpath "/tmp/worktree/.github/workflows")'],
+    [".claude/settings.json", '(subpath "/tmp/worktree/.claude")'],
+    [".codex/config.toml", '(subpath "/tmp/worktree/.codex")'],
+    ["docs/product/product-brief.md", '(subpath "/tmp/worktree/docs/product")'],
+  ])("keeps the diff audit and sandbox write-deny for protected path %s (MOV-400)", (file, sandboxRule) => {
+    // However the change was made -- an inline script, a tool the command
+    // audit cannot read, or no recorded command at all -- the diff blocks it.
+    expect(auditChangedPaths(["src/app/page.tsx", file])).toMatchObject({
+      ok: false,
+      violations: [{ action: file, reason: "protected implementation path changed" }],
+    });
+    expect(buildWorkerSandboxProfile({ worktreePath: "/tmp/worktree", home: "/Users/test" })).toContain(`(deny file-write* ${sandboxRule})`);
+  });
+
   it("blocks protected diffs even if a tool transcript hid the write construction", () => {
     expect(auditChangedPaths(["src/app/page.tsx"], { mode: "repair" }).ok).toBe(true);
     expect(auditChangedPaths(["test/page.test.ts", ".github/workflows/verify.yml"], { mode: "repair" })).toMatchObject({

@@ -1304,16 +1304,31 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
   verificationEvidence = captureVerificationEvidenceFn(logDir);
 
   // A native harness can prove that a scope-only command never reached the
-  // shell. Keep that fact visible, but do not let it conceal the worker's
-  // actual exit condition (notably MOV-151's provider-rate-limit retry).
+  // shell, and a command that only named a protected path changed nothing the
+  // diff audit could see (MOV-400). Keep both visible, but do not let them
+  // conceal the worker's actual exit condition (notably MOV-151's
+  // provider-rate-limit retry).
   if (securityReport.warnings?.length && !budgetHit) {
+    const warningLine = (warning) => `- ${warning.reason}: \`${String(warning.action).slice(0, 500)}\``;
+    const denied = securityReport.warnings.filter((warning) => warning.verdict !== "warn");
+    const named = securityReport.warnings.filter((warning) => warning.verdict === "warn");
     await publisher.publish("progress", {
-      summary: "Worker attempted a scope-only command that the safety harness denied; continuing with the actual worker outcome.",
-      headline: "**Worker scope warning; no command executed.**",
+      summary: named.length
+        ? "Worker commands named a protected path without writing it; recorded as audit warnings and continuing with the actual worker outcome."
+        : "Worker attempted a scope-only command that the safety harness denied; continuing with the actual worker outcome.",
+      headline: named.length ? "**Worker audit warning; no protected path changed.**" : "**Worker scope warning; no command executed.**",
       sections: [
-        ...securityReport.warnings.map((warning) => `- ${warning.reason}: \`${String(warning.action).slice(0, 500)}\``),
-        "",
-        "The native worker harness denied these commands before execution. They remain in the checksummed audit record, but did not grant the worker Git, GitHub, credential, or remote authority.",
+        ...(denied.length ? [
+          ...denied.map(warningLine),
+          "",
+          "The native worker harness denied these commands before execution. They remain in the checksummed audit record, but did not grant the worker Git, GitHub, credential, or remote authority.",
+        ] : []),
+        ...(denied.length && named.length ? [""] : []),
+        ...(named.length ? [
+          ...named.map(warningLine),
+          "",
+          "These commands named a protected path but did not write it. The worker sandbox denies every write to protected paths and the diff audit found none changed, so they are recorded in the checksummed audit record instead of blocking publication.",
+        ] : []),
       ],
     });
   }

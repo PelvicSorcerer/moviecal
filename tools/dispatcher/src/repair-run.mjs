@@ -655,6 +655,7 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
     `Repair attempt: ${attempt} of ${budgets.codeRepair} for this pull request.`,
     `Pushed to the same branch \`${entry.branch}\`; new head \`${pr.headSha || "unknown"}\` (was \`${decision.headSha}\`).`,
     formatUsageLine(usage),
+    ...(audit.warnings?.length ? ["", "Audit warnings:", ...audit.warnings.map((warning) => `- ${warning.reason}: \`${String(warning.action).slice(0, 200)}\``)] : []),
     "",
     "No branch and no pull request were created. GitHub CI is authoritative for whether the repair worked.",
     ...(logDir ? ["", `Full run log: \`${logDir}\``] : []),

@@ -455,6 +455,30 @@ describe("runOnce", () => {
     expect(ctx.linearClient.calls.some((call) => call.type === "addComment" && call.body.includes("Worker scope warning; no command executed"))).toBe(true);
   });
 
+  it("lists a protected-path mention as an audit warning and continues to trusted publication (MOV-400)", async () => {
+    const publishWorkerResultFn = vi.fn(() => ({ number: 4, url: "https://github.com/owner/repo/pull/4", isDraft: true, headSha: "sha-4" }));
+    const ctx = baseCtx({
+      publishWorkerResultFn,
+      auditWorkerResultFn: vi.fn(() => ({
+        ok: true,
+        violations: [],
+        warnings: [
+          { action: "wc -l AGENTS.md", reason: "names protected path AGENTS.md without writing it", category: "safety", verdict: "warn", outcome: "executed" },
+          { action: "git status", reason: "all Git operations are dispatcher-only", category: "scope", verdict: "hard-deny", outcome: "denied" },
+        ],
+      })),
+    });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result).toMatchObject({ outcome: "in-review" });
+    expect(publishWorkerResultFn).toHaveBeenCalledTimes(1);
+    const comment = ctx.linearClient.calls.find((call) => call.type === "addComment" && call.body.includes("Worker audit warning; no protected path changed"));
+    expect(comment.body).toContain("- names protected path AGENTS.md without writing it: `wc -l AGENTS.md`");
+    expect(comment.body).toContain("- all Git operations are dispatcher-only: `git status`");
+    expect(comment.body).toContain("did not write it");
+  });
+
   it("does not let a denied scope warning mask the worker's actual failed outcome", async () => {
     const ctx = baseCtx({
       spawnWorkerFn: vi.fn(async () => ({ exitCode: 1, logDir: "/fake/logs/MOV-1" })),
