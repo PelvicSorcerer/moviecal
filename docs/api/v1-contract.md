@@ -92,6 +92,23 @@ Neither endpoint accepts a body.
 
 **Authorization boundary:** Both transports call the same actor-scoped `listUserWatchlists` / `getWatchlistDetail` domain rules. List summaries use caller-scoped RLS queries (ownership or accepted membership). Detail validates access through `getWatchlistAccess` before reading items with the server-only service-role client. That path relies on domain authorization, not RLS. Service-role construction occurs only after bearer validation; no cookie fallback, token refresh, or token logging is introduced. Direct authenticated database clients remain RLS-enforced. The service-role key never reaches clients.
 
+### Target-scoped item add and remove
+
+Bearer-only, for any list the caller may edit (personal, or shared as owner or accepted editor). Both use the same `addWatchlistItem` / `removeWatchlistItem` domain rules and TMDb movie validation as the web `/api/watchlist` routes.
+
+`POST /api/v1/watchlists/{watchlistId}/items` with body `{ "tmdbId": number }`.
+
+- `201` `{ "created": true, "item": WatchlistItem, "watchlist": WatchlistView }` for a new item.
+- `200` `{ "created": false, "item": WatchlistItem, "watchlist": WatchlistView }` when the movie is already on the list. The response carries the existing item; no second item is ever created, so a client may safely retry a timed-out add or race another editor adding the same movie.
+- `400` for a missing/non-integer/non-positive `tmdbId` or invalid JSON; TMDb failures pass through their status (e.g. `404` unknown movie) and `503` when TMDb is unconfigured.
+
+`DELETE /api/v1/watchlists/{watchlistId}/items/{itemId}`
+
+- `204` no body when the item was removed.
+- `404` `{ "error": "Watchlist item not found." }` if the item is not on that list. A retry of a successful remove therefore returns `404`; clients should treat that as "already removed".
+
+Both: `401` for a missing/invalid bearer. A pending invitee, outsider, or user who lost access gets the same `404` `{ "error": "Watchlist not found." }` as for an unknown list, and nothing is changed. The singular personal `/api/v1/watchlist` and `/api/v1/movies/search` paths are unchanged.
+
 ### Calendar
 
 ### `GET /api/v1/calendar-token`
