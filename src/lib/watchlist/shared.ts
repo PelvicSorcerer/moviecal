@@ -270,11 +270,14 @@ export async function createSharedWatchlistInviteLink(args: {
 }
 
 async function readMembersWithOwnerAnchor(args: {
+  includePending?: boolean;
   repository: WatchlistRepository;
   watchlist: WatchlistSummary;
 }): Promise<WatchlistMember[]> {
   const { watchlist } = args;
-  const members = await args.repository.listMembersForWatchlist(watchlist.id);
+  const members = await args.repository.listMembersForWatchlist(watchlist.id, {
+    includePending: args.includePending,
+  });
   const dedupedMembers = new Map<string, WatchlistMember>();
 
   for (const member of members) {
@@ -335,6 +338,7 @@ export async function listSharedWatchlistMembers(args: {
  */
 export async function listSharedWatchlistMemberProfiles(args: {
   actorUserId: string;
+  includePending?: boolean;
   repository: WatchlistRepository;
   watchlistId: string;
 }): Promise<WatchlistMemberProfile[]> {
@@ -344,6 +348,7 @@ export async function listSharedWatchlistMemberProfiles(args: {
     watchlistId: args.watchlistId,
   });
   const members = await readMembersWithOwnerAnchor({
+    includePending: args.includePending,
     repository: args.repository,
     watchlist,
   });

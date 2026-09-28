@@ -232,9 +232,10 @@ function createSharedWatchlistWorld() {
       return itemsByWatchlistId.get(watchlistId) ?? [];
     },
     listMemberEmailsByUserId,
-    async listMembersForWatchlist(watchlistId) {
+    async listMembersForWatchlist(watchlistId, options) {
       return memberships.filter(
-        (member) => member.watchlistId === watchlistId && member.acceptedAt !== null,
+        (member) => member.watchlistId === watchlistId
+          && (options?.includePending || member.acceptedAt !== null),
       );
     },
     async listWatchlistsForUser(userId) {
@@ -382,6 +383,24 @@ describe('shared member email privacy', () => {
       expect(readMembers).not.toHaveBeenCalled();
     },
   );
+
+  it('includes a pending invitee, with no accepted date, only when asked for', async () => {
+    const world = createSharedWatchlistWorld();
+    const accepted = await listSharedWatchlistMemberProfiles(
+      actorArgs(world, OWNER_USER_ID),
+    );
+    expect(accepted.map((member) => member.userId)).not.toContain(PENDING_USER_ID);
+
+    const withPending = await listSharedWatchlistMemberProfiles({
+      ...actorArgs(world, OWNER_USER_ID),
+      includePending: true,
+    });
+    const pendingRow = withPending.find((member) => member.userId === PENDING_USER_ID);
+    expect(pendingRow).toMatchObject({
+      acceptedAt: null,
+      email: `${PENDING_USER_ID}@moviecal.test`,
+    });
+  });
 
   it('preserves the email-free listing and tolerates unresolved emails', async () => {
     const world = createSharedWatchlistWorld();

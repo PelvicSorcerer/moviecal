@@ -28,6 +28,7 @@ export async function GET(
       actorUserId: identity.user.id,
       operation: () => listSharedWatchlistMemberProfiles({
         actorUserId: identity.user.id,
+        includePending: true,
         repository,
         watchlistId,
       }),

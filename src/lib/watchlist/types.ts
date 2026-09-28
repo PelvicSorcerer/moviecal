@@ -169,7 +169,10 @@ export interface WatchlistRepository {
   listMemberEmailsByUserId(
     userIds: string[],
   ): Promise<Record<string, string | null>>;
-  listMembersForWatchlist(watchlistId: string): Promise<WatchlistMember[]>;
+  listMembersForWatchlist(
+    watchlistId: string,
+    options?: { includePending?: boolean },
+  ): Promise<WatchlistMember[]>;
   listTrackedMovies(): Promise<WatchlistMovieRow[]>;
   listWatchlistsForUser(userId: string): Promise<WatchlistSummary[]>;
   revokeInviteLinksForWatchlist(watchlistId: string): Promise<void>;
