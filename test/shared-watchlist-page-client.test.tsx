@@ -6,6 +6,12 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SharedWatchlistPageClient } from '../src/app/watchlist/[watchlistId]/shared-watchlist-page-client';
 import { buildWatchlistSummary } from './support';
 
+const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => router,
+}));
+
 describe('SharedWatchlistPageClient', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());
@@ -127,6 +133,10 @@ describe('SharedWatchlistPageClient', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove access' }));
 
+    // Nothing is sent until the owner confirms.
+    expect(fetch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm removal' }));
+
     await waitFor(() => {
       expect(screen.queryByText('friend@moviecal.test')).toBeNull();
     });
@@ -197,5 +207,134 @@ describe('SharedWatchlistPageClient', () => {
     expect(screen.getByText('Owner-managed access')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Create invite link' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Remove access' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Leave watchlist' })).toBeNull();
+  });
+
+  it('cancels a pending member removal without calling the API', () => {
+    render(
+      <SharedWatchlistPageClient
+        activeInviteLinkExists={false}
+        initialMembers={[
+          {
+            acceptedAt: '2026-06-20T00:00:00.000Z',
+            canRemove: true,
+            email: 'friend@moviecal.test',
+            id: 'membership-1',
+            isCurrentUser: false,
+            isOwner: false,
+            role: 'editor',
+          },
+        ]}
+        ownerCanManage
+        watchlist={buildWatchlistSummary({ id: 'shared-watchlist-1', kind: 'shared' })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove access' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.getByRole('button', { name: 'Remove access' })).toBeTruthy();
+    expect(screen.getByText('friend@moviecal.test')).toBeTruthy();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps the member and shows the error when removal is refused', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: false,
+      json: async () => ({ error: 'Watchlist access denied.' }),
+    } as Response);
+
+    render(
+      <SharedWatchlistPageClient
+        activeInviteLinkExists={false}
+        initialMembers={[
+          {
+            acceptedAt: '2026-06-20T00:00:00.000Z',
+            canRemove: true,
+            email: 'friend@moviecal.test',
+            id: 'membership-1',
+            isCurrentUser: false,
+            isOwner: false,
+            role: 'editor',
+          },
+        ]}
+        ownerCanManage
+        watchlist={buildWatchlistSummary({ id: 'shared-watchlist-1', kind: 'shared' })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove access' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm removal' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Watchlist access denied.')).toBeTruthy();
+    });
+    expect(screen.getByText('friend@moviecal.test')).toBeTruthy();
+  });
+
+  describe('editor leave', () => {
+    function renderAsEditor() {
+      render(
+        <SharedWatchlistPageClient
+          activeInviteLinkExists={false}
+          canLeave
+          initialMembers={[]}
+          ownerCanManage={false}
+          watchlist={buildWatchlistSummary({
+            id: 'shared-watchlist-1',
+            kind: 'shared',
+            name: 'Friday movie night',
+          })}
+        />,
+      );
+    }
+
+    it('asks for confirmation, then leaves and returns to the overview', async () => {
+      vi.mocked(fetch).mockResolvedValue({
+        ok: true,
+        json: async () => ({ left: true }),
+      } as Response);
+      renderAsEditor();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Leave watchlist' }));
+      expect(fetch).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm leave' }));
+
+      await waitFor(() => {
+        expect(router.push).toHaveBeenCalledWith('/watchlist');
+      });
+      expect(fetch).toHaveBeenCalledWith(
+        '/api/watchlist/shared/shared-watchlist-1/membership',
+        { method: 'DELETE' },
+      );
+    });
+
+    it('can cancel leaving', () => {
+      renderAsEditor();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Leave watchlist' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      expect(screen.getByRole('button', { name: 'Leave watchlist' })).toBeTruthy();
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('shows the error and stays on the page when leaving fails', async () => {
+      vi.mocked(fetch).mockResolvedValue({
+        ok: false,
+        json: async () => ({ error: 'Watchlist access denied.' }),
+      } as Response);
+      router.push.mockClear();
+      renderAsEditor();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Leave watchlist' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm leave' }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Watchlist access denied.')).toBeTruthy();
+      });
+      expect(router.push).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Leave watchlist' })).toBeTruthy();
+    });
   });
 });

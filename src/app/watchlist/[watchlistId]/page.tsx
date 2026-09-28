@@ -229,6 +229,7 @@ export default async function WatchlistDetailPage({
       {isSharedWatchlist ? (
         <SharedWatchlistPageClient
           activeInviteLinkExists={activeInviteLinkExists}
+          canLeave={!ownerCanManage}
           initialMembers={memberEntries}
           ownerCanManage={ownerCanManage}
           watchlist={detail.watchlist}

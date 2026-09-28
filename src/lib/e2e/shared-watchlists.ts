@@ -261,3 +261,35 @@ export function removeE2EWatchlistMember(args: {
 
   return true;
 }
+
+/**
+ * Mirrors `leaveSharedWatchlist`: only an accepted, non-owner member can leave.
+ * Owners and outsiders are refused without touching stored state.
+ */
+export function leaveE2EWatchlist(args: {
+  actorUserId: string;
+  reader: CookieValueReader;
+  response: CookieWriter;
+  watchlistId: string;
+}): 'left' | 'not-member' | 'owner' {
+  const access = getE2EWatchlistAccess(args.reader, args.actorUserId, args.watchlistId);
+
+  if (!access) {
+    return 'not-member';
+  }
+
+  if (access.watchlist.ownerUserId === args.actorUserId || !access.membership) {
+    return 'owner';
+  }
+
+  const sharedState = readE2ESharedState(args.reader);
+
+  setE2ESharedStateCookie(args.response, {
+    memberships: sharedState.memberships.filter(
+      (membership) => membership.id !== access.membership?.id,
+    ),
+    inviteLinks: sharedState.inviteLinks,
+  });
+
+  return 'left';
+}
