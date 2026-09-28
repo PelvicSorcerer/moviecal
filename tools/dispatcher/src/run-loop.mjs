@@ -18,6 +18,7 @@ import { tailLogs } from "./worker-spawn.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "./worker-guard.mjs";
 import { classifyWorkerFailure, NESTED_SANDBOX_CRASH } from "./failure-classification.mjs";
 import { classifyCredentialFailure, CREDENTIAL_FAILURE } from "./credential-failure.mjs";
+import { readLocalToolSuccessEvidence } from "./sandbox-recovery.mjs";
 import { classifyUsageLimitFailure, decideUsageLimitOutcome, MAX_USAGE_LIMIT_DEFERRAL_MS } from "./usage-limit.mjs";
 import { admitBudgetContinuation, admitUsageLimitResume } from "./usage-limit-resume.mjs";
 import { WORKERS as WORKER_POOLS } from "./worker-cooldown.mjs";
@@ -65,7 +66,8 @@ import { budgetUnitForWorker } from "./budget-unit.mjs";
  * @param {(issueIdentifier: string, snapshot: object) => void} [ctx.persistAgentSessionFn] - MOV-158: persist this attempt's session record for the next one; defaults to a no-op
  * @param {number} [ctx.stopPollIntervalMs] - MOV-158: how often to re-read the issue while a worker runs, so a de-delegation/cancellation is honoured at the next safe boundary instead of after a 45-minute worker; 0 (the default) disables the watcher entirely
  * @param {"off"|"report"|"enforce"} [ctx.issueSpecMode] - MOV-303: forwarded to `evaluatePreflight()` (preflight.mjs); `enforce` moves an incomplete issue to Blocked instead of dispatching it, naming every missing item. This is the gate every dispatched issue passes through regardless of how it reached Ready for Agent -- the promoter's own gate (promoter.mjs) only covers the ones it promoted itself. Undefined defaults to `report`, same as the promoter
- * @param {{isOpen: (name: string) => boolean, trip: (name: string, reason: string) => void, clear: (name: string) => void}} [ctx.circuitBreaker] - MOV-180/MOV-177: shared, named host-wide failure-signature breaker store (circuit-breaker.mjs), gating two independent breakers -- NESTED_SANDBOX_CRASH and CREDENTIAL_FAILURE. While either is open, `runOnce` lets exactly one issue per batch through as a half-open probe and skips the rest with outcome "circuit-breaker-open" (also applied dynamically within a batch if a breaker trips mid-cycle from an earlier issue's own outcome); defaults to a permanently-closed no-op so existing callers are unaffected
+ * @param {object} [ctx.circuitBreaker] - MOV-180/MOV-177/MOV-403: shared, named host-wide failure-signature breaker store (circuit-breaker.mjs), gating two independent breakers -- NESTED_SANDBOX_CRASH and CREDENTIAL_FAILURE. While either is open, `runOnce` admits at most one issue per batch as a half-open probe, and only once every open breaker's persisted `nextProbeAt` has passed (or an operator authorized one) and the issue routes to the affected adapter; every other issue is skipped with outcome "circuit-breaker-open" and a `retryAt`, with no worktree, worker or Linear write (also applied dynamically within a batch if a breaker trips mid-cycle). Each breaker closes only on its own adapter's positive evidence. Defaults to a permanently-closed no-op so existing callers are unaffected
+ * @param {(logDir: string, adapter: string) => string|null} [ctx.localToolEvidenceFn] - MOV-403: positive evidence that the adapter completed a local command successfully (sandbox-recovery.mjs); required to close the nested-sandbox breaker
  * @param {{get: Function, record: Function, clear: Function, deferral: Function}} [ctx.usageLimitStore] - MOV-151: per-issue dispatch-time provider usage-limit record (usage-limit.mjs). Defaults to a no-op store, so a caller that does not wire it keeps today's "every non-zero exit escalates" behaviour exactly
  * @param {{get: Function, record: Function, clear: Function, state: Function}} [ctx.workerCooldownStore] - MOV-360: worker-quota-pool (Claude/Codex) dispatch-wide cooldown record (worker-cooldown.mjs), gating dispatch of *every* issue pinned to (or, via `worker:any`, resolving to) a worker whose provider quota is known to be exhausted -- independent of any one issue's own usage-limit history. Defaults to a no-op store that always reports every worker open, so a caller that does not wire it keeps today's per-issue-only usage-limit behaviour exactly, including `resolveDispatchWorker`'s `worker:any` default of Claude
  * @param {(issue: object) => Promise<{acquired: true, lease: object}|{acquired: false, reason: string}>} [ctx.acquireIosSimLeaseFn] - MOV-311: for an "iOS Companion App" issue only, acquire the machine-wide worker-lane simulator lease (scripts/ios-sim-lease.mjs, MOV-309) for the whole worker run. Never waits -- `acquired: false` (held by another lane, queued, or unmanaged simulator state) defers the issue silently, exactly like the usage-limit deferral above. Defaults to always-acquired-with-no-lease, so a caller that does not wire it (every non-iOS issue) is unaffected
@@ -80,19 +82,16 @@ const NESTED_SANDBOX_VARIANTS = {
     reason: (exitCode) => `worker exited ${exitCode} with the nested-sandbox-crash signature`,
     headline: "**Environment failure, not a task failure: nested macOS sandbox crash (MOV-180).**",
     explanation: () => "This run failed before it could do any real work: the harness's own tool sandbox could not apply a second Seatbelt profile inside the one `worker-guard.mjs` already applies to the worker process (`sandbox_apply: Operation not permitted`, exit 71). Every worker on this Mac fails identically while this condition holds — it is not specific to this issue, and re-running it here will not help.",
-    recovery: ": a clean `launchctl bootout` + `launchctl bootstrap` of `com.moviecal.dispatcher` (`launchctl kickstart -k` is not sufficient)",
   },
   "native-command": {
     reason: (exitCode) => `worker exited ${exitCode}; its local command could not start (sandbox_apply: Operation not permitted) and no local command succeeded`,
     headline: "**Environment failure, not a task failure: the worker's local sandbox could not start a command (MOV-402).**",
     explanation: (exitCode) => `This run did no local work: the worker's own structured transcript shows a local command that \`sandbox-exec\` refused to start (\`sandbox_apply: Operation not permitted\`), and no local command or file change succeeded at any point (worker exit ${exitCode}). The security audit still records that command as attempted; that is not evidence the sandbox works. Every worker on this Mac may fail identically while this condition holds — it is not specific to this issue, and re-running it here will not help.`,
-    recovery: "",
   },
   "agent-report": {
     reason: (exitCode) => `worker exited ${exitCode} with sandbox_apply: Operation not permitted before an executed tool action`,
     headline: "**Environment failure, not a task failure: nested macOS sandbox crash (MOV-299).**",
     explanation: (exitCode) => `This run failed before it could do any real work: the worker reported \`sandbox_apply: Operation not permitted\` before an executed tool action (worker exit ${exitCode}). Every worker on this Mac may fail identically while this condition holds — it is not specific to this issue, and re-running it here will not help.`,
-    recovery: "",
   },
 };
 
@@ -110,33 +109,39 @@ function readTranscript(logDir) {
 // this store). Both share the one CircuitBreakerStore, which is keyed by name
 // for exactly this reason (see circuit-breaker.mjs), so listing them here is
 // the only change needed to gate dispatch on a new breaker.
-const DISPATCH_BREAKERS = [NESTED_SANDBOX_CRASH, CREDENTIAL_FAILURE];
+export const DISPATCH_BREAKERS = [NESTED_SANDBOX_CRASH, CREDENTIAL_FAILURE];
 
 export async function runOnce(issues, ctx) {
   const {
     concurrencyLimit,
     worktreeManager,
-    circuitBreaker = { isOpen: () => false, trip: () => {}, clear: () => {} },
+    circuitBreaker = NO_CIRCUIT_BREAKER,
     workerCooldownStore = NO_WORKER_COOLDOWN_STORE,
     usageLimitStore = NO_USAGE_LIMIT_STORE,
     workerTrialStore = null,
     now = () => new Date(),
   } = ctx;
 
-  // MOV-180: once tripped, let exactly one issue in this batch through as a
-  // probe of whether the host-wide condition has cleared — a standard
-  // half-open circuit-breaker state — and skip everything else without
-  // touching the worktree manager or Linear at all. Gating per-batch here
-  // (rather than per-issue inside processIssue) is what makes "closes once a
-  // subsequent run succeeds" possible: a check inside processIssue would also
-  // block the very probe attempt that could clear it, since the breaker is
-  // only cleared *after* that attempt's worker finishes.
-  const openBreakersAtStart = DISPATCH_BREAKERS.filter((name) => circuitBreaker.isOpen(name));
+  // MOV-180/MOV-403: once tripped, a breaker admits at most one half-open
+  // probe, and only once its persisted `nextProbeAt` deadline has passed (or
+  // an operator authorized one). Every other issue is skipped without touching
+  // the worktree manager or Linear at all. Gating per-batch here (rather than
+  // per-issue inside processIssue) is what lets the probe itself run: the
+  // breaker only closes after that attempt's worker finishes with positive
+  // evidence. The probe's schedule is advanced right before its worker spawns.
+  const nowTs = now();
+  const openBreakersAtStart = DISPATCH_BREAKERS.map((name) => breakerStatus(circuitBreaker, name, nowTs)).filter((status) => status.open);
   const breakerOpenAtStart = openBreakersAtStart.length > 0;
+  const probeDue = breakerOpenAtStart && openBreakersAtStart.every((status) => status.due);
+  // A sandbox breaker recorded against one adapter can only be proven healthy
+  // by that adapter, so only an issue routed to it may spend the probe.
+  const probeAdapters = [...new Set(openBreakersAtStart.map((status) => status.adapter).filter(Boolean))];
+  const breakerRetryAt = breakerOpenAtStart
+    ? openBreakersAtStart.map((status) => status.nextProbeAt).filter(Boolean).sort().at(-1) ?? null
+    : null;
   let probeClaimed = false;
 
   // Determine requested routes and retain prior bindings before allocating probes.
-  const nowTs = now();
   const cooldownAtStart = Object.fromEntries(WORKER_POOLS.map((worker) => [worker, workerCooldownStore.state(worker, nowTs)]));
   // MOV-383: with no trial store wired (or the trial disabled) this is exactly
   // the prior policy. Admission itself is re-evaluated per assignment below.
@@ -224,15 +229,25 @@ export async function runOnce(issues, ctx) {
         }
       }
 
+      let breakerProbe = null;
       if (breakerOpenAtStart) {
         // Synchronous check-and-set, no `await` in between: only the first
-        // entrant to reach this point claims the probe slot, regardless of
-        // how many issues are in the batch.
-        if (probeClaimed) {
-          results[index] = { issue: issue.identifier, outcome: "circuit-breaker-open", reason: openBreakersAtStart.join(", ") };
+        // eligible entrant claims the probe slot, regardless of how many
+        // issues are in the batch.
+        const adapterMatches = probeAdapters.length === 0 ||
+          (probeAdapters.length === 1 && probeAdapters[0] === resolvedWorkerName);
+        const eligible = evaluateLocalDispatch(issue, { expectedDelegate: ctx.dispatcherDelegate }).eligible;
+        if (probeClaimed || !probeDue || !adapterMatches || !eligible) {
+          results[index] = {
+            issue: issue.identifier,
+            outcome: "circuit-breaker-open",
+            reason: describeOpenBreakers(openBreakersAtStart, { probeDue, probeClaimed, adapterMatches }),
+            retryAt: breakerRetryAt,
+          };
           return;
         }
         probeClaimed = true;
+        breakerProbe = { names: openBreakersAtStart.map((status) => status.name), claimed: false };
       }
 
       await acquire();
@@ -246,9 +261,14 @@ export async function runOnce(issues, ctx) {
       // close. Only relevant when the breaker was *not* already open at the
       // start; that case is the half-open probe above.
       if (!breakerOpenAtStart) {
-        const trippedDuringBatch = DISPATCH_BREAKERS.filter((name) => circuitBreaker.isOpen(name));
+        const trippedDuringBatch = DISPATCH_BREAKERS.map((name) => breakerStatus(circuitBreaker, name, now())).filter((status) => status.open);
         if (trippedDuringBatch.length > 0) {
-          results[index] = { issue: issue.identifier, outcome: "circuit-breaker-open", reason: trippedDuringBatch.join(", ") };
+          results[index] = {
+            issue: issue.identifier,
+            outcome: "circuit-breaker-open",
+            reason: describeOpenBreakers(trippedDuringBatch, { probeDue: false }),
+            retryAt: trippedDuringBatch.map((status) => status.nextProbeAt).filter(Boolean).sort().at(-1) ?? null,
+          };
           release();
           return;
         }
@@ -273,7 +293,7 @@ export async function runOnce(issues, ctx) {
         if (liveCooldown.probeOwed) probeWinnerId[liveWorkerName] = issue.id;
       }
       try {
-        results[index] = await processIssue(issue, { ...ctx, resolvedWorker: liveWorkerName, resolvedTrial: liveResolved.trial, resolvedRoute: liveResolved });
+        results[index] = await processIssue(issue, { ...ctx, resolvedWorker: liveWorkerName, resolvedTrial: liveResolved.trial, resolvedRoute: liveResolved, breakerProbe });
       } finally {
         release();
         // MOV-166: this issue is no longer a live attempt an inbound signal
@@ -308,6 +328,56 @@ const NO_WORKER_COOLDOWN_STORE = Object.freeze({
   clear: () => {},
   state: () => ({ cooling: false, probeOwed: false, resetAt: null, evidence: null }),
 });
+
+// MOV-403: default no-op breaker for unwired callers.
+const NO_CIRCUIT_BREAKER = Object.freeze({ isOpen: () => false, trip: () => {}, clear: () => {} });
+
+/**
+ * A breaker's admission view. Stores without a persisted schedule (older
+ * doubles) report an open breaker as always due, which keeps the one-probe
+ * batch rule but cannot apply backoff.
+ */
+function breakerStatus(circuitBreaker, name, at) {
+  if (typeof circuitBreaker.status === "function") return circuitBreaker.status(name, at);
+  const open = circuitBreaker.isOpen(name);
+  return { name, open, due: open, adapter: null, nextProbeAt: null, failedProbes: 0 };
+}
+
+function describeOpenBreakers(statuses, { probeDue = true, probeClaimed = false, adapterMatches = true } = {}) {
+  const names = statuses.map((status) => `${status.name}${status.adapter ? ` (${status.adapter})` : ""}`).join(", ");
+  if (probeClaimed) return `${names}; this poll's single recovery probe is already claimed`;
+  if (!probeDue) {
+    const exhausted = statuses.some((status) => status.exhausted);
+    if (exhausted) return `${names}; automatic probes exhausted, awaiting \`dispatcher breaker probe-now\``;
+    const next = statuses.map((status) => status.nextProbeAt).filter(Boolean).sort().at(-1);
+    return `${names}; next recovery probe not before ${next || "an operator-authorized probe"}`;
+  }
+  if (!adapterMatches) return `${names}; the recovery probe must run on the affected adapter`;
+  return `${names}; issue not eligible for local dispatch`;
+}
+
+/** Reserve the probe's persisted schedule once, right before its worker spawns. */
+function claimBreakerProbe(circuitBreaker, breakerProbe, issue, at) {
+  if (!breakerProbe || breakerProbe.claimed) return;
+  breakerProbe.claimed = true;
+  for (const name of breakerProbe.names) circuitBreaker.claimProbe?.(name, { issue: issue.identifier, at });
+}
+
+/** Close a breaker on positive evidence; older stores only support clear(). */
+function recoverBreaker(circuitBreaker, name, proof) {
+  if (typeof circuitBreaker.recover === "function") return circuitBreaker.recover(name, proof);
+  circuitBreaker.clear(name);
+  return true;
+}
+
+/** MOV-403: the recovery half of a sandbox-failure comment, with the real schedule. */
+function sandboxRecoverySections({ adapter, nextProbeAt }) {
+  return [
+    `This issue has been moved back to \`Ready for Agent\` and its worktree kept. New dispatch is held. The dispatcher will admit one recovery probe on the ${adapter} adapter no earlier than ${nextProbeAt ? `**${nextProbeAt}**` : "its next scheduled probe time"}; each failed probe lengthens the wait, and automatic probes stop after a bounded number until an operator authorizes one. The breaker closes only when a ${adapter} worker completes a local command successfully. A clean exit with no successful command, or another adapter's success, does not close it.`,
+    "",
+    `After fixing the cause, \`node tools/dispatcher/bin/dispatcher.mjs breaker probe-now ${NESTED_SANDBOX_CRASH}\` authorizes the next probe early, and \`breaker status\` shows the schedule. See docs/operators/local-execution.md §Security model.`,
+  ];
+}
 
 // Apply the per-issue reset ceiling independently of its retry allowance.
 function usageLimitResetIsTrustworthy(classification, now, maxDeferralMs = MAX_USAGE_LIMIT_DEFERRAL_MS) {
@@ -520,7 +590,9 @@ async function dispatchIssue(issue, ctx) {
     readAgentSessionFn = () => null,
     persistAgentSessionFn = () => {},
     stopPollIntervalMs = 0,
-    circuitBreaker = { isOpen: () => false, trip: () => {}, clear: () => {} },
+    circuitBreaker = NO_CIRCUIT_BREAKER,
+    breakerProbe = null,
+    localToolEvidenceFn = readLocalToolSuccessEvidence,
     usageLimitStore = NO_USAGE_LIMIT_STORE,
     workerCooldownStore = NO_WORKER_COOLDOWN_STORE,
     diagnoseFailureFn = NO_DIAGNOSIS,
@@ -908,6 +980,8 @@ async function dispatchIssue(issue, ctx) {
         refreshIssueFn,
         stopPollIntervalMs,
         circuitBreaker,
+        breakerProbe,
+        localToolEvidenceFn,
         iosSimLeaseId,
         usageLimitStore,
         workerCooldownStore,
@@ -1010,6 +1084,8 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     refreshIssueFn,
     stopPollIntervalMs,
     circuitBreaker,
+    breakerProbe = null,
+    localToolEvidenceFn = readLocalToolSuccessEvidence,
     usageLimitStore,
     workerCooldownStore = NO_WORKER_COOLDOWN_STORE,
     diagnoseFailureFn = NO_DIAGNOSIS,
@@ -1112,6 +1188,10 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     // Keep dependency-injected legacy test doubles compatible; they never
     // spawn a real child and therefore cannot represent the crash window.
     worktreeManager.prepareWorkerSpawn?.(issue.identifier);
+    // MOV-403: a breaker probe counts as spent (and its next deadline is
+    // persisted) before the worker starts, so a crash or restart mid-probe
+    // cannot buy an immediate retry.
+    claimBreakerProbe(circuitBreaker, breakerProbe, issue, now());
     recordRouting("spawn-requested");
     const spawned = spawnWorkerFn({
       invocation,
@@ -1379,24 +1459,36 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
   });
 
   if (classification?.category === NESTED_SANDBOX_CRASH) {
-    // MOV-180/MOV-299/MOV-402: this is an environment-wide fault, not a task
-    // failure — every worker on this Mac hits it identically while it holds.
-    // Requeue the issue for a later retry instead of leaving it looking like a
-    // real per-issue failure in Needs Human Decision, and stop dispatching
-    // anything else until the condition is confirmed cleared. Returning here
-    // also means this attempt never clears a breaker, records readiness
-    // evidence, asks for an advisory diagnosis, or publishes.
+    // MOV-180/MOV-299/MOV-402/MOV-403: an environment fault in this
+    // adapter's tool sandbox, not a task failure. Requeue the issue, keep its
+    // worktree, and hold further dispatch until a scheduled probe on the same
+    // adapter proves a local command can run again. Returning here also means
+    // this attempt never clears a breaker, records readiness evidence, asks
+    // for an advisory diagnosis, or publishes.
     const variant = NESTED_SANDBOX_VARIANTS[classification.signature] ?? NESTED_SANDBOX_VARIANTS["agent-report"];
-    circuitBreaker.trip(NESTED_SANDBOX_CRASH, variant.reason(spawnResult.exitCode));
+    const tripped = circuitBreaker.trip(NESTED_SANDBOX_CRASH, variant.reason(spawnResult.exitCode), {
+      adapter: routing.worker,
+      evidence: `sandbox_apply: Operation not permitted (${classification.signature ?? "agent-report"})`,
+      issue: issue.identifier,
+      at: now(),
+    }) || {};
     worktreeManager.markStatus(issue.identifier, "failed");
+    if (tripped.repeatNotice) {
+      // Same issue, same adapter, same evidence as the comment already on the
+      // issue: only return it to the queue.
+      await publisher.moveState(stateIds.readyForAgent);
+      return { issue: issue.identifier, outcome: "nested-sandbox-crash", exitCode: spawnResult.exitCode, signature: classification.signature, retryAt: tripped.nextProbeAt ?? null };
+    }
     await publisher.publish("error", {
       stateId: stateIds.readyForAgent,
-      summary: "Worker hit a host-wide nested-sandbox crash, not a task failure. Requeued to Ready for Agent; dispatch is paused until the Mac is fixed.",
+      summary: `Worker hit a ${routing.worker} tool-sandbox failure, not a task failure. Requeued to Ready for Agent; dispatch is held until a recovery probe succeeds.`,
       headline: variant.headline,
       sections: [
         variant.explanation(spawnResult.exitCode),
         "",
-        `This issue has been moved back to \`Ready for Agent\` rather than \`Needs Human Decision\`, and the dispatcher has stopped starting any further issue until the condition is confirmed cleared. The retained worktree is \`${entry.path}\`. See docs/operators/local-execution.md §Security model for the manual recovery procedure${variant.recovery}.`,
+        ...sandboxRecoverySections({ adapter: routing.worker, nextProbeAt: tripped.nextProbeAt }),
+        "",
+        `The retained worktree is \`${entry.path}\`.`,
         "",
         "```",
         tail,
@@ -1405,7 +1497,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
         `Full run log: \`${logDir}\``,
       ],
     });
-    return { issue: issue.identifier, outcome: "nested-sandbox-crash", exitCode: spawnResult.exitCode, signature: classification.signature };
+    return { issue: issue.identifier, outcome: "nested-sandbox-crash", exitCode: spawnResult.exitCode, signature: classification.signature, retryAt: tripped.nextProbeAt ?? null };
   }
 
   verificationEvidence = captureVerificationEvidenceFn(logDir);
@@ -1489,6 +1581,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
       circuitBreaker.trip(
         CREDENTIAL_FAILURE,
         `worker exited ${spawnResult.exitCode} with a credential-failure signature: ${credentialFailure.evidence}`,
+        { adapter: routing.worker, evidence: credentialFailure.evidence, issue: issue.identifier, at: now() },
       );
       worktreeManager.markStatus(issue.identifier, "failed");
       await publisher.publish("error", {
@@ -1498,7 +1591,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
         sections: [
           `This run failed before it could do any real work: the worker's provider credential was rejected (\`${credentialFailure.evidence}\`). This is dispatcher-wide, not specific to this issue — every worker will fail identically until the credential (\`CLAUDE_CODE_OAUTH_TOKEN\` today) is regenerated.`,
           "",
-          "This issue has been moved back to `Ready for Agent` rather than `Needs Human Decision` — it did nothing wrong, the credential did. The dispatcher has stopped starting any further issue until a subsequent dispatch attempt succeeds, which is treated as confirmation the credential is healthy again. See docs/operators/local-execution.md §Security model.",
+          `This issue has been moved back to \`Ready for Agent\` rather than \`Needs Human Decision\` — it did nothing wrong, the credential did. New dispatch is held; the dispatcher admits one scheduled recovery probe at a time on a growing backoff, and a clean ${routing.worker} worker exit closes this breaker. After fixing the credential, \`node tools/dispatcher/bin/dispatcher.mjs breaker probe-now ${CREDENTIAL_FAILURE}\` authorizes the next probe early. See docs/operators/local-execution.md §Security model.`,
           "",
           "```",
           tail,
@@ -1791,13 +1884,17 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     };
   }
 
-  // MOV-180/MOV-177: a worker reaching this point ran to completion — proof
-  // that neither host-wide condition either breaker guards against (a nested
-  // sandbox crash, an invalid/expired dispatcher credential) is still
-  // happening, since either one would have short-circuited above before a
-  // clean exit was possible. Clearing an already-closed breaker is a no-op
-  // (see circuit-breaker.mjs), so this is safe to run unconditionally.
-  for (const name of DISPATCH_BREAKERS) circuitBreaker.clear(name);
+  // MOV-177/MOV-403: each breaker closes only on its own positive evidence.
+  // A clean exit proves this adapter's provider credential was accepted, but
+  // not that its tool sandbox works: Codex can narrate a failed first command
+  // and still exit 0. The sandbox breaker needs a local command that this
+  // adapter actually completed successfully. A breaker recorded against a
+  // different adapter stays open either way (see CircuitBreakerStore.recover).
+  recoverBreaker(circuitBreaker, CREDENTIAL_FAILURE, { adapter: routing.worker, evidence: "clean worker exit", at: now() });
+  if (breakerStatus(circuitBreaker, NESTED_SANDBOX_CRASH, now()).open) {
+    const toolEvidence = localToolEvidenceFn(logDir, routing.worker);
+    if (toolEvidence) recoverBreaker(circuitBreaker, NESTED_SANDBOX_CRASH, { adapter: routing.worker, evidence: toolEvidence, at: now() });
+  }
   // MOV-151: and the provider granted this issue a session that ran to a
   // clean exit, so whatever usage-limit history it had is no longer
   // "consecutive". Nothing to forget in the overwhelmingly common case.

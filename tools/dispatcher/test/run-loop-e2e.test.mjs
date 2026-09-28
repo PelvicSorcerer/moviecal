@@ -754,7 +754,8 @@ describe("native Codex sandbox startup failure through the real audit and run co
   it("does not clear an already-open breaker when it is the half-open probe", async () => {
     const breakerPath = `${TMP_ROOT}/circuit-breaker.json`;
     fs.mkdirSync(TMP_ROOT, { recursive: true });
-    new CircuitBreakerStore(breakerPath).trip(NESTED_SANDBOX_CRASH, "earlier native startup failure");
+    // MOV-403: tripped long enough ago that its first probe is already due.
+    new CircuitBreakerStore(breakerPath).trip(NESTED_SANDBOX_CRASH, "earlier native startup failure", { at: new Date(Date.now() - 11 * 60 * 1000) });
 
     const { ctx, result } = await runMov399Shape();
 
@@ -873,11 +874,20 @@ describe("credential-failure circuit breaker, one continuous run across two poll
       { issue: "MOV-BACKLOG", promoted: true, reason: expect.any(String), specViolations: expect.any(Array) },
     ]);
 
-    // Cycle 2: issueA (requeued) and issueB (a second, independently eligible
-    // issue) are both in "Ready for Agent". The breaker is open at the start
-    // of this cycle, so exactly one issue is let through as the half-open
-    // probe -- and this time the worker actually runs and succeeds.
+    // Cycle 2 (MOV-403): the probe deadline has not passed, so neither issue
+    // is claimed and nothing is written to Linear.
     ctx.spawnWorkerFn = vi.fn(async () => ({ exitCode: 0, logDir: `${TMP_ROOT}/logs/clean` }));
+    const callsBeforeDeferredPoll = linearClient.calls.length;
+    const deferred = await runOnce([issueA, issueB], ctx);
+    expect(deferred.map((r) => r.outcome)).toEqual(["circuit-breaker-open", "circuit-breaker-open"]);
+    expect(deferred[0].retryAt).toEqual(expect.any(String));
+    expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+    expect(linearClient.calls).toHaveLength(callsBeforeDeferredPoll);
+
+    // Cycle 3: after fixing the credential, the operator authorizes one early
+    // probe. Exactly one issue is let through -- and this time the worker
+    // actually runs and succeeds.
+    new CircuitBreakerStore(`${TMP_ROOT}/circuit-breaker.json`).authorizeProbe(CREDENTIAL_FAILURE);
 
     const [probeResult, secondResult] = await runOnce([issueA, issueB], ctx);
 
