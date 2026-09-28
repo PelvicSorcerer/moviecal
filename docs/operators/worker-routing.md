@@ -13,7 +13,7 @@ Only workers that can execute against a real local git worktree on this Mac are 
 | Worker | Invocation | Notes |
 |---|---|---|
 | `claude` | `claude -p --model <id>` | Primary worker. Full local tool access, MCP, worktree-aware |
-| `codex` | `codex --sandbox workspace-write exec --model <id> -c model_reasoning_effort=<tier>` | Secondary worker. Independent quota pool and a real vendor-neutrality check on the worker-adapter interface; used only when pinned with `worker:codex` (or during the `worker:any` trial below). See below for the tier→effort/model mapping |
+| `codex` | Routing: `codex --sandbox workspace-write exec --model <id> -c model_reasoning_effort=<tier>`; spawn: separate guarded client + native `exec-server` | Secondary worker. Independent quota pool and a real vendor-neutrality check on the worker-adapter interface; used only when pinned with `worker:codex` (or during the `worker:any` trial below). See below for the tier→effort/model mapping |
 
 Cursor Cloud Agent and GitHub Copilot coding agent are **not** viable dispatch targets for this pipeline: both execute in a cloud VM with no path to this Mac's worktrees. They may still be useful as an editor/IDE completion tool, but that is a separate decision from this repo's agent-dispatch architecture and is not covered by this document.
 
@@ -23,10 +23,12 @@ Codex is the dispatcher's second worker option, selected via the `worker:codex` 
 
 1. **Install** the Codex CLI globally via npm:
    ```sh
-   npm i -g @openai/codex
+   npm i -g @openai/codex@0.157.1
    ```
 
-   Codex CLI 0.157.0 or newer is required for the current routing defaults: that release added GPT-6 Sol and Luna to its model catalog. Older CLI versions can reject those IDs even for an eligible Plus account. Upgrade with `npm install -g @openai/codex@latest` (an administrator must update a root-owned installation), then confirm `codex --version` and run the controlled model/effort smoke checks before dispatch. See the [0.157.0 release notes](https://github.com/openai/codex/releases/tag/rust-v0.157.0).
+   Codex CLI 0.157.0 or newer is required for the current routing defaults: that release added GPT-6 Sol and Luna to its model catalog. Older CLI versions can reject those IDs even for an eligible Plus account. Install the proved version with `npm install -g @openai/codex@0.157.1` (an administrator must update a root-owned installation), then confirm `codex --version` and run the controlled model/effort smoke checks before dispatch. See the [0.157.0 release notes](https://github.com/openai/codex/releases/tag/rust-v0.157.0).
+
+MOV-401 containment requires exactly CLI 0.157.1; unproved versions fail setup. The dispatcher resolves the installed native executable from the npm distribution, admits only the installed client and stock V8 code-mode tool router, and supplies external client/executor guards before changing its effective command mode. The client has provider transport; commands execute only in the separate executor with outbound networking disabled. A missing native executable, unsupported executor, or guard setup failure never falls back to an unguarded worker. `workspace-write` in the routing preview is the requested authority; `codex-launch.json` and the manifest record the external arrangement. See [Codex containment and its local proof gates](./local-execution.md#security-model). Rerun those gates before relying on a CLI/OS upgrade.
 
 2. **Verify** the installation by running `dispatcher doctor`, which will report "codex on PATH" as a passing check:
    ```sh

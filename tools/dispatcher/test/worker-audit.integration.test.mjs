@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
@@ -85,7 +86,7 @@ async function runFixture(commands) {
     const [result] = await runOnce([ISSUE], {
       linearClient: { moveToState: vi.fn(async () => {}), addComment },
       worktreeManager, publishWorkerResultFn,
-      spawnWorkerFn: ({ securityContext: _securityContext, ...args }) => spawnWorker({ ...args, invocation: { command: fixture, args: [] }, killGraceMs: 10 }),
+      spawnWorkerFn: ({ securityContext: _securityContext, ...args }) => spawnWorker({ ...args, invocation: { command: fixture, args: [] }, spawnImpl: (...values) => spawn(...values), killGraceMs: 10 }),
       stateIds: { agentWorking: "working", needsHumanDecision: "human", inReview: "review" },
       concurrencyLimit: 1, iosRunnerOnline: true, secretPresent: () => true,
       worktreeRoot: root, ghRepo: "owner/repo", logRoot, workerTimeoutMs: 10000,

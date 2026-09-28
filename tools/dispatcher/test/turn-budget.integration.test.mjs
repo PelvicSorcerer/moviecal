@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { runOnce } from "../src/run-loop.mjs";
 import { spawnWorker } from "../src/worker-spawn.mjs";
 import { buildUsageExport, captureWorkerUsage, WorkerUsageStore } from "../src/worker-usage.mjs";
@@ -56,7 +57,7 @@ else { process.stdout.write(JSON.stringify({ type: "result", num_turns: 3, durat
     const linearClient = { moveToState: vi.fn(async () => {}), addComment: vi.fn(async () => {}) };
     const publishWorkerResultFn = vi.fn(() => ({ number: 1, url: "https://github.com/owner/repo/pull/1", isDraft: true }));
     const spawnWorkerFn = vi.fn(({ securityContext: _securityContext, ...args }) => spawnWorker({
-      ...args, invocation: { command: fixture, args: [] }, killGraceMs: 10,
+      ...args, invocation: { command: fixture, args: [] }, spawnImpl: (...values) => spawn(...values), killGraceMs: 10,
     }));
     try {
       const [result] = await runOnce([ISSUE], {
@@ -145,7 +146,7 @@ else { out({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 
     const linearClient = { moveToState: vi.fn(async () => {}), addComment: vi.fn(async () => {}) };
     const publishWorkerResultFn = vi.fn(() => ({ number: 1, url: "https://github.com/owner/repo/pull/1", isDraft: true }));
     const spawnWorkerFn = vi.fn(({ securityContext: _securityContext, ...args }) => spawnWorker({
-      ...args, invocation: { command: fixture, args: [] }, killGraceMs: 10,
+      ...args, invocation: { command: fixture, args: [] }, spawnImpl: (...values) => spawn(...values), killGraceMs: 10,
     }));
     const [result] = await runOnce([CODEX_ISSUE], {
       linearClient, worktreeManager, publishWorkerResultFn, spawnWorkerFn,

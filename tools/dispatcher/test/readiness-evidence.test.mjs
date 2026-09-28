@@ -36,6 +36,16 @@ const eligibleIssue = issue([
 ].join("\n"));
 
 describe("MOV-275 durable local verification", () => {
+  it.each(["/bin/zsh -c 'npm run verify'", '/bin/bash -lc "npm run verify"'])("accepts the installed Codex literal command wrapper: %s", (command) => {
+    expect(captureVerificationEvidence(logs([JSON.stringify({ type: "item.completed", item: {
+      id: "verify", type: "command_execution", command, exit_code: 0,
+    } })])).status).toBe("passed");
+  });
+  it.each(["/bin/zsh -c 'npm run verify || true'", "/bin/zsh -c 'npm run verify' | tail", "/bin/zsh -c 'npm run verify > result'", "/bin/zsh -c '$(echo npm run verify)'"])("rejects altered Codex wrappers: %s", (command) => {
+    expect(captureVerificationEvidence(logs([JSON.stringify({ type: "item.completed", item: {
+      id: "verify", type: "command_execution", command, exit_code: 0,
+    } })])).status).toBe("incomplete");
+  });
   it("records only an exact completed successful verify command", () => {
     const evidence = captureVerificationEvidence(logs([
       JSON.stringify({ type: "item.completed", item: { id: "verify", type: "command_execution", command: "npm run verify", exit_code: 0 } }),

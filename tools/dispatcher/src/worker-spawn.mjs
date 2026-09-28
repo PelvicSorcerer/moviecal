@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Transform } from "node:stream";
 import { isCodexWorkItemEvent } from "./budget-unit.mjs";
+import { prepareCodexContainment } from "./codex-containment.mjs";
 import {
   buildWorkerSandboxProfile,
   guardedInvocation,
@@ -16,23 +17,6 @@ import {
 } from "./worker-guard.mjs";
 
 const SECRET_KEY_RE = /(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|ACCESS_KEY|SESSION)/i;
-
-/**
- * Codex's workspace-write sandbox treats linked-worktree Git metadata as
- * outside its workspace. Give it that metadata as an additional directory so
- * it can resolve the worktree's `.git` file. worker-guard.mjs still denies
- * every write to these paths in the inherited Seatbelt profile.
- */
-export function withCodexGitMetadataDirectories(invocation, gitMetadataPaths = []) {
-  if (path.basename(invocation.command) !== "codex" || gitMetadataPaths.length === 0) return invocation;
-  const execIndex = invocation.args.indexOf("exec");
-  if (execIndex === -1) throw new Error("Codex worker invocation must include exec before adding Git metadata directories");
-  const metadataArgs = gitMetadataPaths.flatMap((metadataPath) => ["--add-dir", metadataPath]);
-  return {
-    ...invocation,
-    args: [...invocation.args.slice(0, execIndex), ...metadataArgs, ...invocation.args.slice(execIndex)],
-  };
-}
 
 export function redactWorkerOutput(text, { env = process.env } = {}) {
   let redacted = String(text || "");
@@ -202,7 +186,7 @@ function reapProcessGroup(pid, { graceMs, killImpl }) {
  * @param {AbortSignal} [opts.signal] - MOV-138: aborting (e.g. a per-worker timeout in run-loop.mjs) reaps the
  *   worker's process group immediately, the same SIGTERM-then-SIGKILL path used once the worker exits on its own
  *   (MOV-137). The promise still only settles once the child actually closes.
- * @param {{mode?: 'implementation'|'repair'}} [opts.securityContext] - when present, enforce the shared MOV-145 guard
+ * @param {{mode?: 'implementation'|'repair'}} [opts.securityContext] - required for production launch; enforce the shared MOV-145 guard
  * @param {NodeJS.Platform} [opts.platform] - injectable for tests
  * @param {(cwd: string) => {protectedRepositoryPaths: string[], gitMetadataPaths: string[]}} [opts.repositoryGuardPathsFn] - injectable for tests
  * @param {boolean} [opts.steering] - MOV-214/215: when true (Claude only; the invocation must already carry
@@ -238,6 +222,7 @@ export function spawnWorker({
   onAssistantTurn = null,
   onWorkerInit = null,
   trial = null,
+  prepareCodexContainmentFn = prepareCodexContainment,
 }) {
   fs.mkdirSync(logDir, { recursive: true });
   const stdoutPath = path.join(logDir, "stdout.log");
@@ -250,6 +235,7 @@ export function spawnWorker({
   // (e.g. the darwin-only security-sandbox check) -- every steering helper
   // guards for that.
   let child;
+  let containment;
   let childClosed = false;
   let pendingTurns = 0;
   const turnWaiters = [];
@@ -258,6 +244,10 @@ export function spawnWorker({
     const startedAt = new Date().toISOString();
     let effectiveInvocation = invocation;
     let workerEnv = process.env;
+    if (!securityContext && spawnImpl === spawn) {
+      reject(new Error("production worker launch requires a securityContext and OS guard"));
+      return;
+    }
     if (securityContext) {
       if (platform !== "darwin") {
         childClosed = true; // no child will ever spawn; nextTurnBoundary() must not hang
@@ -273,21 +263,26 @@ export function spawnWorker({
         return;
       }
       const profilePath = path.join(logDir, "worker-sandbox.sb");
-      const profile = buildWorkerSandboxProfile({
-        worktreePath: cwd,
-        mode: securityContext.mode || "implementation",
-        logDir,
-        ...repositoryPaths,
-      });
-      fs.writeFileSync(profilePath, profile, { mode: 0o600 });
-      effectiveInvocation = guardedInvocation(
-        withCodexGitMetadataDirectories(invocation, repositoryPaths.gitMetadataPaths),
-        { profilePath },
-      );
-      workerEnv = sanitizedWorkerEnvironment(process.env, {
-        worker: path.basename(invocation.command),
-      });
-      if (iosSimLeaseId) workerEnv.MOVIECAL_IOS_SIM_LEASE_ID = iosSimLeaseId;
+      if (path.basename(invocation.command) === "codex") {
+        containment = prepareCodexContainmentFn({ invocation, cwd, logDir, repositoryPaths,
+          mode: securityContext.mode || "implementation", home: securityContext.home,
+          sourceEnvironment: { ...process.env, ...(iosSimLeaseId ? { MOVIECAL_IOS_SIM_LEASE_ID: iosSimLeaseId } : {}) } });
+        effectiveInvocation = containment.invocation;
+        workerEnv = containment.environment;
+      } else {
+        const profile = buildWorkerSandboxProfile({
+          worktreePath: cwd,
+          mode: securityContext.mode || "implementation",
+          logDir,
+          ...repositoryPaths,
+        });
+        fs.writeFileSync(profilePath, profile, { mode: 0o600 });
+        effectiveInvocation = guardedInvocation(invocation, { profilePath });
+        workerEnv = sanitizedWorkerEnvironment(process.env, {
+          worker: path.basename(invocation.command),
+        });
+        if (iosSimLeaseId) workerEnv.MOVIECAL_IOS_SIM_LEASE_ID = iosSimLeaseId;
+      }
     }
     // detached: true (POSIX) makes the child the leader of its own process
     // group via setsid(), so its own pid doubles as the group id we reap on
@@ -402,7 +397,8 @@ export function spawnWorker({
             exitCode,
             // MOV-383: worker-trial attribution; null outside a trial.
             trial,
-            securityGuard: securityContext ? { enforced: true, mode: securityContext.mode || "implementation" } : { enforced: false },
+            securityGuard: securityContext ? { enforced: true, mode: securityContext.mode || "implementation",
+              ...(containment ? containment.evidence : {}) } : { enforced: false },
           },
           null,
           2,
@@ -441,10 +437,11 @@ export function spawnWorker({
     });
   });
 
-  if (!steering) return promise;
+  const completed = promise.finally(() => containment?.cleanup());
+  if (!steering) return completed;
 
   return {
-    promise,
+    promise: completed,
     /** Write one trusted follow-up prompt as the next turn. A no-op (not a throw) once the process is gone or never started. */
     writeTurn(text) {
       if (!child || !child.stdin || !child.stdin.writable) return;

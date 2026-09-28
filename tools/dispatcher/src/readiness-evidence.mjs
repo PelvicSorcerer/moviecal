@@ -43,10 +43,14 @@ function parseTranscript(transcript) {
     }
 
     const item = event.item || {};
-    if (item.type === "command_execution" && item.command === VERIFY_COMMAND) {
+    // Installed Codex 0.157.1 records the literal exec_command in its fixed
+    // shell argv. Accept only that exact wrapper, never a pipeline, compound
+    // command, substitution, redirected command or worker success claim.
+    const exactCodexVerify = item.command === VERIFY_COMMAND || /^\/bin\/(?:zsh|bash|sh) -l?c (?:'npm run verify'|"npm run verify")$/.test(item.command || "");
+    if (item.type === "command_execution" && exactCodexVerify) {
       const key = item.id || event.id || `${commands.size}`;
       commands.set(key, {
-        command: item.command,
+        command: VERIFY_COMMAND,
         completed: event.type === "item.completed",
         exitCode: item.exit_code ?? item.exitCode ?? null,
       });

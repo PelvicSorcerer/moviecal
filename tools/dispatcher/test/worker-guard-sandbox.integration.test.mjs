@@ -3,8 +3,8 @@
 // what missed MOV-193 (Codex denied a linked worktree's own Git metadata)
 // and MOV-194 (the MOV-193 fix leaked sibling-worktree isolation): each was a
 // real allow/deny outcome under sandbox-exec, not a string in the profile
-// source. See the note at the bottom of this file for why a MOV-180/184
-// nested-sandbox_apply reproduction is not included here.
+// source. The installed Codex path is additionally covered in
+// codex-containment.integration.test.mjs (MOV-401).
 //
 // This suite builds a real multi-worktree Git fixture and actually invokes
 // /usr/bin/sandbox-exec against it. CI's lane-integration job runs on
@@ -170,24 +170,6 @@ describe.skipIf(!sandboxAvailable)("worker-guard sandbox-exec integration (MOV-1
     expect(result.stdout.trim()).toBe("outer-ok");
   });
 
-  // MOV-180/184 note: docs/operators/local-execution.md documents a
-  // confirmed mechanism where nesting a second, independent sandbox_apply
-  // call inside this deny-bearing profile crashes with `sandbox_apply:
-  // Operation not permitted` (exit 71). This suite attempted to pin that as
-  // a regression test by re-exec'ing /usr/bin/sandbox-exec inside itself
-  // with the same profile, and it did NOT reproduce here (empirically
-  // checked on this machine: two nested sandbox-exec CLI invocations with a
-  // deny-rule-bearing profile both exit 0). Either the crash is specific to
-  // however Claude Code's own internal sandbox applies itself in-process
-  // (not via re-exec'ing the sandbox-exec binary, which is the only nesting
-  // technique a test outside Claude Code itself can drive), or newer macOS
-  // Seatbelt no longer exhibits the collision that was confirmed when
-  // MOV-184 was investigated. Either way, asserting a crash here would be
-  // asserting something false on this OS, so it is intentionally left out
-  // rather than shipped as a misleading green check. The actual guarantee
-  // that a real worker never re-triggers this hazard is enforced at the unit
-  // level instead: worker-routing.test.mjs pins that Claude's invocation
-  // always carries `--settings '{"sandbox":{"enabled":false}}'`, so the
-  // second, independent sandbox_apply call this profile can't safely absorb
-  // is never made in the first place.
+  // Installed Codex nesting, native tool execution and replacement
+  // containment are covered by codex-containment.integration.test.mjs.
 });
