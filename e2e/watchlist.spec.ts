@@ -252,6 +252,7 @@ test('owners can inspect and remove shared watchlist members', async ({
 
   await expect(page.getByText('friend@example.com')).toBeVisible();
   await page.getByRole('button', { name: 'Remove access' }).click();
+  await page.getByRole('button', { name: 'Confirm removal' }).click();
 
   await expect(
     page.getByText('Removed friend@example.com from Friday movie night.'),
@@ -259,6 +260,83 @@ test('owners can inspect and remove shared watchlist members', async ({
   await expect(
     page.getByRole('listitem').filter({ hasText: 'friend@example.com' }),
   ).toHaveCount(0);
+});
+
+test('editors can leave a shared watchlist and lose access', async ({
+  page,
+  seedAuthenticatedSession,
+}) => {
+  const sharedWatchlist = createE2ESharedWatchlist('Friday movie night', 0);
+
+  await seedAuthenticatedSession({
+    sharedState: {
+      inviteLinks: [],
+      memberships: [
+        createE2EWatchlistMember({
+          userId: 'e2e-collaborator-user',
+          watchlistId: sharedWatchlist.id,
+        }),
+      ],
+    },
+    user: 'collaborator',
+    watchlists: [
+      {
+        id: 'e2e-personal-watchlist-e2e-user',
+        kind: 'personal',
+        name: 'Owner watchlist',
+        ownerUserId: 'e2e-user',
+      },
+      sharedWatchlist,
+    ],
+  });
+  await page.goto(`/watchlist/${sharedWatchlist.id}`);
+
+  await page.getByRole('button', { name: 'Leave watchlist' }).click();
+  await page.getByRole('button', { name: 'Confirm leave' }).click();
+
+  await expect(page).toHaveURL('/watchlist');
+
+  const response = await page.goto(`/watchlist/${sharedWatchlist.id}`);
+
+  expect(response?.status()).toBe(404);
+});
+
+test('owners cannot leave their own shared watchlist', async ({
+  page,
+  seedAuthenticatedSession,
+}) => {
+  const sharedWatchlist = createE2ESharedWatchlist('Friday movie night', 0);
+
+  await seedAuthenticatedSession({
+    sharedState: { inviteLinks: [], memberships: [] },
+    user: 'owner',
+    watchlists: [
+      {
+        id: 'e2e-personal-watchlist-e2e-user',
+        kind: 'personal',
+        name: 'My watchlist',
+        ownerUserId: 'e2e-user',
+      },
+      sharedWatchlist,
+    ],
+  });
+  await page.goto(`/watchlist/${sharedWatchlist.id}`);
+
+  await expect(page.getByRole('button', { name: 'Leave watchlist' })).toHaveCount(0);
+
+  const status = await page.evaluate(async (watchlistId) => {
+    const response = await fetch(`/api/watchlist/shared/${watchlistId}/membership`, {
+      method: 'DELETE',
+    });
+
+    return response.status;
+  }, sharedWatchlist.id);
+
+  expect(status).toBe(403);
+  await page.reload();
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Friday movie night' }),
+  ).toBeVisible();
 });
 
 test('authenticated users can open calendar settings', async ({

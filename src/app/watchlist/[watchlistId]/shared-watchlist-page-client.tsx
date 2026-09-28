@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
 import type {
@@ -28,6 +29,7 @@ interface RemoveMemberResponse {
 
 export interface SharedWatchlistPageClientProps {
   activeInviteLinkExists: boolean;
+  canLeave?: boolean;
   initialMembers: MemberEntry[];
   ownerCanManage: boolean;
   watchlist: WatchlistSummary;
@@ -53,10 +55,12 @@ function formatAcceptedAt(acceptedAt: string | null): string {
 
 export function SharedWatchlistPageClient({
   activeInviteLinkExists,
+  canLeave = false,
   initialMembers,
   ownerCanManage,
   watchlist,
 }: SharedWatchlistPageClientProps) {
+  const router = useRouter();
   const [members, setMembers] = useState(initialMembers);
   const [hasActiveInviteLink, setHasActiveInviteLink] = useState(activeInviteLinkExists);
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
@@ -66,6 +70,11 @@ export function SharedWatchlistPageClient({
   const [removingMembershipIds, setRemovingMembershipIds] = useState<
     Record<string, boolean>
   >({});
+  const [confirmingMembershipId, setConfirmingMembershipId] = useState<string | null>(
+    null,
+  );
+  const [isConfirmingLeave, setIsConfirmingLeave] = useState(false);
+  const [isLeaving, setIsLeaving] = useState(false);
 
   async function createInviteLink() {
     setErrorMessage(null);
@@ -103,7 +112,37 @@ export function SharedWatchlistPageClient({
     }
   }
 
+  async function leaveWatchlist() {
+    setErrorMessage(null);
+    setStatusMessage(null);
+    setIsLeaving(true);
+
+    try {
+      const response = await fetch(
+        `/api/watchlist/shared/${watchlist.id}/membership`,
+        {
+          method: 'DELETE',
+        },
+      );
+      const payload = (await response.json()) as RemoveMemberResponse;
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? 'Could not leave this watchlist.');
+      }
+
+      router.push('/watchlist');
+      router.refresh();
+    } catch (error) {
+      setIsConfirmingLeave(false);
+      setIsLeaving(false);
+      setErrorMessage(
+        error instanceof Error ? error.message : 'Could not leave this watchlist.',
+      );
+    }
+  }
+
   async function removeMember(member: MemberEntry) {
+    setConfirmingMembershipId(null);
     setErrorMessage(null);
     setStatusMessage(null);
     setRemovingMembershipIds((current) => ({
@@ -209,16 +248,46 @@ export function SharedWatchlistPageClient({
                     </div>
 
                     {ownerCanManage && member.canRemove ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void removeMember(member);
-                        }}
-                        disabled={isRemoving}
-                        className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-rose-300 hover:text-rose-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
-                      >
-                        {isRemoving ? 'Removing…' : 'Remove access'}
-                      </button>
+                      confirmingMembershipId === member.id || isRemoving ? (
+                        <div className="flex flex-col gap-2">
+                          <p className="max-w-xs text-sm text-slate-600">
+                            Remove {member.email ?? 'this member'}? They will immediately
+                            lose access and can rejoin only with a valid invite link.
+                          </p>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void removeMember(member);
+                              }}
+                              disabled={isRemoving}
+                              className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                            >
+                              {isRemoving ? 'Removing…' : 'Confirm removal'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setConfirmingMembershipId(null);
+                              }}
+                              disabled={isRemoving}
+                              className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:text-slate-400"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setConfirmingMembershipId(member.id);
+                          }}
+                          className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-rose-300 hover:text-rose-700"
+                        >
+                          Remove access
+                        </button>
+                      )
                     ) : null}
                   </div>
                 </li>
@@ -288,6 +357,49 @@ export function SharedWatchlistPageClient({
                 You currently have access to this shared watchlist, but only the owner can
                 inspect or manage other collaborators.
               </p>
+              {canLeave ? (
+                isConfirmingLeave ? (
+                  <div className="mt-4 space-y-3">
+                    <p className="leading-6">
+                      Leave {watchlist.name}? You will immediately lose access to its
+                      movies and it will no longer appear on your calendar. You can rejoin
+                      only with a valid invite link.
+                    </p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void leaveWatchlist();
+                        }}
+                        disabled={isLeaving}
+                        className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                      >
+                        {isLeaving ? 'Leaving…' : 'Confirm leave'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsConfirmingLeave(false);
+                        }}
+                        disabled={isLeaving}
+                        className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:text-slate-400"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsConfirmingLeave(true);
+                    }}
+                    className="mt-4 rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-rose-300 hover:text-rose-700"
+                  >
+                    Leave watchlist
+                  </button>
+                )
+              ) : null}
             </div>
           )}
         </aside>

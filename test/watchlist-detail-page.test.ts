@@ -32,6 +32,7 @@ vi.mock('../src/lib/supabase/watchlist', () => ({
 
 vi.mock('next/navigation', () => ({
   notFound: mocks.notFound,
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
 
 vi.mock('../src/lib/watchlist', async () => {
