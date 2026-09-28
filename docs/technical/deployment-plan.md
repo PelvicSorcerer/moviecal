@@ -3,6 +3,7 @@
 ## Environments
 
 - Development: local Next.js app and local or disposable Supabase project.
+- Preview: Vercel preview deployments (one per pull request), backed by the `moviecal-ci-dev` Supabase project — never production.
 - Production: Vercel hosting and Supabase project.
 
 ## Environment variables
@@ -11,9 +12,9 @@ Use `.env.example` as the canonical placeholder list. Replace placeholders with 
 
 | Variable | Local `.env.local` | Vercel project env | Purpose |
 | --- | --- | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` | required | required | browser-safe Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | required | required | browser-safe Supabase anon key |
-| `SUPABASE_SERVICE_ROLE_KEY` | required | required | server-only Supabase access for protected data and token/feed operations |
+| `NEXT_PUBLIC_SUPABASE_URL` | required | required (preview-scoped value points at `moviecal-ci-dev`, production-scoped value points at the production project) | browser-safe Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | required | required (preview-scoped value points at `moviecal-ci-dev`, production-scoped value points at the production project) | browser-safe Supabase anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | required | required (preview-scoped value points at `moviecal-ci-dev`, production-scoped value points at the production project) | server-only Supabase access for protected data and token/feed operations |
 | `TMDB_API_KEY` | required | required | server-only TMDb search and refresh access |
 | `CRON_SECRET` | required | required | protects `/api/cron/refresh-releases` and authorizes Vercel Cron |
 
@@ -21,6 +22,7 @@ Notes:
 
 - No separate application origin variable is required today; the calendar settings page builds subscription URLs from the incoming request host/protocol headers.
 - Supabase itself is the system of record for database schema, RLS, and disposable auth users. Those are configured in the Supabase project, not committed as app secrets in the repository.
+- **Preview deployments must never point at the production Supabase project.** The three Supabase-related Vercel env vars each carry a Preview-target value pointing at `moviecal-ci-dev` (ref `utaxvnghaqungrvrqnbc`, the same project already used for CI per `docs/operators/supabase-ci-secret-recovery.md`) that is distinct from the Production-target value. When adding or rotating any of these three variables, always set both a Production-scoped and a Preview-scoped value — never one shared value applied to both targets.
 
 ## Deployment steps
 
