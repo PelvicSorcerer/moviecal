@@ -44,33 +44,108 @@ function hasExecutedToolActivity(toolActions) {
   return Array.isArray(toolActions) && toolActions.some((action) => action?.outcome === "executed");
 }
 
+// sandbox-exec prints exactly this line (and nothing else) when it cannot
+// apply its profile, then exits without starting the requested program.
+const SANDBOX_STARTUP_OUTPUT_LINE = /^(?:sandbox-exec: )?sandbox_apply: Operation not permitted$/;
+
+function isSandboxStartupOutput(output) {
+  const lines = String(output || "").split("\n").map((line) => line.trim()).filter(Boolean);
+  return lines.length > 0 && lines.every((line) => SANDBOX_STARTUP_OUTPUT_LINE.test(line));
+}
+
 /**
- * Classify a failed worker run's exit code + log tail against known
+ * Local sandbox health evidence from a Codex `--json` transcript (MOV-402).
+ *
+ * This is deliberately separate from worker-guard.mjs's security audit. The
+ * audit records every *attempted* command as `executed` once the harness
+ * handed it on, so that violations are never lost; that is the right answer
+ * for security and the wrong one for "did a local command actually start".
+ * Here only native `item.completed` events count, keyed by item id so
+ * duplicate started/completed events cannot manufacture extra activity:
+ *
+ * - a `command_execution` with a nonzero exit code whose entire output is the
+ *   sandbox-exec refusal line is a *startup failure*: the shell never ran;
+ * - any other completed `command_execution` with a numeric exit code (zero or
+ *   an ordinary nonzero failure) proves the local sandbox started a program;
+ * - a completed `file_change` proves the worker wrote locally.
+ *
+ * Remote tool calls (MCP, web) and agent narration prove nothing about the
+ * local sandbox either way.
+ *
+ * @param {string} transcript - full structured stdout.log
+ * @returns {{startupFailures: Array<{command: string, exitCode: number}>, successfulLocalActivity: number}}
+ */
+export function assessLocalSandboxStartup(transcript) {
+  const failures = new Map();
+  const successes = new Set();
+  let anonymous = 0;
+  for (const line of String(transcript || "").split("\n")) {
+    if (!line.trim()) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const item = event?.type === "item.completed" ? event.item : null;
+    if (!item || typeof item !== "object") continue;
+    const key = item.id ?? `anonymous-${anonymous++}`;
+    if (item.type === "command_execution" && Number.isInteger(item.exit_code)) {
+      if (item.exit_code !== 0 && isSandboxStartupOutput(item.aggregated_output)) {
+        failures.set(key, { command: String(item.command ?? ""), exitCode: item.exit_code });
+      } else {
+        successes.add(key);
+      }
+    } else if (item.type === "file_change" && String(item.status || "completed") === "completed") {
+      successes.add(key);
+    }
+  }
+  return { startupFailures: [...failures.values()], successfulLocalActivity: successes.size };
+}
+
+/**
+ * Classify a failed worker run's exit code + transcript against known
  * host-wide failure signatures.
  *
- * The legacy fingerprint remains exit code 71 combined with the literal
- * `sandbox_apply: Operation not permitted` string anywhere in captured output.
- * Codex also has a narrower fallback for a graceful/non-71 exit: it must
- * report that exact marker in a structured agent message and the transcript
- * audit must show no executed tool action. This guards against reclassifying a
- * normal zero-change/zero-exit worker result or a sandbox string produced by
- * an otherwise-running tool.
+ * Three signatures, most specific first:
+ *
+ * 1. Legacy: outer exit code 71 combined with the literal
+ *    `sandbox_apply: Operation not permitted` anywhere in captured output.
+ * 2. Native (MOV-402): Codex's own completed `command_execution` event shows
+ *    a command that sandbox-exec refused to start (see
+ *    assessLocalSandboxStartup), and no completed local command or file change
+ *    succeeded anywhere in the run. This holds whatever the outer exit code
+ *    and whatever the model said, and does not consult the security audit's
+ *    `executed` outcome, which records attempts rather than startup.
+ * 3. Narrated (MOV-299): Codex reports the exact marker in a structured agent
+ *    message, the transcript shows no successful local activity, and the audit
+ *    shows no executed tool action.
+ *
+ * Any successful local activity rules out 2 and 3: the sandbox demonstrably
+ * worked for this worker, so its result follows the normal paths.
  *
  * @param {object} args
  * @param {number} args.exitCode
  * @param {string} args.logTail - combined stdout/stderr tail, e.g. from worker-spawn.mjs's tailLogs()
+ * @param {string} [args.transcript] - the full structured stdout.log; defaults to logTail
  * @param {Array<{outcome?: string}>} [args.toolActions] - actions observed by the full structured transcript audit
- * @returns {{category: string}|null} the recognized category, or null when
- *   nothing matches and the caller should fall through to its existing
- *   generic-failure handling.
+ * @returns {{category: string, signature: "exit-71"|"native-command"|"agent-report"}|null}
+ *   the recognized category, or null when nothing matches and the caller
+ *   should fall through to its existing generic-failure handling.
  */
-export function classifyWorkerFailure({ exitCode, logTail, toolActions = [] }) {
+export function classifyWorkerFailure({ exitCode, logTail, transcript, toolActions = [] }) {
   const text = String(logTail || "");
   if (exitCode === SANDBOX_CRASH_EXIT_CODE && SANDBOX_CRASH_LOG_PATTERN.test(text)) {
-    return { category: NESTED_SANDBOX_CRASH };
+    return { category: NESTED_SANDBOX_CRASH, signature: "exit-71" };
   }
-  if (codexReportsSandboxFailure(text) && !hasExecutedToolActivity(toolActions)) {
-    return { category: NESTED_SANDBOX_CRASH };
+  const structured = transcript ?? text;
+  const health = assessLocalSandboxStartup(structured);
+  if (health.successfulLocalActivity > 0) return null;
+  if (health.startupFailures.length > 0) {
+    return { category: NESTED_SANDBOX_CRASH, signature: "native-command" };
+  }
+  if (codexReportsSandboxFailure(structured) && !hasExecutedToolActivity(toolActions)) {
+    return { category: NESTED_SANDBOX_CRASH, signature: "agent-report" };
   }
   return null;
 }

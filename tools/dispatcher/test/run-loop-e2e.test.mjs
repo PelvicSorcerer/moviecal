@@ -45,6 +45,8 @@ import { WorkerCooldownStore } from "../src/worker-cooldown.mjs";
 import { CircuitBreakerStore } from "../src/circuit-breaker.mjs";
 import { CREDENTIAL_FAILURE } from "../src/credential-failure.mjs";
 import { NESTED_SANDBOX_CRASH } from "../src/failure-classification.mjs";
+import { auditWorkerResult, writeWorkerAudit } from "../src/worker-guard.mjs";
+import { jsonl, mov399Events } from "./fixtures/native-sandbox-startup.mjs";
 import { DEFAULT_ISSUE_SPEC_MODE } from "../src/issue-spec.mjs";
 
 // MOV-179: the real diagnosis adapter makes a live Anthropic API call.
@@ -697,6 +699,70 @@ describe("Codex sandbox-report lifecycle through the real run context (MOV-299)"
     });
     expect(linearClient.calls.filter((c) => c.type === "addComment").at(-1).body).toContain("sandbox_apply: Operation not permitted");
     expect(new CircuitBreakerStore(`${TMP_ROOT}/circuit-breaker.json`).isOpen(NESTED_SANDBOX_CRASH)).toBe(true);
+  });
+});
+
+describe("native Codex sandbox startup failure through the real audit and run context (MOV-402)", () => {
+  beforeEach(() => {
+    fs.rmSync(TMP_ROOT, { recursive: true, force: true });
+    diagnoseUnrecognizedFailureMock.mockReset();
+  });
+
+  const issue = {
+    id: "id-native-sandbox", identifier: "MOV-NATIVE-SANDBOX", title: "Native sandbox startup",
+    description: READY_SECTIONS, url: "https://linear.app/moviecal/issue/MOV-NATIVE-SANDBOX",
+    project: null, labels: ["execution:mac", "worker:codex"], delegate: DELEGATE, blockedByIds: [],
+  };
+
+  async function runMov399Shape() {
+    const linearClient = fakeLinearClient({ [issue.id]: issue });
+    const ctx = {
+      ...(await buildRunContext(linearClient, TEAM_KEY, [issue])),
+      // Only git is faked: the transcript audit, audit record, classifier,
+      // readiness capture and breaker store are the real modules.
+      ...fakeLeaves({
+        auditWorkerResultFn: (args) => auditWorkerResult({ ...args, runner: (_cmd, gitArgs) => (gitArgs[0] === "branch" ? `${args.branch}\n` : "") }),
+        writeWorkerAuditFn: writeWorkerAudit,
+      }),
+    };
+    const logDir = path.join(ctx.logRoot, worktreeName(issue.identifier, issue.title));
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.writeFileSync(path.join(logDir, "stdout.log"), jsonl(mov399Events()));
+    ctx.spawnWorkerFn = vi.fn(async () => ({ exitCode: 0, logDir }));
+    const [result] = await runOnce([issue], ctx);
+    return { ctx, linearClient, logDir, result };
+  }
+
+  it("trips the breaker, retains the worktree, requeues with a specific comment, and neither diagnoses nor publishes", async () => {
+    const { ctx, linearClient, logDir, result } = await runMov399Shape();
+
+    expect(result).toMatchObject({ outcome: "nested-sandbox-crash", exitCode: 0, signature: "native-command" });
+    const audit = JSON.parse(fs.readFileSync(path.join(logDir, "security-audit.json"), "utf8"));
+    expect(audit.actions.map((action) => action.outcome)).toEqual(["executed", "executed"]);
+    expect(new CircuitBreakerStore(`${TMP_ROOT}/circuit-breaker.json`).isOpen(NESTED_SANDBOX_CRASH)).toBe(true);
+    expect(ctx.worktreeManager.statusCalls.at(-1)).toMatchObject({ id: issue.identifier, status: "failed" });
+    expect(linearClient.calls.filter((c) => c.type === "moveToState").at(-1)).toMatchObject({ issueId: issue.id, stateId: "state-ready" });
+    const comment = linearClient.calls.filter((c) => c.type === "addComment").at(-1).body;
+    expect(comment).toContain("the worker's local sandbox could not start a command (MOV-402)");
+    const [created] = ctx.worktreeManager.createCalls;
+    expect(comment).toContain(`The retained worktree is \`${TMP_ROOT}/fake-worktrees/${created.name}\``);
+    expect(ctx.publishWorkerResultFn).not.toHaveBeenCalled();
+    expect(diagnoseUnrecognizedFailureMock).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(logDir, "verification-evidence.json"))).toBe(false);
+  });
+
+  it("does not clear an already-open breaker when it is the half-open probe", async () => {
+    const breakerPath = `${TMP_ROOT}/circuit-breaker.json`;
+    fs.mkdirSync(TMP_ROOT, { recursive: true });
+    // MOV-403: tripped long enough ago that its first probe is already due.
+    new CircuitBreakerStore(breakerPath).trip(NESTED_SANDBOX_CRASH, "earlier native startup failure", { at: new Date(Date.now() - 11 * 60 * 1000) });
+
+    const { ctx, result } = await runMov399Shape();
+
+    expect(result.outcome).toBe("nested-sandbox-crash");
+    expect(new CircuitBreakerStore(breakerPath).isOpen(NESTED_SANDBOX_CRASH)).toBe(true);
+    expect(ctx.publishWorkerResultFn).not.toHaveBeenCalled();
+    expect(diagnoseUnrecognizedFailureMock).not.toHaveBeenCalled();
   });
 });
 
