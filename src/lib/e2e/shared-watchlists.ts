@@ -3,8 +3,10 @@ import {
   createE2EWatchlistInviteLink,
   createE2EWatchlistMember,
   readE2ESharedState,
+  readE2EWatchlistItemsByWatchlist,
   readStoredE2EWatchlists,
   setE2ESharedStateCookie,
+  setE2EWatchlistCookie,
   setE2EWatchlistsCookie,
   type E2ESharedState,
 } from './fixtures';
@@ -218,6 +220,55 @@ export function acceptE2EInvite(args: {
     joined: true,
     watchlist: resolvedInvite.watchlist,
   };
+}
+
+export type DeleteE2EWatchlistResult = 'deleted' | 'forbidden' | 'not_found';
+
+export function deleteE2EWatchlist(args: {
+  actorUserId: string;
+  reader: CookieValueReader;
+  response: CookieWriter;
+  watchlistId: string;
+}): DeleteE2EWatchlistResult {
+  const watchlists = readStoredE2EWatchlists(args.reader);
+  const watchlist = watchlists.find((entry) => entry.id === args.watchlistId);
+
+  if (!watchlist) {
+    return 'not_found';
+  }
+
+  if (watchlist.kind !== 'shared' || watchlist.ownerUserId !== args.actorUserId) {
+    return 'forbidden';
+  }
+
+  setE2EWatchlistsCookie(
+    args.response,
+    watchlists.filter((entry) => entry.id !== args.watchlistId),
+  );
+
+  const sharedState = readE2ESharedState(args.reader);
+
+  setE2ESharedStateCookie(args.response, {
+    inviteLinks: sharedState.inviteLinks.filter(
+      (inviteLink) => inviteLink.watchlistId !== args.watchlistId,
+    ),
+    memberships: sharedState.memberships.filter(
+      (membership) => membership.watchlistId !== args.watchlistId,
+    ),
+  });
+
+  const itemsByWatchlist = readE2EWatchlistItemsByWatchlist(args.reader);
+
+  if (args.watchlistId in itemsByWatchlist) {
+    setE2EWatchlistCookie(
+      args.response,
+      Object.fromEntries(
+        Object.entries(itemsByWatchlist).filter(([key]) => key !== args.watchlistId),
+      ),
+    );
+  }
+
+  return 'deleted';
 }
 
 export function removeE2EWatchlistMember(args: {

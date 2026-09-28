@@ -159,6 +159,69 @@ test('read-only shared memberships hide mutation affordances on the detail page'
 
   await expect(page.getByText('Read-only access')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Remove' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Delete watchlist' })).toHaveCount(0);
+});
+
+test('canceling a shared watchlist deletion leaves it fully intact', async ({
+  page,
+  seedAuthenticatedSession,
+}) => {
+  const sharedWatchlist = createE2ESharedWatchlist('Friday movie night', 0);
+
+  await seedAuthenticatedSession({
+    sharedWatchlists: [
+      {
+        id: sharedWatchlist.id,
+        name: sharedWatchlist.name,
+        tmdbIds: [TEST_TMDB_IDS.INCEPTION],
+      },
+    ],
+  });
+  await page.goto(`/watchlist/${sharedWatchlist.id}`);
+
+  await page.getByRole('button', { name: 'Delete watchlist' }).click();
+  await expect(
+    page.getByText('Permanently delete "Friday movie night"?'),
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: 'Cancel' }).click();
+
+  await expect(page.getByRole('button', { name: 'Delete watchlist' })).toBeVisible();
+  await expect(page).toHaveURL(`/watchlist/${sharedWatchlist.id}`);
+
+  await page.reload();
+
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Friday movie night' }),
+  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Inception' })).toBeVisible();
+});
+
+test('owners can confirm permanent deletion of a shared watchlist', async ({
+  page,
+  seedAuthenticatedSession,
+}) => {
+  const sharedWatchlist = createE2ESharedWatchlist('Friday movie night', 0);
+
+  await seedAuthenticatedSession({
+    sharedWatchlists: [
+      {
+        id: sharedWatchlist.id,
+        name: sharedWatchlist.name,
+        tmdbIds: [TEST_TMDB_IDS.INCEPTION],
+      },
+    ],
+  });
+  await page.goto(`/watchlist/${sharedWatchlist.id}`);
+
+  await page.getByRole('button', { name: 'Delete watchlist' }).click();
+  await page.getByRole('button', { name: 'Confirm delete' }).click();
+
+  await expect(page).toHaveURL('/watchlist');
+
+  const response = await page.request.get(`/watchlist/${sharedWatchlist.id}`);
+
+  expect(response.status()).toBe(404);
 });
 
 test('authenticated users can create a shared watchlist from the overview', async ({

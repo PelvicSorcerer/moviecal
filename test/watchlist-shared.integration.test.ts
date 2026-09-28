@@ -88,6 +88,7 @@ function createSharedRegressionRepository(options?: {
   const members = [...(options?.members ?? [])];
   let inviteLink = options?.inviteLink ?? null;
   const createdWatchlists: WatchlistSummary[] = [];
+  const deletedWatchlistIds = new Set<string>();
 
   function getItems(watchlistId: string): WatchlistRow[] {
     return itemsByWatchlist.get(watchlistId) ?? [];
@@ -124,6 +125,28 @@ function createSharedRegressionRepository(options?: {
         }
 
         itemsByWatchlist.set(watchlistId, nextItems);
+
+        return true;
+      },
+      async deleteWatchlist(watchlistId) {
+        if (deletedWatchlistIds.has(watchlistId)) {
+          return false;
+        }
+
+        // Mirrors the real ON DELETE CASCADE behavior: items, memberships, and
+        // any invite link disappear along with the watchlist row itself.
+        deletedWatchlistIds.add(watchlistId);
+        itemsByWatchlist.delete(watchlistId);
+
+        for (const member of [...members]) {
+          if (member.watchlistId === watchlistId) {
+            members.splice(members.indexOf(member), 1);
+          }
+        }
+
+        if (inviteLink?.watchlist.id === watchlistId) {
+          inviteLink = null;
+        }
 
         return true;
       },
@@ -180,6 +203,10 @@ function createSharedRegressionRepository(options?: {
           : null;
       },
       async getWatchlistAccess(actorUserId, watchlistId) {
+        if (deletedWatchlistIds.has(watchlistId)) {
+          return { status: 'not_found' as const };
+        }
+
         if (
           actorUserId === TEST_USER_IDS.OWNER
           && watchlistId === TEST_WATCHLIST_IDS.PERSONAL
@@ -270,6 +297,7 @@ function createSharedRegressionRepository(options?: {
     }),
     getItems,
     getMembers: () => [...members],
+    isWatchlistDeleted: (watchlistId: string) => deletedWatchlistIds.has(watchlistId),
   };
 }
 
@@ -623,6 +651,115 @@ describe('shared watchlist regression integration', () => {
       error: 'Watchlist access denied.',
     });
     expect(getMembers()).toHaveLength(2);
+  });
+
+  it('permanently deletes a shared watchlist for its owner', async () => {
+    const member = buildWatchlistMember({ id: 'membership-1' });
+    const { getMembers, isWatchlistDeleted, repository } = createSharedRegressionRepository({
+      members: [member],
+    });
+
+    setupAuthenticatedRouteMocks(repository);
+
+    const { DELETE } = await import(
+      '../src/app/api/watchlist/shared/[watchlistId]/route'
+    );
+    const response = await DELETE(
+      new NextRequest(
+        `https://moviecal.test/api/watchlist/shared/${TEST_WATCHLIST_IDS.SHARED}`,
+        { method: 'DELETE' },
+      ),
+      { params: Promise.resolve({ watchlistId: TEST_WATCHLIST_IDS.SHARED }) },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      deleted: true,
+      watchlistId: TEST_WATCHLIST_IDS.SHARED,
+    });
+    expect(isWatchlistDeleted(TEST_WATCHLIST_IDS.SHARED)).toBe(true);
+    // Cascade: memberships and shared-list-only items disappear with the watchlist.
+    expect(getMembers()).toHaveLength(0);
+    expect(repository.listItemsForWatchlist(TEST_WATCHLIST_IDS.SHARED)).resolves.toEqual([]);
+  });
+
+  it('returns 403 when a non-owner (accepted editor) tries to delete a shared watchlist, without mutating it', async () => {
+    const { isWatchlistDeleted, repository } = createSharedRegressionRepository();
+
+    setupCollaboratorAuth();
+    mocks.createSupabaseWatchlistRepository.mockReturnValue(repository);
+
+    const { DELETE } = await import(
+      '../src/app/api/watchlist/shared/[watchlistId]/route'
+    );
+    const response = await DELETE(
+      new NextRequest(
+        `https://moviecal.test/api/watchlist/shared/${TEST_WATCHLIST_IDS.SHARED}`,
+        { method: 'DELETE' },
+      ),
+      { params: Promise.resolve({ watchlistId: TEST_WATCHLIST_IDS.SHARED }) },
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Watchlist access denied.',
+    });
+    expect(isWatchlistDeleted(TEST_WATCHLIST_IDS.SHARED)).toBe(false);
+  });
+
+  it('returns 403 for an outsider with no relationship to the shared watchlist, without mutating it', async () => {
+    const { isWatchlistDeleted, repository } = createSharedRegressionRepository();
+
+    mocks.authenticateApiRequest.mockResolvedValue({
+      accessToken: 'access-token',
+      user: { id: 'user-outsider' },
+      applyAuthCookies(response: NextResponse) {
+        response.cookies.set('sb-access-token', 'refreshed');
+      },
+    });
+    mocks.createServerSupabaseClient.mockReturnValue({ name: 'user-client' });
+    mocks.createServerSupabaseServiceRoleClient.mockReturnValue({ name: 'admin-client' });
+    mocks.createSupabaseWatchlistRepository.mockReturnValue(repository);
+    mocks.hasE2EAuthenticatedSession.mockReturnValue(false);
+
+    const { DELETE } = await import(
+      '../src/app/api/watchlist/shared/[watchlistId]/route'
+    );
+    const response = await DELETE(
+      new NextRequest(
+        `https://moviecal.test/api/watchlist/shared/${TEST_WATCHLIST_IDS.SHARED}`,
+        { method: 'DELETE' },
+      ),
+      { params: Promise.resolve({ watchlistId: TEST_WATCHLIST_IDS.SHARED }) },
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Watchlist access denied.',
+    });
+    expect(isWatchlistDeleted(TEST_WATCHLIST_IDS.SHARED)).toBe(false);
+  });
+
+  it('refuses to delete a personal watchlist through the shared-delete route, without mutating it', async () => {
+    const { isWatchlistDeleted, repository } = createSharedRegressionRepository();
+    setupAuthenticatedRouteMocks(repository);
+
+    const { DELETE } = await import(
+      '../src/app/api/watchlist/shared/[watchlistId]/route'
+    );
+    const response = await DELETE(
+      new NextRequest(
+        `https://moviecal.test/api/watchlist/shared/${TEST_WATCHLIST_IDS.PERSONAL}`,
+        { method: 'DELETE' },
+      ),
+      { params: Promise.resolve({ watchlistId: TEST_WATCHLIST_IDS.PERSONAL }) },
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Watchlist access denied.',
+    });
+    expect(isWatchlistDeleted(TEST_WATCHLIST_IDS.PERSONAL)).toBe(false);
   });
 
   it('refuses a cookie-API attempt to write to another user\'s watchlist without leaking its metadata', async () => {

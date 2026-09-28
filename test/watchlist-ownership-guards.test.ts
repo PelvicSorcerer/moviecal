@@ -11,12 +11,18 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { E2E_SHARED_STATE_COOKIE, E2E_WATCHLISTS_COOKIE } from '../src/lib/e2e/fixtures';
-import { removeE2EWatchlistMember } from '../src/lib/e2e/shared-watchlists';
 import {
+  E2E_SHARED_STATE_COOKIE,
+  E2E_WATCHLIST_COOKIE,
+  E2E_WATCHLISTS_COOKIE,
+} from '../src/lib/e2e/fixtures';
+import { deleteE2EWatchlist, removeE2EWatchlistMember } from '../src/lib/e2e/shared-watchlists';
+import {
+  deleteSharedWatchlist,
   listSharedWatchlistMembers,
   removeSharedWatchlistMember,
   WatchlistAccessError,
+  WatchlistNotFoundError,
   type WatchlistMember,
   type WatchlistSummary,
 } from '../src/lib/watchlist';
@@ -140,6 +146,188 @@ describe('shared watchlist owner-membership guards', () => {
     expect(owner?.id).toBe(`owner:${TEST_USER_IDS.OWNER}`);
     expect(owner?.acceptedAt).toBe(OWNER_ACCEPTED_AT);
     expect(members.map((member) => member.id)).not.toContain(OWNER_MEMBERSHIP_ID);
+  });
+});
+
+describe('shared watchlist owner-only deletion guard', () => {
+  it('deletes the shared watchlist for its owner', async () => {
+    const { repository } = createOwnedSharedRepository();
+    const deleteWatchlist = vi.fn(async () => true);
+
+    await expect(
+      deleteSharedWatchlist({
+        actorUserId: TEST_USER_IDS.OWNER,
+        repository: { ...repository, deleteWatchlist },
+        watchlistId: TEST_WATCHLIST_IDS.SHARED,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(deleteWatchlist).toHaveBeenCalledWith(TEST_WATCHLIST_IDS.SHARED);
+  });
+
+  it('refuses to delete for a non-owner, with no repository write', async () => {
+    const { repository } = createOwnedSharedRepository();
+    const deleteWatchlist = vi.fn(async () => true);
+
+    await expect(
+      deleteSharedWatchlist({
+        actorUserId: TEST_USER_IDS.COLLABORATOR,
+        repository: { ...repository, deleteWatchlist },
+        watchlistId: TEST_WATCHLIST_IDS.SHARED,
+      }),
+    ).rejects.toMatchObject({
+      message: 'Watchlist access denied.',
+      name: WatchlistAccessError.name,
+      status: 403,
+    });
+
+    expect(deleteWatchlist).not.toHaveBeenCalled();
+  });
+
+  it('refuses to delete a personal watchlist, with no repository write', async () => {
+    const deleteWatchlist = vi.fn(async () => true);
+    const personalWatchlist = buildWatchlistSummary({
+      id: TEST_WATCHLIST_IDS.PERSONAL,
+      kind: 'personal',
+      ownerUserId: TEST_USER_IDS.OWNER,
+    });
+    const repository = createWatchlistRepository({
+      deleteWatchlist,
+      async getWatchlistAccess(actorUserId, watchlistId) {
+        return actorUserId === TEST_USER_IDS.OWNER && watchlistId === personalWatchlist.id
+          ? { status: 'authorized' as const, watchlist: personalWatchlist, canEdit: true }
+          : { status: 'forbidden' as const };
+      },
+    });
+
+    await expect(
+      deleteSharedWatchlist({
+        actorUserId: TEST_USER_IDS.OWNER,
+        repository,
+        watchlistId: personalWatchlist.id,
+      }),
+    ).rejects.toMatchObject({
+      message: 'Watchlist access denied.',
+      name: WatchlistAccessError.name,
+      status: 403,
+    });
+
+    expect(deleteWatchlist).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a not-found error when the repository deletes nothing', async () => {
+    const { repository } = createOwnedSharedRepository();
+    const deleteWatchlist = vi.fn(async () => false);
+
+    await expect(
+      deleteSharedWatchlist({
+        actorUserId: TEST_USER_IDS.OWNER,
+        repository: { ...repository, deleteWatchlist },
+        watchlistId: TEST_WATCHLIST_IDS.SHARED,
+      }),
+    ).rejects.toMatchObject({
+      message: 'Watchlist not found.',
+      name: WatchlistNotFoundError.name,
+      status: 404,
+    });
+  });
+});
+
+describe('E2E fixture owner-only deletion guard', () => {
+  const sharedWatchlist: WatchlistSummary = {
+    canEdit: true,
+    id: 'e2e-shared-watchlist',
+    kind: 'shared',
+    name: 'E2E shared list',
+    ownerUserId: TEST_USER_IDS.E2E_OWNER,
+  };
+  const personalWatchlist: WatchlistSummary = {
+    canEdit: true,
+    id: 'e2e-personal-watchlist',
+    kind: 'personal',
+    name: 'My watchlist',
+    ownerUserId: TEST_USER_IDS.E2E_OWNER,
+  };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function deleteWatchlist(args: {
+    actorUserId: string;
+    watchlistId: string;
+    watchlists: WatchlistSummary[];
+  }) {
+    vi.stubEnv('MOVIECAL_E2E_TEST_MODE', '1');
+
+    const writes: string[] = [];
+    const entries: Record<string, string> = {
+      [E2E_WATCHLISTS_COOKIE]: JSON.stringify(args.watchlists),
+      [E2E_SHARED_STATE_COOKIE]: JSON.stringify({ inviteLinks: [], memberships: [] }),
+      [E2E_WATCHLIST_COOKIE]: JSON.stringify({ [sharedWatchlist.id]: [] }),
+    };
+
+    const result = deleteE2EWatchlist({
+      actorUserId: args.actorUserId,
+      reader: {
+        get: (name: string) =>
+          entries[name] === undefined ? undefined : { value: entries[name] },
+      },
+      response: { cookies: { set: (name: string) => writes.push(name) } },
+      watchlistId: args.watchlistId,
+    });
+
+    return { result, writes };
+  }
+
+  it('deletes a shared watchlist for its owner', () => {
+    const { result, writes } = deleteWatchlist({
+      actorUserId: TEST_USER_IDS.E2E_OWNER,
+      watchlistId: sharedWatchlist.id,
+      watchlists: [personalWatchlist, sharedWatchlist],
+    });
+
+    expect(result).toBe('deleted');
+    expect(writes).toEqual(
+      expect.arrayContaining([
+        E2E_WATCHLISTS_COOKIE,
+        E2E_SHARED_STATE_COOKIE,
+        E2E_WATCHLIST_COOKIE,
+      ]),
+    );
+  });
+
+  it('refuses to delete a shared watchlist for a non-owner, with no cookie writes', () => {
+    const { result, writes } = deleteWatchlist({
+      actorUserId: TEST_USER_IDS.E2E_COLLABORATOR,
+      watchlistId: sharedWatchlist.id,
+      watchlists: [personalWatchlist, sharedWatchlist],
+    });
+
+    expect(result).toBe('forbidden');
+    expect(writes).toEqual([]);
+  });
+
+  it('refuses to delete a personal watchlist, with no cookie writes', () => {
+    const { result, writes } = deleteWatchlist({
+      actorUserId: TEST_USER_IDS.E2E_OWNER,
+      watchlistId: personalWatchlist.id,
+      watchlists: [personalWatchlist, sharedWatchlist],
+    });
+
+    expect(result).toBe('forbidden');
+    expect(writes).toEqual([]);
+  });
+
+  it('reports not_found for a watchlist id that does not exist', () => {
+    const { result, writes } = deleteWatchlist({
+      actorUserId: TEST_USER_IDS.E2E_OWNER,
+      watchlistId: 'does-not-exist',
+      watchlists: [personalWatchlist, sharedWatchlist],
+    });
+
+    expect(result).toBe('not_found');
+    expect(writes).toEqual([]);
   });
 });
 

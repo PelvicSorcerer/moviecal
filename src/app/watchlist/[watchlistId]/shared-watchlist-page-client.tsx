@@ -27,6 +27,12 @@ interface RemoveMemberResponse {
   error?: string;
 }
 
+interface DeleteWatchlistResponse {
+  error?: string;
+}
+
+type DeleteWatchlistState = 'confirming' | 'deleting' | 'idle';
+
 export interface SharedWatchlistPageClientProps {
   activeInviteLinkExists: boolean;
   canLeave?: boolean;
@@ -75,6 +81,7 @@ export function SharedWatchlistPageClient({
   );
   const [isConfirmingLeave, setIsConfirmingLeave] = useState(false);
   const [isLeaving, setIsLeaving] = useState(false);
+  const [deleteState, setDeleteState] = useState<DeleteWatchlistState>('idle');
 
   async function createInviteLink() {
     setErrorMessage(null);
@@ -178,6 +185,32 @@ export function SharedWatchlistPageClient({
         ...current,
         [member.id]: false,
       }));
+    }
+  }
+
+  async function deleteWatchlist() {
+    setErrorMessage(null);
+    setStatusMessage(null);
+    setDeleteState('deleting');
+
+    try {
+      const response = await fetch(`/api/watchlist/shared/${watchlist.id}`, {
+        method: 'DELETE',
+      });
+      const payload = (await response.json()) as DeleteWatchlistResponse;
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? 'Could not delete this watchlist right now.');
+      }
+
+      router.push('/watchlist');
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : 'Could not delete this watchlist right now.',
+      );
+      setDeleteState('idle');
     }
   }
 
@@ -404,6 +437,57 @@ export function SharedWatchlistPageClient({
           )}
         </aside>
       </section>
+
+      {ownerCanManage ? (
+        <section className="rounded-3xl border border-rose-200 bg-rose-50 p-6 shadow-sm">
+          <p className="text-sm font-medium uppercase tracking-[0.2em] text-rose-700">
+            Danger zone
+          </p>
+          <h2 className="mt-2 text-2xl font-semibold text-rose-950">
+            Permanently delete this watchlist
+          </h2>
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-rose-700">
+            Deleting {watchlist.name} removes it, every movie saved to it, every
+            member&apos;s access, and any invite link immediately. Members lose access
+            right away, and a movie that only lived on this list disappears from their
+            calendar feed the next time it is requested — a movie also saved to
+            another accessible list is unaffected. This cannot be undone.
+          </p>
+
+          {deleteState === 'confirming' ? (
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <p className="text-sm font-semibold text-rose-900">
+                {`Permanently delete "${watchlist.name}"?`}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  void deleteWatchlist();
+                }}
+                className="rounded-xl bg-rose-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-800"
+              >
+                Confirm delete
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeleteState('idle')}
+                className="rounded-xl border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:border-rose-400 hover:bg-rose-100"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setDeleteState('confirming')}
+              disabled={deleteState === 'deleting'}
+              className="mt-4 rounded-xl border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:border-rose-500 hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-rose-100 disabled:text-rose-300"
+            >
+              {deleteState === 'deleting' ? 'Deleting…' : 'Delete watchlist'}
+            </button>
+          )}
+        </section>
+      ) : null}
     </div>
   );
 }
