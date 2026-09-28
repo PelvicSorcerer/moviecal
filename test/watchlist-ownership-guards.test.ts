@@ -18,7 +18,6 @@ import {
 } from '../src/lib/e2e/fixtures';
 import { deleteE2EWatchlist, removeE2EWatchlistMember } from '../src/lib/e2e/shared-watchlists';
 import {
-  deleteSharedWatchlist,
   listSharedWatchlistMembers,
   removeSharedWatchlistMember,
   WatchlistAccessError,
@@ -146,90 +145,6 @@ describe('shared watchlist owner-membership guards', () => {
     expect(owner?.id).toBe(`owner:${TEST_USER_IDS.OWNER}`);
     expect(owner?.acceptedAt).toBe(OWNER_ACCEPTED_AT);
     expect(members.map((member) => member.id)).not.toContain(OWNER_MEMBERSHIP_ID);
-  });
-});
-
-describe('shared watchlist owner-only deletion guard', () => {
-  it('deletes the shared watchlist for its owner', async () => {
-    const { repository } = createOwnedSharedRepository();
-    const deleteWatchlist = vi.fn(async () => true);
-
-    await expect(
-      deleteSharedWatchlist({
-        actorUserId: TEST_USER_IDS.OWNER,
-        repository: { ...repository, deleteWatchlist },
-        watchlistId: TEST_WATCHLIST_IDS.SHARED,
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(deleteWatchlist).toHaveBeenCalledWith(TEST_WATCHLIST_IDS.SHARED);
-  });
-
-  it('refuses to delete for a non-owner, with no repository write', async () => {
-    const { repository } = createOwnedSharedRepository();
-    const deleteWatchlist = vi.fn(async () => true);
-
-    await expect(
-      deleteSharedWatchlist({
-        actorUserId: TEST_USER_IDS.COLLABORATOR,
-        repository: { ...repository, deleteWatchlist },
-        watchlistId: TEST_WATCHLIST_IDS.SHARED,
-      }),
-    ).rejects.toMatchObject({
-      message: 'Watchlist access denied.',
-      name: WatchlistAccessError.name,
-      status: 403,
-    });
-
-    expect(deleteWatchlist).not.toHaveBeenCalled();
-  });
-
-  it('refuses to delete a personal watchlist, with no repository write', async () => {
-    const deleteWatchlist = vi.fn(async () => true);
-    const personalWatchlist = buildWatchlistSummary({
-      id: TEST_WATCHLIST_IDS.PERSONAL,
-      kind: 'personal',
-      ownerUserId: TEST_USER_IDS.OWNER,
-    });
-    const repository = createWatchlistRepository({
-      deleteWatchlist,
-      async getWatchlistAccess(actorUserId, watchlistId) {
-        return actorUserId === TEST_USER_IDS.OWNER && watchlistId === personalWatchlist.id
-          ? { status: 'authorized' as const, watchlist: personalWatchlist, canEdit: true }
-          : { status: 'forbidden' as const };
-      },
-    });
-
-    await expect(
-      deleteSharedWatchlist({
-        actorUserId: TEST_USER_IDS.OWNER,
-        repository,
-        watchlistId: personalWatchlist.id,
-      }),
-    ).rejects.toMatchObject({
-      message: 'Watchlist access denied.',
-      name: WatchlistAccessError.name,
-      status: 403,
-    });
-
-    expect(deleteWatchlist).not.toHaveBeenCalled();
-  });
-
-  it('surfaces a not-found error when the repository deletes nothing', async () => {
-    const { repository } = createOwnedSharedRepository();
-    const deleteWatchlist = vi.fn(async () => false);
-
-    await expect(
-      deleteSharedWatchlist({
-        actorUserId: TEST_USER_IDS.OWNER,
-        repository: { ...repository, deleteWatchlist },
-        watchlistId: TEST_WATCHLIST_IDS.SHARED,
-      }),
-    ).rejects.toMatchObject({
-      message: 'Watchlist not found.',
-      name: WatchlistNotFoundError.name,
-      status: 404,
-    });
   });
 });
 

@@ -128,8 +128,11 @@ function createSharedRegressionRepository(options?: {
 
         return true;
       },
-      async deleteWatchlist(watchlistId) {
-        if (deletedWatchlistIds.has(watchlistId)) {
+      async deleteSharedWatchlistOwnedBy({ ownerUserId, watchlistId }) {
+        if (
+          deletedWatchlistIds.has(watchlistId)
+          || ownerUserId !== TEST_USER_IDS.OWNER
+        ) {
           return false;
         }
 
