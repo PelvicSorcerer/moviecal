@@ -2,9 +2,16 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import { redactWorkerOutput, spawnWorker, tailLogs, withCodexGitMetadataDirectories } from "../src/worker-spawn.mjs";
+import { redactWorkerOutput, spawnWorker as realSpawnWorker, tailLogs } from "../src/worker-spawn.mjs";
+
+import { prepareCodexContainment } from "../src/codex-containment.mjs";
+const spawnWorker = (options) => realSpawnWorker({
+  prepareCodexContainmentFn: (args) => prepareCodexContainment({ ...args, resolveExecutable: (command) => command === "codex" ? "/installed/codex" : command, verifyVersion: () => "codex-cli 0.157.1" }),
+  ...options,
+});
 
 function fakeChildProcess({ exitCode = 0, stdoutText = "", stderrText = "" } = {}) {
   const child = new EventEmitter();
@@ -41,6 +48,23 @@ describe("spawnWorker", () => {
 
   afterEach(() => {
     if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("refuses a real production launch without its security context", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mov401-no-guard-"));
+    await expect(spawnWorker({ invocation: { command: "codex", args: ["exec"] }, cwd: tmpDir,
+      brief: "must never run", logDir: path.join(tmpDir, "logs") })).rejects.toThrow(/requires a securityContext and OS guard/);
+  });
+
+  it.each(["implementation", "repair"])("does not spawn after Codex containment setup fails in %s", async (mode) => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mov401-setup-fail-"));
+    const spawnImpl = vi.fn();
+    await expect(spawnWorker({ invocation: { command: "codex", args: ["--sandbox", "workspace-write", "exec"] }, cwd: tmpDir,
+      brief: "must never run", logDir: path.join(tmpDir, "logs"), spawnImpl, platform: "darwin", securityContext: { mode },
+      repositoryGuardPathsFn: () => ({ protectedRepositoryPaths: [], gitMetadataPaths: [] }),
+      prepareCodexContainmentFn: () => { throw new Error("profile setup failed"); },
+    })).rejects.toThrow(/profile setup failed/);
+    expect(spawnImpl).not.toHaveBeenCalled();
   });
 
   it("pipes the brief to the worker's stdin", async () => {
@@ -189,7 +213,7 @@ describe("spawnWorker", () => {
     try {
       for (const command of ["claude", "codex"]) {
         await spawnWorker({
-          invocation: { command, args: ["exec"] },
+          invocation: { command, args: command === "codex" ? ["--sandbox", "workspace-write", "exec"] : ["exec"] },
           cwd: "/tmp/some-worktree",
           brief: "brief",
           logDir: path.join(tmpDir, command),
@@ -208,8 +232,9 @@ describe("spawnWorker", () => {
       else process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = originalScrub;
     }
     for (const [index, command] of ["claude", "codex"].entries()) {
-      expect(calls[index].command).toBe("/usr/bin/sandbox-exec");
-      expect(calls[index].args).toContain(command);
+      expect(calls[index].command).toBe(command === "codex" ? process.execPath : "/usr/bin/sandbox-exec");
+      if (command === "claude") expect(calls[index].args).toContain(command);
+      else expect(calls[index].args[0]).toContain("codex-supervisor.mjs");
       expect(calls[index].opts.env).not.toHaveProperty("GH_TOKEN");
       expect(fs.readFileSync(path.join(tmpDir, command, "worker-sandbox.sb"), "utf8")).toContain("deny process-exec");
     }
@@ -289,23 +314,13 @@ describe("spawnWorker", () => {
       }
     }
     expect(calls[0].args).not.toContain("--add-dir");
-    expect(calls[1].args).toEqual([
-      "-f", path.join(tmpDir, "codex", "worker-sandbox.sb"), "codex",
-      "--sandbox", "workspace-write",
-      "--add-dir", "/repo/.git/worktrees/issue",
-      "--add-dir", "/repo/.git",
-      "exec", "--json",
-    ]);
-  });
-
-  it("adds metadata directories only to a valid Codex invocation", () => {
-    const invocation = { command: "codex", args: ["--sandbox", "workspace-write", "exec"] };
-    expect(withCodexGitMetadataDirectories(invocation, ["/repo/.git"])).toEqual({
-      command: "codex",
-      args: ["--sandbox", "workspace-write", "--add-dir", "/repo/.git", "exec"],
-    });
-    expect(withCodexGitMetadataDirectories({ command: "claude", args: ["-p"] }, ["/repo/.git"])).toEqual({ command: "claude", args: ["-p"] });
-    expect(() => withCodexGitMetadataDirectories({ command: "codex", args: [] }, ["/repo/.git"])).toThrow(/include exec/);
+    expect(calls[1].command).toBe(process.execPath);
+    const launch = JSON.parse(fs.readFileSync(calls[1].args[1], "utf8"));
+    expect(launch.args).toContain("danger-full-access");
+    expect(launch.args).not.toContain("--add-dir");
+    expect(launch.binary).toBe("/installed/codex");
+    const profile = fs.readFileSync(launch.harnessProfile, "utf8");
+    expect(profile).toContain('(deny process-exec (require-not (require-any (literal "/installed/codex") (literal "/installed/codex-code-mode-host"))))');
   });
 
   it("fails closed rather than spawning without the Mac safety boundary", async () => {
@@ -417,6 +432,7 @@ describe("spawnWorker", () => {
       cwd: tmpDir,
       brief: "",
       logDir: path.join(tmpDir, "run"),
+      spawnImpl: (...args) => spawn(...args),
       killGraceMs: 100,
     });
 

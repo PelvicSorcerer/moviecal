@@ -306,8 +306,8 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
     ["bin/dispatcher.mjs", source],
   ];
 
-  it("opens no server, socket, or port anywhere in the dispatcher", () => {
-    // The local Mac must not expose an inbound endpoint. Enabling Agent
+  it("opens no listener except the isolated Codex loopback transport", () => {
+    // Agent Sessions must not expose an inbound endpoint. Enabling Agent
     // Sessions needs a reachable HTTPS receiver; MOV-159 is the decision gate
     // for whether a signed relay is worth its attack surface, and MOV-158
     // deliberately does not build one.
@@ -320,6 +320,18 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       /from\s+["']ws["']/,
     ];
     for (const [name, text] of dispatcherSources) {
+      // MOV-401's per-attempt supervisor reserves one ephemeral IPv4
+      // loopback port, then hands it to the confined native exec-server.
+      // This is worker IPC, never an Agent Session receiver. Native tests
+      // prove that command code cannot bind another TCP/UDP/IPv6 listener.
+      if (name === path.join("src", "codex-supervisor.mjs")) {
+        expect(text.match(/\.listen\s*\(/g)).toHaveLength(1);
+        expect(text).toContain('reservation.listen(0, "127.0.0.1", resolve)');
+        expect(text).toContain('const endpoint = `ws://127.0.0.1:${port}`');
+        expect(text).toContain('EXECUTOR_LISTENER=localhost:${port}');
+        expect(text).not.toMatch(/from\s+["'](?:express|ws|node:(?:http|https|tls|dgram))["']/);
+        continue;
+      }
       for (const pattern of listenerPatterns) {
         expect(pattern.test(text), `${name} matches ${pattern}`).toBe(false);
       }

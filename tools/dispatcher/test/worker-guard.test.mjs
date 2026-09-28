@@ -87,7 +87,7 @@ describe("worker guard", () => {
     // still caught by security-policy.mjs's post-hoc transcript audit.
     expect(profile).not.toContain('/usr/bin/security');
     expect(profile).toContain('(deny file-read* (subpath "/Users/test/.config/gh"))');
-    expect(profile).toContain('(deny file-write* (literal "/tmp/worktree/.git"))');
+    expect(profile).toContain('(deny file-write* (subpath "/tmp/worktree/.git"))');
     expect(profile).toContain('(deny file-write* (subpath "/tmp/worktree/.github/workflows"))');
     expect(profile).not.toContain('/Users/test/.config/moviecal/env.local');
     expect(profile).not.toContain("/tmp/worktree/test");

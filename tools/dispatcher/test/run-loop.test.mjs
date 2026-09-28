@@ -616,6 +616,7 @@ describe("runOnce", () => {
     expect(ctx.linearClient.calls.at(-1).body).toContain("ENOENT");
     expect(ctx.linearClient.calls.at(-1).body).toContain("SHA-256");
     expect(ctx.linearClient.calls.at(-1).body).toContain("no worker ran and no remote mutation was attempted");
+    expect(ctx.publishWorkerResultFn).not.toHaveBeenCalled();
   });
 
   it("blocks on the concurrency limit before creating a worktree", async () => {

@@ -1,10 +1,10 @@
 // Shared technical safety boundary for dispatcher-spawned Claude and Codex
 // workers (MOV-145).
 //
-// Prompts are not an authority boundary. Both worker adapters run inside the
-// same macOS sandbox profile, with Git and privileged credentials removed
-// from their capability set. Each harness additionally sandboxes every
-// model-generated command from the network. After a worker exits, the
+// Prompts are not an authority boundary. Both adapters use OS guards with
+// Git and privileged credentials removed from command authority. Codex uses
+// separately guarded client/executor siblings so command code cannot use
+// the client's provider transport (MOV-401). After a worker exits, the
 // dispatcher audits its structured tool transcript and resulting diff before
 // it performs any Git or remote action.
 
@@ -139,9 +139,21 @@ export function buildWorkerSandboxProfile({
   protectedRepositoryPaths = [],
   protectedRepositoryReadRules = null,
   gitMetadataPaths = [],
+  writablePaths,
+  executablePaths,
+  networkRole,
+  immutablePaths = [],
+  unreadablePaths = [],
 } = {}) {
   if (!path.isAbsolute(worktreePath || "")) throw new Error("worker sandbox requires an absolute worktreePath");
   if (!WORKER_MODES.includes(mode)) throw new Error(`unknown worker mode: ${mode}`);
+  if (networkRole != null && !["executor", "harness"].includes(networkRole)) throw new Error("unknown sandbox network role");
+  if (networkRole && (!Array.isArray(writablePaths) || !writablePaths.length || writablePaths.some((file) => !path.isAbsolute(file)))) {
+    throw new Error("external sandbox requires explicit absolute writable roots");
+  }
+  if (networkRole === "harness" && (!Array.isArray(executablePaths) || !executablePaths.length || executablePaths.some((file) => !path.isAbsolute(file)))) {
+    throw new Error("client sandbox requires installed executable paths");
+  }
 
   const deniedExecutables = [
     "/usr/bin/git",
@@ -169,6 +181,14 @@ export function buildWorkerSandboxProfile({
   ].map((file) => ["subpath", file]);
   if (mode === "repair") deniedReadRules.push(["subpath", path.join(home, ".config", "moviecal", "env.local")]);
   if (logDir) deniedReadRules.push(["subpath", logDir]);
+  deniedReadRules.push(...unreadablePaths.map((file) => ["subpath", file]));
+  if (networkRole === "executor") {
+    deniedExecutables.push("/usr/bin/security");
+    for (const rel of [".codex", ".claude", "Library/Keychains"]) {
+      deniedReadRules.push(["subpath", path.join(home, rel)]);
+    }
+    deniedReadRules.push(["subpath", "/Library/Keychains"]);
+  }
   // A linked worktree's shared .git directory can sit inside another
   // checkout. Denying that checkout's whole tree would override every
   // narrower metadata allowance, so repositoryGuardPaths supplies entry-level
@@ -178,7 +198,7 @@ export function buildWorkerSandboxProfile({
     ? protectedRepositoryReadRules
     : protectedRepositoryPaths.map((file) => ["subpath", file])));
   const writeRules = [
-    ["literal", path.join(worktreePath, ".git")],
+    ["subpath", path.join(worktreePath, ".git")],
     ["literal", path.join(worktreePath, "AGENTS.md")],
     ["literal", path.join(worktreePath, ".github", "copilot-instructions.md")],
     ["subpath", path.join(worktreePath, ".github", "workflows")],
@@ -196,6 +216,7 @@ export function buildWorkerSandboxProfile({
     ["subpath", path.join(home, "Library", "LaunchAgents")],
   ];
   if (logDir) writeRules.push(["subpath", logDir]);
+  writeRules.push(...immutablePaths.map((file) => ["subpath", file]));
   for (const repositoryPath of protectedRepositoryPaths) writeRules.push(["subpath", repositoryPath]);
   for (const metadataPath of gitMetadataPaths) writeRules.push(["subpath", metadataPath]);
   if (mode === "repair") {
@@ -222,7 +243,53 @@ export function buildWorkerSandboxProfile({
 
   return [
     "(version 1)",
-    "(allow default)",
+    ...(networkRole ? [
+      // External Codex confinement supplies the native workspace-write
+      // boundary, including process isolation and a closed Mach-service
+      // surface. A network deny on allow-default would leave system brokers
+      // available to command code.
+      "(deny default)",
+      "(allow process-exec process-fork)",
+      "(allow signal process-info* (target same-sandbox))",
+      "(allow file-read* file-test-existence)",
+      "(allow sysctl-read)",
+      '(allow sysctl-write (sysctl-name "kern.grade_cputype"))',
+      '(allow iokit-open (iokit-registry-entry-class "RootDomainUserClient"))',
+      '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo") (global-name "com.apple.PowerManagement.control"))',
+      "(allow ipc-posix-sem)",
+      '(allow ipc-posix-shm-read-data ipc-posix-shm-write-create ipc-posix-shm-write-unlink (ipc-posix-name-regex #"^/__KMP_REGISTERED_LIB_[0-9]+$"))',
+    ] : ["(allow default)"]),
+    ...(writablePaths ? [
+      `(${networkRole ? "allow" : "deny"} file-write* ${networkRole ? "" : "(require-not (require-any "}${[
+        ...writablePaths.map((file) => `(subpath ${quoteSandboxString(file)})`),
+        '(literal "/dev/null")', '(literal "/dev/tty")',
+      ].join(" ")}${networkRole ? ")" : ")))"}`,
+      // Renaming an ancestor must not move a protected tree to an allowed
+      // name. Protect deletion/rename of every ancestor, including the root.
+      ...[...new Set(writeRules.flatMap(([, file]) => {
+        const ancestors = [];
+        const root = writablePaths.find((candidate) => file.startsWith(`${candidate}/`));
+        if (!root) return ancestors;
+        for (let parent = path.dirname(file); parent === root || parent.startsWith(`${root}/`); parent = path.dirname(parent)) {
+          ancestors.push(parent);
+          if (parent === root) break;
+        }
+        return ancestors;
+      }))].map((file) => `(deny file-write-unlink (literal ${quoteSandboxString(file)}))`),
+    ] : []),
+    ...(executablePaths ? [
+      `(deny process-exec (require-not (require-any ${executablePaths.map((file) => `(literal ${quoteSandboxString(file)})`).join(" ")})))`,
+    ] : []),
+    ...(networkRole === "executor" ? [
+      // Only the executor's already-occupied IPv4 TCP listener is admitted.
+      // Command code cannot open another listener (or a UDP/IPv6 equivalent).
+      '(allow network-bind network-inbound (require-all (local tcp (param "EXECUTOR_LISTENER")) (socket-domain AF_INET)))',
+    ] : []),
+    ...(networkRole === "harness" ? [
+      "(allow network-outbound)",
+      '(allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))',
+      '(allow mach-lookup (global-name "com.apple.bsd.dirhelper") (global-name "com.apple.system.opendirectoryd.membership") (global-name "com.apple.SecurityServer") (global-name "com.apple.networkd") (global-name "com.apple.ocspd") (global-name "com.apple.trustd.agent") (global-name "com.apple.SystemConfiguration.DNSConfiguration") (global-name "com.apple.SystemConfiguration.configd"))',
+    ] : []),
     ...deniedExecutables.map((file) => `(deny process-exec (literal ${quoteSandboxString(file)}))`),
     ...deniedReadRules.map(([kind, file]) => `(deny file-read* (${kind} ${quoteSandboxString(file)}))`),
     ...writeRules.map(([kind, file]) => `(deny file-write* (${kind} ${quoteSandboxString(file)}))`),
