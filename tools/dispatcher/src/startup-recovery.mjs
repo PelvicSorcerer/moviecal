@@ -2,6 +2,9 @@
 
 function recoveryComment(change) {
   if (!change.dirty) return `**Worktree abandoned:** ${change.reason}. Requeuing.`;
+  if (change.uncommittedPaths?.includes("operator continuation requires human reconciliation even if its tree is clean")) {
+    return `**Operator continuation interrupted:** ${change.reason}. The retained worktree at \`${change.path}\` remains for inspection. Check its attempt log and whether its original branch already has a PR before any further action. The spent authorization will not replay. Moving to Needs Human Decision.`;
+  }
   const details = change.uncommittedPaths.length > 0
     ? `uncommitted changes (${change.uncommittedPaths.join(", ")})`
     : "commits not present on its remote-tracking branch";

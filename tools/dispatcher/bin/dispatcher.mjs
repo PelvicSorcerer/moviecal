@@ -42,6 +42,7 @@
 //                                     cycle. Comments are its only write — it never
 //                                     changes a state, priority, label, project, or
 //                                     milestone. `--dry-run` writes nothing at all
+//   dispatcher resume <MOV-N> [--dry-run] - preview or authorize one retained failed-worktree continuation
 //   dispatcher repair --dry-run    - preview bounded repair admission without
 //                                     reserving, spawning, rerunning, or writing
 //   dispatcher master-ci --dry-run - preview post-merge master-CI incident
@@ -118,7 +119,8 @@ import {
 } from "../src/dispatch-eligibility.mjs";
 import { DispatcherLock, WorktreeManager } from "../src/worktree-manager.mjs";
 import { UsageLimitStore } from "../src/usage-limit.mjs";
-import { runOnce, DISPATCH_BREAKERS } from "../src/run-loop.mjs";
+import { runOnce, runOperatorResume, DISPATCH_BREAKERS } from "../src/run-loop.mjs";
+import { parseResumeArgs, inspectOperatorResume } from "../src/operator-resume.mjs";
 import {
   buildRunContext,
   RUN_STATE_NAMES,
@@ -1412,6 +1414,58 @@ async function cmdRepair({ dryRun = false } = {}) {
   return 0;
 }
 
+async function cmdResume(args) {
+  let parsed;
+  try { parsed = parseResumeArgs(args); } catch (error) { console.error(error.message); return 1; }
+  const built = buildLinearClient();
+  if (!built) return 1;
+  const lock = parsed.dryRun ? null : new DispatcherLock(dispatcherLockPath());
+  if (lock) {
+    try { lock.acquire(); } catch (error) { console.error(error.message); return 2; }
+    process.once("exit", () => lock.release());
+  }
+  try {
+    const manager = new WorktreeManager({ repoRoot: REPO_ROOT, worktreeRoot: worktreeRoot(), statePath: worktreesStatePath() });
+    const entry = manager.loadState()[parsed.issueId];
+    if (!entry?.linearIssueId) {
+      console.log(JSON.stringify({ issue: parsed.issueId, readOnly: parsed.dryRun, admitted: false,
+        reasons: ["retained issue UUID provenance is missing"] }, null, 2));
+      return 2;
+    }
+    const ctx = await buildRunContext(built.client, built.teamKey, [], { repairLockHeld: Boolean(lock?.owned) });
+    let issue = await built.client.issueSnapshot(entry.linearIssueId, { includeResumeFields: true });
+    if (!issue || issue.identifier !== parsed.issueId) {
+      console.log(JSON.stringify({ issue: parsed.issueId, readOnly: parsed.dryRun, admitted: false,
+        reasons: ["Linear issue is missing or does not match retained registry identity"] }, null, 2));
+      return 2;
+    }
+    let inspection = inspectOperatorResume(issue, ctx);
+    if (!parsed.dryRun && inspection.admitted) {
+      // The first inspection can involve GitHub and Git reads. Re-read Linear
+      // at the claim boundary, then apply the same admission policy again.
+      const refreshed = await built.client.issueSnapshot(entry.linearIssueId, { includeResumeFields: true });
+      if (!refreshed || refreshed.identifier !== parsed.issueId) {
+        console.log(JSON.stringify({ issue: parsed.issueId, readOnly: false, admitted: false,
+          reasons: ["Linear issue changed or disappeared before claim"] }, null, 2));
+        return 2;
+      }
+      issue = refreshed;
+      inspection = inspectOperatorResume(issue, ctx);
+    }
+    const { invocation: _invocation, ...display } = inspection;
+    console.log(JSON.stringify({ mode: parsed.dryRun ? "resume-preview" : "resume-admission", ...display }, null, 2));
+    if (parsed.dryRun || !inspection.admitted) return inspection.admitted ? 0 : 2;
+    const result = await runOperatorResume(issue, inspection, ctx);
+    console.log(JSON.stringify({ mode: "resume-result", ...result }, null, 2));
+    return result.outcome === "in-review" ? 0 : 2;
+  } catch (error) {
+    console.error(`resume refused: ${error.message}`);
+    return 2;
+  } finally {
+    lock?.release();
+  }
+}
+
 /**
  * Read-only master-CI observer preview. A real observation is intentionally
  * available only inside `dispatcher run`, behind the explicit environment
@@ -1514,6 +1568,10 @@ async function main() {
       process.exitCode = await cmdRepair({ dryRun: rest.includes("--dry-run") });
       break;
     }
+    case "resume": {
+      process.exitCode = await cmdResume(rest);
+      break;
+    }
     case "master-ci": {
       process.exitCode = await cmdMasterCi({ dryRun: rest.includes("--dry-run") });
       break;
@@ -1527,7 +1585,7 @@ async function main() {
     }
     default:
       console.error(
-        "Usage: dispatcher <doctor|health|usage|trial|breaker|dry-run|shadow|agent-signal|gc|promote|priorities|audit-issues|reconcile-parents|repair|master-ci|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
+        "Usage: dispatcher <doctor|health|usage|trial|breaker|dry-run|shadow|agent-signal|gc|promote|priorities|audit-issues|reconcile-parents|repair|resume|master-ci|run> [--pr <number>] [--fixture <path>] [--dry-run] [--once] [--interval <ms>]",
       );
       process.exitCode = 1;
   }

@@ -75,6 +75,18 @@ describe("reconcileStartupRecoveries (MOV-173)", () => {
     expect(linear.addComment).toHaveBeenCalledWith("linear-1", expect.stringContaining("remote-tracking branch"));
   });
 
+  it("keeps a crashed operator continuation in human review even when its tree is clean", async () => {
+    const { manager, linear, change } = setup({ dirty: true });
+    change.reason = "dispatcher restarted during a spent operator continuation";
+    change.uncommittedPaths = ["operator continuation requires human reconciliation even if its tree is clean"];
+    await reconcileStartupRecoveries([change], {
+      worktreeManager: manager, linearClient: linear,
+      readyForAgentStateId: "ready", needsHumanDecisionStateId: "human",
+    });
+    expect(linear.moveToState).toHaveBeenCalledWith("linear-1", "human");
+    expect(linear.addComment).toHaveBeenCalledWith("linear-1", expect.stringContaining("spent authorization will not replay"));
+  });
+
   it("does not write for a non-abandoned worktree because no recovery change exists", async () => {
     const { manager, linear } = setup();
     await reconcileStartupRecoveries([], {

@@ -191,13 +191,15 @@ export class LinearClient {
    * this credential — which the caller treats as "do not claim", never as
    * "unchanged".
    */
-  async issueSnapshot(issueId) {
+  async issueSnapshot(issueId, { includeResumeFields = false } = {}) {
     const query = `
       query($id: String!) {
         issue(id: $id) {
           ${ISSUE_FIELDS}
+          ${includeResumeFields ? ISSUE_SPEC_FIELDS : ""}
           state { name }
           children { nodes { id identifier state { name } } }
+          ${includeResumeFields ? "comments(last: 20) { nodes { body } }" : ""}
         }
       }
     `;
@@ -205,13 +207,14 @@ export class LinearClient {
     const node = data && data.issue;
     if (!node) return null;
     return {
-      ...normalizeIssue(node),
+      ...(includeResumeFields ? withIssueSpecFields(node, normalizeIssue(node)) : normalizeIssue(node)),
       stateName: node.state ? node.state.name : null,
       children: (node.children?.nodes || []).map((child) => ({
         id: child.id,
         identifier: child.identifier,
         stateName: child.state ? child.state.name : null,
       })),
+      ...(includeResumeFields ? { recentComments: (node.comments?.nodes || []).map((comment) => comment.body) } : {}),
     };
   }
 
