@@ -62,6 +62,7 @@ console.log("retained fixture verification passed");\n`);
   fs.writeFileSync(path.join(entry.path, "README.md"), "staged\n");
   git(["add", "README.md"], entry.path);
   fs.writeFileSync(path.join(entry.path, "untracked.txt"), "untracked\n");
+  manager.setWorkerPid(issue.identifier, 2147483000); // Retain an exited historical worker PID.
   manager.markStatus(issue.identifier, "failed");
   const linearClient = { moveToState: vi.fn(async () => {}), addComment: vi.fn(async () => {}) };
   const ctx = {
@@ -86,6 +87,22 @@ console.log("retained fixture verification passed");\n`);
 }
 
 suite("operator continuation lifecycle", () => {
+  it("previews retained staged, untracked and committed work without changing Git or state", () => {
+    const f = fixture();
+    const indexPath = f.git(["rev-parse", "--path-format=absolute", "--git-path", "index"], f.entry.path);
+    const before = {
+      state: fs.readFileSync(f.manager.statePath), index: fs.readFileSync(indexPath),
+      head: f.git(["rev-parse", "HEAD"], f.entry.path),
+    };
+    const preview = inspectOperatorResume(f.issue, f.ctx, { findPrFn: () => null });
+    expect(preview.admitted).toBe(true);
+    expect(preview.changedPaths).toEqual(["README.md", "untracked.txt"]);
+    expect(preview.unpublishedCommits).toBe(1);
+    expect(fs.readFileSync(f.manager.statePath).equals(before.state)).toBe(true);
+    expect(fs.readFileSync(indexPath).equals(before.index)).toBe(true);
+    expect(f.git(["rev-parse", "HEAD"], f.entry.path)).toBe(before.head);
+    expect(fs.readFileSync(path.join(f.entry.path, "untracked.txt"), "utf8")).toBe("untracked\n");
+  });
   it.runIf(process.platform === "darwin")("uses the real macOS guard, captures verification, and publishes preserved work once", async () => {
     const f = fixture();
     const source = String.raw`

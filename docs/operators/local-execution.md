@@ -408,7 +408,6 @@ fixtures from the pushed branch, outside a worker sandbox:
 ```sh
 MOVIECAL_OPERATOR_RESUME_ARTIFACT_ROOT=/private/tmp/moviecal-resume-evidence \
   npx vitest --config vitest.integration.config.ts --run \
-  tools/dispatcher/test/operator-resume.integration.test.mjs \
   tools/dispatcher/test/operator-resume-lifecycle.integration.test.mjs
 ```
 
