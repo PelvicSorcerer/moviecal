@@ -109,6 +109,17 @@ Bearer-only, for any list the caller may edit (personal, or shared as owner or a
 
 Both: `401` for a missing/invalid bearer. A pending invitee, outsider, or user who lost access gets the same `404` `{ "error": "Watchlist not found." }` as for an unknown list, and nothing is changed. The singular personal `/api/v1/watchlist` and `/api/v1/movies/search` paths are unchanged.
 
+### `DELETE /api/v1/watchlists/{id}`
+
+Permanently deletes a shared watchlist the caller owns, with its items, memberships, and invite links. There is no undo. It calls the same `deleteSharedWatchlist` domain operation as the web surface, so authorization and cascade behavior are identical.
+
+- Request body: none.
+- Response `204`: no body.
+- `401` `{ "error": "Unauthorized." }` for a missing or invalid bearer token; nothing is read or written.
+- `403` `{ "error": "Watchlist access denied." }` for an accepted editor, pending invitee, outsider, or any personal list (personal lists are never deletable). The message carries no list metadata and nothing changes.
+- `404` `{ "error": "Watchlist not found." }` for an unknown id, or a repeat delete of an already-deleted list.
+- Former members lose access on their next request: the list disappears from `GET /api/v1/watchlists`, its detail returns `404`, and events sourced only from that list leave their private calendar feed. A movie also on another accessible list stays in the feed.
+
 ### Calendar
 
 ### `GET /api/v1/calendar-token`
