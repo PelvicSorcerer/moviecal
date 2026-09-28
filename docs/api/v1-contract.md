@@ -120,6 +120,16 @@ Permanently deletes a shared watchlist the caller owns, with its items, membersh
 - `404` `{ "error": "Watchlist not found." }` for an unknown id, or a repeat delete of an already-deleted list.
 - Former members lose access on their next request: the list disappears from `GET /api/v1/watchlists`, its detail returns `404`, and events sourced only from that list leave their private calendar feed. A movie also on another accessible list stays in the feed.
 
+### Shared member management
+
+Bearer-only, actor-scoped to the shared-domain operations the web routes use (`listSharedWatchlistMemberProfiles`, `removeSharedWatchlistMember`, `leaveSharedWatchlist`).
+
+- `GET /api/v1/watchlists/{id}/members` (owner only) returns `{ members: { id, userId, role, email, acceptedAt }[] }`, owner first. The owner row's `id` is the synthetic `owner:{userId}`, never the real membership id. Pending invitees appear with `acceptedAt: null`.
+- `DELETE /api/v1/watchlists/{id}/members/{membershipId}` (owner only) removes an editor or pending invitee and returns `{ deleted: true, membershipId }`. Unknown or other-list membership IDs, including the synthetic owner ID, return `404` `Watchlist member not found.`; the real owner membership returns `403`.
+- `DELETE /api/v1/watchlists/{id}/membership` (accepted editor) removes the caller's own membership and returns `{ left: true, watchlistId }`. The owner cannot leave (`403`).
+- An accepted editor attempting an owner-only action gets `403` and no member emails. Outsiders and pending invitees get the same `404` `Watchlist not found.` as an unknown list, and nothing changes. Invalid bearer returns `401` before repository construction.
+- Access and calendar contribution end on the next request after removal or leave. Emails are returned only by the owner-only listing.
+
 ### Calendar
 
 ### `GET /api/v1/calendar-token`
