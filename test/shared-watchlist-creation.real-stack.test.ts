@@ -21,9 +21,21 @@ import {
   type WatchlistRepository,
 } from '../src/lib/watchlist';
 
-const URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+// This test creates/deletes auth users. Refuse unapproved targets before even
+// constructing a client. The hosted dev ref is documented in deployment-plan.md.
+const disposableTargets = new Set([
+  'http://127.0.0.1:54321',
+  'http://localhost:54321',
+  'http://[::1]:54321',
+  'https://utaxvnghaqungrvrqnbc.supabase.co',
+]);
+if (!disposableTargets.has((SUPABASE_URL ?? '').replace(/\/$/, ''))) {
+  throw new Error('MOV-407 real-stack tests require local Supabase or moviecal-ci-dev.');
+}
+
 const LABELS = ['owner', 'member', 'outsider'] as const;
 type Label = (typeof LABELS)[number];
 type Actor = {
@@ -41,7 +53,7 @@ function returned<T>(response: { data: T | null; error: unknown }): T {
 
 describe('shared watchlist creation — real RLS (MOV-407)', () => {
   const options = { auth: { autoRefreshToken: false, persistSession: false } };
-  const admin = createClient<Database>(URL, SERVICE_KEY, options);
+  const admin = createClient<Database>(SUPABASE_URL, SERVICE_KEY, options);
   const actors = {} as Record<Label, Actor>;
   const createdUserIds: string[] = [];
 
@@ -61,7 +73,7 @@ describe('shared watchlist creation — real RLS (MOV-407)', () => {
       expect(created.error).toBeNull();
       const userId = created.data.user!.id;
       createdUserIds.push(userId);
-      const client = createClient<Database>(URL, ANON_KEY, options);
+      const client = createClient<Database>(SUPABASE_URL, ANON_KEY, options);
       const signedIn = await client.auth.signInWithPassword(credentials);
       expect(signedIn.error).toBeNull();
       expect(signedIn.data.session).not.toBeNull();
@@ -139,7 +151,7 @@ describe('shared watchlist creation — real RLS (MOV-407)', () => {
       id: expect.any(String), kind: 'shared', name: 'Weekend movies', ownerUserId: actor.userId,
     });
 
-    const freshClient = createClient<Database>(URL, ANON_KEY, {
+    const freshClient = createClient<Database>(SUPABASE_URL, ANON_KEY, {
       ...options,
       global: { headers: { Authorization: `Bearer ${actor.session.access_token}` } },
     });
