@@ -422,3 +422,23 @@ describe("worker guard", () => {
     }).ok).toBe(false);
   });
 });
+
+describe("security audit semantics for sandbox startup failures (MOV-402)", () => {
+  const completed = (id, command, exitCode, output) => JSON.stringify({
+    type: "item.completed",
+    item: { id, type: "command_execution", command, aggregated_output: output, exit_code: exitCode, status: exitCode === 0 ? "completed" : "failed" },
+  });
+
+  it("still records a command the sandbox refused to start as attempted, and keeps its violation", () => {
+    const transcript = completed("item_1", "git push --force origin master", 71, "sandbox-exec: sandbox_apply: Operation not permitted\n");
+    const audit = auditWorkerTranscript(transcript);
+    expect(audit.actions).toEqual([{ kind: "command", value: "git push --force origin master", outcome: "executed" }]);
+    expect(audit.ok).toBe(false);
+    expect(audit.violations).toEqual([expect.objectContaining({ action: "git push --force origin master", outcome: "executed" })]);
+  });
+
+  it("does not relabel an ordinary nonzero command that really ran as denied", () => {
+    const transcript = completed("item_1", "npm test", 1, "1 failed\n");
+    expect(extractToolActions(transcript)).toEqual([{ kind: "command", value: "npm test", outcome: "executed" }]);
+  });
+});

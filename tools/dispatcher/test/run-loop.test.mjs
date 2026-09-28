@@ -1400,22 +1400,22 @@ describe("runOnce", () => {
   });
 
   describe("nested-sandbox-crash detection and circuit breaker (MOV-180)", () => {
-    /** A minimal fake CircuitBreakerStore that records every call, in-memory only. */
+    /** A minimal fake CircuitBreakerStore that records every call, in-memory only; breakers are independent by name. */
     function fakeCircuitBreaker({ initiallyOpen = false } = {}) {
-      let open = initiallyOpen;
+      const open = new Set(initiallyOpen ? [NESTED_SANDBOX_CRASH, CREDENTIAL_FAILURE] : []);
       return {
         calls: { isOpen: [], trip: [], clear: [] },
         isOpen(name) {
           this.calls.isOpen.push(name);
-          return open;
+          return open.has(name);
         },
         trip(name, reason) {
           this.calls.trip.push({ name, reason });
-          open = true;
+          open.add(name);
         },
         clear(name) {
           this.calls.clear.push(name);
-          open = false;
+          open.delete(name);
         },
       };
     }
@@ -1470,9 +1470,13 @@ describe("runOnce", () => {
 
       const lastComment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1);
       expect(lastComment.body).toContain("Environment failure, not a task failure");
-      expect(lastComment.body).toMatch(/every worker on this mac/i);
       expect(lastComment.body).toContain("Ready for Agent");
-      expect(lastComment.body).toContain("launchctl bootout");
+      // MOV-403: names the affected adapter and the real recovery procedure,
+      // not the stale bootout/bootstrap advice or a "no further worker" promise.
+      expect(lastComment.body).toContain("recovery probe on the claude adapter");
+      expect(lastComment.body).toContain("breaker probe-now nested-sandbox-crash");
+      expect(lastComment.body).not.toContain("launchctl bootout");
+      expect(lastComment.body).not.toMatch(/stopped starting any further issue/i);
     });
 
     it("requeues and trips the breaker when Codex gracefully reports the signature before any tool action", async () => {
@@ -1573,17 +1577,27 @@ describe("runOnce", () => {
       expect(ctx.linearClient.calls.some((c) => c.issueId === "id-b")).toBe(false);
     });
 
-    it("closes the breaker once the half-open probe attempt succeeds", async () => {
+    it("a clean probe exit with no local-tool evidence does not close the sandbox breaker (MOV-403)", async () => {
       const circuitBreaker = fakeCircuitBreaker({ initiallyOpen: true });
-      const ctx = baseCtx({ circuitBreaker });
+      const localToolEvidenceFn = vi.fn(() => null);
+      const ctx = baseCtx({ circuitBreaker, localToolEvidenceFn });
 
       const [result] = await runOnce([ISSUE], ctx);
 
       expect(result.outcome).toBe("in-review");
-      // MOV-177: a clean worker run clears every dispatch breaker, not just
-      // the nested-sandbox one — see run-loop.mjs's DISPATCH_BREAKERS list.
-      expect(circuitBreaker.calls.clear).toEqual([NESTED_SANDBOX_CRASH, CREDENTIAL_FAILURE]);
-      expect(circuitBreaker.isOpen(NESTED_SANDBOX_CRASH)).toBe(false);
+      // Only the credential breaker has its evidence (a clean session).
+      expect(circuitBreaker.calls.clear).toEqual([CREDENTIAL_FAILURE]);
+      expect(localToolEvidenceFn).toHaveBeenCalledWith(expect.stringContaining("MOV-1-fix-the-thing"), "claude");
+    });
+
+    it("closes the sandbox breaker once the probe shows a successful local command (MOV-403)", async () => {
+      const circuitBreaker = fakeCircuitBreaker({ initiallyOpen: true });
+      const ctx = baseCtx({ circuitBreaker, localToolEvidenceFn: () => "claude Bash tool result succeeded: git status" });
+
+      const [result] = await runOnce([ISSUE], ctx);
+
+      expect(result.outcome).toBe("in-review");
+      expect(circuitBreaker.calls.clear).toContain(NESTED_SANDBOX_CRASH);
     });
 
     it("re-trips (stays open) when the half-open probe hits the signature again", async () => {
