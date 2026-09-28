@@ -357,11 +357,84 @@ only the `moviecal-worker` device; `npm run ios:sim:run` renews it rather than
 queueing behind its own dispatcher. The id is recorded on the worktree registry
 entry (`iosSimLeaseId`) so startup recovery releases it explicitly.
 
+## Retained-worktree recovery
+
+### Operator continuation of a retained failed implementation (MOV-404)
+
+After the upgraded dispatcher is installed in the dedicated daemon worktree and
+the service restarted (see **Persistent service** below), inspect one original
+issue at a time:
+
+```sh
+node tools/dispatcher/bin/dispatcher.mjs resume MOV-333 --dry-run
+```
+
+The preview reads current Linear state, registry provenance, Git worktree and
+ownership marker, changed paths and unpublished commits, worker binding,
+prerequisites, quota/breaker state, prior failure and verification evidence,
+and GitHub PR identity. It does not acquire the singleton lock, reserve a
+worker, write state, or mutate Git. A refusal is an instruction to resolve the
+named condition and preview again, never to requeue a dirty worktree. A
+substantive human decision (for example MOV-391's RLS decision) must be
+resolved by a human; the command cannot turn it into a technical recovery.
+
+For a previewed, admitted issue, stop the persistent service so the command
+can acquire its existing singleton lock, then authorize exactly one attempt:
+
+```sh
+launchctl unload ~/Library/LaunchAgents/com.moviecal.dispatcher.plist
+node tools/dispatcher/bin/dispatcher.mjs resume MOV-333
+launchctl load ~/Library/LaunchAgents/com.moviecal.dispatcher.plist
+```
+
+Live execution re-reads Linear and repeats admission under the lock before
+spending the authorization in `worktrees.json`. It reopens the same failed
+worktree and exact branch without checkout, reset, cleanup, or reclaim. The
+worker gets a separate `operator-resume/<attempt-id>/` log and a brief with
+bounded prior evidence and the current issue description. The usual
+supervision, timeout, budget, simulator lease, transcript/diff audit,
+verification record, and trusted non-force draft publisher apply. Existing PR
+targets use the separate repair policy. A failed, stopped, or interrupted
+continuation retains the tree and cannot relaunch automatically; its spent
+attempt record and log remain for review. A credential or sandbox failure still
+trips the adapter breaker, and a trustworthy provider reset still records its
+shared cooldown; the spent issue request itself is never requeued. Repeating
+the same resume command
+on that failed tree is refused.
+
+For isolated local evidence on macOS, run the retained-tree and lifecycle
+fixtures from the pushed branch, outside a worker sandbox:
+
+```sh
+MOVIECAL_OPERATOR_RESUME_ARTIFACT_ROOT=/private/tmp/moviecal-resume-evidence \
+  npx vitest --config vitest.integration.config.ts --run \
+  tools/dispatcher/test/operator-resume.integration.test.mjs \
+  tools/dispatcher/test/operator-resume-lifecycle.integration.test.mjs
+```
+
+The fixtures create their own temporary repository, bare remote, worktrees,
+registry, breakers, provider state and logs; Linear and GitHub are fake
+adapters. The macOS happy path launches a fake worker through the real
+supervisor and Seatbelt guard, runs literal `npm run verify` against the
+fixture's preserved files, captures structured evidence, and publishes only
+to its disposable bare remote. It retains a redacted manifest, audit,
+verification record and result at the requested artifact path. It does not
+call a model or use live recovery issues. The fixtures exercise failure,
+timeout and replay refusal; the human security checklist remains required.
+
+After MOV-404 merges and the daemon is upgraded, an authorized operator may
+preview and recover MOV-333, MOV-334, MOV-341, MOV-342, MOV-343, and MOV-346
+individually. MOV-335 additionally waits for MOV-399's live audit change and
+daemon upgrade. MOV-391 is excluded pending its substantive security decision.
+Do not move the whole `Needs Human Decision` queue or create replacement
+feature issues. Each original issue keeps its own testing, manual review,
+draft readiness, and completion requirements.
+
 ## Worker interface
 
 A worker is any binary satisfying: *given a repo path, a branch, and a brief on stdin, produce verified filesystem changes in that worktree and exit 0.* Concretely, `claude -p --model <id>` or `codex --sandbox workspace-write --ask-for-approval never exec`. For a linked Git worktree, the dispatcher adds its shared Git metadata directories to Codex with `--add-dir` so Codex can resolve the worktree's `.git` file (MOV-193). The shared outer `worker-guard.mjs` profile keeps those directories non-writable for both adapters; `--add-dir` does not grant an effective write capability. It also denies every non-`.git` top-level entry of the checkout containing that shared metadata rather than denying the checkout root, because macOS Seatbelt deny rules cannot make an exception for nested `.git` paths (MOV-194). Both adapters therefore remain unable to read sibling source and local files while the backing metadata remains available only as necessary. A worker cannot execute Git, push, open/edit a PR, or receive GitHub mutation authority. The dispatcher instead injects a bounded, read-only repository snapshot (branch/HEAD/base, initial status, recent commits, and changed paths) into each brief, so a worker has routine orientation context without invoking Git itself. Implementation and repair briefs also carry short **Explore efficiently** guidance: locate code before opening it, read large files by range, avoid unchanged repeat reads, and use the repo's `explore` subagent for broad searches. When the issue names existing repository files, a **Likely starting points** list adds their paths and line counts, marks files over 400 lines "read by range", and stops at 15 entries. Missing or unreadable paths are omitted; orientation failure leaves the ordinary brief intact. No file contents are included, and paths use the repository-context redaction. After it exits, the dispatcher audits the structured tool transcript, assigned branch, base diff, and dirty paths; only a clean audit reaches `worker-publish.mjs`, which stages and commits the accepted changes, performs a non-force push of exactly the assigned branch, and finds or creates its draft PR. Adding a third worker means satisfying this same boundary, not writing a new operator guide or merge path.
 
-A worker invocation is one-shot — there is no resume across turns, so the brief (`brief.mjs`) explicitly tells the worker to run verification (`npm run verify`, `xcodebuild`, etc.) synchronously and never background a long-running build/test and exit expecting to check on it later (`MOV-137`, after `MOV-106`'s first dispatch did exactly that and left an orphaned `xcodebuild test` running after the worker exited 0). As a backstop, `worker-spawn.mjs` spawns the worker detached (its own process group) and, once it exits, signals the whole group (`SIGTERM` then `SIGKILL` after a grace period) so nothing it spawned outlives it. A zero exit with no audited filesystem change is a failed publication, not success.
+A worker invocation is one-shot — there is no resume across turns, so the brief (`brief.mjs`) explicitly tells the worker to run verification (`npm run verify`, `xcodebuild`, etc.) synchronously and never background a long-running build/test and exit expecting to check on it later (`MOV-137`, after `MOV-106`'s first dispatch did exactly that and left an orphaned `xcodebuild test` running after the worker exited 0). As a backstop, `worker-spawn.mjs` spawns the worker detached (its own process group) and, once it exits, signals the whole group (`SIGTERM` then `SIGKILL` after a grace period) so nothing it spawned outlives it. A zero exit with no audited filesystem change is a failed publication, except an operator continuation whose retained branch already has proven unpublished commits.
 
 ## Branch and CI conventions
 

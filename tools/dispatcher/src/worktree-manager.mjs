@@ -173,6 +173,18 @@ export class WorktreeManager {
     }
   }
 
+  ownershipMarker(worktreePath) {
+    try {
+      const gitDir = this._worktreeGitDir(worktreePath);
+      const markerPath = path.join(gitDir, OWNERSHIP_MARKER_FILENAME);
+      if (!fs.lstatSync(markerPath).isFile()) return null;
+      const marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+      return marker && typeof marker.id === "string" ? marker : null;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * True only when a recorded path is still a linked Git worktree. A path
    * existing on disk is not enough: an interrupted or external removal can
@@ -191,6 +203,15 @@ export class WorktreeManager {
       if (!fs.lstatSync(path.join(worktreePath, ".git")).isFile()) return false;
       this._worktreeGitDir(worktreePath);
       return true;
+    } catch {
+      return false;
+    }
+  }
+
+  worktreeBelongsToRepository(worktreePath) {
+    try {
+      const commonDir = (cwd) => String(this.runner("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd })).trim();
+      return fs.realpathSync(commonDir(worktreePath)) === fs.realpathSync(commonDir(this.repoRoot));
     } catch {
       return false;
     }
@@ -364,10 +385,11 @@ export class WorktreeManager {
    * identity assertions below are a last structural backstop against being
    * called with a path or branch the caller did not actually admit.
    */
-  resumeEntry(id, { worktreePath, branch } = {}) {
+  resumeEntry(id, { worktreePath, branch, expectedStatus = null } = {}) {
     const state = this.loadState();
     const entry = state[id];
     if (!entry) throw new Error(`no worktree record for ${id}`);
+    if (expectedStatus && entry.status !== expectedStatus) throw new Error(`worktree record for ${id} is ${entry.status}, not ${expectedStatus}`);
     if (worktreePath && entry.path !== worktreePath) {
       throw new Error(`worktree record for ${id} points at ${entry.path}, not ${worktreePath}`);
     }
@@ -730,7 +752,12 @@ export class WorktreeManager {
           ));
           continue;
         }
-        changes.push(this._abandonForStartupRecovery(state, id, entry, "dispatcher restarted after worker stopped without a terminal update"));
+        changes.push(this._abandonForStartupRecovery(state, id, entry,
+          entry.operatorResume
+            ? "dispatcher restarted during a spent operator continuation; inspect its retained tree and any PR before recovery"
+            : "dispatcher restarted after worker stopped without a terminal update",
+          entry.operatorResume ? { forceDirty: true, forcedUncommittedPath: "operator continuation requires human reconciliation even if its tree is clean" } : {},
+        ));
       }
     }
     const knownPaths = new Set(Object.values(state).map((entry) => path.resolve(entry.path)));

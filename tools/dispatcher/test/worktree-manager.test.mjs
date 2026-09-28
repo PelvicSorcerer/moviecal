@@ -537,6 +537,18 @@ describe("WorktreeManager", () => {
     expect(manager.loadState()["MOV-1"].startupRecovery).toMatchObject({ stateMoved: false, commentPosted: false });
   });
 
+  it("never requeues a crashed operator continuation even if publication left a clean tree", () => {
+    manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix", linearIssueId: "linear-1" });
+    manager.updateEntry("MOV-1", { operatorResume: { attemptId: "spent", status: "claimed" } });
+    manager.setWorkerPid("MOV-1", 1234);
+
+    const changes = manager.reconcileStartup({ isPidAlive: () => false });
+
+    expect(changes[0]).toMatchObject({ id: "MOV-1", dirty: true });
+    expect(changes[0].uncommittedPaths).toContain("operator continuation requires human reconciliation even if its tree is clean");
+    expect(manager.loadState()["MOV-1"].operatorResume.attemptId).toBe("spent");
+  });
+
   it("terminates a recorded live worker group before requeuing its clean worktree (MOV-254)", () => {
     manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix", linearIssueId: "linear-1" });
     manager.setWorkerPid("MOV-1", 4321);
@@ -599,6 +611,7 @@ describe("WorktreeManager", () => {
   it("create() stamps an ownership marker in the worktree's own Git directory", () => {
     const entry = manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
     expect(manager.isDispatcherOwnedWorktree(entry.path)).toBe(true);
+    expect(manager.ownershipMarker(entry.path)?.id).toBe("MOV-1");
   });
 
   it("isDispatcherOwnedWorktree is false for a plain directory this dispatcher never created", () => {

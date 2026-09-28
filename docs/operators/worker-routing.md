@@ -160,6 +160,12 @@ For a fresh `worker:any` issue, the baseline or active trial determines the **re
 
 Explicit worker pins and issues without a worker label keep their existing route. Retries, retained resumes, continuations and repairs keep their recorded worker. Cooldown fallback does not transfer an already-started issue. Preview shows the requested worker and fallback reason through the same resolver as live dispatch. A Claude fallback during the Codex trial has no trial attribution and consumes no Codex assignment; a later fresh Codex claim follows ordinary trial admission. The one-active-worker cap and all model, eligibility and security gates remain in force.
 
+Operator continuation of a retained failed worktree (`dispatcher resume MOV-N`)
+keeps its recorded worker and model. A conflicting explicit worker pin or model
+tier refuses admission, and quota/breaker gates remain in force. Preview and
+live execution use the same route check; neither selects a fallback provider
+or charges a new worker-trial assignment.
+
 ## Temporary `worker:any` → Codex trial (MOV-383)
 
 A bounded, **disabled-by-default** switch for the Sol-vs-Sonnet data-gathering trial ([MOV-384](https://linear.app/moviecal/issue/MOV-384) owns cohort selection, live activation and rollback; this feature was delivered inactive and is not activated by merging it). While active, a *fresh* `worker:any` issue resolves to Codex at **every** tier — the tier and its pinned model/effort are untouched (default = GPT-6 Sol at `medium`; cheap/strong Codex runs are supplemental data, not default-tier Sol-vs-Sonnet evidence). Nothing else changes: explicit `worker:claude` / `worker:codex` pins keep precedence, an issue with no worker label keeps its ordinary Claude route, and eligibility, upgrade validation (`model:strong` still needs an `upgrade:*` label), concurrency, cooldown, verification and security gates all apply as usual. Missing or refused Codex/model follows the existing failure path. Only a recognized provider cooldown permits fresh `worker:any` fallback; unrelated failures do not trigger substitution.

@@ -6,7 +6,7 @@
 // creates the draft PR after worker-guard validation.
 
 import { execFileSync } from "node:child_process";
-import { findPrForBranch } from "./pr-check.mjs";
+import { findPrForBranch, findAnyPrForBranch } from "./pr-check.mjs";
 import { pullRequestReadinessEvidence } from "./readiness-evidence.mjs";
 
 export function defaultRunner(command, args, opts = {}) {
@@ -43,27 +43,35 @@ export function pullRequestBody(issue, verificationEvidence) {
  * execFileSync (no shell), branch identity is checked again immediately
  * before the push, and a non-fast-forward remote rejects naturally.
  */
-export function publishWorkerResult({ worktreePath, branch, repo, issue, verificationEvidence, runner = defaultRunner } = {}) {
+export function publishWorkerResult({ worktreePath, branch, repo, issue, verificationEvidence, allowExistingCommits = false, requireNewPr = false, runner = defaultRunner } = {}) {
   if (!branch?.startsWith(`agent/${issue?.identifier}-`)) {
     throw new Error("assigned branch does not match the dispatcher issue namespace");
   }
   const actualBranch = String(runner("git", ["branch", "--show-current"], { cwd: worktreePath })).trim();
   if (actualBranch !== branch) throw new Error(`refusing to publish ${actualBranch || "detached HEAD"}; expected ${branch}`);
+  if (requireNewPr && findAnyPrForBranch(branch, repo, runner)) throw new Error(`branch ${branch} already has a PR; use repair`);
 
   const dirty = String(runner("git", ["status", "--porcelain=v1"], { cwd: worktreePath })).trim();
-  if (!dirty) throw new Error("worker produced no audited filesystem changes");
-  runner("git", ["add", "--all", "--", ".", ":!WORKER_PROGRESS.md"], { cwd: worktreePath });
-  const staged = String(runner("git", ["diff", "--cached", "--name-only"], { cwd: worktreePath })).trim();
-  if (!staged) throw new Error("worker changes produced an empty Git index");
-  if (staged.split("\n").includes("WORKER_PROGRESS.md")) throw new Error("refusing to publish worker progress file");
-  runner("git", ["commit", "-m", `fix: ${issue.identifier} ${issue.title}`], { cwd: worktreePath });
+  if (!dirty && !allowExistingCommits) throw new Error("worker produced no audited filesystem changes");
+  if (dirty) {
+    runner("git", ["add", "--all", "--", ".", ":!WORKER_PROGRESS.md"], { cwd: worktreePath });
+    const staged = String(runner("git", ["diff", "--cached", "--name-only"], { cwd: worktreePath })).trim();
+    if (!staged) throw new Error("worker changes produced an empty Git index");
+    if (staged.split("\n").includes("WORKER_PROGRESS.md")) throw new Error("refusing to publish worker progress file");
+    runner("git", ["commit", "-m", `fix: ${issue.identifier} ${issue.title}`], { cwd: worktreePath });
+  }
 
   const afterCommit = String(runner("git", ["status", "--porcelain=v1"], { cwd: worktreePath })).trim();
   if (afterCommit) throw new Error("dispatcher commit did not leave a clean worktree");
   const ahead = Number(String(runner("git", ["rev-list", "--count", "origin/master..HEAD"], { cwd: worktreePath })).trim());
   if (!Number.isInteger(ahead) || ahead < 1) throw new Error("dispatcher produced no commit ahead of origin/master");
 
+  if (requireNewPr && findAnyPrForBranch(branch, repo, runner)) throw new Error(`branch ${branch} gained a PR before publication; use repair`);
+
   runner("git", ["push", "--set-upstream", "origin", `HEAD:refs/heads/${branch}`], { cwd: worktreePath });
+  if (requireNewPr && findAnyPrForBranch(branch, repo, runner)) {
+    throw new Error(`branch ${branch} gained a PR during publication; use repair`);
+  }
   let pr = findPrForBranch(branch, repo, runner);
   if (!pr) {
     runner("gh", [
