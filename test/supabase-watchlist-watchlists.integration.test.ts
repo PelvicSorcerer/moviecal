@@ -3,7 +3,8 @@ import type { PostgrestError } from '@supabase/supabase-js';
 
 import type { ServerSupabaseClient } from '../src/lib/supabase/server';
 import { createWatchlistsAggregate } from '../src/lib/supabase/watchlist/watchlists';
-import { WatchlistDataError } from '../src/lib/watchlist';
+import { createSharedWatchlist, WatchlistDataError } from '../src/lib/watchlist';
+import { createSupabaseWatchlistRepository } from '../src/lib/supabase/watchlist';
 
 const SUPABASE_ERROR: PostgrestError = {
   code: 'P0001',
@@ -78,6 +79,27 @@ describe('createWatchlistsAggregate — createWatchlist', () => {
       ownerUserId: 'user-1',
     });
     expect(userClient.from).toHaveBeenCalledWith('watchlists');
+  });
+
+  it('creates a shared list through the domain and actor repository, returning its normalized row', async () => {
+    const row = { ...VALID_WATCHLIST_ROW, kind: 'shared', name: 'Friday movie night' };
+    const chain = makeChain({ data: row, error: null });
+    const userClient = { from: vi.fn(() => chain) } as unknown as ServerSupabaseClient;
+    const adminClient = { from: vi.fn() } as unknown as ServerSupabaseClient;
+    const repository = createSupabaseWatchlistRepository({ adminClient, userClient });
+
+    await expect(createSharedWatchlist({
+      name: '  Friday   movie night  ',
+      userId: 'user-1', repository,
+    })).resolves.toEqual({
+      canEdit: true, id: 'watchlist-1', kind: 'shared',
+      name: 'Friday movie night', ownerUserId: 'user-1',
+    });
+    expect(chain.insert).toHaveBeenCalledWith({
+      kind: 'shared', name: 'Friday movie night', owner_user_id: 'user-1',
+    });
+    expect(chain.single).toHaveBeenCalledTimes(1);
+    expect(adminClient.from).not.toHaveBeenCalled();
   });
 
   it('throws WatchlistDataError on a PostgrestError', async () => {
