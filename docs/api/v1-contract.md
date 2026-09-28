@@ -31,7 +31,7 @@ All errors use `{ "error": string }` with an appropriate HTTP status:
 
 ### Watchlist
 
-Base path: `/api/v1/watchlist`. The singular path remains the authenticated user's **personal** item API. The plural read endpoints below additionally expose authorized personal and shared lists. Shared mutations remain on the cookie-session web surface.
+Base path: `/api/v1/watchlist`. The singular path remains the authenticated user's **personal** item API. The plural read endpoints below additionally expose authorized personal and shared lists. Shared-list create and rename are published below; other shared mutations remain on the cookie-session web surface.
 
 ### `GET /api/v1/watchlist`
 

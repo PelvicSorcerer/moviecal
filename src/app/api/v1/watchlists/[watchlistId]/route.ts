@@ -7,6 +7,11 @@ import { createSupabaseWatchlistRepository } from '../../../../../lib/supabase/w
 import {
   getAuthorizedWatchlistDetail,
   parsePageRequest,
+  renameSharedWatchlist,
+  toAuthorizedWatchlistView,
+  WatchlistAccessError,
+  WatchlistInputError,
+  WatchlistNotFoundError,
 } from '../../../../../lib/watchlist';
 
 export async function GET(
@@ -34,6 +39,64 @@ export async function GET(
 
     return NextResponse.json(result);
   } catch (error) {
+    return handleDomainError(error);
+  }
+}
+
+/**
+ * Renames a shared list (owner or accepted editor). Last successful write wins,
+ * so the request is idempotent and safe to retry. Outsiders, pending invitees,
+ * personal lists, and unknown ids are all answered with the same 404.
+ */
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ watchlistId: string }> },
+): Promise<NextResponse> {
+  const identity = await resolveBearerIdentity(request);
+
+  if (!identity) {
+    return apiError('Unauthorized.', 401);
+  }
+
+  const { watchlistId } = await context.params;
+
+  try {
+    const body: unknown = await request.json().catch(() => {
+      throw new WatchlistInputError('Request body must be valid JSON.');
+    });
+    const name =
+      typeof body === 'object' && body !== null
+        ? (body as { name?: unknown }).name
+        : undefined;
+
+    if (typeof name !== 'string') {
+      throw new WatchlistInputError('A shared watchlist name is required.');
+    }
+
+    const watchlist = await renameSharedWatchlist({
+      actorUserId: identity.user.id,
+      name,
+      repository: createSupabaseWatchlistRepository({
+        userClient: identity.userClient,
+        adminClient: createServerSupabaseServiceRoleClient(),
+      }),
+      watchlistId,
+    });
+
+    return NextResponse.json({
+      watchlist: toAuthorizedWatchlistView({
+        actorUserId: identity.user.id,
+        watchlist,
+      }),
+    });
+  } catch (error) {
+    if (
+      error instanceof WatchlistAccessError
+      || error instanceof WatchlistNotFoundError
+    ) {
+      return apiError('Watchlist not found.', 404);
+    }
+
     return handleDomainError(error);
   }
 }
