@@ -1,8 +1,10 @@
 # MOV-401 Codex containment proof
 
 Human-led implementation evidence, collected on macOS arm64 with installed
-`codex-cli 0.157.1` on 2026-09-27 local time (2026-09-28 UTC). Operator sign-off
-is pending. This record does not authorize daemon deployment or a MOV-399 retry.
+`codex-cli 0.157.1` on 2026-09-27 local time (2026-09-28 UTC). The repository
+owner granted operator sign-off after the human testing walkthrough below.
+This approval covers the containment design, testing and review readiness;
+daemon deployment and a MOV-399 retry remain separate operator actions.
 
 ## Authority arrangement
 
@@ -73,12 +75,39 @@ Live manifest SHA-256 evidence:
 
 ## Operator review
 
-On the pushed issue branch, follow MOV-401's Manual Verification checklist
-and the [local containment gates](../operators/local-execution.md#security-model).
-Inspect both profiles, immutable environment routing, version pin, successful
-and denied tool results, and manifest hashes. Record tester/date and explicit
-sign-off in the issue/PR before ready promotion, daemon deployment or retrying
-MOV-399. A restart alone does not repair the original policy collision.
+The repository owner ran the Manual Verification checklist on pushed head
+`852331f071aab562b25b4d80a05ae1c722335716` on 2026-09-27 (America/Chicago):
+
+- Native gate at 21:55: both test files passed, 16 tests passed, none skipped.
+- Live fixture at 21:56–21:57: guidance read, `pwd`, harmless own-file write
+  and exact fixture verification all exited 0. Worker exit, audit and durable
+  verification evidence passed; all three manifest hashes matched and runtime
+  cleanup completed.
+- Design review at approximately 21:59: the owner explicitly approved the
+  separate guards, effective native command mode, restricted code-mode
+  delegation, temporary loopback transport and version/reproof requirements,
+  and authorized marking [PR #760](https://github.com/PelvicSorcerer/moviecal/pull/760)
+  ready for review. Sign-off is also recorded in MOV-401 and the PR body.
+
+Human live evidence is preserved at
+`/private/tmp/MOV-401-human-evidence-eyGxBr`. Its manifest SHA-256 records are:
+
+- Executor profile: `c0e755cecded8ffd2d3173eeb73bfca29e3816b4af513004e690975968578ece`
+- Client profile: `175cf45c35b09ac4bbd6bb5d8d671cae691898aec2e0aa520e877bd5e5f97e77`
+- Launch descriptor: `2703aabd19f3dee0f5293d51d761403da9bbd0616cde49a8c278cd9a429cf62d`
+
+The earlier automated review ran before this sign-off and received only the
+first 60,000 characters of the 119 KB diff. That review did not cover the full
+implementation. Complete local source inspection covers the remainder of
+containment preparation, supervisor lifecycle, guard generation, spawn wiring,
+verification parsing and the native/unit tests; the manual design approval and
+Mac proof above supply the operator handoff evidence. The per-PR AI-review
+acknowledgement records this limit explicitly; it does not change deterministic
+review checks or worker enforcement.
+
+For CLI/OS changes, repeat the [local containment gates](../operators/local-execution.md#security-model)
+and operator review before updating the allowlist. A restart alone does not
+repair the original policy collision.
 
 `exec-server` is experimental in installed CLI help. Re-prove this arrangement
 after a CLI/OS upgrade before updating the version allowlist. Reference:
