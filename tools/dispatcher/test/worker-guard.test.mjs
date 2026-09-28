@@ -386,6 +386,45 @@ describe("worker guard", () => {
     });
   });
 
+  it.each([
+    "supabase/migrations/20260901000000_shared_lists.sql",
+    "src/app/auth/sign-in/route.ts",
+    "src/lib/supabase/calendar-tokens.ts",
+  ].flatMap((file) => [
+    ["Write", file, { type: "assistant", message: { content: [{ type: "tool_use", name: "Write", input: { file_path: file, content: "fixture" } }] } }],
+    ["Edit", file, { type: "assistant", message: { content: [{ type: "tool_use", name: "Edit", input: { file_path: file, old_string: "fixture", new_string: "updated fixture" } }] } }],
+    ["cat redirect", file, { type: "item.completed", item: { type: "command_execution", command: `cat > ${file} <<'EOF'\nfixture\nEOF`, exit_code: 0 } }],
+  ]))("requires human review after %s changes %s", (_writer, file, event) => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-guard-"));
+    fs.writeFileSync(path.join(tmpDir, "stdout.log"), `${JSON.stringify(event)}\n`);
+    const runner = (_command, args) => {
+      if (args[0] === "branch") return "agent/MOV-1-fix\n";
+      if (args[0] === "diff") return "";
+      if (args[0] === "status") return `?? ${file}\n`;
+      throw new Error(`unexpected ${args.join(" ")}`);
+    };
+    expect(auditWorkerResult({ worktreePath: "/tmp/wt", branch: "agent/MOV-1-fix", logDir: tmpDir, runner })).toMatchObject({
+      ok: true,
+      violations: [],
+      humanReviewPaths: [file],
+    });
+  });
+
+  it("requires review for committed auth and calendar-token changes and leaves unrelated work alone", () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-guard-"));
+    fs.writeFileSync(path.join(tmpDir, "stdout.log"), `${JSON.stringify({ type: "item.completed", item: { type: "command_execution", command: "npm run verify", exit_code: 0 } })}\n`);
+    const runner = (_command, args) => {
+      if (args[0] === "branch") return "agent/MOV-1-fix\n";
+      if (args[0] === "diff") return "src/app/auth/sign-in/route.ts\nsrc/app/settings/calendar/actions.ts\nsrc/lib/calendar-tokens.ts\nsrc/app/page.tsx\n";
+      if (args[0] === "status") return "";
+      throw new Error(`unexpected ${args.join(" ")}`);
+    };
+    expect(auditWorkerResult({ worktreePath: "/tmp/wt", branch: "agent/MOV-1-fix", logDir: tmpDir, runner })).toMatchObject({
+      ok: true,
+      humanReviewPaths: ["src/app/auth/sign-in/route.ts", "src/app/settings/calendar/actions.ts", "src/lib/calendar-tokens.ts"],
+    });
+  });
+
   it("writes a checksummed audit record outside the worktree", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-audit-"));
     const record = writeWorkerAudit(tmpDir, { issue: "MOV-1", ok: false, violations: [{ reason: "blocked" }] }, {

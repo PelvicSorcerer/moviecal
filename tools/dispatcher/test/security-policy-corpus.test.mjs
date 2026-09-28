@@ -96,6 +96,108 @@ const EARLIER_FALSE_POSITIVES = [
   ["npm run credential paths", "npm run lane:unit -- tools/dispatcher/test/credential-failure.test.mjs"],
 ];
 
+// Exact read commands from the six historical security-audit.json records
+// named by MOV-399, with duplicate transcript events removed.
+const MIGRATION_READS = [
+  [
+    "MOV-330",
+    "ls && echo \"--- supabase ---\" && ls supabase/migrations/ && echo \"--- pkg scripts ---\" && node -e \"const p=require('./package.json');console.log(JSON.stringify(p.scripts,null,1))\""
+  ],
+  [
+    "MOV-330",
+    "ls && echo \"--- supabase ---\" && ls supabase/migrations/"
+  ],
+  [
+    "MOV-330",
+    "for f in supabase/migrations/20260709000000_issue_138_service_role_grants.sql supabase/migrations/20260709000001_issue_138_service_role_function_grants.sql supabase/migrations/20260709000002_issue_138_authenticated_role_grants.sql supabase/migrations/20260710000000_issue_200_ensure_authenticated_grants.sql; do echo \"=== $f ===\"; cat \"$f\"; done"
+  ],
+  [
+    "MOV-330",
+    "wc -l supabase/migrations/20260924000000_mov_330_watchlist_ownership_invariants.sql test/watchlist-ownership-guards.test.ts test/watchlist-ownership-invariants.real-stack.test.ts test/tmp-env-probe.test.ts"
+  ],
+  [
+    "MOV-330",
+    "wc -l supabase/migrations/20260924000000_mov_330_watchlist_ownership_invariants.sql test/watchlist-ownership-guards.test.ts test/watchlist-ownership-invariants.real-stack.test.ts test/tmp-env-probe.test.ts test/supabase-schema.test.ts test/watchlist-shared.integration.test.ts"
+  ],
+  [
+    "MOV-330",
+    "grep -n \"^-- [0-9]\\.\" supabase/migrations/20260924000000_mov_330_watchlist_ownership_invariants.sql"
+  ],
+  [
+    "MOV-330",
+    "sed -n '200,210p;320,340p' supabase/migrations/20260924000000_mov_330_watchlist_ownership_invariants.sql"
+  ],
+  [
+    "MOV-330",
+    "wc -l supabase/migrations/20260924000000_mov_330_watchlist_ownership_invariants.sql test/watchlist-ownership-guards.test.ts test/watchlist-ownership-invariants.real-stack.test.ts test/tmp-env-probe.test.ts test/supabase-schema.test.ts"
+  ],
+  [
+    "MOV-335",
+    "grep -n \"create table.*movies\\|tmdb_id\\|movies (\" -A3 supabase/migrations/*.sql | grep -B2 -A15 \"table public.movies\\|table \\\"public\\\".\\\"movies\\\"\" | head -60"
+  ],
+  [
+    "MOV-335",
+    "sed -n '1,50p' supabase/migrations/20260611153000_issue_10_initial_schema.sql"
+  ],
+  [
+    "MOV-335",
+    "sed -n '230,300p' supabase/migrations/20260625150000_issue_69_multi_watchlist_schema.sql"
+  ],
+  [
+    "MOV-340",
+    "ls supabase/migrations && grep -rn \"role\" supabase/migrations/*.sql | grep -i \"check\\|create type\\|text not null\" | head -20"
+  ],
+  [
+    "MOV-372",
+    "grep -n \"normalizeSharedWatchlistName\\|requireWatchlistAccess\" -B2 -A30 src/lib/watchlist/items.ts | head -120; grep -n \"watchlists\" supabase/migrations/20260625150000_issue_69_multi_watchlist_schema.sql | head -40; grep -n \"\" supabase/migrations/20260924000000_mov_330_watchlist_ownership_invariants.sql | head -150"
+  ],
+  [
+    "MOV-372",
+    "sed -n 150,400p supabase/migrations/20260924000000_mov_330_watchlist_ownership_invariants.sql; sed -n 290,340p supabase/migrations/20260625150000_issue_69_multi_watchlist_schema.sql; sed -n 1,12p supabase/migrations/20260625150000_issue_69_multi_watchlist_schema.sql; ls supabase/migrations | tail -5"
+  ],
+  [
+    "MOV-372",
+    "sed -n 400,520p supabase/migrations/20260924000000_mov_330_watchlist_ownership_invariants.sql; cat test/watchlist-ownership-invariants.real-stack.test.ts | head -150; ls test | grep -i watchlist"
+  ],
+  [
+    "MOV-373",
+    "cat supabase/migrations/20260709000002_issue_138_authenticated_role_grants.sql supabase/migrations/20260710000000_issue_200_ensure_authenticated_grants.sql"
+  ],
+  [
+    "MOV-374",
+    "grep -n \"watchlist_memberships\" -A 12 supabase/migrations/20260625150000_issue_69_multi_watchlist_schema.sql | grep -n \"policy\" -A 14 | head -80"
+  ],
+  [
+    "MOV-374",
+    "grep -n \"create table\" -A 20 supabase/migrations/20260611153000_issue_10_initial_schema.sql | head -60 && echo \"=== items alter ===\" && grep -n \"watchlist_items\" -B2 -A 12 supabase/migrations/20260625150000_issue_69_multi_watchlist_schema.sql | head -60"
+  ]
+];
+
+describe("MOV-399 migration and auth command reads", () => {
+  it.each([
+    "supabase login --token example src/lib/supabase/calendar-tokens.ts",
+    "cat src/lib/supabase/calendar-tokens.ts; supabase login --token example",
+    "cat src/lib/supabase/calendar-tokens.ts; /opt/homebrew/bin/supabase secrets list",
+  ])("keeps actual credential operations blocked: %s", (command) => {
+    expect(classifyAction(command)).toMatchObject({ verdict: "hard-deny", category: "safety" });
+  });
+
+  it.each(MIGRATION_READS)("allows the %s read", (_issue, command) => {
+    expect(classifyAction(command)).toEqual({ verdict: "allow", reason: null, category: null });
+  });
+
+  it.each([
+    "cat src/app/auth/sign-in/route.ts",
+    "rg -n token src/app/settings/calendar/actions.ts",
+    "wc -l src/lib/calendar-tokens.ts",
+    "cat src/lib/supabase/calendar-tokens.ts",
+    "rg -n token src/lib/supabase/calendar-tokens.ts",
+    "cat > supabase/migrations/20260901000000_shared_lists.sql <<'EOF'\nselect 1;\nEOF",
+  ])("allows a command that mentions a review-required path: %s", (command) => {
+    expect(classifyAction(command)).toEqual({ verdict: "allow", reason: null, category: null });
+  });
+});
+
 // Line-aware classification and inline interpreter scripts (MOV-398).
 const LINE_AND_INLINE_FALSE_POSITIVES = [
   "npx supabase status\nrg -n token src/lib/auth",
@@ -200,8 +302,8 @@ describe("MOV-398 negative-control corpus", () => {
     expect(classifyAction("cat > test/auth.test.ts <<'EOF'\nexport {};\nEOF", { workerMode: "repair" }).verdict).toBe("hard-deny");
   });
 
-  it("keeps the needs-human classification for an opener that targets an auth route", () => {
-    expect(classifyAction("cat > src/app/auth/sign-in/route.ts <<'EOF'\nexport {};\nEOF").verdict).toBe("needs-human");
+  it("allows an opener targeting an auth route; the diff requires review", () => {
+    expect(classifyAction("cat > src/app/auth/sign-in/route.ts <<'EOF'\nexport {};\nEOF").verdict).toBe("allow");
   });
 });
 
@@ -280,8 +382,8 @@ describe("MOV-400 protected-path corpus", () => {
     expect(classifyAction("rm -rf test", { workerMode: "repair" })).toMatchObject({ verdict: "hard-deny", reason: "repair workers cannot change tests" });
   });
 
-  it("does not let a warning outrank a later needs-human or hard-deny rule", () => {
-    expect(classifyAction("wc -l AGENTS.md; cp notes.ts src/app/auth/notes.ts").verdict).toBe("needs-human");
+  it("does not let a warning outrank a later hard-deny rule", () => {
+    expect(classifyAction("wc -l AGENTS.md; cp notes.ts src/app/auth/notes.ts").verdict).toBe("warn");
     expect(classifyAction("wc -l AGENTS.md; cp README.md .claude/settings.json")).toMatchObject({ verdict: "hard-deny", reason: "edits worker permission policy" });
     expect(classifyAction("wc -l AGENTS.md && gh pr view 1")).toMatchObject({ verdict: "hard-deny", category: "scope" });
   });

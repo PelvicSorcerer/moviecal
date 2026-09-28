@@ -48,6 +48,20 @@ describe("runHeuristics sensitive-path gating", () => {
     expect(findings[0].summary).toMatch(/add the "sensitive-path-ack" label/);
   });
 
+  it.each([
+    "supabase/migrations/20260901000000_shared_lists.sql",
+    "src/app/auth/sign-in/route.ts",
+    "src/lib/auth/session.ts",
+    "src/app/settings/calendar/actions.ts",
+    "src/app/api/calendar/[token]/route.ts",
+    "src/app/api/v1/calendar-token/route.ts",
+    "src/lib/calendar-tokens.ts",
+    "src/lib/supabase/calendar-tokens.ts",
+  ])("requires sensitive-path sign-off for %s", (file) => {
+    expect(runHeuristics([file], CLEAN_DIFF, NO_ACK)).toMatchObject([{ severity: "block" }]);
+    expect(runHeuristics([file], CLEAN_DIFF, ACK)).toMatchObject([{ severity: "warn" }]);
+  });
+
   it("downgrades the sensitive-path finding to warn when acknowledged", () => {
     const findings = runHeuristics([".github/workflows/verify.yml"], CLEAN_DIFF, ACK);
     expect(findings).toHaveLength(1);

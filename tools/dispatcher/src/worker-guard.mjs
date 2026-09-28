@@ -14,6 +14,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { classifyAction } from "./security-policy.mjs";
+import { reviewRequiredPaths } from "./review-required-paths.mjs";
 
 export const WORKER_MODES = Object.freeze(["implementation", "repair"]);
 export const APPROVED_EXECUTOR = "moviecal-dispatcher";
@@ -557,6 +558,7 @@ export function auditWorkerResult({ worktreePath, branch, logDir, mode = "implem
   const committed = String(runner("git", ["diff", "--name-only", `${baseRef}...HEAD`], { cwd: worktreePath })).split("\n").filter(Boolean);
   const dirty = statusPaths(runner("git", ["status", "--porcelain=v1"], { cwd: worktreePath }));
   const changedAudit = auditChangedPaths([...committed, ...dirty], { mode });
+  const humanReviewPaths = reviewRequiredPaths([...committed, ...dirty]);
   violations.push(...changedAudit.violations);
 
   const stdoutPath = path.join(logDir, "stdout.log");
@@ -568,7 +570,7 @@ export function auditWorkerResult({ worktreePath, branch, logDir, mode = "implem
     warnings = transcript.warnings;
     violations.push(...transcript.violations);
   }
-  return { ok: violations.length === 0, mode, baseRef, branch, actualBranch, committed, dirty, actions, warnings, violations };
+  return { ok: violations.length === 0, mode, baseRef, branch, actualBranch, committed, dirty, humanReviewPaths, actions, warnings, violations };
 }
 
 /** Persist an audit record outside the worker-writable worktree. */

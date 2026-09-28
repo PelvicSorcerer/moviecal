@@ -2091,6 +2091,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     }
     recordOperatorStage("publication-requested", { verificationStatus: verificationEvidence?.status || "unknown" });
     pr = publishWorkerResultFn({ worktreePath: entry.path, branch, repo: ghRepo, issue, verificationEvidence,
+      humanReviewPaths: securityReport.humanReviewPaths || [],
       allowExistingCommits: Boolean(operatorResume), requireNewPr: Boolean(operatorResume) });
     recordOperatorStage("publication-returned", { prNumber: pr?.number || null, prUrl: pr?.url || null });
   } catch (err) {
@@ -2162,7 +2163,12 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     stateId: stateIds.inReview,
     summary: `Pull request opened: ${pr.url}${pr.isDraft ? " (draft)" : ""}`,
     headline: `**Pull request opened:** ${pr.url}${pr.isDraft ? " (draft)" : ""}`,
-    sections: [formatUsageLine(usage)],
+    sections: [
+      formatUsageLine(usage),
+      ...(securityReport.humanReviewPaths?.length ? [
+        `Migration or auth/calendar-token change needs human review before merge: ${securityReport.humanReviewPaths.map((file) => `\`${file}\``).join(", ")}. The draft PR is not eligible for PR autonomy; \`lane-review\` requires \`sensitive-path-ack\` and a \`lane-review-ack: <reason>\` line.`,
+      ] : []),
+    ],
   });
   return { issue: issue.identifier, outcome: "in-review", pr: pr.url };
 }

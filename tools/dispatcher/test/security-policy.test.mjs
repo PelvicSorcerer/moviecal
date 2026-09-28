@@ -168,12 +168,12 @@ describe("classifyAction", () => {
     expect(classifyAction(command).verdict).toBe("hard-deny");
   });
 
-  it("flags a database migration as needs-human", () => {
-    expect(classifyAction("edit supabase/migrations/0042_add_column.sql").verdict).toBe("needs-human");
+  it("allows commands mentioning a database migration", () => {
+    expect(classifyAction("edit supabase/migrations/0042_add_column.sql").verdict).toBe("allow");
   });
 
-  it("flags auth route changes as needs-human", () => {
-    expect(classifyAction("edit src/app/auth/sign-in/route.ts").verdict).toBe("needs-human");
+  it("allows commands mentioning an auth route", () => {
+    expect(classifyAction("edit src/app/auth/sign-in/route.ts").verdict).toBe("allow");
   });
 
   it.each([

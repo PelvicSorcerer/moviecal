@@ -64,9 +64,10 @@ const NON_INCIDENT_CONCLUSIONS = new Set([
  * Job names that must never be repaired automatically, no matter how their
  * failure reads. `lane-migrate-prod` runs a production database migration;
  * `lane-smoke-post-deploy` observes production. "Anything adding a new
- * secret", "any production deploy", and "database migrations touching
- * existing tables" are already unconditional `Needs Human Decision` items
- * (docs/operators/local-execution.md §Security model), and a post-merge
+ * secret" and "any production deploy" remain human decisions. Migration
+ * file changes may publish as draft PRs but require human sign-off before
+ * merge (docs/operators/local-execution.md §Security model); running a
+ * production migration is still outside worker authority. A post-merge
  * observer is not a new exception to that list.
  *
  * Deliberately applied here rather than in `ci-outcomes.mjs`: widening the

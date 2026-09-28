@@ -167,10 +167,10 @@ export function declaredReadiness(issue = {}) {
 }
 
 /** Render the repository PR contract from dispatcher-proven facts only. */
-export function pullRequestReadinessEvidence(issue, verification = {}) {
+export function pullRequestReadinessEvidence(issue, verification = {}, { humanReviewPaths = [] } = {}) {
   const declared = declaredReadiness(issue);
   const verificationPassed = verification.status === "passed";
-  const autonomy = declared.autonomy === "eligible" && verificationPassed ? "eligible" : "disabled";
+  const autonomy = declared.autonomy === "eligible" && verificationPassed && humanReviewPaths.length === 0 ? "eligible" : "disabled";
   const localEvidence = verificationPassed
     ? `\`${VERIFY_COMMAND}\` passed; durable dispatcher record: \`${verification.artifactPath}\`.`
     : verification.status === "failed"

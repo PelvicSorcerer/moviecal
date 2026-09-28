@@ -4,6 +4,7 @@
 
 import { JsonStateStore } from "./state-store.mjs";
 import { hasDurablePassedVerification } from "./readiness-evidence.mjs";
+import { reviewRequiredPaths } from "./review-required-paths.mjs";
 
 export const AUTONOMY_DISABLE_LABEL = "autonomy:disabled";
 export const AUTONOMY_DISABLE_MARKER = /^\s*Autonomy:\s*disabled\s*$/im;
@@ -92,6 +93,7 @@ export function evaluatePrAutonomy({ issue, observation, repo, repairAttempts = 
   if (AUTONOMY_DISABLE_MARKER.test(String(observation.body || ""))) return deny("PR's autonomy kill switch is disabled");
   if (!hasRequiredEvidence(observation.body)) return deny("PR is missing complete explicit autonomy and no-human-testing evidence");
   if (!Array.isArray(observation.changedFiles) || observation.changedFiles.length === 0) return deny("PR has no changed-path evidence");
+  if (reviewRequiredPaths(observation.changedFiles).length) return deny("PR changes a migration or auth/calendar-token path requiring human review");
   if (observation.changedFiles.some((file) => !isAutonomySafePath(file))) return deny("PR changes a sensitive or outside-approved path");
   if (repairAttempts.some((attempt) => ["code-repair", "infrastructure-rerun"].includes(attempt.kind))) return deny("PR has automatic repair activity");
   const checks = observation.checks;
