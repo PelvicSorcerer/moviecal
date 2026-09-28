@@ -235,13 +235,17 @@ export function createMembershipsAggregate(args: {
       return Object.fromEntries(entries);
     },
 
-    async listMembersForWatchlist(watchlistId: string): Promise<WatchlistMember[]> {
-      const { data, error } = await args.adminClient
+    async listMembersForWatchlist(
+      watchlistId: string,
+      options?: { includePending?: boolean },
+    ): Promise<WatchlistMember[]> {
+      const base = args.adminClient
         .from('watchlist_memberships')
         .select(watchlistMembershipSelect)
-        .eq('watchlist_id', watchlistId)
-        .not('accepted_at', 'is', null)
-        .order('accepted_at', { ascending: true });
+        .eq('watchlist_id', watchlistId);
+      const { data, error } = await (
+        options?.includePending ? base : base.not('accepted_at', 'is', null)
+      ).order('accepted_at', { ascending: true });
 
       if (error) {
         throwSupabaseError(error);
