@@ -303,7 +303,7 @@ describe.skipIf(!supabaseReachable || !credentialsPresent)(
             repository: repositoryFor('owner'),
             watchlistId: sharedId,
           }),
-        ).resolves.toBeUndefined();
+        ).resolves.toMatchObject({ deleted: true });
 
         expect(await watchlistRow(sharedId)).toBeNull();
 
