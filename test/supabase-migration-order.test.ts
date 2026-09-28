@@ -19,12 +19,24 @@ const migrations = readdirSync('supabase/migrations')
   .sort();
 
 describe('Supabase migration ordering', () => {
-  it('applies the MOV-330 invariants last, on unique timestamps', () => {
+  it('applies ownership and creation fixes after their prerequisites, on unique timestamps', () => {
     const timestamps = migrations.map((filename) => filename.split('_')[0]);
 
-    expect(migrations.at(-1)).toBe(
+    const invariants = migrations.indexOf(
       '20260924000000_mov_330_watchlist_ownership_invariants.sql',
     );
+    expect(invariants).toBeGreaterThanOrEqual(0);
+    for (const prerequisite of [
+      '20260625150000_issue_69_multi_watchlist_schema.sql',
+      '20260710000000_issue_200_ensure_authenticated_grants.sql',
+    ]) {
+      const index = migrations.indexOf(prerequisite);
+      expect(index).toBeGreaterThanOrEqual(0);
+      expect(invariants).toBeGreaterThan(index);
+    }
+    expect(migrations.indexOf(
+      '20260928183342_mov_407_watchlist_insert_returning.sql',
+    )).toBeGreaterThan(invariants);
     expect(new Set(timestamps).size).toBe(timestamps.length);
   });
 });
