@@ -5,6 +5,7 @@ import { resolveBearerIdentity } from '../../../../../lib/auth/bearer-identity';
 import { createServerSupabaseServiceRoleClient } from '../../../../../lib/supabase/server';
 import { createSupabaseWatchlistRepository } from '../../../../../lib/supabase/watchlist';
 import {
+  deleteSharedWatchlist,
   getAuthorizedWatchlistDetail,
   parsePageRequest,
   renameSharedWatchlist,
@@ -97,6 +98,39 @@ export async function PATCH(
       return apiError('Watchlist not found.', 404);
     }
 
+    return handleDomainError(error);
+  }
+}
+
+/**
+ * Permanently deletes a shared watchlist the bearer owns. All authorization
+ * and cascade rules live in `deleteSharedWatchlist`; this route only adds the
+ * bearer transport and the stable response mapping.
+ */
+export async function DELETE(
+  request: Request,
+  context: { params: Promise<{ watchlistId: string }> },
+): Promise<NextResponse> {
+  const identity = await resolveBearerIdentity(request);
+
+  if (!identity) {
+    return apiError('Unauthorized.', 401);
+  }
+
+  const { watchlistId } = await context.params;
+
+  try {
+    await deleteSharedWatchlist({
+      actorUserId: identity.user.id,
+      repository: createSupabaseWatchlistRepository({
+        userClient: identity.userClient,
+        adminClient: createServerSupabaseServiceRoleClient(),
+      }),
+      watchlistId,
+    });
+
+    return new NextResponse(null, { status: 204 });
+  } catch (error) {
     return handleDomainError(error);
   }
 }
