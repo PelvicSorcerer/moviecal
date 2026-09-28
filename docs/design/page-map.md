@@ -21,6 +21,7 @@ Key pages and API routes in the current web app. The shared-list operations belo
 - `/api/watchlist/invite/accept` — authenticated `POST` to accept a valid invitation as an editor.
 - `/api/watchlist/shared/[watchlistId]/members/[membershipId]` — owner-only `DELETE` to remove a member.
 - `/api/watchlist/shared/[watchlistId]/membership` — `DELETE` for an editor to leave a shared watchlist (owners are refused).
+- `/api/watchlist/shared/[watchlistId]` — owner-only `DELETE` to permanently delete a shared watchlist. Cascades its items, memberships, and invite links; refuses a personal watchlist and any non-owner caller without mutating anything.
 - `/api/watchlist/[id]` — authenticated `DELETE` watchlist operation scoped to the requested `watchlist_id` target when present, or the actor's personal watchlist otherwise.
 - `/api/calendar/[token]` — public tokenized calendar feed endpoint returning `text/calendar`.
 - `/api/cron/refresh-releases` — protected scheduled release-date refresh endpoint.
