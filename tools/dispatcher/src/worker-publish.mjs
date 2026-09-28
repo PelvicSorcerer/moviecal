@@ -13,7 +13,16 @@ export function defaultRunner(command, args, opts = {}) {
   return execFileSync(command, args, { encoding: "utf8", ...opts });
 }
 
-export function pullRequestBody(issue, verificationEvidence) {
+function humanReviewNote(humanReviewPaths) {
+  return [
+    "## Human Review Required",
+    "",
+    `Migration or auth/calendar-token change requires human review: ${humanReviewPaths.map((file) => `\`${file}\``).join(", ")}.`,
+    "The repo owner must provide the `sensitive-path-ack` label and a `lane-review-ack: <reason>` PR body line before merge.",
+  ].join("\n");
+}
+
+export function pullRequestBody(issue, verificationEvidence, humanReviewPaths = []) {
   return [
     "## Summary",
     "",
@@ -23,6 +32,7 @@ export function pullRequestBody(issue, verificationEvidence) {
     "",
     "- Automated coverage and any deferred coverage remain subject to the Linear issue's Testing Expectations and human review.",
     "- GitHub CI remains authoritative for required-check results.",
+    ...(humanReviewPaths.length ? ["", humanReviewNote(humanReviewPaths)] : []),
     "",
     "## Verification",
     "",
@@ -30,7 +40,7 @@ export function pullRequestBody(issue, verificationEvidence) {
       ? "- [x] `npm run verify` (dispatcher-captured structured result)"
       : "- [ ] `npm run verify` (no durable passing dispatcher record)",
     "",
-    pullRequestReadinessEvidence(issue, verificationEvidence),
+    pullRequestReadinessEvidence(issue, verificationEvidence, { humanReviewPaths }),
     "",
     `**Linear:** Fixes ${issue.identifier}`,
     "",
@@ -43,7 +53,7 @@ export function pullRequestBody(issue, verificationEvidence) {
  * execFileSync (no shell), branch identity is checked again immediately
  * before the push, and a non-fast-forward remote rejects naturally.
  */
-export function publishWorkerResult({ worktreePath, branch, repo, issue, verificationEvidence, allowExistingCommits = false, requireNewPr = false, runner = defaultRunner } = {}) {
+export function publishWorkerResult({ worktreePath, branch, repo, issue, verificationEvidence, humanReviewPaths = [], allowExistingCommits = false, requireNewPr = false, runner = defaultRunner } = {}) {
   if (!branch?.startsWith(`agent/${issue?.identifier}-`)) {
     throw new Error("assigned branch does not match the dispatcher issue namespace");
   }
@@ -87,8 +97,20 @@ export function publishWorkerResult({ worktreePath, branch, repo, issue, verific
       "--title",
       `${issue.identifier}: ${issue.title}`,
       "--body",
-      pullRequestBody(issue, verificationEvidence),
+      pullRequestBody(issue, verificationEvidence, humanReviewPaths),
     ], { cwd: worktreePath });
+    pr = findPrForBranch(branch, repo, runner);
+  } else if (humanReviewPaths.length) {
+    // A retry may reuse a PR whose prior body predates the sensitive diff.
+    // Keep human-authored evidence, but restore the required draft handoff.
+    if (!pr.isDraft) runner("gh", ["pr", "ready", String(pr.number), "--undo", "--repo", repo], { cwd: worktreePath });
+    const { body = "" } = JSON.parse(runner("gh", ["pr", "view", String(pr.number), "--repo", repo, "--json", "body"], { cwd: worktreePath }));
+    const disabledBody = /^Autonomy:[^\r\n]*$/im.test(body)
+      ? body.replace(/^Autonomy:[^\r\n]*$/gim, "Autonomy: disabled")
+      : `${body}\n\nAutonomy: disabled`;
+    const reviewNote = humanReviewNote(humanReviewPaths);
+    runner("gh", ["pr", "edit", String(pr.number), "--repo", repo, "--body",
+      disabledBody.includes(reviewNote) ? disabledBody : `${disabledBody}\n\n${reviewNote}`], { cwd: worktreePath });
     pr = findPrForBranch(branch, repo, runner);
   }
   if (!pr) throw new Error(`GitHub did not return a PR for ${branch} after creation`);

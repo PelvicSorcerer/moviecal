@@ -12,6 +12,7 @@ import { UsageLimitStore } from "../src/usage-limit.mjs";
 import { worktreeName } from "../src/preflight.mjs";
 import { captureWorkerUsage, WorkerUsageStore } from "../src/worker-usage.mjs";
 import { workerInvocation } from "../src/worker-routing.mjs";
+import { pullRequestBody } from "../src/worker-publish.mjs";
 
 const STATE_IDS = {
   blocked: "state-blocked",
@@ -516,6 +517,36 @@ describe("runOnce", () => {
     }));
     expect(ctx.findPrForBranchFn).not.toHaveBeenCalled();
     expect(result.pr).toBe("https://github.com/owner/repo/pull/4");
+  });
+
+  it("publishes a migration diff as a draft with a human-review run comment", async () => {
+    const issue = {
+      ...ISSUE,
+      description: "## Manual Verification\nHuman testing: not-required\nRationale: deterministic coverage.\nAutonomy: eligible",
+    };
+    let prBody;
+    const publishWorkerResultFn = vi.fn(({ issue: publishedIssue, verificationEvidence, humanReviewPaths }) => {
+      prBody = pullRequestBody(publishedIssue, verificationEvidence, humanReviewPaths);
+      return { number: 4, url: "https://github.com/owner/repo/pull/4", isDraft: true, headSha: "sha-4" };
+    });
+    const ctx = baseCtx({
+      publishWorkerResultFn,
+      captureVerificationEvidenceFn: () => ({ status: "passed", artifactPath: "/fake/logs/x/verification-evidence.json" }),
+      auditWorkerResultFn: vi.fn(() => ({
+        ok: true, violations: [], warnings: [],
+        humanReviewPaths: ["supabase/migrations/20260901000000_shared_lists.sql"],
+      })),
+    });
+    const [result] = await runOnce([issue], ctx);
+    expect(result).toMatchObject({ outcome: "in-review" });
+    expect(prBody).toContain("Migration or auth/calendar-token change requires human review");
+    expect(prBody).toContain("Autonomy: disabled");
+    expect(publishWorkerResultFn).toHaveBeenCalledWith(expect.objectContaining({
+      humanReviewPaths: ["supabase/migrations/20260901000000_shared_lists.sql"],
+    }));
+    const comment = ctx.linearClient.calls.find((call) => call.type === "addComment" && call.body.includes("Migration or auth/calendar-token change needs human review"));
+    expect(comment.body).toContain("not eligible for PR autonomy");
+    expect(comment.body).toContain("sensitive-path-ack");
   });
 
   it("fails closed when the trusted dispatcher publisher is not configured", async () => {

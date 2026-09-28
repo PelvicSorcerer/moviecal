@@ -42,6 +42,7 @@
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { REVIEW_REQUIRED_PATH_PATTERNS } from "../tools/dispatcher/src/review-required-paths.mjs";
 
 // A sensitive-path finding is a `block` by default. It can be downgraded to a
 // `warn` (still printed, still in the summary comment — fully auditable) only
@@ -63,6 +64,7 @@ const AI_ACK_LABEL = "lane-review-ai-ack";
 const AI_ACK_MARKER_RE = /^lane-review-ai-ack:[ \t]*(\S.*?)\s*$/im;
 
 const SENSITIVE_PATH_PATTERNS = [
+  ...REVIEW_REQUIRED_PATH_PATTERNS,
   /^\.github\/workflows\//,
   /^AGENTS\.md$/,
   /^\.github\/copilot-instructions\.md$/,

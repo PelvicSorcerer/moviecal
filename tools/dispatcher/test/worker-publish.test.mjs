@@ -11,6 +11,7 @@ function runnerFixture({ branch = "agent/MOV-42-fix-the-thing", dirty = " M src/
   const calls = [];
   let created = false;
   let committed = false;
+  let restoredDraft = false;
   const runner = (command, args, opts) => {
     calls.push({ command, args, opts });
     if (command === "git" && args[0] === "branch") return `${branch}\n`;
@@ -25,8 +26,11 @@ function runnerFixture({ branch = "agent/MOV-42-fix-the-thing", dirty = " M src/
     if (command === "git" && args[0] === "push") return "";
     if (command === "gh" && args[0] === "pr" && args[1] === "list") {
       const pr = existingPr || (created ? { number: 9, url: "https://github.com/o/r/pull/9", isDraft: true, headRefOid: "abc" } : null);
-      return JSON.stringify(pr ? [pr] : []);
+      return JSON.stringify(pr ? [{ ...pr, isDraft: restoredDraft || pr.isDraft }] : []);
     }
+    if (command === "gh" && args[0] === "pr" && args[1] === "view") return JSON.stringify({ body: "Human-authored notes\n\nAutonomy: eligible" });
+    if (command === "gh" && args[0] === "pr" && args[1] === "edit") return "";
+    if (command === "gh" && args[0] === "pr" && args[1] === "ready") { restoredDraft = true; return ""; }
     if (command === "gh" && args[0] === "pr" && args[1] === "create") {
       created = true;
       return "https://github.com/o/r/pull/9\n";
@@ -73,6 +77,24 @@ describe("trusted worker publication", () => {
     expect(calls.some((call) => call.command === "gh" && call.args[1] === "create")).toBe(false);
   });
 
+  it.each([true, false])("adds review evidence to a reused PR and restores draft if needed (was draft: %s)", (isDraft) => {
+    const { runner, calls } = runnerFixture({ existingPr: { number: 7, url: "url", isDraft, headRefOid: "def" } });
+    const pr = publishWorkerResult({
+      worktreePath: "/tmp/wt", branch: "agent/MOV-42-fix-the-thing", repo: "owner/repo", issue: ISSUE,
+      humanReviewPaths: ["supabase/migrations/fixture.sql"], runner,
+    });
+    expect(pr).toMatchObject({ number: 7, isDraft: true });
+    expect(calls.some((call) => call.command === "gh" && call.args[1] === "create")).toBe(false);
+    expect(calls.some((call) => call.command === "gh" && call.args[1] === "ready" && call.args.includes("--undo"))).toBe(!isDraft);
+    const edit = calls.find((call) => call.command === "gh" && call.args[1] === "edit");
+    const body = edit.args.at(edit.args.indexOf("--body") + 1);
+    expect(body).toContain("Human-authored notes");
+    expect(body).toContain("Autonomy: disabled");
+    expect(body).not.toContain("Autonomy: eligible");
+    expect(body).toContain("Migration or auth/calendar-token change requires human review");
+    expect(body).toContain("supabase/migrations/fixture.sql");
+  });
+
   it.each([
     ["wrong branch", { branch: "master" }, /expected/],
     ["no filesystem changes", { dirty: "" }, /no audited filesystem changes/],
@@ -112,6 +134,13 @@ describe("trusted worker publication", () => {
     const body = pullRequestBody(ISSUE, { status: "incomplete" });
     expect(body).toContain("Autonomy: disabled");
     expect(body).toContain("no durable successful exact `npm run verify` execution");
+  });
+
+  it("states human review and disables autonomy for a changed migration", () => {
+    const body = pullRequestBody(ISSUE, { status: "passed", artifactPath: "/logs/verification-evidence.json" }, ["supabase/migrations/20260901000000_shared_lists.sql"]);
+    expect(body).toContain("Migration or auth/calendar-token change requires human review");
+    expect(body).toContain("sensitive-path-ack");
+    expect(body).toContain("Autonomy: disabled");
   });
 });
 

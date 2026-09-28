@@ -84,6 +84,21 @@ describe("MOV-273 PR autonomy path policy", () => {
     }), repo, enabled: true })).toMatchObject({ eligible: true, action: "ready" });
   });
 
+  it.each([
+    "supabase/migrations/20260901000000_shared_lists.sql",
+    "src/app/auth/sign-in/route.ts",
+    "src/lib/auth/session.ts",
+    "src/app/settings/calendar/actions.ts",
+    "src/app/api/calendar/[token]/route.ts",
+    "src/lib/calendar-tokens.ts",
+    "src/lib/supabase/calendar-tokens.ts",
+  ])("never grants PR autonomy to a human-review path: %s", (file) => {
+    expect(evaluatePrAutonomy({ issue, observation: observation({ changedFiles: [file] }), repo, enabled: true })).toMatchObject({
+      eligible: false,
+      reason: "PR changes a migration or auth/calendar-token path requiring human review",
+    });
+  });
+
   it("uses the required review check policy and blocks requested changes before auto-merge", () => {
     expect(evaluatePrAutonomy({ issue, observation: observation({ isDraft: false }), repo, enabled: true })).toMatchObject({ eligible: true, action: "merge" });
     expect(evaluatePrAutonomy({ issue, observation: observation({ isDraft: false, review: { decision: "CHANGES_REQUESTED", requestedChanges: [], blockingRequiredChecks: [] } }), repo, enabled: true }).reason).toMatch(/blocking review/);
@@ -123,7 +138,7 @@ describe("MOV-273 PR autonomy path policy", () => {
     ...["area:auth", "area:calendar", "area:database", "area:deployment", "area:security", "security:review"].map((label) => [label, { labels: [...issue.labels, label] }, observation(), true, /human or sensitive/]),
     ["manual evidence", {}, observation({ body: "Autonomy: eligible\nHuman testing: required" }), true, /evidence/],
     ["non-durable local evidence", {}, observation({ body: body.replace("; durable dispatcher record: `/logs/MOV-1/verification-evidence.json`.", " (passed)") }), true, /evidence/],
-    ["mixed allowed and denied paths", {}, observation({ changedFiles: ["src/lib/format-release-date.ts", "src/lib/auth/identity.ts"] }), true, /sensitive or outside-approved/],
+    ["mixed allowed and denied paths", {}, observation({ changedFiles: ["src/lib/format-release-date.ts", "src/lib/auth/identity.ts"] }), true, /requiring human review/],
     ["stale SHA", {}, observation({ checks: { ...observation().checks, ignoredStale: 1 } }), true, /stale/],
     ["missing check", {}, observation({ checks: { ...observation().checks, missingRequired: ["lane-unit"] } }), true, /incomplete/],
     ["old check SHA", {}, observation({ checks: { ...observation().checks, checks: observation().checks.checks.map((check) => check.name === "lane-unit" ? { ...check, sha: "old" } : check) } }), true, /latest SHA/],
