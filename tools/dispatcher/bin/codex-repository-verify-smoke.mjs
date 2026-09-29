@@ -8,8 +8,8 @@ import path from "node:path";
 import http from "node:http";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { ensureWorktreeDependencies } from "../src/dependency-install.mjs";
-import { prepareWorkerDependencies, spawnWorker } from "../src/worker-spawn.mjs";
+import { ensureWorktreeDependencies, writeDependencyInstallRecord } from "../src/dependency-install.mjs";
+import { spawnWorker } from "../src/worker-spawn.mjs";
 import { workerInvocation } from "../src/worker-routing.mjs";
 import { prepareCodexContainment, resolveCodexExecutable } from "../src/codex-containment.mjs";
 import { auditWorkerResult, isInsideWorkerSandboxEnv, repositoryGuardPaths, writeWorkerAudit } from "../src/worker-guard.mjs";
@@ -37,7 +37,8 @@ if (git(["rev-parse", "HEAD"], checkout) !== head) throw new Error("fixture clon
 fs.mkdirSync(path.join(home, ".codex"), { recursive: true, mode: 0o700 });
 fs.writeFileSync(path.join(home, ".codex", "auth.json"), "{}\n", { mode: 0o600 });
 
-const dependencyInstall = await prepareWorkerDependencies(ensureWorktreeDependencies, { worktreePath: checkout, logDir });
+const dependencyInstall = await ensureWorktreeDependencies({ worktreePath: checkout, logDir });
+writeDependencyInstallRecord(logDir, dependencyInstall);
 const initial = { issue: "MOV-416", head, branch, installedCli: execFileSync(resolveCodexExecutable(), ["--version"], { encoding: "utf8" }).trim(), dependencyInstall: { ok: dependencyInstall?.ok, status: dependencyInstall?.status, reason: dependencyInstall?.reason || null } };
 if (!dependencyInstall?.ok) {
   fs.writeFileSync(path.join(evidenceRoot, "proof.json"), JSON.stringify({ ...initial, passed: false, reason: "trusted dependency install failed; no worker started" }, null, 2) + "\n");
@@ -76,7 +77,7 @@ if (!dependencyInstall?.ok) {
     `model_providers.fixture={name="fixture",base_url="http://127.0.0.1:${provider.address().port}/v1",wire_api="responses",requires_openai_auth=false,supports_websockets=false}`);
   let result;
   try {
-    result = await spawnWorker({ invocation, cwd: checkout, logDir, dependencyInstall,
+    result = await spawnWorker({ invocation, cwd: checkout, logDir,
       brief: "This is a disposable MOV-416 verification fixture. The trusted installer already prepared dependencies. Do not install anything, use Git/GitHub, browse, delegate, or change existing source. Write only mov-416-marker.txt containing fixture-ok; then run literal npm run verify synchronously and wait for its final result. Report that result and stop.",
       securityContext: { mode: "implementation", home }, signal: AbortSignal.timeout(480000),
       repositoryGuardPathsFn: () => repositoryGuardPaths(checkout, undefined, undefined, home),
@@ -94,7 +95,7 @@ if (!dependencyInstall?.ok) {
   const marker = fs.existsSync(markerPath) && fs.readFileSync(markerPath, "utf8").trim() === "fixture-ok";
   const noWorkerInstall = !audit.actions.some((action) => /\bnpm\s+(ci|install)\b/.test(JSON.stringify(action)));
   const passed = result.exitCode === 0 && audit.ok && verification.status === "passed" && marker && noWorkerInstall
-    && manifest.dependencyInstall?.ok === true && manifest.securityGuard?.arrangement === "codex-sibling-exec-server";
+    && dependencyInstall.ok === true && manifest.securityGuard?.arrangement === "codex-sibling-exec-server";
   const proof = { ...initial, passed, workerExitCode: result.exitCode, auditOk: audit.ok, auditSha256: auditRecord.sha256,
     violations: audit.violations, verificationStatus: verification.status, verifyExecutions: verification.executions.length,
     marker, noWorkerInstall, guard: manifest.securityGuard, evidenceRoot, requestCount };
