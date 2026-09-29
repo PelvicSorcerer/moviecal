@@ -15,7 +15,7 @@ import { confirmRoutingUnchanged, resolveRouting, resolveDispatchWorker, workerP
 import { confirmStillClaimable, evaluateLocalDispatch } from "./dispatch-eligibility.mjs";
 import { generateBrief } from "./brief.mjs";
 import { collectRepositoryContext } from "./repository-context.mjs";
-import { tailLogs } from "./worker-spawn.mjs";
+import { dependencyInstallBlockerSections, prepareWorkerDependencies, tailLogs, writeDependencyInstallFailureManifest } from "./worker-spawn.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "./worker-guard.mjs";
 import { classifyWorkerFailure, NESTED_SANDBOX_CRASH } from "./failure-classification.mjs";
 import { classifyCredentialFailure, CREDENTIAL_FAILURE } from "./credential-failure.mjs";
@@ -50,6 +50,7 @@ import { budgetUnitForWorker } from "./budget-unit.mjs";
  * @param {string} ctx.logRoot
  * @param {(args: object) => Promise<{exitCode: number, logDir: string}>} ctx.spawnWorkerFn - given a `signal` (AbortSignal, MOV-138), a real
  *   implementation should kill the worker's process group when it fires; see worker-spawn.mjs.
+ * @param {(args: {worktreePath: string, logDir: string, onSpawn?: Function}) => Promise<object>} [ctx.prepareWorktreeDependenciesFn] - MOV-412: the trusted pre-spawn dependency install (dependency-install.mjs); a not-ok result or a throw starts no worker and escalates to Needs Human Decision. Omitted by test doubles, which then skip the step
  * @param {number} ctx.workerTimeoutMs - MOV-138: a worker that hasn't exited after this many ms is killed and its issue moved to Needs Human Decision
  * @param {(worktreePath: string) => string[]} [ctx.uncommittedChangesFn] - MOV-137; defaults to "always clean" if not provided (tests that don't care about this can omit it)
  * @param {(worktreePath: string, authorizedPath: string) => {applied: boolean, path?: string, reason?: string}} [ctx.applyStagedWorkflowEditFn] - MOV-121; defaults to a no-op if not provided (tests that don't care about this can omit it)
@@ -668,6 +669,7 @@ async function dispatchIssue(issue, ctx) {
     ghRepo,
     logRoot,
     spawnWorkerFn,
+    prepareWorktreeDependenciesFn = null,
     workerTimeoutMs,
     uncommittedChangesFn = () => [],
     applyStagedWorkflowEditFn = () => ({ applied: false, reason: "not configured" }),
@@ -1055,6 +1057,7 @@ async function dispatchIssue(issue, ctx) {
         ghRepo,
         logRoot,
         spawnWorkerFn,
+        prepareWorktreeDependenciesFn,
         workerTimeoutMs,
         uncommittedChangesFn,
         applyStagedWorkflowEditFn,
@@ -1164,6 +1167,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     ghRepo,
     logRoot,
     spawnWorkerFn,
+    prepareWorktreeDependenciesFn = null,
     workerTimeoutMs,
     uncommittedChangesFn,
     applyStagedWorkflowEditFn,
@@ -1279,6 +1283,36 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
   const logDir = operatorResume ? path.join(logRoot, entry.name, "operator-resume", operatorResume.attemptId)
     : path.join(logRoot, entry.name, continuation ? "budget-continuation" : "");
 
+  // MOV-410/MOV-412: the dispatcher prepares the locked toolchain itself before
+  // every worker start in this worktree. Worker-side installs are prohibited and
+  // have no fallback, so a failed or throwing install starts no worker.
+  recordOperatorStage("dependency-install");
+  const dependencyInstall = await prepareWorkerDependencies(prepareWorktreeDependenciesFn, {
+    worktreePath: entry.path,
+    logDir,
+    // npm's process group writes the worktree like a worker would, so startup
+    // recovery must be able to find and kill it after a dispatcher crash.
+    onSpawn: ({ pid }) => worktreeManager.setWorkerPid?.(issue.identifier, pid),
+  });
+  if (dependencyInstall && !dependencyInstall.ok) {
+    let manifestPath = null;
+    try {
+      manifestPath = writeDependencyInstallFailureManifest(logDir, { cwd: entry.path, dependencyInstall });
+    } catch (error) {
+      logger.error(`Could not write the dependency-install manifest for ${issue.identifier}: ${error.message}`);
+    }
+    worktreeManager.setWorkerPid?.(issue.identifier, null);
+    worktreeManager.markStatus(issue.identifier, "failed");
+    recordOperatorStage("dependency-install-failed", { reason: dependencyInstall.reason });
+    await publisher.publish("error", {
+      stateId: stateIds.needsHumanDecision,
+      summary: `Dispatcher could not prepare dependencies for ${issue.identifier} (${dependencyInstall.reason}); no worker started.`,
+      headline: "**Dependency install failed; no worker started.**",
+      sections: dependencyInstallBlockerSections(dependencyInstall, { manifestPath }),
+    });
+    return { issue: issue.identifier, outcome: "dependency-install-failed", reason: dependencyInstall.reason };
+  }
+
   // Two abort controllers with different jobs: `abortController` kills the
   // worker's process group (MOV-137/138), `watcherAbort` retires the stop
   // watcher once the worker has settled so no timer outlives the attempt.
@@ -1326,6 +1360,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
       },
       iosSimLeaseId,
       trial,
+      dependencyInstall,
       // MOV-386: warn as soon as the worker's own init event shows a
       // permission mode or tool set other than the one requested. The usage
       // record captures the same check from stdout.log once the run ends.

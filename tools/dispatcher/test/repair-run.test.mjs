@@ -146,6 +146,41 @@ describe("runRepairPass (MOV-190)", () => {
     expect(ctx.spawnWorkerFn.mock.calls[0][0]).not.toHaveProperty("onWorkerInit");
   });
 
+  it("prepares dependencies in the retained checkout before the repair worker starts (MOV-412)", async () => {
+    const ctx = context();
+    const events = [];
+    const install = { ok: true, status: "current" };
+    ctx.prepareWorktreeDependenciesFn = vi.fn(async ({ worktreePath }) => { events.push(["install", worktreePath]); return install; });
+    ctx.spawnWorkerFn = vi.fn(async ({ cwd }) => { events.push(["spawn", cwd]); return { exitCode: 0 }; });
+
+    const [result] = await runRepairPass(ctx);
+
+    expect(result.outcome).toBe("repaired");
+    expect(events).toEqual([["install", ENTRY.path], ["spawn", ENTRY.path]]);
+    expect(ctx.spawnWorkerFn.mock.calls[0][0].dependencyInstall).toBe(install);
+  });
+
+  it.each([
+    ["a failed", async () => ({ ok: false, status: "failed", reason: "dirty-dependency-inputs", detail: "package-lock.json (modified)", dirtyInputs: [{ path: "package-lock.json", reason: "modified" }] }), "dirty-dependency-inputs"],
+    ["a throwing", async () => { throw new Error("boom"); }, "unexpected-error"],
+  ])("%s install starts no repair worker and hands the PR to a human (MOV-412)", async (_name, install, reason) => {
+    const ctx = context();
+    ctx.prepareWorktreeDependenciesFn = vi.fn(install);
+
+    const [result] = await runRepairPass(ctx);
+
+    expect(result).toMatchObject({ issue: ENTRY.id, outcome: "dependency-install-failed" });
+    expect(result.reason).toContain(reason);
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(0);
+    expect(ctx.publishRepairResultFn).not.toHaveBeenCalled();
+    const [comment] = ctx.commentOnPullRequestFn.mock.calls.map(([args]) => args.body);
+    expect(comment).toContain(`Dependency install blocked: \`${reason}\``);
+    expect(comment).toMatch(/no worker-side fallback/);
+    expect(ctx.ledger.attempts(ENTRY.id).find((attempt) => attempt.kind === "code-repair")).toMatchObject({ outcome: "failed" });
+    const logDir = path.join(ctx.logRoot, `${ENTRY.name}-repair-${HEAD}`);
+    expect(JSON.parse(fs.readFileSync(path.join(logDir, "manifest.json"), "utf8"))).toMatchObject({ workerStarted: false, dependencyInstall: { ok: false, reason } });
+  });
+
   it("re-runs an admitted transient failure without starting a worker or publishing code", async () => {
     const ctx = context({ observed: observation({ name: "lane-browser", conclusion: "TIMED_OUT" }) });
     ctx.rerunFailedJobsFn.mockReturnValue({ rerun: [{ id: 9, name: "browser", conclusion: "timed_out" }], skipped: [], errors: [] });

@@ -2476,6 +2476,23 @@ describe("runOnce", () => {
         });
       });
 
+      it("prepares dependencies in the retained worktree before the resumed worker starts, and starts none if that fails (MOV-412)", async () => {
+        const events = [];
+        const ok = resumeCtx({ ctx: {
+          prepareWorktreeDependenciesFn: vi.fn(async ({ worktreePath }) => { events.push(["install", worktreePath]); return { ok: true, status: "current" }; }),
+          spawnWorkerFn: vi.fn(async ({ cwd, logDir }) => { events.push(["spawn", cwd]); return { exitCode: 0, logDir }; }),
+        } });
+        expect((await runOnce([ISSUE], ok))[0].outcome).toBe("in-review");
+        expect(events).toEqual([["install", RESUME_PATH], ["spawn", RESUME_PATH]]);
+
+        const failed = resumeCtx({ ctx: { prepareWorktreeDependenciesFn: vi.fn(async () => ({ ok: false, status: "failed", reason: "npm-failed", detail: "npm ci exited with code 1", step: "ci", exitCode: 1, args: ["ci"], command: "npm" })) } });
+        const [result] = await runOnce([ISSUE], failed);
+        expect(result).toMatchObject({ outcome: "dependency-install-failed", reason: "npm-failed" });
+        expect(failed.spawnWorkerFn).toHaveBeenCalledTimes(0);
+        expect(failed.worktreeManager.statusCalls.at(-1)).toMatchObject({ id: "MOV-1", status: "failed" });
+        expect(failed.linearClient.calls.filter((c) => c.type === "moveToState").at(-1).stateId).toBe(STATE_IDS.needsHumanDecision);
+      });
+
       it("tells Linear and the worker that this is a resume of the retained worktree", async () => {
         const ctx = resumeCtx();
 
@@ -3316,6 +3333,40 @@ describe("MOV-367 turn budget continuation", () => {
     expect(writeTurns.filter((text) => text.includes("WORKER_PROGRESS.md"))).toHaveLength(steeringEnabled ? 1 : 0);
   });
 
+  it("prepares dependencies before the budget-stopped attempt and again before its continuation (MOV-412)", async () => {
+    const { ctx } = budgetContext();
+    const events = [];
+    const spawn = ctx.spawnWorkerFn;
+    ctx.prepareWorktreeDependenciesFn = vi.fn(async ({ logDir }) => {
+      events.push(`install:${path.basename(logDir)}`);
+      return { ok: true, status: "current" };
+    });
+    ctx.spawnWorkerFn = vi.fn((args) => {
+      events.push(`spawn:${path.basename(args.logDir)}`);
+      return spawn(args);
+    });
+    const [result] = await runOnce([ISSUE], ctx);
+    expect(result.outcome).toBe("in-review");
+    const name = worktreeName(ISSUE.identifier, ISSUE.title);
+    expect(events).toEqual([`install:${name}`, `spawn:${name}`, "install:budget-continuation", "spawn:budget-continuation"]);
+  });
+
+  it("starts no continuation worker when the continuation's dependency install fails (MOV-412)", async () => {
+    const { ctx } = budgetContext();
+    ctx.logRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mov412-continuation-"));
+    try {
+      ctx.prepareWorktreeDependenciesFn = vi.fn()
+        .mockResolvedValueOnce({ ok: true, status: "current" })
+        .mockRejectedValueOnce(new Error("disk vanished"));
+      const [result] = await runOnce([ISSUE], ctx);
+      expect(result).toMatchObject({ outcome: "dependency-install-failed", reason: "unexpected-error" });
+      expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+      expect(ctx.publishWorkerResultFn).not.toHaveBeenCalled();
+      const logDir = path.join(ctx.logRoot, worktreeName(ISSUE.identifier, ISSUE.title), "budget-continuation");
+      expect(JSON.parse(fs.readFileSync(path.join(logDir, "manifest.json"), "utf8")).dependencyInstall).toMatchObject({ ok: false, reason: "unexpected-error", detail: expect.stringContaining("disk vanished") });
+    } finally { fs.rmSync(ctx.logRoot, { recursive: true, force: true }); }
+  });
+
   it("treats a clean exit after the wrap-up prompt with a progress file as a budget stop", async () => {
     const { ctx, writeTurns } = budgetContext({ steeringEnabled: true });
     let starts = 0;
@@ -3512,5 +3563,61 @@ describe("iOS Companion App worker-lane simulator lease (MOV-311)", () => {
     expect(result.outcome).toBe("stopped");
     expect(releaseIosSimLeaseFn).toHaveBeenCalledWith("lease-stop");
     releaseWorker();
+  });
+});
+
+describe("pre-spawn dependency install (MOV-412)", () => {
+  let logRoot;
+  beforeEach(() => { logRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mov412-run-loop-")); });
+  afterEach(() => { fs.rmSync(logRoot, { recursive: true, force: true }); });
+
+  const FAILED_INSTALL = { ok: false, status: "failed", reason: "timeout", detail: "npm ci exceeded 600000 ms; its process group was killed", step: "ci", command: "npm", args: ["ci", "--ignore-scripts"], worktreePath: "/fake/worktrees/x" };
+
+  it.each([
+    ["claude", [], async () => FAILED_INSTALL, "timeout"],
+    ["codex", ["worker:codex"], async () => FAILED_INSTALL, "timeout"],
+    ["claude", [], async () => { throw new Error("spawn EACCES"); }, "unexpected-error"],
+    ["codex", ["worker:codex"], async () => undefined, "unexpected-error"],
+  ])("a failed %s install starts no worker, marks the worktree failed and posts the blocker", async (_worker, labels, install, reason) => {
+    const ctx = baseCtx({ logRoot, prepareWorktreeDependenciesFn: vi.fn(install) });
+    const [result] = await runOnce([{ ...ISSUE, labels: [...ISSUE.labels, ...labels] }], ctx);
+
+    expect(result).toMatchObject({ outcome: "dependency-install-failed", reason });
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(0);
+    expect(ctx.auditWorkerResultFn).not.toHaveBeenCalled();
+    expect(ctx.publishWorkerResultFn).not.toHaveBeenCalled();
+    expect(ctx.worktreeManager.statusCalls).toEqual([{ id: "MOV-1", status: "failed" }]);
+    const moves = ctx.linearClient.calls.filter((c) => c.type === "moveToState").map((c) => c.stateId);
+    expect(moves).toEqual([STATE_IDS.agentWorking, STATE_IDS.needsHumanDecision]);
+    const blocker = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1).body;
+    expect(blocker).toContain(`Dependency install blocked: \`${reason}\``);
+    expect(blocker).toMatch(/no worker-side fallback/);
+    const logDir = path.join(logRoot, ctx.worktreeManager.createCalls[0].name);
+    const manifest = JSON.parse(fs.readFileSync(path.join(logDir, "manifest.json"), "utf8"));
+    expect(manifest).toMatchObject({ workerStarted: false, dependencyInstall: { ok: false, reason } });
+    expect(blocker).toContain(path.join(logDir, "manifest.json"));
+    expect(JSON.parse(fs.readFileSync(path.join(logDir, "dependency-install.json"), "utf8"))).toMatchObject({ ok: false, reason });
+  });
+
+  it("installs after the worktree is ready and before the worker starts, then hands the record to the manifest writer", async () => {
+    const events = [];
+    const install = { ok: true, status: "installed", reason: null, installReason: "fresh" };
+    const ctx = baseCtx({
+      logRoot,
+      prepareWorktreeDependenciesFn: vi.fn(async (args) => { events.push("install"); args.onSpawn({ pid: 4242 }); return install; }),
+      spawnWorkerFn: vi.fn(async ({ logDir }) => { events.push("spawn"); return { exitCode: 0, logDir }; }),
+    });
+    const create = ctx.worktreeManager.create.bind(ctx.worktreeManager);
+    ctx.worktreeManager.create = (args) => { events.push("worktree"); return create(args); };
+    ctx.worktreeManager.setWorkerPid = vi.fn();
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result.outcome).toBe("in-review");
+    expect(events).toEqual(["worktree", "install", "spawn"]);
+    expect(ctx.prepareWorktreeDependenciesFn).toHaveBeenCalledWith(expect.objectContaining({ worktreePath: `/fake/worktrees/${ctx.worktreeManager.createCalls[0].name}` }));
+    // npm's process group is recorded for startup recovery while it runs.
+    expect(ctx.worktreeManager.setWorkerPid).toHaveBeenCalledWith("MOV-1", 4242);
+    expect(ctx.spawnWorkerFn.mock.calls[0][0].dependencyInstall).toBe(install);
   });
 });

@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { inspectOperatorResume, parseResumeArgs } from "../src/operator-resume.mjs";
 import { generateBrief } from "../src/brief.mjs";
 import { publishWorkerResult } from "../src/worker-publish.mjs";
@@ -213,5 +216,53 @@ describe("operator resume parsing and admission", () => {
     await expect(runOperatorResume(data.issue, inspection, data.ctx)).rejects.toThrow(/target changed/);
     data.ctx.lockHeldFn = () => false;
     await expect(runOperatorResume(data.issue, inspection, data.ctx)).rejects.toThrow(/singleton lock/);
+  });
+
+  it.each([true, false])("runs the dependency install before the continuation worker (install ok: %s) (MOV-412)", async (installOk) => {
+    const logRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mov412-operator-resume-"));
+    try {
+      const data = fixture({ ctx: { logRoot } });
+      const inspection = data.inspect();
+      let entry = { ...data.entry };
+      const events = [];
+      data.ctx.worktreeManager = {
+        loadState: () => ({ [id]: entry }),
+        updateEntry: (_id, extra) => { entry = { ...entry, ...extra }; return entry; },
+        resumeEntry: () => { entry = { ...entry, status: "active" }; return entry; },
+        markStatus: (_id, status) => { entry = { ...entry, status }; return entry; },
+        markStatusIf: (_id, expected, status) => {
+          if (entry.status === expected) entry = { ...entry, status };
+          return entry;
+        },
+        prepareWorkerSpawn: () => {},
+        setWorkerPid: () => {},
+      };
+      Object.assign(data.ctx, {
+        lockHeldFn: () => true,
+        linearClient: { moveToState: async (_id, state) => { events.push(`state:${state}`); }, addComment: async () => {} },
+        stateIds: { agentWorking: "working", needsHumanDecision: "decision" },
+        repositoryContextFn: () => null, refreshIssueFn: async () => data.issue,
+        prepareWorktreeDependenciesFn: async ({ worktreePath: target }) => {
+          events.push(`install:${target}`);
+          return installOk ? { ok: true, status: "current" } : { ok: false, status: "failed", reason: "unsafe-node-modules", detail: "node_modules is a symlink" };
+        },
+        spawnWorkerFn: () => { events.push("spawn"); throw new Error("fixture spawn refusal"); },
+        writeWorkerAuditFn: () => ({ path: "fixture-audit" }),
+        workerTimeoutMs: 1000, stopPollIntervalMs: 0,
+      });
+
+      const result = await runOperatorResume(data.issue, inspection, data.ctx);
+
+      expect(result.outcome).toBe(installOk ? "spawn-error" : "dependency-install-failed");
+      expect(events.filter((event) => !event.startsWith("state:"))).toEqual(installOk ? [`install:${worktreePath}`, "spawn"] : [`install:${worktreePath}`]);
+      expect(events.at(-1)).toBe("state:decision");
+      expect(entry.status).toBe("failed");
+      expect(entry.operatorResume).toMatchObject({ status: "finished", outcome: result.outcome });
+      if (!installOk) {
+        expect(entry.operatorResume.stage).toBe("dependency-install-failed");
+        const manifest = JSON.parse(fs.readFileSync(path.join(entry.operatorResume.logDir, "manifest.json"), "utf8"));
+        expect(manifest).toMatchObject({ workerStarted: false, dependencyInstall: { reason: "unsafe-node-modules" } });
+      }
+    } finally { fs.rmSync(logRoot, { recursive: true, force: true }); }
   });
 });

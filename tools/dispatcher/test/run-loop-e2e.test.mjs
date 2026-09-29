@@ -48,6 +48,7 @@ import { NESTED_SANDBOX_CRASH } from "../src/failure-classification.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "../src/worker-guard.mjs";
 import { jsonl, mov399Events } from "./fixtures/native-sandbox-startup.mjs";
 import { DEFAULT_ISSUE_SPEC_MODE } from "../src/issue-spec.mjs";
+import { ensureWorktreeDependencies } from "../src/dependency-install.mjs";
 
 // MOV-179: the real diagnosis adapter makes a live Anthropic API call.
 // Nothing in this file wants that -- the point of the describe block below is
@@ -254,6 +255,9 @@ function statefulWorktreeRegistry({ owned = true, integrityBranch = null } = {})
 function fakeLeaves(overrides = {}) {
   return {
     worktreeManager: fakeWorktreeManager(),
+    // MOV-412: the real installer would run git and npm against these fake
+    // worktrees; the MOV-412 block below exercises it fail-closed on purpose.
+    prepareWorktreeDependenciesFn: vi.fn(async () => ({ ok: true, status: "current" })),
     spawnWorkerFn: vi.fn(async () => ({ exitCode: 0, logDir: `${TMP_ROOT}/logs/x` })),
     auditWorkerResultFn: vi.fn(() => ({ ok: true, violations: [] })),
     writeWorkerAuditFn: vi.fn(() => ({ path: `${TMP_ROOT}/logs/x/security-audit.json`, sha256: "abc123" })),
@@ -991,6 +995,78 @@ describe("advisory diagnosis for the unrecognized-failure escalation, through th
 
     expect(result.outcome).toBe("credential-failure");
     expect(diagnoseUnrecognizedFailureMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("pre-spawn dependency install through the real run context (MOV-412)", () => {
+  beforeEach(() => {
+    fs.rmSync(TMP_ROOT, { recursive: true, force: true });
+  });
+
+  function installIssue(identifier, labels = []) {
+    return {
+      id: `id-${identifier}`, identifier, title: "Needs a prepared toolchain",
+      description: READY_SECTIONS, url: `https://linear.app/moviecal/issue/${identifier}`,
+      project: null, labels: ["execution:mac", ...labels], delegate: DELEGATE, blockedByIds: [],
+    };
+  }
+
+  it("wires the trusted installer into the run context", async () => {
+    const ctx = await buildRunContext(fakeLinearClient(), TEAM_KEY, []);
+    expect(ctx.prepareWorktreeDependenciesFn).toBe(ensureWorktreeDependencies);
+  });
+
+  it.each([["claude", []], ["codex", ["worker:codex"]]])("installs in the ready worktree before the %s worker starts", async (worker, labels) => {
+    const issue = installIssue(`MOV-INSTALL-${worker.toUpperCase()}`, labels);
+    const events = [];
+    const installResult = { ok: true, status: "installed", reason: null };
+    const leaves = fakeLeaves({
+      prepareWorktreeDependenciesFn: vi.fn(async ({ worktreePath }) => {
+        events.push(["install", worktreePath]);
+        return installResult;
+      }),
+      spawnWorkerFn: vi.fn(async ({ cwd, logDir }) => {
+        events.push(["spawn", cwd]);
+        return { exitCode: 0, logDir };
+      }),
+    });
+    const ctx = { ...(await buildRunContext(fakeLinearClient({ [issue.id]: issue }), TEAM_KEY, [issue])), ...leaves };
+
+    const [result] = await runOnce([issue], ctx);
+
+    expect(result.outcome).toBe("in-review");
+    const worktreePath = `${TMP_ROOT}/fake-worktrees/${ctx.worktreeManager.createCalls[0].name}`;
+    expect(events).toEqual([["install", worktreePath], ["spawn", worktreePath]]);
+    expect(ctx.spawnWorkerFn.mock.calls[0][0].invocation.command).toBe(worker);
+    expect(ctx.spawnWorkerFn.mock.calls[0][0].dependencyInstall).toBe(installResult);
+    expect(ctx.prepareWorktreeDependenciesFn.mock.calls[0][0].logDir).toBe(path.join(ctx.logRoot, ctx.worktreeManager.createCalls[0].name));
+  });
+
+  it("fails closed through the real installer: no worker, a failed worktree, a blocker and the manifest record", async () => {
+    // The real ensureWorktreeDependencies runs here. This file's
+    // child_process mock makes its `git` read of the committed lockfile
+    // throw, so it refuses before it could ever start npm.
+    const issue = installIssue("MOV-INSTALL-FAIL", ["worker:codex"]);
+    const linearClient = fakeLinearClient({ [issue.id]: issue });
+    const { prepareWorktreeDependenciesFn: _unused, ...leaves } = fakeLeaves();
+    const ctx = { ...(await buildRunContext(linearClient, TEAM_KEY, [issue])), ...leaves };
+
+    const [result] = await runOnce([issue], ctx);
+
+    expect(result).toMatchObject({ outcome: "dependency-install-failed", reason: "committed-inputs-unreadable" });
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(0);
+    expect(ctx.publishWorkerResultFn).not.toHaveBeenCalled();
+    expect(ctx.worktreeManager.statusCalls.at(-1)).toMatchObject({ id: issue.identifier, status: "failed" });
+    expect(linearClient.calls.filter((call) => call.type === "moveToState").at(-1).stateId).toBe("state-needs-human");
+    const blocker = linearClient.calls.filter((call) => call.type === "addComment").at(-1).body;
+    expect(blocker).toContain("Dependency install failed; no worker started.");
+    expect(blocker).toContain("Dependency install blocked: `committed-inputs-unreadable`");
+    expect(blocker).toMatch(/no worker-side fallback/);
+    const logDir = path.join(ctx.logRoot, ctx.worktreeManager.createCalls[0].name);
+    const manifest = JSON.parse(fs.readFileSync(path.join(logDir, "manifest.json"), "utf8"));
+    expect(manifest).toMatchObject({ workerStarted: false, dependencyInstall: { ok: false, reason: "committed-inputs-unreadable" } });
+    expect(JSON.parse(fs.readFileSync(path.join(logDir, "dependency-install.json"), "utf8"))).toMatchObject({ ok: false, reason: "committed-inputs-unreadable" });
+    expect(fs.existsSync(path.join(logDir, "stdout.log"))).toBe(false);
   });
 });
 

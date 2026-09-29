@@ -5,7 +5,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import { redactWorkerOutput, spawnWorker as realSpawnWorker, tailLogs } from "../src/worker-spawn.mjs";
+import { dependencyInstallBlockerSections, prepareWorkerDependencies, redactWorkerOutput, spawnWorker as realSpawnWorker, tailLogs, writeDependencyInstallFailureManifest } from "../src/worker-spawn.mjs";
+import { captureVerificationEvidence } from "../src/readiness-evidence.mjs";
 
 import { prepareCodexContainment } from "../src/codex-containment.mjs";
 const spawnWorker = (options) => realSpawnWorker({
@@ -695,5 +696,58 @@ describe("spawnWorker — steering (MOV-214/215)", () => {
     expect(result).toBeInstanceOf(Promise);
     await result;
     expect(capturedChild.getWritten()).toBe("the brief text");
+  });
+});
+
+describe("pre-spawn dependency install record (MOV-412)", () => {
+  let tmpDir;
+  afterEach(() => { if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it("records the install in manifest.json, never in the transcript the audit and verification evidence read", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mov412-manifest-"));
+    const logDir = path.join(tmpDir, "run");
+    const dependencyInstall = { ok: true, status: "installed", installReason: "fresh", command: "npm", args: ["ci", "--ignore-scripts"] };
+    await spawnWorker({ invocation: { command: "codex", args: ["exec"] }, cwd: "/tmp/some-worktree", brief: "brief", logDir,
+      spawnImpl: () => fakeChildProcess({ exitCode: 0, stdoutText: "{\"type\":\"thread.started\"}\n" }), dependencyInstall });
+
+    expect(JSON.parse(fs.readFileSync(path.join(logDir, "manifest.json"), "utf8")).dependencyInstall).toEqual(dependencyInstall);
+    expect(fs.readFileSync(path.join(logDir, "stdout.log"), "utf8")).not.toMatch(/npm|ci/);
+    expect(captureVerificationEvidence(logDir)).toMatchObject({ status: "incomplete", executions: [] });
+  });
+
+  it("records a null install for callers that ran none", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mov412-manifest-"));
+    const logDir = path.join(tmpDir, "run");
+    await spawnWorker({ invocation: { command: "claude", args: ["-p"] }, cwd: "/tmp/some-worktree", brief: "brief", logDir, spawnImpl: () => fakeChildProcess() });
+    expect(JSON.parse(fs.readFileSync(path.join(logDir, "manifest.json"), "utf8")).dependencyInstall).toBeNull();
+  });
+
+  it("skips when no installer is wired, and fails closed on a throw or a malformed result", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mov412-prepare-"));
+    const args = { worktreePath: "/tmp/wt", logDir: path.join(tmpDir, "logs") };
+    expect(await prepareWorkerDependencies(null, args)).toBeNull();
+
+    const thrown = await prepareWorkerDependencies(async () => { throw new Error("boom"); }, args);
+    expect(thrown).toMatchObject({ ok: false, reason: "unexpected-error", detail: expect.stringContaining("boom"), worktreePath: "/tmp/wt" });
+    expect(await prepareWorkerDependencies(async () => null, args)).toMatchObject({ ok: false, reason: "unexpected-error" });
+    expect(await prepareWorkerDependencies(async () => ({ ok: "yes" }), args)).toMatchObject({ ok: false, reason: "unexpected-error" });
+    expect(JSON.parse(fs.readFileSync(path.join(args.logDir, "dependency-install.json"), "utf8"))).toMatchObject({ ok: false });
+
+    const onSpawn = vi.fn();
+    const installer = vi.fn(async () => ({ ok: true, status: "current" }));
+    expect(await prepareWorkerDependencies(installer, { ...args, onSpawn })).toEqual({ ok: true, status: "current" });
+    expect(installer).toHaveBeenCalledWith({ worktreePath: "/tmp/wt", logDir: args.logDir, onSpawn });
+  });
+
+  it("renders the module's blocker plus the no-fallback rule, and a failure manifest with no worker", () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mov412-blocker-"));
+    const result = { ok: false, reason: "npm-failed", detail: "npm ci exited with code 1", step: "ci", command: "npm", args: ["ci"], exitCode: 1, logPath: "/logs/dependency-install.log" };
+    const manifestPath = writeDependencyInstallFailureManifest(path.join(tmpDir, "run"), { cwd: "/tmp/wt", dependencyInstall: result });
+    expect(JSON.parse(fs.readFileSync(manifestPath, "utf8"))).toEqual({ cwd: "/tmp/wt", workerStarted: false, dependencyInstall: result });
+    const text = dependencyInstallBlockerSections(result, { manifestPath }).join("\n");
+    expect(text).toContain("### Dependency install blocked: `npm-failed`");
+    expect(text).toContain("- Install log: `/logs/dependency-install.log`");
+    expect(text).toContain(`Run manifest: \`${manifestPath}\``);
+    expect(text).toMatch(/No worker was started\. Workers must never install dependencies themselves, so there is no worker-side fallback/);
   });
 });

@@ -13,9 +13,40 @@ function expectIterativeVerification(brief) {
   expect(brief).toMatch(/If it fails, fix the failure using focused checks, then run `npm run verify` again/);
   expect(brief).toMatch(/any failed run disables PR autonomy for this attempt/);
   expect(brief).toMatch(/Run verification synchronously/);
-  expect(brief).toMatch(/Prepare dependencies before verification/);
+  expect(brief).toMatch(/dependency toolchain is already prepared/);
   expect(brief).toMatch(/exact command, verbatim/);
 }
+
+// MOV-412: every rendering says the dispatcher prepared the toolchain and that
+// the worker must not install, while keeping the verify and hard-deny rules.
+function expectPreparedToolchain(brief) {
+  expect(brief).not.toMatch(/Prepare dependencies before verification/);
+  expect(brief).not.toMatch(/run `npm ci` as its own command/);
+  expect(brief).toMatch(/trusted dispatcher installed `node_modules` from the committed lockfile \(`npm ci`\)/);
+  expect(brief).toMatch(/Workers must never install dependencies: do \*\*not\*\* run `npm ci`, `npm install`/);
+  expect(brief).not.toMatch(/(?:This worker|Workers) (?:has|have) no (?:outbound )?network/);
+  expect(brief).toMatch(/report the missing toolchain as a blocker and stop/);
+  expect(brief).toMatch(/failed exact verification remains durable evidence/);
+  expect(brief).toMatch(/Run `npm run verify` as its own exact command, verbatim/);
+  expect(brief).toMatch(/separate from the hard-deny rule/);
+}
+
+describe("prepared dependency toolchain (MOV-412)", () => {
+  const issue = { identifier: "MOV-42", title: "Fix", url: "https://linear.app/moviecal/issue/MOV-42", description: "desc" };
+  for (const worker of ["claude", "codex"]) {
+    it(`implementation brief for ${worker} says the toolchain is prepared and never asks for npm ci`, () => {
+      const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker, model: "default" });
+      expectPreparedToolchain(brief);
+      expect(brief).toMatch(/stop and report the blocker instead of improvising around it/);
+    });
+
+    it(`repair brief for ${worker} says the toolchain is prepared and never asks for npm ci`, () => {
+      const brief = generateRepairBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker, model: "default", prNumber: 42, headSha: "abc" });
+      expectPreparedToolchain(brief);
+      expect(brief).toMatch(/stop and say so instead of improvising around it/);
+    });
+  }
+});
 
 it("keeps both briefs' focused commands aligned with package scripts and Vitest config files", () => {
   const packageJson = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8"));
@@ -145,13 +176,6 @@ describe("generateBrief", () => {
     expect(brief).toMatch(/Autonomy: disabled/);
   });
 
-  it("prepares locked dependencies before the first durable verification attempt (MOV-281)", () => {
-    const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
-    expect(brief).toMatch(/Prepare dependencies before verification/);
-    expect(brief).toMatch(/npm ci/);
-    expect(brief).toMatch(/failed exact verification remains durable evidence/);
-  });
-
   it("keeps remote mutation in the trusted dispatcher instead of the worker", () => {
     const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "codex", model: "default" });
     expect(brief).toMatch(/do \*\*not\*\* run Git/i);
@@ -225,7 +249,7 @@ describe("generateBrief", () => {
   });
 
   // MOV-409: a worker that reads a vendored skill's "fetch the changelog
-  // first" instruction and hits the sandbox's network deny must skip that
+  // first" instruction that is unavailable or prohibited must skip that
   // step, not treat it as a hard-deny stop and abandon the issue.
   it("tells the worker that external doc/changelog fetches are unavailable and skill-directed fetches should be skipped, not treated as a blocker", () => {
     const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
@@ -371,13 +395,6 @@ describe("generateRepairBrief (MOV-188)", () => {
     const brief = generateRepairBrief(issue, options);
     expect(brief).toMatch(/exact command, verbatim/i);
     expect(brief).toMatch(/Autonomy: disabled/);
-  });
-
-  it("prepares locked dependencies before the repair worker verifies (MOV-281)", () => {
-    const brief = generateRepairBrief(issue, options);
-    expect(brief).toMatch(/Prepare dependencies before verification/);
-    expect(brief).toMatch(/npm ci/);
-    expect(brief).toMatch(/failed exact verification remains durable evidence/);
   });
 
   it("is a repair brief, not the implementation brief", () => {

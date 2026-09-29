@@ -9,6 +9,7 @@ import path from "node:path";
 import { Transform } from "node:stream";
 import { isCodexWorkItemEvent } from "./budget-unit.mjs";
 import { prepareCodexContainment } from "./codex-containment.mjs";
+import { renderDependencyInstallBlocker, writeDependencyInstallRecord } from "./dependency-install.mjs";
 import {
   buildWorkerSandboxProfile,
   guardedInvocation,
@@ -202,6 +203,7 @@ function reapProcessGroup(pid, { graceMs, killImpl }) {
  *   `system/init` event (Claude only emits one), so the caller can confirm the effective permission mode and tool set
  *   while the worker runs. Observation only: a throwing callback is swallowed and never affects the worker.
  * @param {object|null} [opts.trial] - MOV-383: worker-trial attribution (trialId, requestedWorker, resolvedWorker, routingReason, assignedAt) recorded in manifest.json; null outside a trial
+ * @param {object|null} [opts.dependencyInstall] - MOV-412: the dispatcher's pre-spawn dependency install result, recorded in manifest.json; null when the caller ran no install
  * @returns {Promise<{exitCode: number, logDir: string, pid: number|null}>|{promise: Promise<{exitCode: number, logDir: string, pid: number|null}>, writeTurn: (text: string) => void, requestClose: () => void, nextTurnBoundary: () => Promise<{ended: boolean}>}}
  */
 export function spawnWorker({
@@ -222,6 +224,7 @@ export function spawnWorker({
   onAssistantTurn = null,
   onWorkerInit = null,
   trial = null,
+  dependencyInstall = null,
   prepareCodexContainmentFn = prepareCodexContainment,
 }) {
   fs.mkdirSync(logDir, { recursive: true });
@@ -397,6 +400,9 @@ export function spawnWorker({
             exitCode,
             // MOV-383: worker-trial attribution; null outside a trial.
             trial,
+            // MOV-412: the dispatcher's own pre-spawn install, kept out of the
+            // worker transcript that the audit and verification evidence read.
+            dependencyInstall,
             securityGuard: securityContext ? { enforced: true, mode: securityContext.mode || "implementation",
               ...(containment ? containment.evidence : {}) } : { enforced: false },
           },
@@ -470,6 +476,56 @@ export function spawnWorker({
       return new Promise((resolve) => turnWaiters.push(resolve));
     },
   };
+}
+
+/**
+ * MOV-410/MOV-412: run the dispatcher's trusted dependency install for a
+ * worktree before any worker starts in it. Returns null when the caller wired
+ * no installer (test doubles), otherwise the install result, which is also
+ * written to `dependency-install.json` beside the run logs. A throw or a
+ * malformed result becomes a not-ok result: the caller must then start no
+ * worker, because there is no worker-side install fallback.
+ */
+export async function prepareWorkerDependencies(prepareFn, { worktreePath, logDir, onSpawn } = {}) {
+  if (typeof prepareFn !== "function") return null;
+  let result;
+  try {
+    result = await prepareFn({ worktreePath, logDir, onSpawn });
+  } catch (error) {
+    result = { ok: false, status: "failed", reason: "unexpected-error", detail: `dependency install threw: ${error?.message || error}` };
+  }
+  if (!result || typeof result !== "object") {
+    result = { ok: false, status: "failed", reason: "unexpected-error", detail: "dependency install returned no result" };
+  }
+  if (result.ok !== true) result = { ...result, ok: false, reason: result.reason || "unexpected-error", worktreePath: result.worktreePath ?? worktreePath ?? null };
+  try {
+    writeDependencyInstallRecord(logDir, result);
+  } catch {
+    // manifest.json and the Linear blocker still carry the record
+  }
+  return result;
+}
+
+/**
+ * The run manifest for an attempt whose dependency install failed, so no
+ * worker started. It carries the install record under the same
+ * `dependencyInstall` key a started worker's manifest uses.
+ */
+export function writeDependencyInstallFailureManifest(logDir, { cwd, dependencyInstall }) {
+  fs.mkdirSync(logDir, { recursive: true });
+  const manifestPath = path.join(logDir, "manifest.json");
+  fs.writeFileSync(manifestPath, JSON.stringify({ cwd, workerStarted: false, dependencyInstall }, null, 2) + "\n");
+  return manifestPath;
+}
+
+/** Markdown sections for a failed dependency install's `Needs Human Decision` blocker. */
+export function dependencyInstallBlockerSections(result, { manifestPath = null } = {}) {
+  return [
+    renderDependencyInstallBlocker(result) || "### Dependency install blocked",
+    "",
+    ...(manifestPath ? [`Run manifest: \`${manifestPath}\``, ""] : []),
+    "No worker was started. Workers must never install dependencies themselves, so there is no worker-side fallback: fix the cause above, then requeue the issue.",
+  ];
 }
 
 /** Read the last `n` lines across stdout+stderr logs for a failed run, for reporting back to Linear. */
