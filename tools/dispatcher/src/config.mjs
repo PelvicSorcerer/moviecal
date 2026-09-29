@@ -129,6 +129,38 @@ export function worktreeRoot() {
   return process.env.MOVIECAL_WORKTREE_ROOT || path.join(os.homedir(), "code", "worktrees", "moviecal");
 }
 
+/**
+ * Roots scanned by `dispatcher gc` for terminal-issue worktrees (MOV-417):
+ * the interactive/human root, Codex-managed worktrees, and the dispatcher's
+ * own root. Override with a path-delimited MOVIECAL_WORKTREE_ROOTS.
+ */
+export function worktreeCleanupRoots() {
+  const override = process.env.MOVIECAL_WORKTREE_ROOTS;
+  if (override) return override.split(path.delimiter).filter((p) => path.isAbsolute(p));
+  return [path.join(os.homedir(), "code", "worktrees"), path.join(os.homedir(), ".codex", "worktrees"), worktreeRoot()];
+}
+
+/** The launchd daemon's dedicated checkout; `dispatcher gc` never removes it. */
+export function daemonCheckoutDir() {
+  return process.env.MOVIECAL_DAEMON_CHECKOUT || path.join(worktreeRoot(), "dispatcher-daemon");
+}
+
+/** Where `dispatcher gc` writes recovery records for preserved local work. */
+export function worktreeRecoveryDir() {
+  return path.join(configDir(), "worktree-recovery");
+}
+
+export const DEFAULT_WORKTREE_RETENTION_DAYS = 7;
+
+/** Terminal-issue retention in days: `--retention-days` wins over MOVIECAL_WORKTREE_RETENTION_DAYS. */
+export function resolveWorktreeRetentionDays(flagValue = undefined) {
+  const raw = flagValue ?? process.env.MOVIECAL_WORKTREE_RETENTION_DAYS;
+  if (raw === undefined || raw === "") return DEFAULT_WORKTREE_RETENTION_DAYS;
+  const days = Number(raw);
+  if (!Number.isFinite(days) || days <= 0) throw new Error(`retention days must be a positive number, got "${raw}"`);
+  return days;
+}
+
 export function logRoot() {
   return process.env.MOVIECAL_LOG_ROOT || path.join(os.homedir(), "Library", "Logs", "moviecal-dispatcher");
 }
