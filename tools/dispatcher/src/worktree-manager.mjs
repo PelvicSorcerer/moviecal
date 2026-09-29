@@ -850,19 +850,19 @@ export class WorktreeManager {
   }
 
   /**
-   * Garbage-collect: clean up anything merged, and anything failed/abandoned
-   * older than retentionDays.
+   * Garbage-collect: clean up anything merged, failed or abandoned whose
+   * terminal transition (`endedAt`) is at least retentionDays old.
    */
   gc({ retentionDays }) {
     const state = this.loadState();
     const now = Date.now();
     const removed = [];
     for (const [id, entry] of Object.entries(state)) {
-      if (entry.status === "merged") {
-        if (this.cleanup(id)) removed.push(id);
-        continue;
-      }
-      if (entry.status === "failed" || entry.status === "abandoned") {
+      // MOV-417: merged entries follow the same terminal retention as
+      // failed/abandoned ones instead of being removed the moment the PR
+      // merges. A missing/invalid timestamp retains the entry (fail closed).
+      if (["merged", "failed", "abandoned"].includes(entry.status)) {
+        if (entry.status === "merged" && !Number.isFinite(Date.parse(entry.endedAt || ""))) continue;
         const ended = entry.endedAt ? new Date(entry.endedAt).getTime() : now;
         const ageDays = (now - ended) / (1000 * 60 * 60 * 24);
         if (ageDays >= retentionDays) {

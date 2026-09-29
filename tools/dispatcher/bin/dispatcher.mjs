@@ -27,7 +27,10 @@
 //                                  - MOV-403: show each dispatch breaker's adapter, evidence
 //                                     and next probe time, or authorize one early recovery
 //                                     probe (keeps all persisted state and history)
-//   dispatcher gc                  - prune merged/stale worktrees and old run logs
+//   dispatcher gc [--dry-run] [--retention-days N] [--json]
+//                                  - prune registry worktrees past retention and remove Done/Canceled
+//                                     issues' linked worktrees after N days (default 7, MOV-417),
+//                                     preserving local work; --dry-run previews without any write
 //   dispatcher promote [--dry-run] - move Backlog/Blocked issues that meet the
 //                                     readiness contract into Ready for Agent
 //                                     (MOV-129), assigning the configured
@@ -65,6 +68,10 @@ import {
   linearEnvPath,
   linearAppEnvPath,
   worktreeRoot,
+  worktreeCleanupRoots,
+  daemonCheckoutDir,
+  worktreeRecoveryDir,
+  resolveWorktreeRetentionDays,
   logRoot,
   worktreesStatePath,
   usageLimitStatePath,
@@ -118,6 +125,7 @@ import {
   selectCloudCandidates,
 } from "../src/dispatch-eligibility.mjs";
 import { DispatcherLock, WorktreeManager } from "../src/worktree-manager.mjs";
+import { WorktreeRetention, formatResult } from "../src/worktree-retention.mjs";
 import { UsageLimitStore } from "../src/usage-limit.mjs";
 import { runOnce, runOperatorResume, DISPATCH_BREAKERS } from "../src/run-loop.mjs";
 import { parseResumeArgs, inspectOperatorResume } from "../src/operator-resume.mjs";
@@ -679,28 +687,89 @@ async function cmdDryRun({ fixturePath } = {}) {
   return routingError || trialConfigError ? 1 : 0;
 }
 
-function cmdGc() {
-  const manager = new WorktreeManager({
-    repoRoot: REPO_ROOT,
-    worktreeRoot: worktreeRoot(),
-    statePath: worktreesStatePath(),
-  });
-  const removed = manager.gc({ retentionDays: 7 });
-  console.log(removed.length > 0 ? `Pruned: ${removed.join(", ")}` : "Nothing to prune.");
+function parseGcArgs(args) {
+  const parsed = { dryRun: false, json: false, retentionDays: undefined };
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === "--dry-run") parsed.dryRun = true;
+    else if (args[i] === "--json") parsed.json = true;
+    else if (args[i] === "--retention-days") { parsed.retentionDays = args[i + 1]; i += 1; }
+    else throw new Error(`unknown gc option: ${args[i]}`);
+  }
+  parsed.retentionDays = resolveWorktreeRetentionDays(parsed.retentionDays);
+  return parsed;
+}
 
-  const logDir = logRoot();
-  if (fs.existsSync(logDir)) {
-    const now = Date.now();
-    const cutoffMs = RUN_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-    for (const entry of fs.readdirSync(logDir)) {
-      const full = path.join(logDir, entry);
-      const stat = fs.statSync(full);
-      if (now - stat.mtimeMs > cutoffMs) {
-        fs.rmSync(full, { recursive: true, force: true });
-        console.log(`Pruned run log: ${entry}`);
+/**
+ * `dispatcher gc [--dry-run] [--retention-days N] [--json]` (MOV-417).
+ *
+ * Live: takes the dispatcher's exclusive lock, prunes registry entries past
+ * retention, then removes Done/Canceled issues' linked worktrees whose
+ * retention (from Linear's terminal timestamp) has elapsed, preserving local
+ * work first. `--dry-run` reports every candidate and changes nothing: no
+ * lock, registry, Git, Linear, or file writes.
+ */
+async function cmdGc(args = []) {
+  let parsed;
+  try { parsed = parseGcArgs(args); } catch (error) { console.error(error.message); return 1; }
+  const auth = resolveLinearAuth();
+  const linear = auth.mode === "app" ? new LinearClient({ appAuth: auth.appAuth })
+    : auth.mode === "apiKey" ? new LinearClient({ apiKey: auth.apiKey }) : null;
+  const lock = parsed.dryRun ? null : new DispatcherLock(dispatcherLockPath());
+  if (lock) {
+    try { lock.acquire(); } catch (error) { console.error(error.message); return 2; }
+    process.once("exit", () => lock.release());
+  }
+  const manager = new WorktreeManager({ repoRoot: REPO_ROOT, worktreeRoot: worktreeRoot(), statePath: worktreesStatePath() });
+  const usageLimits = new UsageLimitStore(usageLimitStatePath());
+  const retention = new WorktreeRetention({
+    repoRoot: REPO_ROOT,
+    roots: worktreeCleanupRoots(),
+    excludedPaths: [daemonCheckoutDir()],
+    selfPaths: [process.cwd(), REPO_ROOT],
+    registry: manager,
+    recoveryDir: worktreeRecoveryDir(),
+    retentionDays: parsed.retentionDays,
+    fetchIssue: async (id) => {
+      if (!linear) throw new Error("no Linear credential configured");
+      return linear.issueTerminalSnapshot(id);
+    },
+    hasPendingContinuation: (id) => { try { return Boolean(usageLimits.get(id)); } catch { return true; } },
+  });
+
+  let results;
+  try {
+    if (!parsed.dryRun) {
+      const removed = manager.gc({ retentionDays: parsed.retentionDays });
+      if (!parsed.json) console.log(removed.length > 0 ? `Pruned registry worktrees: ${removed.join(", ")}` : "No registry worktrees past retention.");
+    }
+    results = parsed.dryRun ? await retention.preview() : await retention.run();
+  } catch (error) {
+    console.error(`worktree inventory failed: ${error.message}`);
+    return 1;
+  }
+  if (parsed.json) {
+    console.log(JSON.stringify({ dryRun: parsed.dryRun, retentionDays: parsed.retentionDays, results }, null, 2));
+  } else {
+    console.log(`${parsed.dryRun ? "Preview (nothing changed)" : "Cleanup"} — ${results.length} worktree(s), retention ${parsed.retentionDays}d`);
+    for (const r of results) console.log(formatResult(r));
+  }
+
+  if (!parsed.dryRun) {
+    const logDir = logRoot();
+    if (fs.existsSync(logDir)) {
+      const now = Date.now();
+      const cutoffMs = RUN_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+      for (const entry of fs.readdirSync(logDir)) {
+        const full = path.join(logDir, entry);
+        const stat = fs.statSync(full);
+        if (now - stat.mtimeMs > cutoffMs) {
+          fs.rmSync(full, { recursive: true, force: true });
+          if (!parsed.json) console.log(`Pruned run log: ${entry}`);
+        }
       }
     }
   }
+  return results.some((r) => r.outcome === "failed") ? 1 : 0;
 }
 
 /**
@@ -1528,7 +1597,7 @@ async function main() {
       process.exitCode = runBreakerCommand(rest, new CircuitBreakerStore(circuitBreakerStatePath()), DISPATCH_BREAKERS);
       break;
     case "gc":
-      cmdGc();
+      process.exitCode = await cmdGc(rest);
       break;
     case "shadow": {
       const prFlagIdx = rest.indexOf("--pr");

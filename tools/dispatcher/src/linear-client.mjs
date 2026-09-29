@@ -657,6 +657,34 @@ export class LinearClient {
   }
 
   /**
+   * Current terminal-state evidence for one issue (MOV-417 worktree retention):
+   * workflow state name/type plus Linear's own completed/canceled timestamps.
+   * Returns `null` when the issue is not visible; callers must treat that, and
+   * any thrown error, as "unknown" and never as terminal.
+   */
+  async issueTerminalSnapshot(identifier) {
+    const match = /^([A-Z]+)-(\d+)$/i.exec(String(identifier || "").trim());
+    if (!match) return null;
+    const query = `
+      query($teamKey: String!, $number: Float!) {
+        issues(filter: { team: { key: { eq: $teamKey } }, number: { eq: $number } }, first: 1) {
+          nodes { identifier state { name type } completedAt canceledAt }
+        }
+      }
+    `;
+    const data = await this.request(query, { teamKey: match[1].toUpperCase(), number: Number(match[2]) });
+    const node = data.issues?.nodes?.[0];
+    if (!node) return null;
+    return {
+      identifier: node.identifier,
+      stateName: node.state?.name || null,
+      stateType: node.state?.type || null,
+      completedAt: node.completedAt || null,
+      canceledAt: node.canceledAt || null,
+    };
+  }
+
+  /**
    * Create one issue. The only issue-creating mutation in the dispatcher, and
    * its sole caller is the master-failure observer (MOV-305): everything else
    * the dispatcher does reacts to issues a human or an authoring agent filed.
