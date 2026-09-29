@@ -42,7 +42,7 @@
         "e2e:install": "npm run lane:browser:install",
         "e2e": "playwright test",
         "verify": "npm run lane:all-fast",
-        "build": "next build",
+        "build": "next build --webpack",
         "typecheck": "tsc --noEmit",
         "dev": "next dev",
         "test": "vitest",
