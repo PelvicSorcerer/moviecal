@@ -224,6 +224,28 @@ describe("generateBrief", () => {
     expect(brief).toMatch(/stop and report/i);
   });
 
+  // MOV-409: a worker that reads a vendored skill's "fetch the changelog
+  // first" instruction and hits the sandbox's network deny must skip that
+  // step, not treat it as a hard-deny stop and abandon the issue.
+  it("tells the worker that external doc/changelog fetches are unavailable and skill-directed fetches should be skipped, not treated as a blocker", () => {
+    const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker: "claude", model: "default" });
+    expect(brief).toMatch(/external documentation and changelog fetches are unavailable/i);
+    expect(brief).toContain("`curl`, `WebFetch`, `WebSearch`");
+    expect(brief).toMatch(/advisory and does not apply in this environment/i);
+    expect(brief).toMatch(/skip that step/i);
+    expect(brief).toMatch(/do not retry the fetch another way/i);
+    expect(brief).toContain("SKILL.md");
+  });
+
+  it("keeps the external-fetch carve-out distinct from the hard-deny stop rule for both workers", () => {
+    for (const worker of ["claude", "codex"]) {
+      const brief = generateBrief(issue, { branch: "b", worktreePath: "/tmp/wt", worker, model: "default" });
+      expect(brief).toMatch(/stop and report/i);
+      expect(brief).toMatch(/separate from the hard-deny rule/i);
+      expect(brief).toMatch(/still means stop and report/i);
+    }
+  });
+
   it("requires local iOS verification and snapshot-reference review only when ios paths are in scope", () => {
     const iosBrief = generateBrief(
       { ...issue, description: "Change `ios/**` behavior." },
@@ -334,6 +356,15 @@ describe("generateRepairBrief (MOV-188)", () => {
     expect(brief).toMatch(/Do not run Git/);
     expect(brief).toMatch(/never creates a replacement branch or PR/);
     expect(brief).toMatch(/stop and say so instead of improvising/);
+  });
+
+  it("tells the repair worker that external doc/changelog fetches are unavailable and skill-directed fetches should be skipped, not treated as a blocker (MOV-409)", () => {
+    const brief = generateRepairBrief(issue, options);
+    expect(brief).toMatch(/external documentation and changelog fetches are unavailable/i);
+    expect(brief).toMatch(/advisory and does not apply in this environment/i);
+    expect(brief).toMatch(/do not retry the fetch another way/i);
+    expect(brief).toMatch(/stop and say so instead of improvising/i);
+    expect(brief).toMatch(/separate from the hard-deny rule/i);
   });
 
   it("tells the repair worker to run npm run verify as an exact, unwrapped command (MOV-274 follow-up)", () => {

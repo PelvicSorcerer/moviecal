@@ -63,6 +63,16 @@ function explorationLines(context, worker) {
   ];
 }
 
+// MOV-409: a worker that reads a vendored skill's "fetch the changelog first"
+// step and hits the sandbox's network deny must not treat that as a blocker —
+// it produced zero filesystem changes on an issue with nothing wrong with it.
+function externalFetchLines() {
+  return [
+    "**External documentation and changelog fetches are unavailable — that is not a blocker.** This worker has no outbound network for fetching external documentation, changelogs, or other reference material: `curl`, `WebFetch`, `WebSearch`, and any other fetch mechanism are denied or excluded from this worker's tool set (see `docs/operators/local-execution.md` §Security model, \"Network tools and the Seatbelt profile\"). If a skill or doc step — including a vendored `SKILL.md` under `.agents/skills/**` — tells you to fetch an external reference before implementing, that instruction is advisory and does not apply in this environment: skip that step, rely on this repository's own docs, migrations, types, and installed package sources, and keep going with the issue. Do not retry the fetch another way (a different tool, a raw script, a mirrored URL, delegating the fetch to another process) — that would be working around a refusal, which is not what this carve-out permits. This is separate from the hard-deny rule elsewhere in this brief: a protected-path write, a Git/`gh`/deploy command, or a credential-access attempt still means stop and report, exactly as before.",
+    "",
+  ];
+}
+
 function iterativeVerificationLines() {
   return [
     "## Check your work while iterating",
@@ -186,6 +196,7 @@ export function generateBrief(issue, { branch, worktreePath, worker, model, upgr
     "If you hit a hard-deny action or a case that needs a human decision (see `docs/operators/local-execution.md` §Security model), stop and report the blocker instead of improvising around it — do not attempt to work around a refusal.",
   );
   lines.push("");
+  lines.push(...externalFetchLines());
 
   const workflowAuth = resolveWorkflowEditAuthorization(issue);
   if (workflowAuth.authorized) {
@@ -312,6 +323,7 @@ export function generateRepairBrief(issue, {
     "- **Do not run Git, `gh`, or any GitHub API.** After you exit, the trusted dispatcher audits your transcript and diff, commits, and pushes to this same branch at this same pull request. It never creates a replacement branch or PR, and it refuses to push at all if the checkout has moved off the head SHA above.",
     "- If the correct fix needs a human decision — a governance gate, a credential, a sensitive path, an acknowledgement label, or a change this repair is not allowed to make — **stop and say so instead of improvising around it.** An honest \"this needs a human\" is a successful repair outcome; a workaround is not.",
     "",
+    ...externalFetchLines(),
     "**Run verification synchronously.** You are a one-shot invocation with no resume. Wait for `npm run verify` (and any other build/test command) to finish and act on its actual result before exiting. Anything still running when you exit is killed before the dispatcher audits your changes.",
     "",
     "**Prepare dependencies before verification.** Before your first `npm run verify`, check whether the local toolchain is present. If `node_modules` is absent or incomplete, run `npm ci` as its own command and wait for it to finish first. Do not probe the toolchain by running `npm run verify` before this bootstrap step: a failed exact verification remains durable evidence and cannot be replaced by a later passing run.",
