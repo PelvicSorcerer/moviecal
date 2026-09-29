@@ -38,10 +38,17 @@ fs.mkdirSync(path.join(home, ".codex"), { recursive: true, mode: 0o700 });
 fs.writeFileSync(path.join(home, ".codex", "auth.json"), "{}\n", { mode: 0o600 });
 
 const dependencyInstall = await ensureWorktreeDependencies({ worktreePath: checkout, logDir });
-writeDependencyInstallRecord(logDir, dependencyInstall);
+try {
+  writeDependencyInstallRecord(logDir, dependencyInstall);
+} catch (error) {
+  if (dependencyInstall.ok) throw error; // a successful install must have durable evidence
+  process.stderr.write(`Could not persist failed-install detail: ${error.message}\n`);
+}
 const initial = { issue: "MOV-416", head, branch, installedCli: execFileSync(resolveCodexExecutable(), ["--version"], { encoding: "utf8" }).trim(), dependencyInstall: { ok: dependencyInstall?.ok, status: dependencyInstall?.status, reason: dependencyInstall?.reason || null } };
 if (!dependencyInstall?.ok) {
-  fs.writeFileSync(path.join(evidenceRoot, "proof.json"), JSON.stringify({ ...initial, passed: false, reason: "trusted dependency install failed; no worker started" }, null, 2) + "\n");
+  try {
+    fs.writeFileSync(path.join(evidenceRoot, "proof.json"), JSON.stringify({ ...initial, passed: false, reason: "trusted dependency install failed; no worker started" }, null, 2) + "\n");
+  } catch { /* npm may have exhausted the disk; stdout below still reports failure */ }
   process.stdout.write(JSON.stringify({ passed: false, evidenceRoot, reason: "trusted dependency install failed" }) + "\n");
   process.exitCode = 1;
 } else {
