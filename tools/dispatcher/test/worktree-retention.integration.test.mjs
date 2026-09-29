@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { WorktreeManager, DispatcherLock } from "../src/worktree-manager.mjs";
 import { WorktreeRetention } from "../src/worktree-retention.mjs";
+import { isInsideWorkerSandboxEnv } from "../src/worker-guard.mjs";
 
 const DAY = 86_400_000;
 const NOW = Date.parse("2026-09-29T12:00:00Z");
@@ -31,7 +32,11 @@ function fingerprint(dir) {
   return out.join("\n");
 }
 
-describe("WorktreeRetention against real Git worktrees", () => {
+// These fixtures execute real git, which the worker guard intentionally denies.
+// Keep them active in CI and local verification outside a dispatched worker.
+const insideWorkerSandbox = isInsideWorkerSandboxEnv();
+
+describe.skipIf(insideWorkerSandbox)("WorktreeRetention against real Git worktrees", () => {
   let tmp, repo, dispatcherRoot, codexRoot, statePath, recoveryDir, registry, linear, calls, opts;
 
   const snapshot = (id, status, extra = {}) => ({
@@ -333,7 +338,7 @@ describe("WorktreeRetention against real Git worktrees", () => {
   });
 });
 
-describe("dispatcher gc command", () => {
+describe.skipIf(insideWorkerSandbox)("dispatcher gc command", () => {
   const cli = path.resolve(import.meta.dirname, "../bin/dispatcher.mjs");
   let tmp;
   beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gc-cli-")); });
