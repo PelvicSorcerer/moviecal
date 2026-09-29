@@ -50,7 +50,7 @@ Local verification commands:
 - `npm run agent:check` validates the post-cutover project dispatch invariant and issue contract before worker implementation.
 - `npm run agent:handoff` validates the same project dispatch invariant plus local git handoff readiness after merge.
 - `npm run agent:project-check` runs the shared project queue validator (`scripts/project-queue-check.sh`) in post-cutover mode.
-- `npm run build` may require elevated execution in Codex because Next.js/Turbopack can hit sandbox restrictions even when the project itself builds correctly.
+- `npm run dev` and `npm run build` use Next.js webpack. The browser lane starts the webpack dev server; the native Codex worker still runs its exact verification command within the existing guard.
 - `npm run tool:install` installs workspace-local `vercel`, plus a repo-local Supabase binary. It detects OS/arch and supports macOS (Intel/Apple Silicon) and Linux (amd64/arm64); Windows is not supported.
 - The Supabase portion of `npm run tool:install` downloads the matching platform archive and, on macOS, may ad-hoc re-sign the binary locally so it can run without a full system-wide install (a no-op on Linux).
 - In Codex, `bash scripts/agent-check.sh` may need elevated execution because sandboxed `gh` cannot always see the macOS keychain-backed login even when `gh auth status` succeeds in your normal terminal.

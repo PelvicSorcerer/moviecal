@@ -44,7 +44,7 @@
         "verify": "npm run lane:all-fast",
         "build": "next build --webpack",
         "typecheck": "tsc --noEmit",
-        "dev": "next dev",
+        "dev": "next dev --webpack",
         "test": "vitest",
         "lint": "echo \"skip lint (scaffold)\"",
         "check:testing-governance": "bash scripts/testing-governance-check.sh",

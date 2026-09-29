@@ -35,7 +35,7 @@ Workers can run affected tests with `npx vitest --config vitest.unit.config.ts -
 
 **Runs:** `npm run lint`, `npm run typecheck`, `npm run build`
 
-`npm run build` uses Next.js webpack for local, CI, and worker verification (MOV-416). The previous Turbopack build tried to bind a local port inside the Codex executor and failed under its existing network-denying profile. A single build mode keeps the production-build gate comparable across environments; switching bundlers again requires rerunning the native full-repository worker check as well as ordinary CI.
+`npm run build` uses Next.js webpack for local, CI, and worker verification (MOV-416). `npm run dev` uses webpack too, so the browser lane exercises the same bundler as the production build. The previous Turbopack build tried to bind a local port inside the Codex executor and failed under its existing network-denying profile. A single build mode keeps the production-build gate comparable across environments; switching bundlers again requires rerunning the native full-repository worker check as well as ordinary CI.
 
 **Expected to catch:**
 
