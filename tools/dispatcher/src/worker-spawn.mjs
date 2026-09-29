@@ -202,6 +202,7 @@ function reapProcessGroup(pid, { graceMs, killImpl }) {
  *   `system/init` event (Claude only emits one), so the caller can confirm the effective permission mode and tool set
  *   while the worker runs. Observation only: a throwing callback is swallowed and never affects the worker.
  * @param {object|null} [opts.trial] - MOV-383: worker-trial attribution (trialId, requestedWorker, resolvedWorker, routingReason, assignedAt) recorded in manifest.json; null outside a trial
+ * @param {object|null} [opts.dependencyInstall] - MOV-410: the dispatcher's own pre-spawn install record, stored in manifest.json apart from the worker's transcript; null when no install step ran
  * @returns {Promise<{exitCode: number, logDir: string, pid: number|null}>|{promise: Promise<{exitCode: number, logDir: string, pid: number|null}>, writeTurn: (text: string) => void, requestClose: () => void, nextTurnBoundary: () => Promise<{ended: boolean}>}}
  */
 export function spawnWorker({
@@ -222,6 +223,7 @@ export function spawnWorker({
   onAssistantTurn = null,
   onWorkerInit = null,
   trial = null,
+  dependencyInstall = null,
   prepareCodexContainmentFn = prepareCodexContainment,
 }) {
   fs.mkdirSync(logDir, { recursive: true });
@@ -397,6 +399,8 @@ export function spawnWorker({
             exitCode,
             // MOV-383: worker-trial attribution; null outside a trial.
             trial,
+            // MOV-410: dispatcher-side, never a worker action or verification evidence.
+            dependencyInstall,
             securityGuard: securityContext ? { enforced: true, mode: securityContext.mode || "implementation",
               ...(containment ? containment.evidence : {}) } : { enforced: false },
           },

@@ -47,6 +47,7 @@ import { WorkerUsageStore, captureWorkerUsage, DISPATCHER_ORIGIN } from "./worke
 import { RepairLedger } from "./repair-ledger.mjs";
 import { buildIsIssueSatisfied } from "./dependency-gate.mjs";
 import { spawnWorker } from "./worker-spawn.mjs";
+import { prepareWorktreeDependencies } from "./dependency-install.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "./worker-guard.mjs";
 import { publishWorkerResult } from "./worker-publish.mjs";
 import { publishRepairResult } from "./worker-publish.mjs";
@@ -173,6 +174,9 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     ghRepo: GITHUB_REPO,
     logRoot: logRoot(),
     spawnWorkerFn: spawnWorker,
+    // MOV-410: trusted, unsandboxed `npm ci --ignore-scripts` before every
+    // implementation and repair spawn; workers have no network to install.
+    prepareDependenciesFn: prepareWorktreeDependencies,
     // MOV-311: the machine-wide iOS simulator worker-lane lease, held for the
     // whole worker run of an "iOS Companion App" issue only (run-loop.mjs
     // gates on issue.project before ever calling these).

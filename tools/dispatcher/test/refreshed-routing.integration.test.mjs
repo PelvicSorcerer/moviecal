@@ -45,6 +45,7 @@ async function fixture(labels) {
     writeWorkerAuditFn: () => ({}), captureVerificationEvidenceFn: () => null,
     publishWorkerResultFn: () => ({ number: 1, url: "https://github.com/owner/repo/pull/1", isDraft: true, headSha: "fixture" }),
     persistAgentSessionFn: () => {}, readAgentSessionFn: () => null,
+    prepareDependenciesFn: async () => ({ ok: true, status: "already-prepared" }),
   });
   return { ctx, first, second, snapshots, linearClient, root, trial, manager };
 }

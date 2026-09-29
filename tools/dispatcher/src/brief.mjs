@@ -73,6 +73,16 @@ function externalFetchLines() {
   ];
 }
 
+// MOV-410: the dispatcher installs dependencies before spawn, because workers
+// have no network (MOV-331's worker-side `npm ci` failed with ENOTFOUND).
+// Replaces MOV-281's "run npm ci yourself" step for both workers and modes.
+function preparedDependencyLines() {
+  return [
+    "**Dependencies are already prepared; you have no network to install them.** Before this worker started, the trusted dispatcher ran `npm ci --ignore-scripts` in this worktree from the lockfile committed at its HEAD and confirmed the toolchain (`node_modules/.bin/tsc`, `next`, and `vitest`) is present. This worker has no outbound network for dependency installs: do **not** run `npm ci`, `npm install`, or any other package install or update, and do not add or change dependencies. If the toolchain is missing or broken anyway, or the issue cannot be done without a new or changed dependency, stop and report that as the blocker. Do not probe the toolchain by running `npm run verify`: a failed exact verification remains durable evidence and cannot be replaced by a later passing run.",
+    "",
+  ];
+}
+
 function iterativeVerificationLines() {
   return [
     "## Check your work while iterating",
@@ -184,10 +194,7 @@ export function generateBrief(issue, { branch, worktreePath, worker, model, upgr
     "**Run verification synchronously.** You are a one-shot invocation — there is no resume, no later turn in which to check on something you backgrounded. Wait for `npm run verify` and any build/test command (including `xcodebuild`, `xcrun simctl`, long-running `npm` scripts) to finish, and act on its actual result, before you exit. Never background a long-running build or test and exit expecting it to keep running or to be resumed — anything still running when you exit is forcibly killed before the dispatcher audits your filesystem changes.",
   );
   lines.push("");
-  lines.push(
-    "**Prepare dependencies before verification.** Before your first `npm run verify`, check whether the local toolchain is present. If `node_modules` is absent or incomplete, run `npm ci` as its own command and wait for it to finish first. Do not probe the toolchain by running `npm run verify` before this bootstrap step: a failed exact verification remains durable evidence and cannot be replaced by a later passing run.",
-  );
-  lines.push("");
+  lines.push(...preparedDependencyLines());
   lines.push(
     "**Run `npm run verify` as its own exact command, verbatim.** The dispatcher only credits local verification when your structured tool transcript records a command whose text is the literal `npm run verify` — nothing appended. Do **not** pipe it (`npm run verify 2>&1 | tail -300`, `| cat`), redirect it (`> out.log`), chain it (`&& echo done`, `; true`), or wrap it in a subshell — even a harmless wrapper used only to shorten output breaks the exact-string match and makes correct, passing work render as unverified (`Autonomy: disabled`) on the resulting PR. Run the plain command and let it print in full; summarize the result in your own words afterward if you want a shorter record, but never alter the invocation itself.",
   );
@@ -326,8 +333,7 @@ export function generateRepairBrief(issue, {
     ...externalFetchLines(),
     "**Run verification synchronously.** You are a one-shot invocation with no resume. Wait for `npm run verify` (and any other build/test command) to finish and act on its actual result before exiting. Anything still running when you exit is killed before the dispatcher audits your changes.",
     "",
-    "**Prepare dependencies before verification.** Before your first `npm run verify`, check whether the local toolchain is present. If `node_modules` is absent or incomplete, run `npm ci` as its own command and wait for it to finish first. Do not probe the toolchain by running `npm run verify` before this bootstrap step: a failed exact verification remains durable evidence and cannot be replaced by a later passing run.",
-    "",
+    ...preparedDependencyLines(),
     "**Run `npm run verify` as its own exact command, verbatim.** The dispatcher only credits local verification when your structured tool transcript records a command whose text is the literal `npm run verify` — nothing appended. Do **not** pipe it, redirect it, chain it, or wrap it in a subshell, even to shorten output — a wrapped invocation makes correct, passing work render as unverified (`Autonomy: disabled`) on the PR.",
     "",
   ];

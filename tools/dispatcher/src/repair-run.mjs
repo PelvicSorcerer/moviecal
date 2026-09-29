@@ -43,6 +43,7 @@ import { workerInvocation } from "./worker-routing.mjs";
 import { evaluateClaudeInit, reportClaudeStartupCheck } from "./worker-startup-check.mjs";
 import { formatUsageLine, usageContextFromInvocation } from "./worker-usage.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
+import { dependencyInstallBlockerSections, writeDependencyInstallManifest } from "./dependency-install.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
 
@@ -72,6 +73,7 @@ const REQUIRED_DEPENDENCIES = Object.freeze([
   "uncommittedChangesFn",
   "issueForEntryFn",
   "spawnWorkerFn",
+  "prepareDependenciesFn",
   "auditWorkerResultFn",
   "writeWorkerAuditFn",
   "publishRepairResultFn",
@@ -351,7 +353,7 @@ async function runInfrastructureRerun({ entry, ctx, decision, reporter }) {
 }
 
 /** Close out a reserved code-repair attempt that did not publish, and stop. */
-async function failCodeRepair({ entry, ctx, decision, reporter, reason, logDir = null }) {
+async function failCodeRepair({ entry, ctx, decision, reporter, reason, logDir = null, sections: explanation = null }) {
   const { ledger, uncommittedChangesFn, now = () => new Date(), logger = console } = ctx;
   ledger.complete(entry.id, decision.key, { outcome: "failed", detail: reason, now: now() });
 
@@ -364,7 +366,7 @@ async function failCodeRepair({ entry, ctx, decision, reporter, reason, logDir =
     logger.error(`${entry.id}: could not list the retained repair changes: ${error.message}`);
   }
 
-  const sections = [
+  const sections = explanation ? ["", ...explanation] : [
     "",
     "The repair worker's changes were **not** published: nothing was committed and nothing was pushed. The pull request is exactly as CI last saw it.",
     ...(retained.length
@@ -398,6 +400,7 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
     budgets = DEFAULT_REPAIR_BUDGETS,
     worktreeManager,
     spawnWorkerFn,
+    prepareDependenciesFn,
     auditWorkerResultFn,
     writeWorkerAuditFn,
     publishRepairResultFn,
@@ -462,6 +465,30 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
     repositoryContext,
   });
 
+  // MOV-410: the same trusted, pre-spawn install as an implementation
+  // attempt. A failure closes the reserved attempt with no worker started.
+  let dependencyInstall;
+  try {
+    dependencyInstall = await prepareDependenciesFn({ worktreePath: entry.path, logDir });
+  } catch (error) {
+    dependencyInstall = { ok: false, status: "failed", reason: `dependency preparation failed unexpectedly: ${error.message}` };
+  }
+  if (dependencyInstall && !dependencyInstall.ok) {
+    try {
+      writeDependencyInstallManifest(logDir, dependencyInstall);
+    } catch (error) {
+      logger.error(`${entry.id}: could not write the dependency-install manifest: ${error.message}`);
+    }
+    return failCodeRepair({
+      entry,
+      ctx,
+      decision,
+      reporter,
+      reason: `the dispatcher could not prepare dependencies before the repair worker: ${dependencyInstall.reason}`,
+      sections: ["The pull request is exactly as CI last saw it: nothing was committed or pushed.", ...dependencyInstallBlockerSections(dependencyInstall, logDir)],
+    });
+  }
+
   await reporter.publish("repair", {
     summary: `Starting bounded repair attempt ${attempt} of ${budgets.codeRepair} on PR #${entry.prNumber} at ${decision.headSha}.`,
     headline: `**Automatic repair started on PR #${entry.prNumber}** (attempt ${attempt} of ${budgets.codeRepair}).`,
@@ -490,6 +517,7 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
       signal: abortController.signal,
       securityContext: { mode: REPAIR_WORKER_MODE },
       trial: entry.trial ?? null,
+      dependencyInstall,
       // MOV-386: the same startup check as an implementation worker.
       ...((entry.worker || "claude") === "claude"
         ? { onWorkerInit: (event) => reportClaudeStartupCheck(evaluateClaudeInit(event), { label: `${entry.id} repair`, logger }) }

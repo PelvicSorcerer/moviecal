@@ -188,6 +188,12 @@ is absent. It does not alter #569, the evidence parser, the ledger, or the
 autonomy configuration; another clean application-code pilot after MOV-281 is
 merged is required.
 
+MOV-410 later moved that install out of the worker. Workers have no network,
+so the dispatcher now runs `npm ci --ignore-scripts` before spawn, and the
+briefs tell workers the toolchain is ready and not to install. MOV-281's
+intent is unchanged: dependencies exist before the first exact
+`npm run verify`, and the evidence rules are the same.
+
 ## Action budget and sequence
 
 The cap is the total durable ledger count, not a per-run allowance. The only

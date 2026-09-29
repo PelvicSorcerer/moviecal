@@ -214,4 +214,43 @@ describe("operator resume parsing and admission", () => {
     data.ctx.lockHeldFn = () => false;
     await expect(runOperatorResume(data.issue, inspection, data.ctx)).rejects.toThrow(/singleton lock/);
   });
+
+  it("prepares the retained worktree's dependencies before spawn and stops without a worker when that fails (MOV-410)", async () => {
+    const data = fixture();
+    const inspection = data.inspect();
+    let entry = { ...data.entry };
+    const order = [];
+    data.ctx.worktreeManager = {
+      loadState: () => ({ [id]: entry }),
+      updateEntry: (_id, extra) => { entry = { ...entry, ...extra }; return entry; },
+      resumeEntry: () => { entry = { ...entry, status: "active" }; return entry; },
+      markStatus: (_id, status) => { entry = { ...entry, status }; return entry; },
+      markStatusIf: (_id, expected, status) => {
+        if (entry.status === expected) entry = { ...entry, status };
+        return entry;
+      },
+      prepareWorkerSpawn: () => { order.push("spawn-pending"); },
+    };
+    const spawnWorkerFn = vi.fn();
+    Object.assign(data.ctx, {
+      lockHeldFn: () => true,
+      linearClient: { moveToState: async (_id, state) => { order.push(state); }, addComment: async () => {} },
+      stateIds: { agentWorking: "working", needsHumanDecision: "decision" },
+      repositoryContextFn: () => null, refreshIssueFn: async () => data.issue,
+      prepareDependenciesFn: vi.fn(async ({ worktreePath }) => {
+        order.push("install");
+        expect(worktreePath).toBe(entry.path);
+        return { ok: false, status: "failed", reason: "npm ci --ignore-scripts exited with code 1" };
+      }),
+      spawnWorkerFn, writeWorkerAuditFn: () => ({ path: "fixture-audit" }),
+      workerTimeoutMs: 1000, stopPollIntervalMs: 0,
+    });
+    const result = await runOperatorResume(data.issue, inspection, data.ctx);
+    expect(result.outcome).toBe("dependency-install-failed");
+    expect(spawnWorkerFn).not.toHaveBeenCalled();
+    expect(order).not.toContain("spawn-pending");
+    expect(order.indexOf("install")).toBeLessThan(order.lastIndexOf("decision"));
+    expect(entry.status).toBe("failed");
+    expect(entry.operatorResume).toMatchObject({ status: "finished", outcome: "dependency-install-failed" });
+  });
 });

@@ -3514,3 +3514,63 @@ describe("iOS Companion App worker-lane simulator lease (MOV-311)", () => {
     releaseWorker();
   });
 });
+
+describe("trusted dependency install before spawn (MOV-410)", () => {
+  let logRoot;
+  beforeEach(() => { logRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mov410-run-loop-")); });
+  afterEach(() => { fs.rmSync(logRoot, { recursive: true, force: true }); });
+
+  const INSTALLED = { ok: true, status: "installed", origin: "dispatcher", command: "npm", args: ["ci", "--ignore-scripts"], exitCode: 0, lockfileSha256: "lock-sha" };
+
+  it.each(["claude", "codex"])("prepares the %s worker's worktree before the worker process exists, and hands the record to the manifest", async (worker) => {
+    const order = [];
+    const ctx = baseCtx({
+      logRoot,
+      prepareDependenciesFn: vi.fn(async () => { order.push("install"); return INSTALLED; }),
+      spawnWorkerFn: vi.fn(async () => { order.push("spawn"); return { exitCode: 0, logDir: "/fake/logs/x" }; }),
+    });
+    ctx.worktreeManager.prepareWorkerSpawn = () => order.push("spawn-pending");
+
+    const [result] = await runOnce([{ ...ISSUE, labels: ["execution:mac", `worker:${worker}`] }], ctx);
+
+    expect(result.outcome).toBe("in-review");
+    expect(order).toEqual(["install", "spawn-pending", "spawn"]);
+    const logDir = path.join(logRoot, "MOV-1-fix-the-thing");
+    expect(ctx.prepareDependenciesFn).toHaveBeenCalledWith({ worktreePath: "/fake/worktrees/MOV-1-fix-the-thing", logDir });
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledTimes(1);
+    expect(ctx.spawnWorkerFn.mock.calls[0][0]).toMatchObject({ dependencyInstall: INSTALLED, invocation: { command: worker } });
+  });
+
+  it("stops a failed install before spawn with a precise blocker and no fallback", async () => {
+    const failed = { ok: false, status: "failed", reason: "npm ci --ignore-scripts exited with code 1", exitCode: 1, commit: "head", lockfileSha256: "lock-sha", outputTail: "npm error code ENOTFOUND" };
+    const ctx = baseCtx({ logRoot, prepareDependenciesFn: vi.fn(async () => failed) });
+    const prepareWorkerSpawn = vi.fn();
+    ctx.worktreeManager.prepareWorkerSpawn = prepareWorkerSpawn;
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result).toEqual({ issue: "MOV-1", outcome: "dependency-install-failed", error: failed.reason });
+    expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+    expect(prepareWorkerSpawn).not.toHaveBeenCalled();
+    expect(ctx.prepareDependenciesFn).toHaveBeenCalledTimes(1);
+    expect(ctx.worktreeManager.statusCalls).toEqual([{ id: "MOV-1", status: "failed" }]);
+    expect(ctx.linearClient.calls.filter((c) => c.type === "moveToState").at(-1).stateId).toBe("state-needs-human");
+    const comment = ctx.linearClient.calls.filter((c) => c.type === "addComment").at(-1).body;
+    expect(comment).toContain("Dispatcher could not prepare the worktree's dependencies; no worker started.");
+    expect(comment).toContain("Reason: npm ci --ignore-scripts exited with code 1");
+    expect(comment).toContain("npm error code ENOTFOUND");
+    expect(comment).toMatch(/no worker-side fallback, and no sandbox profile was changed/);
+    const manifest = JSON.parse(fs.readFileSync(path.join(logRoot, "MOV-1-fix-the-thing", "manifest.json"), "utf8"));
+    expect(manifest).toEqual({ workerStarted: false, exitCode: null, dependencyInstall: failed });
+  });
+
+  it("fails closed, without spawning, when the install step itself throws", async () => {
+    const ctx = baseCtx({ logRoot, prepareDependenciesFn: vi.fn(async () => { throw new Error("EACCES: log dir"); }) });
+
+    const [result] = await runOnce([ISSUE], ctx);
+
+    expect(result.outcome).toBe("dependency-install-failed");
+    expect(result.error).toMatch(/dependency preparation failed unexpectedly: EACCES: log dir/);
+    expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+  });
+});

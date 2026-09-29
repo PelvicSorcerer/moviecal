@@ -16,6 +16,7 @@ import { confirmStillClaimable, evaluateLocalDispatch } from "./dispatch-eligibi
 import { generateBrief } from "./brief.mjs";
 import { collectRepositoryContext } from "./repository-context.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
+import { dependencyInstallBlockerSections, writeDependencyInstallManifest } from "./dependency-install.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "./worker-guard.mjs";
 import { classifyWorkerFailure, NESTED_SANDBOX_CRASH } from "./failure-classification.mjs";
 import { classifyCredentialFailure, CREDENTIAL_FAILURE } from "./credential-failure.mjs";
@@ -422,6 +423,10 @@ const NO_WORKER_COOLDOWN_STORE = Object.freeze({
   state: () => ({ cooling: false, probeOwed: false, resetAt: null, evidence: null }),
 });
 
+// MOV-410: unwired callers (test doubles) skip the trusted install step;
+// buildRunContext() wires the real prepareWorktreeDependencies().
+const NO_DEPENDENCY_PREPARATION = async () => null;
+
 // MOV-403: default no-op breaker for unwired callers.
 const NO_CIRCUIT_BREAKER = Object.freeze({ isOpen: () => false, trip: () => {}, clear: () => {} });
 
@@ -668,6 +673,7 @@ async function dispatchIssue(issue, ctx) {
     ghRepo,
     logRoot,
     spawnWorkerFn,
+    prepareDependenciesFn = NO_DEPENDENCY_PREPARATION,
     workerTimeoutMs,
     uncommittedChangesFn = () => [],
     applyStagedWorkflowEditFn = () => ({ applied: false, reason: "not configured" }),
@@ -1055,6 +1061,7 @@ async function dispatchIssue(issue, ctx) {
         ghRepo,
         logRoot,
         spawnWorkerFn,
+        prepareDependenciesFn,
         workerTimeoutMs,
         uncommittedChangesFn,
         applyStagedWorkflowEditFn,
@@ -1164,6 +1171,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     ghRepo,
     logRoot,
     spawnWorkerFn,
+    prepareDependenciesFn = NO_DEPENDENCY_PREPARATION,
     workerTimeoutMs,
     uncommittedChangesFn,
     applyStagedWorkflowEditFn,
@@ -1279,6 +1287,33 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
   const logDir = operatorResume ? path.join(logRoot, entry.name, "operator-resume", operatorResume.attemptId)
     : path.join(logRoot, entry.name, continuation ? "budget-continuation" : "");
 
+  // MOV-410: the dispatcher, not the worker, prepares dependencies -- outside
+  // the sandbox and before the worker process exists, for fresh, resumed,
+  // continued, and operator-continued attempts alike. A failure stops here:
+  // there is no worker-side install fallback and no broader sandbox.
+  let dependencyInstall;
+  try {
+    dependencyInstall = await prepareDependenciesFn({ worktreePath: entry.path, logDir });
+  } catch (error) {
+    dependencyInstall = { ok: false, status: "failed", reason: `dependency preparation failed unexpectedly: ${error.message}` };
+  }
+  if (dependencyInstall && !dependencyInstall.ok) {
+    try {
+      writeDependencyInstallManifest(logDir, dependencyInstall);
+    } catch (error) {
+      logger.error(`Could not write the dependency-install manifest for ${issue.identifier}: ${error.message}`);
+    }
+    worktreeManager.markStatus(issue.identifier, "failed");
+    recordOperatorStage("dependency-install-failed");
+    await publisher.publish("error", {
+      stateId: stateIds.needsHumanDecision,
+      summary: `Dispatcher could not prepare dependencies for ${issue.identifier}, so no worker started: ${dependencyInstall.reason}`,
+      headline: "**Dispatcher could not prepare the worktree's dependencies; no worker started.**",
+      sections: dependencyInstallBlockerSections(dependencyInstall, logDir),
+    });
+    return { issue: issue.identifier, outcome: "dependency-install-failed", error: dependencyInstall.reason };
+  }
+
   // Two abort controllers with different jobs: `abortController` kills the
   // worker's process group (MOV-137/138), `watcherAbort` retires the stop
   // watcher once the worker has settled so no timer outlives the attempt.
@@ -1326,6 +1361,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
       },
       iosSimLeaseId,
       trial,
+      dependencyInstall,
       // MOV-386: warn as soon as the worker's own init event shows a
       // permission mode or tool set other than the one requested. The usage
       // record captures the same check from stdout.log once the run ends.

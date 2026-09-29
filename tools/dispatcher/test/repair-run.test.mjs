@@ -68,6 +68,7 @@ function context({ entry = ENTRY, observed = observation(), dirty = [], enabled 
     uncommittedChangesFn: vi.fn(() => dirty),
     issueForEntryFn: vi.fn(async () => issue),
     spawnWorkerFn: vi.fn(async () => ({ exitCode: 0 })),
+    prepareDependenciesFn: vi.fn(async () => ({ ok: true, status: "already-prepared" })),
     workerInvocationFn: vi.fn(() => ({ command: "worker", args: [] })),
     auditWorkerResultFn: vi.fn(() => ({ ok: true, violations: [] })),
     writeWorkerAuditFn: vi.fn(() => ({ path: "/logs/audit.json", sha256: "digest" })),
@@ -198,5 +199,49 @@ describe("runRepairPass (MOV-190)", () => {
     expect(ctx.publishRepairResultFn).not.toHaveBeenCalled();
     expect(ctx.commentOnPullRequestFn).not.toHaveBeenCalled();
     expect(ctx.issueForEntryFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("trusted dependency install before a repair worker (MOV-410)", () => {
+  it("installs before spawning the repair worker and records the install in its manifest arguments", async () => {
+    const ctx = context();
+    const order = [];
+    const record = { ok: true, status: "installed", command: "npm", args: ["ci", "--ignore-scripts"], exitCode: 0 };
+    ctx.prepareDependenciesFn = vi.fn(async () => { order.push("install"); return record; });
+    ctx.spawnWorkerFn = vi.fn(async () => { order.push("spawn"); return { exitCode: 0 }; });
+
+    const [result] = await runRepairPass(ctx);
+
+    expect(result.outcome).toBe("repaired");
+    expect(order).toEqual(["install", "spawn"]);
+    expect(ctx.prepareDependenciesFn).toHaveBeenCalledWith({ worktreePath: ENTRY.path, logDir: path.join(ctx.logRoot, `${ENTRY.name}-repair-${HEAD}`) });
+    expect(ctx.spawnWorkerFn).toHaveBeenCalledWith(expect.objectContaining({ dependencyInstall: record, securityContext: { mode: "repair" } }));
+  });
+
+  it("closes the reserved attempt without a worker when the install fails", async () => {
+    const ctx = context();
+    ctx.prepareDependenciesFn = vi.fn(async () => ({ ok: false, status: "failed", reason: "npm ci --ignore-scripts exited with code 1", outputTail: "npm error code ENOTFOUND" }));
+
+    const [result] = await runRepairPass(ctx);
+
+    expect(result.outcome).toBe("repair-failed");
+    expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
+    expect(ctx.publishRepairResultFn).not.toHaveBeenCalled();
+    const [attempt] = ctx.ledger.attempts(ENTRY.id);
+    expect(attempt).toMatchObject({ outcome: "failed" });
+    expect(attempt.detail).toMatch(/could not prepare dependencies before the repair worker: npm ci --ignore-scripts exited with code 1/);
+    const comment = ctx.commentOnPullRequestFn.mock.calls.at(-1)[0].body;
+    expect(comment).toContain("npm error code ENOTFOUND");
+    expect(comment).toMatch(/No worker was started/);
+    expect(comment).not.toMatch(/repair worker's changes were \*\*not\*\* published/);
+    const manifest = JSON.parse(fs.readFileSync(path.join(ctx.logRoot, `${ENTRY.name}-repair-${HEAD}`, "manifest.json"), "utf8"));
+    expect(manifest).toMatchObject({ workerStarted: false, dependencyInstall: { status: "failed" } });
+  });
+
+  it("refuses to run without the install step wired", async () => {
+    const ctx = context();
+    delete ctx.prepareDependenciesFn;
+    await expect(runRepairPass(ctx)).rejects.toThrow(/missing required dependencies: prepareDependenciesFn/);
+    expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
   });
 });

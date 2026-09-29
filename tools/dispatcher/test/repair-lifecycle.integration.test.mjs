@@ -34,7 +34,7 @@ function context({ observation = observed(), ledgerPath = null } = {}) {
     worktreeManager: { loadState: () => ({ "MOV-1": target }), activeCount: () => 0, updateEntry: vi.fn() },
     ghRepo: REPO, logRoot: root, workerTimeoutMs: 1_000, budgets: { codeRepair: 2, infrastructureRerun: 1, total: 3 }, concurrencyLimit: 1, trustedReviewers: ["trusted"],
     observePrFn: vi.fn(() => observation), localHeadShaFn: () => HEAD, uncommittedChangesFn: () => [], issueForEntryFn: async () => ({ id: "linear-1", identifier: "MOV-1", title: "Repair", description: "" }),
-    spawnWorkerFn: vi.fn(async () => ({ exitCode: 0 })), workerInvocationFn: () => ({ command: "worker", args: [] }), auditWorkerResultFn: () => ({ ok: true, violations: [] }), writeWorkerAuditFn: () => ({}),
+    spawnWorkerFn: vi.fn(async () => ({ exitCode: 0 })), prepareDependenciesFn: async () => ({ ok: true, status: "already-prepared" }), workerInvocationFn: () => ({ command: "worker", args: [] }), auditWorkerResultFn: () => ({ ok: true, violations: [] }), writeWorkerAuditFn: () => ({}),
     publishRepairResultFn: vi.fn(() => ({ number: 1, url: "https://github.com/owner/repo/pull/1", headSha: "head-2" })), rerunFailedJobsFn: vi.fn(() => ({ rerun: [{ id: 4, name: "CI", conclusion: "timed_out" }], skipped: [], errors: [] })), collectRepairEvidenceFn: () => ({}), commentOnPullRequestFn: vi.fn(), stateIds: { needsHumanDecision: "human" }, logger: { error() {} },
   };
   return ctx;

@@ -255,6 +255,8 @@ function fakeLeaves(overrides = {}) {
   return {
     worktreeManager: fakeWorktreeManager(),
     spawnWorkerFn: vi.fn(async () => ({ exitCode: 0, logDir: `${TMP_ROOT}/logs/x` })),
+    // MOV-410: the real install would run npm in these fake worktree paths.
+    prepareDependenciesFn: vi.fn(async () => ({ ok: true, status: "already-prepared" })),
     auditWorkerResultFn: vi.fn(() => ({ ok: true, violations: [] })),
     writeWorkerAuditFn: vi.fn(() => ({ path: `${TMP_ROOT}/logs/x/security-audit.json`, sha256: "abc123" })),
     publishWorkerResultFn: vi.fn(() => ({ number: 1, url: "https://github.com/owner/repo/pull/1", isDraft: true, headSha: "sha-1" })),
@@ -294,6 +296,9 @@ describe("dependency-gating -> promotion -> dispatch, one continuous run (MOV-19
 
     expect(typeof ctx.isIssueSatisfied).toBe("function");
     expect(ctx.usageLimitStore).toBeInstanceOf(UsageLimitStore);
+    // MOV-410: the live context wires the real trusted pre-spawn install.
+    const { prepareWorktreeDependencies } = await import("../src/dependency-install.mjs");
+    expect((await buildRunContext(linearClient, TEAM_KEY, [issue])).prepareDependenciesFn).toBe(prepareWorktreeDependencies);
 
     const [result] = await runOnce([issue], ctx);
 

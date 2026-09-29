@@ -15,6 +15,8 @@ Only workers that can execute against a real local git worktree on this Mac are 
 | `claude` | `claude -p --model <id>` | Primary worker. Full local tool access, MCP, worktree-aware |
 | `codex` | Routing: `codex --sandbox workspace-write exec --model <id> -c model_reasoning_effort=<tier>`; spawn: separate guarded client + native `exec-server` | Secondary worker. Independent quota pool and a real vendor-neutrality check on the worker-adapter interface; used only when pinned with `worker:codex` (or during the `worker:any` trial below). See below for the tier→effort/model mapping |
 
+Both workers get the same prepared worktree. The dispatcher runs `npm ci --ignore-scripts` itself before spawning either one, and neither worker installs dependencies or has network to do so (MOV-410). Routing to Codex therefore no longer depends on a worker-side install that its closed executor cannot perform. See [local-execution.md §Worktree lifecycle and §Security model](./local-execution.md#security-model).
+
 Cursor Cloud Agent and GitHub Copilot coding agent are **not** viable dispatch targets for this pipeline: both execute in a cloud VM with no path to this Mac's worktrees. They may still be useful as an editor/IDE completion tool, but that is a separate decision from this repo's agent-dispatch architecture and is not covered by this document.
 
 ### Installing the Codex CLI
