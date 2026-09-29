@@ -398,10 +398,32 @@ describe("WorktreeManager", () => {
     expect(fs.readFileSync(linked, "utf8")).toContain("NEXT_PUBLIC_SUPABASE_URL");
   });
 
-  it("marks a worktree merged and gc removes it", () => {
-    const entry = manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+  it("retains a freshly merged worktree until the terminal retention window passes (MOV-417)", () => {
+    manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
     manager.markStatus("MOV-1", "merged");
 
+    expect(manager.gc({ retentionDays: 7 })).toEqual([]);
+    expect(manager.loadState()["MOV-1"]).toBeDefined();
+  });
+
+  it("retains a merged entry with no usable endedAt instead of guessing its age", () => {
+    manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+    manager.markStatus("MOV-1", "merged");
+    const state = manager.loadState();
+    delete state["MOV-1"].endedAt;
+    manager.saveState(state);
+
+    expect(manager.gc({ retentionDays: 7 })).toEqual([]);
+  });
+
+  it("removes a merged worktree once it is older than the configured retention", () => {
+    const entry = manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix" });
+    manager.markStatus("MOV-1", "merged");
+    const state = manager.loadState();
+    state["MOV-1"].endedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+    manager.saveState(state);
+
+    expect(manager.gc({ retentionDays: 14 })).toEqual([]);
     const removed = manager.gc({ retentionDays: 7 });
 
     expect(removed).toEqual(["MOV-1"]);

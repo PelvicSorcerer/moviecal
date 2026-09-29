@@ -676,6 +676,19 @@ describe("LinearClient", () => {
       expect(await client.issueByIdentifier("not-an-identifier")).toBeNull();
     });
 
+    it("reads terminal-state evidence (state plus completed/canceled timestamps) for one issue", async () => {
+      const fetchImpl = mockFetch({
+        issues: { nodes: [{ identifier: "MOV-293", state: { name: "Done", type: "completed" }, completedAt: "2026-09-01T00:00:00.000Z", canceledAt: null }] },
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      expect(await client.issueTerminalSnapshot("mov-293")).toEqual({
+        identifier: "MOV-293", stateName: "Done", stateType: "completed", completedAt: "2026-09-01T00:00:00.000Z", canceledAt: null,
+      });
+      expect(JSON.parse(fetchImpl.mock.calls[0][1].body).variables).toEqual({ teamKey: "MOV", number: 293 });
+      expect(await client.issueTerminalSnapshot("nope")).toBeNull();
+    });
+
     it("creates an issue with its labels, project, milestone, and initial state", async () => {
       const fetchImpl = mockFetch({
         issueCreate: { success: true, issue: { id: "id-900", identifier: "MOV-900", url: "https://linear.test/MOV-900" } },
