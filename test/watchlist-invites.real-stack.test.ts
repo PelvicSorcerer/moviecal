@@ -129,6 +129,12 @@ describe('atomic seven-day invites — real database', () => {
     });
     expect(duplicate.error?.code).toBe('23505');
 
+    const revoked = await owner.client.rpc('rotate_watchlist_invite_link', {
+      target_watchlist_id: listId, new_token_hash: null,
+    });
+    expect(revoked.error).toBeNull();
+    expect(revoked.data).toBeNull();
+    await create();
     await revokeSharedWatchlistInviteLink({
       actorUserId: owner.id, repository, watchlistId: listId,
     });

@@ -72,9 +72,13 @@ begin
       target_watchlist_id, (select auth.uid()), new_token_hash,
       issued_at, issued_at + interval '7 days'
     ) returning * into created_link;
+
+    return created_link;
   end if;
 
-  return created_link;
+  -- An unassigned composite variable serializes as an all-null row through
+  -- PostgREST. A revoke has no replacement link, so return SQL NULL.
+  return null;
 end;
 $$;
 
