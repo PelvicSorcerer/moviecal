@@ -52,6 +52,8 @@ MOV-401 containment requires exactly CLI 0.157.1; unproved versions fail setup. 
 
 The Claude strong tier now defaults to Opus 5.5. The change reflects lower published token prices and stronger published coding results; see the retained review evidence in [MOV-362](https://linear.app/moviecal/issue/MOV-362/route-modelstrong-claude-workers-to-claude-opus-55). `MOVIECAL_MODEL_STRONG` still overrides the default.
 
+The Claude default tier now resolves to Sonnet 5.5, per direct instruction (2026-09-29); see [MOV-413](https://linear.app/moviecal/issue/MOV-413/route-modeldefault-claude-workers-to-claude-sonnet-55). `MOVIECAL_MODEL_DEFAULT` still overrides the default.
+
 Claude workers receive an explicit `--effort` by tier when their model supports it. Implementation and repair workers use the same mapping:
 
 | Tier | Default Claude effort | Override |

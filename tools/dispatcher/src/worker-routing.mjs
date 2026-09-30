@@ -360,7 +360,7 @@ export function modelIdForTier(worker, tier) {
   if (worker !== "claude") return null; // Codex uses codexModelIdForTier().
   const table = {
     cheap: process.env.MOVIECAL_MODEL_CHEAP || "claude-haiku-4-5",
-    default: process.env.MOVIECAL_MODEL_DEFAULT || "claude-sonnet-5",
+    default: process.env.MOVIECAL_MODEL_DEFAULT || "claude-sonnet-5-5",
     strong: process.env.MOVIECAL_MODEL_STRONG || "claude-opus-5-5",
   };
   const id = table[tier];
