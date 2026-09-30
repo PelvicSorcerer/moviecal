@@ -203,6 +203,52 @@ describe("LinearClient", () => {
     });
   });
 
+  describe("issueComments (MOV-423)", () => {
+    it("reads with first: 20, not last: 20, so an issue with more than 20 comments still surfaces the newest ones", async () => {
+      // Confirmed live against MOV-331/PelvicSorcerer/moviecal#797: Linear's
+      // comments connection is ordered newest-first. `comments(first: 20)`
+      // returned the newest comments, including the repeated observation
+      // key; `comments(last: 20)` returned only the oldest 20 (from several
+      // days earlier) and never contained it. This pins the query shape so a
+      // future edit cannot silently revert to `last: 20` and reintroduce the
+      // duplicate-publication bug.
+      const fetchImpl = mockFetch({ issue: { comments: { nodes: [{ body: "newest: ci-observation:797:sha:fp2" }, { body: "older: ci-observation:797:sha:fp1" }] } } });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      const bodies = await client.issueComments("issue-797");
+
+      expect(bodies).toEqual(["newest: ci-observation:797:sha:fp2", "older: ci-observation:797:sha:fp1"]);
+      const { query, variables } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+      expect(query).toMatch(/comments\(first: 20, after: \$after\)/);
+      expect(query).not.toMatch(/comments\(last: 20\)/);
+      expect(variables).toEqual({ issueId: "issue-797", after: null });
+    });
+
+    it("pages past 20 newer comments to find an existing observation key", async () => {
+      const key = "ci-observation:797:sha:old-key";
+      const fetchImpl = vi.fn(async (_url, init) => {
+        const { variables } = JSON.parse(init.body);
+        const nodes = variables.after
+          ? [{ body: `previous observation ${key}` }]
+          : Array.from({ length: 20 }, (_, index) => ({ body: `newer comment ${index}` }));
+        return { json: async () => ({ data: { issue: { comments: {
+          nodes,
+          pageInfo: { hasNextPage: !variables.after, endCursor: variables.after ? null : "page-2" },
+        } } } }) };
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      expect(await client.issueComments("issue-797", { untilContains: key })).toContain(`previous observation ${key}`);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(fetchImpl.mock.calls[1][1].body).variables.after).toBe("page-2");
+    });
+
+    it("returns an empty array when the issue or its comments are not visible, rather than throwing", async () => {
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl: mockFetch({ issue: null }) });
+      expect(await client.issueComments("issue-gone")).toEqual([]);
+    });
+  });
+
   it("issuesForPromotion adds stateName + recentComments and filters by a state list (MOV-129)", async () => {
     const fetchImpl = mockFetch({
       issues: {
@@ -220,7 +266,11 @@ describe("LinearClient", () => {
             inverseRelations: {
               nodes: [{ type: "blocks", issue: { id: "id-800", state: { name: "Done" } }, relatedIssue: { id: "id-900" } }],
             },
-            comments: { nodes: [{ body: "first" }, { body: "**Dispatcher preflight failed:** blocked by unresolved relation(s): id-800" }] },
+            // MOV-423: Linear's comments connection is newest-first, so this
+            // mock's array order (matching a real response) puts the newest
+            // comment first. `issuesForPromotion` reverses it back to the
+            // oldest-to-newest contract `recentComments` consumers expect.
+            comments: { nodes: [{ body: "**Dispatcher preflight failed:** blocked by unresolved relation(s): id-800" }, { body: "first" }] },
           },
         ],
       },
@@ -351,7 +401,10 @@ describe("LinearClient", () => {
       labels: { nodes: [{ name: "type:fix" }] },
       relations: { nodes: [] },
       inverseRelations: { nodes: [] },
-      comments: { nodes: [{ body: "a human comment" }, { body: "<!-- moviecal-issue-spec-audit:risk-missing -->" }] },
+      // MOV-423: newest-first, matching Linear's real comments connection
+      // order — `issuesForSpecAudit` reverses this back to the
+      // oldest-to-newest `recentComments` contract below.
+      comments: { nodes: [{ body: "<!-- moviecal-issue-spec-audit:risk-missing -->" }, { body: "a human comment" }] },
       ...overrides,
     });
 
@@ -381,7 +434,7 @@ describe("LinearClient", () => {
       const { query, variables } = JSON.parse(fetchImpl.mock.calls[0][1].body);
       expect(query).toMatch(/projectMilestone \{ name \}/);
       expect(query).toMatch(/projectMilestones \{ nodes \{ id \} \}/);
-      expect(query).toMatch(/comments\(last: 20\) \{ nodes \{ body \} \}/);
+      expect(query).toMatch(/comments\(first: 20\) \{ nodes \{ body \} \}/);
       expect(query).toMatch(/pageInfo\s*\{\s*hasNextPage\s+endCursor\s*\}/);
       // The state list is the caller's, resolved from workflow-state type.
       expect(query).toMatch(/state:\s*\{\s*name:\s*\{\s*in:\s*\$stateNames\s*\}\s*\}/);

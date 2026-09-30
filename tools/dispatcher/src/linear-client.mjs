@@ -64,6 +64,21 @@ const ISSUE_SPEC_FIELDS = `
  * issue with no project has no project status and no milestone count — not a
  * zero-milestone project, which is a different (and compliant) thing.
  */
+/**
+ * `recentComments` bodies, oldest-to-newest (MOV-423). Linear's `comments`
+ * connection is ordered newest-first, so `first: 20` returns the 20 newest
+ * comments in newest-first order. Every consumer of `recentComments`
+ * (`promoter.mjs`'s `lastPreflightFailureReason`, `issue-spec-audit.mjs`'s
+ * `lastAuditFingerprint`) is written against the pre-existing
+ * oldest-to-newest contract and scans from the end of the array for the most
+ * recent match, so the newest-first GraphQL order is reversed here to keep
+ * that contract intact — only which 20 comments are selected changes, not
+ * their presentation order.
+ */
+function recentCommentBodies(node) {
+  return (node.comments?.nodes || []).map((comment) => comment.body).reverse();
+}
+
 function withIssueSpecFields(node, normalized) {
   const project = node.project || null;
   return {
@@ -199,7 +214,7 @@ export class LinearClient {
           ${includeResumeFields ? ISSUE_SPEC_FIELDS : ""}
           state { name }
           children { nodes { id identifier state { name } } }
-          ${includeResumeFields ? "comments(last: 20) { nodes { body } }" : ""}
+          ${includeResumeFields ? "comments(first: 20) { nodes { body } }" : ""}
         }
       }
     `;
@@ -214,7 +229,7 @@ export class LinearClient {
         identifier: child.identifier,
         stateName: child.state ? child.state.name : null,
       })),
-      ...(includeResumeFields ? { recentComments: (node.comments?.nodes || []).map((comment) => comment.body) } : {}),
+      ...(includeResumeFields ? { recentComments: recentCommentBodies(node) } : {}),
     };
   }
 
@@ -236,7 +251,7 @@ export class LinearClient {
             ${ISSUE_FIELDS}
             ${ISSUE_SPEC_FIELDS}
             state { name }
-            comments(last: 20) { nodes { body } }
+            comments(first: 20) { nodes { body } }
           }
         }
       }
@@ -245,7 +260,7 @@ export class LinearClient {
     return data.issues.nodes.map((node) => ({
       ...withIssueSpecFields(node, normalizeIssue(node)),
       stateName: node.state ? node.state.name : null,
-      recentComments: (node.comments ? node.comments.nodes : []).map((c) => c.body),
+      recentComments: recentCommentBodies(node),
     }));
   }
 
@@ -273,7 +288,7 @@ export class LinearClient {
             ${ISSUE_FIELDS}
             ${ISSUE_SPEC_FIELDS}
             state { name type }
-            comments(last: 20) { nodes { body } }
+            comments(first: 20) { nodes { body } }
           }
         }
       }
@@ -289,7 +304,7 @@ export class LinearClient {
           ...withIssueSpecFields(node, normalizeIssue(node)),
           stateName: node.state ? node.state.name : null,
           stateType: node.state ? node.state.type : null,
-          recentComments: (node.comments ? node.comments.nodes : []).map((c) => c.body),
+          recentComments: recentCommentBodies(node),
         })),
       );
       if (!issues.pageInfo?.hasNextPage || !issues.pageInfo.endCursor) break;
@@ -394,14 +409,45 @@ export class LinearClient {
     return data.commentCreate.success;
   }
 
-  async issueComments(issueId) {
+  /**
+   * Comments on an issue, beginning with the newest (MOV-423). Linear's
+   * `comments` connection is ordered newest-first, so `first: N` is the N
+   * *newest* comments — confirmed live against MOV-331/PelvicSorcerer/moviecal#797,
+   * which had over 20 comments: `comments(first: 20)` returned the newest
+   * ones (including the repeated observation key), while `comments(last: 20)`
+   * returned the oldest 20 and never contained it. The review-CI observer's
+   * duplicate check (`reportObservationToLinear`) depends on seeing its own
+   * most recent comment here, so using `last` silently broke deduplication on
+   * any issue with a long comment history: the check looked at ancient
+   * comments and never found the key it had just posted, so every poll
+   * re-published the same observation. When a key is supplied, continue
+   * through older pages until it is found or the history is exhausted.
+   */
+  async issueComments(issueId, { untilContains } = {}) {
     const query = `
-      query($issueId: String!) {
-        issue(id: $issueId) { comments(last: 20) { nodes { body } } }
+      query($issueId: String!, $after: String) {
+        issue(id: $issueId) {
+          comments(first: 20, after: $after) {
+            nodes { body }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
       }
     `;
-    const data = await this.request(query, { issueId });
-    return (data.issue?.comments?.nodes || []).map((comment) => comment.body);
+    const bodies = [];
+    let after = null;
+    do {
+      const data = await this.request(query, { issueId, after });
+      const comments = data.issue?.comments;
+      const page = (comments?.nodes || []).map((comment) => comment.body);
+      bodies.push(...page);
+      if (!untilContains || page.some((body) => body.includes(untilContains)) || !comments?.pageInfo?.hasNextPage) break;
+      if (!comments.pageInfo.endCursor || comments.pageInfo.endCursor === after) {
+        throw new Error("Linear comments pagination did not advance");
+      }
+      after = comments.pageInfo.endCursor;
+    } while (true);
+    return bodies;
   }
 
   async moveToState(issueId, stateId) {

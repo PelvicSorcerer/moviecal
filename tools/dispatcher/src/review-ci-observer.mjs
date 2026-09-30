@@ -2,6 +2,8 @@
 // Keeping it separate from the long-running worker loop lets a terminal CI
 // transition be reported while an unrelated implementation worker is active.
 
+import { observationSnapshotKey } from "./ci-outcomes.mjs";
+
 let reportInFlight = false;
 
 /**
@@ -35,20 +37,21 @@ export async function reportReviewCi({
       if (observation.observationError || !observation.headSha) continue;
       const events = (observation.checks?.checks || []).map((check) => ({ ...check, sha: check.sha || observation.headSha, conclusion: check.outcome }));
       const decision = decideCiOutcome({ prNumber: entry.prNumber, prUrl: entry.prUrl || null, headSha: observation.headSha, events });
+      const statusObservation = {
+        requiredChecks: observation.checks.required.map((check) => check.name),
+        requiredCheckStates: observation.checks.required.map((check) => ({ name: check.name, outcome: check.outcome })),
+        missingRequired: observation.checks.missingRequired,
+        pending: observation.checks.pending,
+        timedOut: observation.checks.timedOut,
+      };
       const existingBodies = typeof linearClient?.issueComments === "function"
-        ? await linearClient.issueComments(issue.id)
+        ? await linearClient.issueComments(issue.id, { untilContains: observationSnapshotKey({ decision, observation: statusObservation }) })
         : [];
       results.push(await reportObservationToLinear({
         linearClient,
         issueId: issue.id,
         decision,
-        observation: {
-          requiredChecks: observation.checks.required.map((check) => check.name),
-          requiredCheckStates: observation.checks.required.map((check) => ({ name: check.name, outcome: check.outcome })),
-          missingRequired: observation.checks.missingRequired,
-          pending: observation.checks.pending,
-          timedOut: observation.checks.timedOut,
-        },
+        observation: statusObservation,
         existingBodies,
       }));
     }
