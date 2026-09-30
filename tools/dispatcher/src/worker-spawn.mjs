@@ -203,6 +203,7 @@ function reapProcessGroup(pid, { graceMs, killImpl }) {
  *   `system/init` event (Claude only emits one), so the caller can confirm the effective permission mode and tool set
  *   while the worker runs. Observation only: a throwing callback is swallowed and never affects the worker.
  * @param {object|null} [opts.trial] - MOV-383: worker-trial attribution (trialId, requestedWorker, resolvedWorker, routingReason, assignedAt) recorded in manifest.json; null outside a trial
+ * @param {object|null} [opts.jev] - MOV-427: Jev router-arm admission attribution (trialId, armId, policyHash, worker, routingReason, assignedAt) recorded in manifest.json; null outside the arm
  * @param {object|null} [opts.dependencyInstall] - MOV-412: the dispatcher's pre-spawn dependency install result, recorded in manifest.json; null when the caller ran no install
  * @returns {Promise<{exitCode: number, logDir: string, pid: number|null}>|{promise: Promise<{exitCode: number, logDir: string, pid: number|null}>, writeTurn: (text: string) => void, requestClose: () => void, nextTurnBoundary: () => Promise<{ended: boolean}>}}
  */
@@ -224,6 +225,7 @@ export function spawnWorker({
   onAssistantTurn = null,
   onWorkerInit = null,
   trial = null,
+  jev = null,
   dependencyInstall = null,
   prepareCodexContainmentFn = prepareCodexContainment,
 }) {
@@ -400,6 +402,8 @@ export function spawnWorker({
             exitCode,
             // MOV-383: worker-trial attribution; null outside a trial.
             trial,
+            // MOV-427: Jev router-arm admission attribution; null outside the arm.
+            jev,
             // MOV-412: the dispatcher's own pre-spawn install, kept out of the
             // worker transcript that the audit and verification evidence read.
             dependencyInstall,

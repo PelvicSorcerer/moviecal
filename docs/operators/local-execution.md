@@ -143,6 +143,17 @@ Fresh `worker:any` issues request Claude by default; MOV-395 selects another ava
 - **Records.** Trial ID, requested worker, resolved worker, routing reason and assignment time appear in `manifest.json`, the worktree registry entry and the usage record/`usage export`.
 - **Rollback.** `trial stop`, expiry, or cap exhaustion restores the Claude baseline for new claims. Already-assigned Codex issues finish on Codex; relabel `worker:claude` and requeue to move one.
 
+### Bounded Jev router arm admission (MOV-427)
+
+A separate, disabled-by-default admission ledger for the [MOV-422](https://linear.app/moviecal/issue/MOV-422) Jev router trial; the full policy, states, labels and rollback are in `docs/operators/worker-routing.md` §Bounded Jev router arm admission. **This build has no live routing** -- admitting an issue to a Jev arm never selects a worker, model, or provider, so `worker:*`/`model:*` dispatch above is completely unaffected. Operationally:
+
+- **Activate** (requires Adam's separate credit/governance approval, and an already-approved `policyHash` hard-coded into `jev-trial.mjs` -- the list ships empty): `node tools/dispatcher/bin/dispatcher.mjs jev activate --id <trialId> --arm <jev-hosted|jev-oss> --policy-hash <approved-hash> --expires <future ISO UTC, at most 14 days> --max-assignments <1-12> --spend-ceiling-usd <up to 75>`. Inspect with `jev status`, `dry-run` or `doctor`. The config is `~/.config/moviecal/jev-trial.json`; assignments/spend are `~/.config/moviecal/jev-trial-assignments.json`.
+- **Early stop:** `node tools/dispatcher/bin/dispatcher.mjs jev stop`. No daemon restart, no run lock; disables only future admissions and keeps every record.
+- **Eligibility.** Only an issue explicitly labeled `router:jev`, without `human-only`, `risk:high`, or an `area:auth`/`area:security`/`area:database`/`area:deployment`/`area:migrations`/`area:secrets`/`security-sensitive` label, can be admitted.
+- **Admission, the cap and the spend ceiling.** Admitted under the same dispatcher lock and at the same point as the worker trial above, immediately before the worktree is created, re-reading expiry, the 12-assignment cap and the spend ceiling each time. Non-blocking: an ineligible issue or an off/expired/exhausted/spend-exhausted/invalid arm simply dispatches unattributed under its ordinary route.
+- **Records.** Trial ID, arm ID, approved policy hash, allowed worker and assignment time appear in `manifest.json`, the worktree registry entry, the usage record/`usage export`, and a bounded field on `routing-decisions.jsonl`.
+- **Rollback.** `jev stop`, expiry, cap exhaustion, or the spend ceiling stops new admissions immediately; since routing itself is untouched in this build, no further rollback step applies to already-assigned issues.
+
 ## Dispatch trigger
 
 The dispatcher polls Linear for issues in workflow state `Ready for Agent`, then claims only the ones that satisfy **both** halves of the boundary below (MOV-143, `tools/dispatcher/src/dispatch-eligibility.mjs`). (A future phase may register a Linear Agent App for webhook-driven dispatch instead of polling; both share the same downstream pipeline.)

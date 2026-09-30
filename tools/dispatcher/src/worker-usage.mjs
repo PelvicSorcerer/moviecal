@@ -66,6 +66,20 @@ function sanitizeTrial(trial) {
   };
 }
 
+/** MOV-427: keep only bounded identifiers/timestamps of the Jev arm admission attribution; null outside the arm. */
+function sanitizeJev(jev) {
+  const trialId = identifier(jev?.trialId);
+  if (!trialId) return null;
+  return {
+    trialId,
+    armId: identifier(jev.armId),
+    policyHash: identifier(jev.policyHash),
+    worker: identifier(jev.worker),
+    routingReason: typeof jev.routingReason === "string" ? jev.routingReason.slice(0, 200) : null,
+    assignedAt: timestamp(jev.assignedAt),
+  };
+}
+
 /** Codex wraps commands as `bash -lc '<cmd>'`; unwrap so the exact-verify count sees the real command. */
 export function unwrapShellCommand(command) {
   if (typeof command !== "string") return command;
@@ -127,7 +141,7 @@ export function foldCodexUsage(events) {
 export function parseWorkerUsage(transcript, {
   issue, attemptKind, worker, modelId = null, tier = null, reasoningEffort = null, exitOutcome = null,
   durationMs = null, observedTurns = null, attemptId = null, origin = null, startedAt = null, endedAt = null,
-  wallDurationMs = null, terminationReason = null, trial = null,
+  wallDurationMs = null, terminationReason = null, trial = null, jev = null,
 } = {}) {
   const wall = number(wallDurationMs) ?? number(durationMs);
   const summary = {
@@ -136,6 +150,7 @@ export function parseWorkerUsage(transcript, {
     modelId: identifier(modelId), modelSource: identifier(modelId) ? "invocation" : null, modelsReported: [],
     tier: identifier(tier), reasoningEffort: identifier(reasoningEffort),
     trial: sanitizeTrial(trial),
+    jev: sanitizeJev(jev),
     startedAt: timestamp(startedAt), endedAt: timestamp(endedAt),
     budgetUnit: budgetUnitForWorker(worker), budgetCount: null,
     turns: null, turnsSource: null, durationMs: wall, wallDurationMs: wall, durationSource: wall === null ? null : "manifest-wall-clock",
@@ -472,6 +487,8 @@ export function summarizeByIssue(runs) {
       attempts: rows.length,
       attemptIds: rows.map((row) => row.attemptId).filter(Boolean),
       trialIds: [...new Set(rows.map((row) => row.trial?.trialId).filter(Boolean))].sort(),
+      // MOV-427: the Jev arm(s) this issue's attempts were admitted to, if any.
+      jevTrialIds: [...new Set(rows.map((row) => row.jev?.trialId).filter(Boolean))].sort(),
       attemptsByKind: countBy(rows, "attemptKind"),
       attemptsByExitOutcome: countBy(rows, "exitOutcome"),
       partialAttempts: rows.filter((row) => row.partial).length,

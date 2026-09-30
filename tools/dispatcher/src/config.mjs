@@ -86,6 +86,16 @@ export function workerTrialAssignmentsPath() {
   return path.join(configDir(), "worker-trial-assignments.json");
 }
 
+/** MOV-427: the bounded, disabled-by-default Jev router arm admission config; absent means disabled (jev-trial.mjs). */
+export function jevTrialConfigPath() {
+  return path.join(configDir(), "jev-trial.json");
+}
+
+/** MOV-427: durable, append-only record of Jev arm assignments and spend; makes the cap/spend meter survive restarts. */
+export function jevTrialAssignmentsPath() {
+  return path.join(configDir(), "jev-trial-assignments.json");
+}
+
 /** Numeric, redacted summaries of completed worker attempts (MOV-363). */
 export function workerUsageStatePath() {
   return path.join(configDir(), "worker-usage.json");

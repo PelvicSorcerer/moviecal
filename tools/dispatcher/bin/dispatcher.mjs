@@ -78,6 +78,8 @@ import {
   workerCooldownStatePath,
   workerTrialConfigPath,
   workerTrialAssignmentsPath,
+  jevTrialConfigPath,
+  jevTrialAssignmentsPath,
   workerUsageStatePath,
   repairLedgerStatePath,
   masterIncidentLedgerStatePath,
@@ -118,6 +120,7 @@ import { describeWorkerBudget } from "../src/turn-budget.mjs";
 import { resolveRouting, resolveDispatchWorker, workerProbeWinners, workerInvocation, modelIdForTier, claudeEffortForTier, claudeModelDoesNotSupportEffort } from "../src/worker-routing.mjs";
 import { WorkerCooldownStore, WORKERS as WORKER_POOLS } from "../src/worker-cooldown.mjs";
 import { WorkerTrialStore, describeTrialState } from "../src/worker-trial.mjs";
+import { JevArmStore, describeJevState, isEligibleForJevArm, ELIGIBLE_LABEL as JEV_ELIGIBLE_LABEL } from "../src/jev-trial.mjs";
 import { inferExecutionRoute, resolveExecutionRoute } from "../src/execution-routing.mjs";
 import {
   describeDelegate,
@@ -364,6 +367,14 @@ async function cmdDoctor() {
     checks.push({ name: "worker:any trial routing", ok: state.status !== "invalid", detail: describeTrialState(state) });
   }
 
+  // MOV-427: bounded Jev router-arm admission. Read-only; an invalid config
+  // fails the check because admission refuses eligible issues until fixed.
+  // No live routing exists yet, so this never affects worker/model dispatch.
+  {
+    const state = buildJevArmStore().state(new Date());
+    checks.push({ name: "jev arm admission", ok: state.status !== "invalid", detail: describeJevState(state) });
+  }
+
   // MOV-386: the last effective Claude worker permission mode and tool set,
   // read from the usage ledger (each run's own system/init event). Read-only;
   // a recorded mismatch fails the check so it cannot go unnoticed.
@@ -520,6 +531,57 @@ function cmdTrial(args) {
   return 1;
 }
 
+function buildJevArmStore() {
+  return new JevArmStore({ configPath: jevTrialConfigPath(), ledgerPath: jevTrialAssignmentsPath() });
+}
+
+/**
+ * MOV-427: `dispatcher jev status|activate|stop`. Activation and early stop
+ * touch only the arm config file: stop never deletes an assignment/spend
+ * record or disturbs running work, and neither needs (or contends for) the
+ * run lock. No live routing exists yet -- admission is bookkeeping ahead of
+ * MOV-428/429's transport.
+ */
+function cmdJev(args) {
+  const [action, ...flags] = args;
+  const store = buildJevArmStore();
+  const flag = (name) => {
+    const i = flags.indexOf(name);
+    return i === -1 ? undefined : flags[i + 1];
+  };
+  try {
+    if (action === "status") {
+      const state = store.state(new Date());
+      console.log(JSON.stringify(state, null, 2));
+      console.log(describeJevState(state));
+      return state.status === "invalid" ? 1 : 0;
+    }
+    if (action === "activate") {
+      const max = flag("--max-assignments");
+      const spend = flag("--spend-ceiling-usd");
+      const state = store.activate({
+        trialId: flag("--id"),
+        armId: flag("--arm"),
+        policyHash: flag("--policy-hash"),
+        expiresAt: flag("--expires"),
+        maxAssignments: max === undefined ? undefined : Number(max),
+        spendCeilingUsd: spend === undefined ? undefined : Number(spend),
+      });
+      console.log(describeJevState(state));
+      return 0;
+    }
+    if (action === "stop") {
+      console.log(describeJevState(store.stop()));
+      return 0;
+    }
+  } catch (error) {
+    console.error(`jev ${action} failed: ${error.message}`);
+    return 1;
+  }
+  console.error("Usage: dispatcher jev status | activate --id <trialId> --arm <jev-hosted|jev-oss> --policy-hash <hash> --expires <ISO UTC> --max-assignments <1-12> --spend-ceiling-usd <n> | stop");
+  return 1;
+}
+
 async function cmdDryRun({ fixturePath } = {}) {
   let issues;
   if (fixturePath) {
@@ -551,6 +613,10 @@ async function cmdDryRun({ fixturePath } = {}) {
   // Previewing never admits, so it never consumes an assignment slot.
   const trials = buildWorkerTrialStore();
   const trialState = trials.state(new Date());
+  // MOV-427: read-only snapshot of the same Jev arm admission `dispatcher run`
+  // uses. Previewing never admits, so it never consumes a slot or spend.
+  const jevArm = buildJevArmStore();
+  const jevState = jevArm.state(new Date());
 
   const requestedRoutes = issues.map((issue) => resolveDispatchWorker(issue, {
     boundWorker: usageLimits.get(issue.identifier)?.worker ?? null,
@@ -566,7 +632,8 @@ async function cmdDryRun({ fixturePath } = {}) {
     },
   });
 
-  console.log(`worker:any trial: ${describeTrialState(trialState)}\n`);
+  console.log(`worker:any trial: ${describeTrialState(trialState)}`);
+  console.log(`jev arm:         ${describeJevState(jevState)}\n`);
   console.log(`${issues.length} issue(s) in Ready for Agent:\n`);
   let routingError = false;
   const trialConfigError = trialState.status === "invalid";
@@ -620,6 +687,17 @@ async function cmdDryRun({ fixturePath } = {}) {
     if (resolvedWorker.trial) {
       const t = resolvedWorker.trial;
       console.log(`  trial:    ${t.trialId} — requested worker:any, resolved ${resolvedWorker.worker}, ${t.pending ? "would be assigned at dispatch" : `assigned ${t.assignedAt}`}; ${t.routingReason}`);
+    }
+    // MOV-427: preview only -- never admits. Existing assignments are shown
+    // as-is; a fresh issue shows whether it would be admitted right now.
+    {
+      const existingJev = jevArm.get(issue.identifier);
+      if (existingJev) {
+        console.log(`  jev arm:  ${existingJev.trialId}/${existingJev.armId} — assigned ${existingJev.assignedAt}; ${existingJev.reason}`);
+      } else if (jevState.status === "active") {
+        const eligibility = isEligibleForJevArm(issue, { eligibleLabel: JEV_ELIGIBLE_LABEL });
+        console.log(`  jev arm:  ${eligibility.eligible ? `would be admitted to ${jevState.trialId}/${jevState.armId} at dispatch` : `not eligible — ${eligibility.reason}`}`);
+      }
     }
     const quota = cooldownSnapshot[resolvedWorker.worker];
     if (quota?.cooling || quota?.probeOwed) console.log(`  worker cooldown: ${quota.cooling ? "COOLING" : "PROBE OWED"} until ${quota.resetAt}`);
@@ -1580,6 +1658,9 @@ async function main() {
     }
     case "trial":
       process.exitCode = cmdTrial(rest);
+      break;
+    case "jev":
+      process.exitCode = cmdJev(rest);
       break;
     case "doctor":
       process.exitCode = await cmdDoctor();
