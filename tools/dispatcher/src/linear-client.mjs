@@ -410,7 +410,7 @@ export class LinearClient {
   }
 
   /**
-   * The most recently posted comments on an issue (MOV-423). Linear's
+   * Comments on an issue, beginning with the newest (MOV-423). Linear's
    * `comments` connection is ordered newest-first, so `first: N` is the N
    * *newest* comments — confirmed live against MOV-331/PelvicSorcerer/moviecal#797,
    * which had over 20 comments: `comments(first: 20)` returned the newest
@@ -420,16 +420,34 @@ export class LinearClient {
    * most recent comment here, so using `last` silently broke deduplication on
    * any issue with a long comment history: the check looked at ancient
    * comments and never found the key it had just posted, so every poll
-   * re-published the same observation.
+   * re-published the same observation. When a key is supplied, continue
+   * through older pages until it is found or the history is exhausted.
    */
-  async issueComments(issueId) {
+  async issueComments(issueId, { untilContains } = {}) {
     const query = `
-      query($issueId: String!) {
-        issue(id: $issueId) { comments(first: 20) { nodes { body } } }
+      query($issueId: String!, $after: String) {
+        issue(id: $issueId) {
+          comments(first: 20, after: $after) {
+            nodes { body }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
       }
     `;
-    const data = await this.request(query, { issueId });
-    return (data.issue?.comments?.nodes || []).map((comment) => comment.body);
+    const bodies = [];
+    let after = null;
+    do {
+      const data = await this.request(query, { issueId, after });
+      const comments = data.issue?.comments;
+      const page = (comments?.nodes || []).map((comment) => comment.body);
+      bodies.push(...page);
+      if (!untilContains || page.some((body) => body.includes(untilContains)) || !comments?.pageInfo?.hasNextPage) break;
+      if (!comments.pageInfo.endCursor || comments.pageInfo.endCursor === after) {
+        throw new Error("Linear comments pagination did not advance");
+      }
+      after = comments.pageInfo.endCursor;
+    } while (true);
+    return bodies;
   }
 
   async moveToState(issueId, stateId) {

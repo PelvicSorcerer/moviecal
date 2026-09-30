@@ -66,8 +66,14 @@ function fakeLinearComments(prewrittenCount) {
   for (let i = 0; i < prewrittenCount; i++) comments.unshift(`unrelated human comment #${i}`);
   return {
     comments,
-    async issueComments() {
-      return comments.slice(0, 20);
+    async issueComments(_id, { untilContains } = {}) {
+      const read = [];
+      for (let offset = 0; offset < comments.length; offset += 20) {
+        const page = comments.slice(offset, offset + 20);
+        read.push(...page);
+        if (!untilContains || page.some((body) => body.includes(untilContains))) break;
+      }
+      return read;
     },
     async addComment(_id, body) {
       comments.unshift(body);
@@ -150,5 +156,29 @@ describe("review CI observation deduplication on a long comment history (MOV-423
     expect(observationComments).toHaveLength(2);
     expect(observationComments[0]).toContain("Decision: **propose-code-repair**");
     expect(observationComments[1]).toContain("Decision: **provisional**");
+  });
+
+  it("does not repost a snapshot after its key is buried under 20 newer comments", async () => {
+    const store = fakeLinearComments(25);
+    const linearClient = {
+      issuesInState: async () => [{ id: "linear-1", identifier: "MOV-1" }],
+      issueComments: store.issueComments,
+      addComment: store.addComment,
+    };
+    class ReviewWorktreeManager {
+      loadState() { return { "MOV-1": entry }; }
+    }
+    const args = {
+      linearClient, teamKey: "MOV", inReviewStateName: "In Review",
+      WorktreeManager: ReviewWorktreeManager, worktreeManagerOptions: {},
+      observePrFn: () => observation("pending"), githubRepo: "owner/repo",
+      decideCiOutcome, reportObservationToLinear,
+    };
+
+    await reportReviewCi(args);
+    for (let index = 0; index < 25; index++) store.comments.unshift(`new comment ${index}`);
+    await reportReviewCi(args);
+
+    expect(store.comments.filter((body) => body.includes("ci-observation:"))).toHaveLength(1);
   });
 });

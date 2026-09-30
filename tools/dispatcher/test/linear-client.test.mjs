@@ -219,9 +219,28 @@ describe("LinearClient", () => {
 
       expect(bodies).toEqual(["newest: ci-observation:797:sha:fp2", "older: ci-observation:797:sha:fp1"]);
       const { query, variables } = JSON.parse(fetchImpl.mock.calls[0][1].body);
-      expect(query).toMatch(/comments\(first: 20\) \{ nodes \{ body \} \}/);
+      expect(query).toMatch(/comments\(first: 20, after: \$after\)/);
       expect(query).not.toMatch(/comments\(last: 20\)/);
-      expect(variables).toEqual({ issueId: "issue-797" });
+      expect(variables).toEqual({ issueId: "issue-797", after: null });
+    });
+
+    it("pages past 20 newer comments to find an existing observation key", async () => {
+      const key = "ci-observation:797:sha:old-key";
+      const fetchImpl = vi.fn(async (_url, init) => {
+        const { variables } = JSON.parse(init.body);
+        const nodes = variables.after
+          ? [{ body: `previous observation ${key}` }]
+          : Array.from({ length: 20 }, (_, index) => ({ body: `newer comment ${index}` }));
+        return { json: async () => ({ data: { issue: { comments: {
+          nodes,
+          pageInfo: { hasNextPage: !variables.after, endCursor: variables.after ? null : "page-2" },
+        } } } }) };
+      });
+      const client = new LinearClient({ apiKey: "lin_api_abc", fetchImpl });
+
+      expect(await client.issueComments("issue-797", { untilContains: key })).toContain(`previous observation ${key}`);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(fetchImpl.mock.calls[1][1].body).variables.after).toBe("page-2");
     });
 
     it("returns an empty array when the issue or its comments are not visible, rather than throwing", async () => {
