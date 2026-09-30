@@ -33,7 +33,7 @@
 ## Invite links
 
 - Watchlist invite links are bearer credentials and must be treated with the same care as calendar tokens.
-- Store only hashed invite tokens in `watchlist_invite_links.token_hash`; compare them server-side when invite acceptance is implemented.
+- Store only hashed invite tokens in `watchlist_invite_links.token_hash`; compare them server-side. The raw invite URL is shown once after creation. Rotation and revoke use the caller-scoped, owner-only database RPC; expired and revoked links cannot be accepted.
 - Invite links must not imply user search, contact discovery, or a friend graph.
 - RLS should keep invite-link rows owner-scoped for interactive reads and writes; token resolution should happen through trusted server-side access.
 

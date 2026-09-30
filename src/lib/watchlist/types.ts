@@ -133,12 +133,11 @@ export interface WatchlistRepository {
     userId: string;
     watchlistId: string;
   }): Promise<WatchlistMember>;
-  createInviteLink(args: {
-    createdByUserId: string;
-    expiresAt: string | null;
-    tokenHash: string;
+  /** Atomically revoke the old link and optionally replace it with a seven-day link. */
+  rotateInviteLink(args: {
+    tokenHash: string | null;
     watchlistId: string;
-  }): Promise<WatchlistInviteLink>;
+  }): Promise<WatchlistInviteLink | null>;
   findItemByMovieIdForWatchlist(
     watchlistId: string,
     movieId: number,
@@ -175,7 +174,6 @@ export interface WatchlistRepository {
   ): Promise<WatchlistMember[]>;
   listTrackedMovies(): Promise<WatchlistMovieRow[]>;
   listWatchlistsForUser(userId: string): Promise<WatchlistSummary[]>;
-  revokeInviteLinksForWatchlist(watchlistId: string): Promise<void>;
   removeMembershipFromWatchlist(
     watchlistId: string,
     membershipId: string,

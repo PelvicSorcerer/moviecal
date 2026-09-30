@@ -37,6 +37,7 @@ function makeChain(result: { data: unknown; error: PostgrestError | null }) {
     insert: vi.fn().mockReturnThis(),
     update: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    gt: vi.fn().mockReturnThis(),
     is: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockReturnThis(),
@@ -54,19 +55,14 @@ function mockClient(result: { data: unknown; error: PostgrestError | null }) {
   } as unknown as ServerSupabaseClient;
 }
 
-describe('createInvitesAggregate — createInviteLink', () => {
-  it('returns a mapped WatchlistInviteLink', async () => {
-    const adminClient = mockClient({ data: VALID_INVITE_ROW, error: null });
-    const { createInviteLink } = createInvitesAggregate({
-      adminClient,
-      userClient: adminClient,
-    });
+describe('createInvitesAggregate — rotateInviteLink', () => {
+  it('uses the caller-scoped atomic RPC and maps its result', async () => {
+    const adminClient = mockClient({ data: null, error: null });
+    const userClient = { rpc: vi.fn().mockResolvedValue({ data: VALID_INVITE_ROW, error: null }) } as unknown as ServerSupabaseClient;
+    const { rotateInviteLink } = createInvitesAggregate({ adminClient, userClient });
 
-    const result = await createInviteLink({
-      createdByUserId: 'user-1',
-      expiresAt: '2026-07-20T00:00:00.000Z',
-      tokenHash: 'abc123hash',
-      watchlistId: 'watchlist-1',
+    const result = await rotateInviteLink({
+      tokenHash: 'abc123hash', watchlistId: 'watchlist-1',
     });
 
     expect(result).toEqual({
@@ -77,25 +73,26 @@ describe('createInvitesAggregate — createInviteLink', () => {
       revokedAt: null,
       watchlistId: 'watchlist-1',
     });
-    expect(adminClient.from).toHaveBeenCalledWith('watchlist_invite_links');
+    expect(userClient.rpc).toHaveBeenCalledWith('rotate_watchlist_invite_link', {
+      target_watchlist_id: 'watchlist-1', new_token_hash: 'abc123hash',
+    });
+    expect(adminClient.from).not.toHaveBeenCalled();
   });
 
-  it('throws WatchlistDataError on a PostgrestError', async () => {
+  it('passes null for revocation and does not log a failed rotation', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const adminClient = mockClient({ data: null, error: SUPABASE_ERROR });
-    const { createInviteLink } = createInvitesAggregate({
-      adminClient,
-      userClient: adminClient,
+    const userClient = { rpc: vi.fn()
+      .mockResolvedValueOnce({ data: null, error: null })
+      .mockResolvedValueOnce({ data: null, error: SUPABASE_ERROR }) } as unknown as ServerSupabaseClient;
+    const { rotateInviteLink } = createInvitesAggregate({ adminClient, userClient });
+    await expect(rotateInviteLink({ tokenHash: null, watchlistId: 'watchlist-1' })).resolves.toBeNull();
+    await expect(rotateInviteLink({ tokenHash: 'abc123hash', watchlistId: 'watchlist-1' }))
+      .rejects.toThrow(WatchlistDataError);
+    expect(userClient.rpc).toHaveBeenCalledWith('rotate_watchlist_invite_link', {
+      target_watchlist_id: 'watchlist-1', new_token_hash: null,
     });
-
-    await expect(
-      createInviteLink({
-        createdByUserId: 'user-1',
-        expiresAt: null,
-        tokenHash: 'abc123hash',
-        watchlistId: 'watchlist-1',
-      }),
-    ).rejects.toThrow(WatchlistDataError);
+    expect(consoleSpy).not.toHaveBeenCalled();
     consoleSpy.mockRestore();
   });
 });
@@ -134,33 +131,6 @@ describe('createInvitesAggregate — getActiveInviteLinkForWatchlist', () => {
     });
 
     await expect(getActiveInviteLinkForWatchlist('watchlist-1')).rejects.toThrow(
-      WatchlistDataError,
-    );
-    consoleSpy.mockRestore();
-  });
-});
-
-describe('createInvitesAggregate — revokeInviteLinksForWatchlist', () => {
-  it('resolves without error on success', async () => {
-    const adminClient = mockClient({ data: null, error: null });
-    const { revokeInviteLinksForWatchlist } = createInvitesAggregate({
-      adminClient,
-      userClient: adminClient,
-    });
-
-    await expect(revokeInviteLinksForWatchlist('watchlist-1')).resolves.toBeUndefined();
-    expect(adminClient.from).toHaveBeenCalledWith('watchlist_invite_links');
-  });
-
-  it('throws WatchlistDataError on a PostgrestError', async () => {
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const adminClient = mockClient({ data: null, error: SUPABASE_ERROR });
-    const { revokeInviteLinksForWatchlist } = createInvitesAggregate({
-      adminClient,
-      userClient: adminClient,
-    });
-
-    await expect(revokeInviteLinksForWatchlist('watchlist-1')).rejects.toThrow(
       WatchlistDataError,
     );
     consoleSpy.mockRestore();

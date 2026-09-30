@@ -48,6 +48,7 @@ export {
   createSharedWatchlist,
   createSharedWatchlistInviteLink,
   createWatchlistInviteToken,
+  revokeSharedWatchlistInviteLink,
   deleteSharedWatchlist,
   getSharedWatchlistInviteLinkStatus,
   hashWatchlistInviteToken,

@@ -128,7 +128,7 @@ describe('calendar watchlist aggregation', () => {
       async acceptInviteMembership() {
         throw new Error('not implemented');
       },
-      async createInviteLink() {
+      async rotateInviteLink() {
         throw new Error('not implemented');
       },
       async createWatchlist() {
@@ -242,7 +242,6 @@ describe('calendar watchlist aggregation', () => {
       async removeMembershipFromWatchlist() {
         return false;
       },
-      async revokeInviteLinksForWatchlist() {},
       async upsertMovie() {
         return { id: 42 };
       },

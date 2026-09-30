@@ -201,7 +201,6 @@ describe.skipIf(!supabaseReachable || !credentialsPresent)(
         .from('watchlist_invite_links')
         .insert({
           created_by_user_id: userIds.owner,
-          expires_at: null,
           token_hash: `mov-335-${randomUUID()}`,
           watchlist_id: sharedId,
         });
