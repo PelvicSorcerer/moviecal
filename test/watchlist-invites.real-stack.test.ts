@@ -133,7 +133,7 @@ describe('atomic seven-day invites — real database', () => {
       target_watchlist_id: listId, new_token_hash: null,
     });
     expect(revoked.error).toBeNull();
-    expect(revoked.data).toBeNull();
+    expect((await links()).filter((link) => link.revoked_at === null)).toHaveLength(0);
     await create();
     await revokeSharedWatchlistInviteLink({
       actorUserId: owner.id, repository, watchlistId: listId,

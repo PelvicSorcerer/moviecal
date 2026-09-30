@@ -74,6 +74,12 @@ export function createInvitesAggregate(args: {
         throw new WatchlistDataError('Supabase request failed.');
       }
 
+      // PostgREST serializes a null composite result as an object whose fields
+      // are all null. Revocation has no replacement link to map.
+      if (tokenHash === null) {
+        return null;
+      }
+
       return data ? mapInviteLinkRow(assertInviteLinkRow(data)) : null;
     },
 

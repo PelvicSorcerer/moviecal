@@ -83,7 +83,10 @@ describe('createInvitesAggregate — rotateInviteLink', () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const adminClient = mockClient({ data: null, error: SUPABASE_ERROR });
     const userClient = { rpc: vi.fn()
-      .mockResolvedValueOnce({ data: null, error: null })
+      .mockResolvedValueOnce({ data: {
+        id: null, watchlist_id: null, created_by_user_id: null,
+        token_hash: null, created_at: null, expires_at: null, revoked_at: null,
+      }, error: null })
       .mockResolvedValueOnce({ data: null, error: SUPABASE_ERROR }) } as unknown as ServerSupabaseClient;
     const { rotateInviteLink } = createInvitesAggregate({ adminClient, userClient });
     await expect(rotateInviteLink({ tokenHash: null, watchlistId: 'watchlist-1' })).resolves.toBeNull();

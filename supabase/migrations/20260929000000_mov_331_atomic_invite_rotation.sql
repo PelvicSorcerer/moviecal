@@ -76,8 +76,8 @@ begin
     return created_link;
   end if;
 
-  -- An unassigned composite variable serializes as an all-null row through
-  -- PostgREST. A revoke has no replacement link, so return SQL NULL.
+  -- Revocation has no replacement link. PostgREST serializes this null
+  -- composite as an all-null object, which the caller treats as absent.
   return null;
 end;
 $$;
