@@ -252,10 +252,7 @@ export async function createSharedWatchlistInviteLink(args: {
   });
   const inviteToken = createWatchlistInviteToken();
 
-  await args.repository.revokeInviteLinksForWatchlist(watchlist.id);
-  await args.repository.createInviteLink({
-    createdByUserId: args.actorUserId,
-    expiresAt: null,
+  await args.repository.rotateInviteLink({
     tokenHash: hashWatchlistInviteToken(inviteToken),
     watchlistId: watchlist.id,
   });
@@ -267,6 +264,15 @@ export async function createSharedWatchlistInviteLink(args: {
       args.baseUrl,
     ).toString(),
   };
+}
+
+export async function revokeSharedWatchlistInviteLink(args: {
+  actorUserId: string;
+  repository: WatchlistRepository;
+  watchlistId: string;
+}): Promise<void> {
+  const watchlist = await requireOwnedSharedWatchlist(args);
+  await args.repository.rotateInviteLink({ tokenHash: null, watchlistId: watchlist.id });
 }
 
 async function readMembersWithOwnerAnchor(args: {

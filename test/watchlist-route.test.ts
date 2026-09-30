@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   createSupabaseWatchlistRepository: vi.fn(),
   createSharedWatchlist: vi.fn(),
   createSharedWatchlistInviteLink: vi.fn(),
+  revokeSharedWatchlistInviteLink: vi.fn(),
   acceptWatchlistInvite: vi.fn(),
   removeSharedWatchlistMember: vi.fn(),
   listPersonalWatchlistItems: vi.fn(),
@@ -53,6 +54,7 @@ vi.mock('../src/lib/watchlist', async () => {
     ...actual,
     createSharedWatchlist: mocks.createSharedWatchlist,
     createSharedWatchlistInviteLink: mocks.createSharedWatchlistInviteLink,
+    revokeSharedWatchlistInviteLink: mocks.revokeSharedWatchlistInviteLink,
     acceptWatchlistInvite: mocks.acceptWatchlistInvite,
     removeSharedWatchlistMember: mocks.removeSharedWatchlistMember,
     listPersonalWatchlistItems: mocks.listPersonalWatchlistItems,
@@ -430,6 +432,23 @@ describe('watchlist routes', () => {
       actorUserId: 'user-1',
       baseUrl: 'https://moviecal.test',
       repository: { name: 'repository' },
+      watchlistId: 'shared-watchlist-1',
+    });
+  });
+
+  it('revokes a shared invite through DELETE without returning a bearer URL', async () => {
+    const { DELETE } = await import('../src/app/api/watchlist/shared/[watchlistId]/invite/route');
+    mocks.revokeSharedWatchlistInviteLink.mockResolvedValue(undefined);
+    const response = await DELETE(
+      new NextRequest('https://moviecal.test/api/watchlist/shared/shared-watchlist-1/invite', {
+        method: 'DELETE',
+      }),
+      { params: Promise.resolve({ watchlistId: 'shared-watchlist-1' }) },
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ revoked: true });
+    expect(mocks.revokeSharedWatchlistInviteLink).toHaveBeenCalledWith({
+      actorUserId: 'user-1', repository: { name: 'repository' },
       watchlistId: 'shared-watchlist-1',
     });
   });

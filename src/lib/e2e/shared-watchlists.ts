@@ -139,6 +139,7 @@ export function createE2EInviteLink(args: {
   }
 
   const sharedState = readE2ESharedState(args.reader);
+  const createdAt = new Date();
   const nextSharedState: E2ESharedState = {
     memberships: sharedState.memberships,
     inviteLinks: [
@@ -149,7 +150,9 @@ export function createE2EInviteLink(args: {
           revokedAt: inviteLink.revokedAt ?? new Date().toISOString(),
         })),
       createE2EWatchlistInviteLink({
+        createdAt: createdAt.toISOString(),
         createdByUserId: args.actorUserId,
+        expiresAt: new Date(createdAt.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
         token: args.token,
         watchlistId: args.watchlistId,
       }),
@@ -162,6 +165,27 @@ export function createE2EInviteLink(args: {
     watchlist: access.watchlist,
     inviteUrl: new URL(`/watchlist/invite/${encodeURIComponent(args.token)}`, args.baseUrl).toString(),
   };
+}
+
+export function revokeE2EInviteLink(args: {
+  actorUserId: string;
+  reader: CookieValueReader;
+  response: CookieWriter;
+  watchlistId: string;
+}): boolean {
+  const access = getE2EWatchlistAccess(args.reader, args.actorUserId, args.watchlistId);
+  if (!access || access.watchlist.ownerUserId !== args.actorUserId) {
+    return false;
+  }
+
+  const state = readE2ESharedState(args.reader);
+  setE2ESharedStateCookie(args.response, {
+    memberships: state.memberships,
+    inviteLinks: state.inviteLinks.map((link) => link.watchlistId === args.watchlistId
+      ? { ...link, revokedAt: link.revokedAt ?? new Date().toISOString() }
+      : link),
+  });
+  return true;
 }
 
 export function acceptE2EInvite(args: {

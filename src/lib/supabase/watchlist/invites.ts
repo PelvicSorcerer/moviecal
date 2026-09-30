@@ -1,5 +1,5 @@
 import type { ServerSupabaseClient } from '../server';
-import type { ResolvedWatchlistInvite, WatchlistInviteLink } from '../../watchlist';
+import { WatchlistDataError, type ResolvedWatchlistInvite, type WatchlistInviteLink } from '../../watchlist';
 import {
   throwSupabaseError,
   watchlistInviteLinkSelect,
@@ -57,33 +57,30 @@ export function createInvitesAggregate(args: {
   userClient: ServerSupabaseClient;
 }) {
   return {
-    async createInviteLink({
-      createdByUserId,
-      expiresAt,
+    async rotateInviteLink({
       tokenHash,
       watchlistId,
     }: {
-      createdByUserId: string;
-      expiresAt: string | null;
-      tokenHash: string;
+      tokenHash: string | null;
       watchlistId: string;
-    }): Promise<WatchlistInviteLink> {
-      const { data, error } = await args.adminClient
-        .from('watchlist_invite_links')
-        .insert({
-          created_by_user_id: createdByUserId,
-          expires_at: expiresAt,
-          token_hash: tokenHash,
-          watchlist_id: watchlistId,
-        })
-        .select(watchlistInviteLinkSelect)
-        .single();
+    }): Promise<WatchlistInviteLink | null> {
+      const { data, error } = await args.userClient.rpc('rotate_watchlist_invite_link', {
+        target_watchlist_id: watchlistId,
+        new_token_hash: tokenHash,
+      });
 
       if (error) {
-        throwSupabaseError(error);
+        // Do not log RPC errors: they can contain the hash passed to the call.
+        throw new WatchlistDataError('Supabase request failed.');
       }
 
-      return mapInviteLinkRow(assertInviteLinkRow(data));
+      // PostgREST serializes a null composite result as an object whose fields
+      // are all null. Revocation has no replacement link to map.
+      if (tokenHash === null) {
+        return null;
+      }
+
+      return data ? mapInviteLinkRow(assertInviteLinkRow(data)) : null;
     },
 
     async findInviteLinkByTokenHash(
@@ -132,6 +129,7 @@ export function createInvitesAggregate(args: {
         .select(watchlistInviteLinkSelect)
         .eq('watchlist_id', watchlistId)
         .is('revoked_at', null)
+        .gt('expires_at', new Date().toISOString())
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -143,18 +141,5 @@ export function createInvitesAggregate(args: {
       return data ? mapInviteLinkRow(assertInviteLinkRow(data)) : null;
     },
 
-    async revokeInviteLinksForWatchlist(watchlistId: string): Promise<void> {
-      const { error } = await args.adminClient
-        .from('watchlist_invite_links')
-        .update({
-          revoked_at: new Date().toISOString(),
-        })
-        .eq('watchlist_id', watchlistId)
-        .is('revoked_at', null);
-
-      if (error) {
-        throwSupabaseError(error);
-      }
-    },
   };
 }

@@ -186,6 +186,13 @@ export interface Database {
     };
     Views: Record<string, never>;
     Functions: {
+      rotate_watchlist_invite_link: {
+        Args: {
+          target_watchlist_id: string;
+          new_token_hash: string | null;
+        };
+        Returns: Database['public']['Tables']['watchlist_invite_links']['Row'] | null;
+      };
       can_edit_watchlist: {
         Args: {
           target_watchlist_id: string;

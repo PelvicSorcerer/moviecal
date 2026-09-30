@@ -183,9 +183,13 @@ function createSharedRegressionRepository(options?: {
 
         return member;
       },
-      async createInviteLink(args) {
+      async rotateInviteLink(args) {
+        if (args.tokenHash === null) {
+          inviteLink = null;
+          return null;
+        }
         const link = buildWatchlistInviteLink({
-          createdByUserId: args.createdByUserId,
+          createdByUserId: 'user-1',
           id: 'invite-new',
           watchlistId: args.watchlistId,
         });
@@ -196,9 +200,6 @@ function createSharedRegressionRepository(options?: {
         };
 
         return link;
-      },
-      async revokeInviteLinksForWatchlist() {
-        inviteLink = null;
       },
       async getActiveInviteLinkForWatchlist(watchlistId) {
         return inviteLink?.watchlist.id === watchlistId
@@ -552,6 +553,26 @@ describe('shared watchlist regression integration', () => {
     await expect(response.json()).resolves.toEqual({
       error: 'Watchlist access denied.',
     });
+  });
+
+  it('revokes an invite for the owner and refuses a non-owner', async () => {
+    const { repository } = createSharedRegressionRepository();
+    setupAuthenticatedRouteMocks(repository);
+    const { DELETE } = await import('../src/app/api/watchlist/shared/[watchlistId]/invite/route');
+    const request = () => new NextRequest(
+      `https://moviecal.test/api/watchlist/shared/${TEST_WATCHLIST_IDS.SHARED}/invite`,
+      { method: 'DELETE' },
+    );
+    const context = { params: Promise.resolve({ watchlistId: TEST_WATCHLIST_IDS.SHARED }) };
+    const ownerResponse = await DELETE(request(), context);
+    expect(ownerResponse.status).toBe(200);
+    await expect(ownerResponse.json()).resolves.toEqual({ revoked: true });
+
+    setupCollaboratorAuth();
+    mocks.createSupabaseWatchlistRepository.mockReturnValue(repository);
+    const denied = await DELETE(request(), context);
+    expect(denied.status).toBe(403);
+    await expect(denied.json()).resolves.toEqual({ error: 'Watchlist access denied.' });
   });
 
   it('removes a shared watchlist member for the owner', async () => {

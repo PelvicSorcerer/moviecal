@@ -26,8 +26,8 @@ export function createWatchlistRepository(
     async acceptInviteMembership() {
       return buildWatchlistMember();
     },
-    async createInviteLink() {
-      return buildWatchlistInviteLink();
+    async rotateInviteLink({ tokenHash }) {
+      return tokenHash ? buildWatchlistInviteLink() : null;
     },
     async createWatchlist() {
       return sharedWatchlist;
@@ -131,9 +131,6 @@ export function createWatchlistRepository(
               ownerUserId: userId,
             }),
           ];
-    },
-    async revokeInviteLinksForWatchlist() {
-      return undefined;
     },
     async removeMembershipFromWatchlist() {
       return true;
