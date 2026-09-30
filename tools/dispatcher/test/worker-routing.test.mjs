@@ -535,11 +535,21 @@ describe("modelIdForTier", () => {
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "custom-strong-model"]);
   });
 
-  it("keeps the Claude cheap and default models unchanged", () => {
+  it("keeps the Claude cheap model unchanged", () => {
     delete process.env.MOVIECAL_MODEL_CHEAP;
-    delete process.env.MOVIECAL_MODEL_DEFAULT;
     expect(modelIdForTier("claude", "cheap")).toBe("claude-haiku-4-5");
-    expect(modelIdForTier("claude", "default")).toBe("claude-sonnet-5");
+  });
+
+  it("uses the new Claude default-tier model in the worker invocation", () => {
+    delete process.env.MOVIECAL_MODEL_DEFAULT;
+    const args = workerInvocation("claude", "default").args;
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "claude-sonnet-5-5"]);
+  });
+
+  it("honors the configured Claude default model override", () => {
+    process.env.MOVIECAL_MODEL_DEFAULT = "custom-default-model";
+    const args = workerInvocation("claude", "default").args;
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "custom-default-model"]);
   });
 
   it("returns null for a non-claude worker (codex resolves its own default)", () => {
