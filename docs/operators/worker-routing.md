@@ -134,10 +134,40 @@ preflight/routing failure handling.
 Bounded routing evidence is appended to `routing-decisions.jsonl` beside the
 issue's run logs. It records poll and refreshed routing inputs, the selected
 worker/tier/model/effort/budget and selection reason, and `unchanged`, `deferred`,
-or `spawn-requested` decisions. `spawn-requested` records the invocation the
-dispatcher handed to the worker adapter; the transcript confirms whether it
-started. Evidence uses known routing labels and bounded model identifiers,
-never descriptions, prompts, credentials, or arbitrary label contents.
+or `spawn-requested` decisions (`kind: "routing-decision"`). `spawn-requested`
+records the invocation the dispatcher handed to the worker adapter; the
+transcript confirms whether it started. Evidence uses known routing labels and
+bounded model identifiers, never descriptions, prompts, credentials, or
+arbitrary label contents.
+
+### Per-request routed accounting (MOV-426)
+
+The same file also carries `kind: "routed-request"` rows: one bounded, folded
+record per logical routed request (a worker turn dispatched through a router
+arm), written by `tools/dispatcher/src/routed-request.mjs`. No live router
+arm is wired up yet (MOV-427/MOV-428 own that credential and provider work);
+this is the accounting contract a future broker must emit, built and tested
+ahead of it so the trial can be audited from day one.
+
+Each row carries the issue/attempt/turn/request ID, router arm and policy
+hash, requested and resolved model/effort, provider, input/output/cache
+tokens and cache-hit status, latency, API-equivalent and actual billed USD,
+invoice ID(s), and fallback/error status -- or an explicit `"missing"` marker
+per field in `availability` when the router never reported it; a field is
+never invented. A retried request (chained by the broker's `retryOf`) folds
+to one record keyed by its first attempt, so a retry is never double-counted
+as a second accepted turn, while `billedUsd` still sums every attempt in the
+chain since a failed call can still be invoiced.
+
+`captureWorkerUsage` folds an attempt's routed-request rows (scoped by
+attempt ID) into its `usage.json` as `routedRequests`/`routedInvoice`.
+`dispatcher usage export`'s per-issue `routedInvoice` sums every attempt kind
+(implementation, continuation, resume, repair) for that issue exactly once,
+deduplicated by request ID, and reports `apiEquivalentUsd` and `billedUsd` as
+separate totals -- the former is a Claude-style API-equivalent estimate, the
+latter is the actual OpenRouter (or other provider) invoice; they are never
+added together. Like all routing evidence, a routed-request row never carries
+a prompt, tool payload, header, or credential.
 
 
 - `worker:claude` / `worker:codex` — pins the worker binary. Pinned workers are never changed, including by the quota-pool cooldown below.
