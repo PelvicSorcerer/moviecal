@@ -517,6 +517,7 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
       signal: abortController.signal,
       securityContext: { mode: REPAIR_WORKER_MODE },
       trial: entry.trial ?? null,
+      jev: entry.jev ?? null,
       dependencyInstall,
       // MOV-386: the same startup check as an implementation worker.
       ...((entry.worker || "claude") === "claude"
@@ -533,6 +534,7 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
       ...usageContextFromInvocation(invocation, entry.worker || "claude"),
       tier: entry.model || "default",
       trial: entry.trial ?? null,
+      jev: entry.jev ?? null,
       exitOutcome: result.exitCode === 0 ? "exited-0" : `exited-${result.exitCode}`,
     })).catch((error) => { logger.error(`Could not capture repair usage for ${entry.id}: ${error.message}`); return null; });
     spawnResult = await raceRepairTimeout(workerPromise, workerTimeoutMs);

@@ -456,7 +456,7 @@ export class WorktreeManager {
    * Create a new worktree + branch from origin/master and record it.
    * Returns the state entry.
    */
-  create({ id, name, branch, worker, model, trial = null, linearUrl, linearIssueId, envLocalSource, repository }) {
+  create({ id, name, branch, worker, model, trial = null, jev = null, linearUrl, linearIssueId, envLocalSource, repository }) {
     const worktreePath = path.join(this.worktreeRoot, name);
     if (!this.isPathFree(worktreePath)) {
       throw new Error(`worktree path already exists: ${worktreePath}`);
@@ -503,6 +503,10 @@ export class WorktreeManager {
       // MOV-383: worker-trial attribution from the original assignment, kept so
       // repairs of this retained worktree stay attributed after the trial ends.
       trial,
+      // MOV-427: Jev router-arm admission from the original assignment, kept
+      // so a repair or resume of this retained worktree stays attributed to
+      // the same arm after the arm ends -- it never re-admits.
+      jev,
       linearUrl,
       // The Linear issue's internal UUID (distinct from `id`, which is the
       // human-readable identifier like "MOV-152") -- pr-reconcile.mjs needs

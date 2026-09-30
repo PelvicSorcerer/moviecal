@@ -357,6 +357,11 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       // MOV-303: persists only { lastRunAt } for the issue-completeness
       // audit's cadence -- not a credential.
       "issueSpecAuditStatePath",
+      // MOV-427: the bounded Jev router-arm admission config and its
+      // assignment/spend ledger -- dispatcher state, not credentials. No
+      // provider key lives here; MOV-428/429 own actual credential storage.
+      "jevTrialAssignmentsPath",
+      "jevTrialConfigPath",
       "linearAppEnvPath",
       "linearEnvPath",
       // MOV-314: durable incident state for master-CI observations, not a credential.

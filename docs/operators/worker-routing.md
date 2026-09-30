@@ -231,6 +231,37 @@ node tools/dispatcher/bin/dispatcher.mjs trial stop
 
 **Rollback.** `trial stop` (or waiting for expiry/exhaustion) restores the baseline for new claims immediately. Issues already assigned to Codex finish there; to move one, relabel it `worker:claude` and requeue it through the normal recovery workflow. Deleting `worker-trial.json` is equivalent to disabled but loses the config record — prefer `stop`.
 
+## Bounded Jev router arm admission (MOV-427)
+
+A bounded, **disabled-by-default** admission ledger for the Jev router trial designed in [MOV-422](https://linear.app/moviecal/issue/MOV-422/research-the-jev-router-trial-compare-hosted-and-open-source-routers). **This build has no live routing.** Admitting an issue to a Jev arm here never selects a worker, model, or provider — `worker:*`/`model:*` routing (the tables above) is completely unaffected, and `resolveDispatchWorker`/`resolveRouting` never consult this state. It exists to build and test the admission/eligibility/attribution contract ahead of the actual router transport and credential broker ([MOV-428](https://linear.app/moviecal/issue/MOV-428), [MOV-429](https://linear.app/moviecal/issue/MOV-429)), the same way [MOV-426](https://linear.app/moviecal/issue/MOV-426)'s `routed-request.mjs` built the per-request accounting contract ahead of any live broker.
+
+**Opt-in only.** An issue is only eligible once it carries the explicit `router:jev` label (`ELIGIBLE_LABEL` in `jev-trial.mjs`) **and** none of the excluded labels: `human-only`, `risk:high`, `area:auth`, `area:security`, `area:database`, `area:deployment`, `area:migrations`, `area:secrets`, `security-sensitive`. This mirrors MOV-422's "exclude auth, migrations, secrets, high-risk work, and human-only issues" cohort rule. No other label or the absence of `router:jev` ever triggers admission.
+
+**Approved policy hash.** `activate` requires a `policyHash` already present in the code-level `APPROVED_POLICY_HASHES` allowlist in `jev-trial.mjs`. That list ships **empty**: no router candidate list or provider policy has been reviewed yet, so every activation attempt fails validation until a human adds an approved hash in a reviewed change. This is the "cannot activate with a missing guard" requirement from the MOV-422 design.
+
+**State.** Two files under `~/.config/moviecal/` (outside the repo), parallel to the worker trial's: `jev-trial.json` (config: `enabled`, `trialId`, `armId` — `jev-hosted` or `jev-oss`, `policyHash`, `allowedWorker` — always `claude` until MOV-429 proves Codex transport, `activatedAt`, `expiresAt` in explicit UTC, `maxAssignments`, `spendCeilingUsd`) and `jev-trial-assignments.json` (append-only ledger: one assignment record per distinct issue, plus one spend record per distinct provider request ID so a retried usage report is never double-counted). No file means disabled. Activation requires an approved `policyHash`, an `expiresAt` in the future and at most 14 days out, `maxAssignments` from 1 to **12** (a hard cap — not operator-raisable past 12 without a code change), and a `spendCeilingUsd` from 0 exclusive up to 75. Expiry, the cap and the spend meter are re-read before every new assignment, so expiry/exhaustion take effect without a deploy or daemon restart.
+
+**Activate** (requires Adam's separate credit/governance approval per MOV-422; record it on the eventual live-activation issue):
+
+```sh
+node tools/dispatcher/bin/dispatcher.mjs jev activate --id <trialId> --arm jev-hosted --policy-hash <approved-hash> --expires 2026-10-10T00:00:00Z --max-assignments 12 --spend-ceiling-usd 75
+node tools/dispatcher/bin/dispatcher.mjs jev status     # also shown by `dry-run` and `doctor`
+```
+
+**Early stop** — disables *future* admissions only. It keeps the config and every ledger/spend record and does not touch running work:
+
+```sh
+node tools/dispatcher/bin/dispatcher.mjs jev stop
+```
+
+**States.** `dry-run`, `doctor` and `jev status` report `disabled`, `active` (with `assigned/max` and `spentUsd/spendCeilingUsd`), `expired`, `exhausted`, `spend-exhausted` or `invalid`. `dry-run` shows, per issue, either its existing assignment or (for an eligible fresh issue, while the arm is active) that it would be admitted at dispatch time — previews never admit. In the live loop, admission happens under the dispatcher's singleton lock, at the same point the worker-trial admission happens, immediately before the worktree is created. It is **non-blocking**: an ineligible issue, or an arm that is off/expired/exhausted/spend-exhausted/invalid, simply leaves the issue unattributed and it dispatches under its ordinary `worker:*`/`model:*` route unchanged — admission failure never defers or blocks dispatch in this build, because there is no live route for it to protect yet.
+
+**Existing work keeps its arm.** A running attempt, retained-worktree resume, budget continuation, PR repair, or retry of an issue that already has a ledger record keeps the recorded arm/policy hash unconditionally — that read never re-evaluates eligibility, expiry, the cap, or spend. The toggle and deadline never change an already-assigned issue's arm.
+
+**Attribution.** The trial ID, arm ID, approved policy hash, allowed worker, routing reason and assignment time are written to the run `manifest.json` (`jev`), the worktree registry entry, each usage record (`jev`, exported by `dispatcher usage export`'s per-issue `jevTrialIds`), and a bounded `jev` field on the `routing-decisions.jsonl` entry once admitted. They are `null` for attempts outside the arm.
+
+**Rollback.** `jev stop` (or waiting for expiry/exhaustion/spend-ceiling) stops new admissions immediately; since routing itself is untouched in this build, there is nothing further to roll back for already-assigned issues — they simply keep their recorded attribution. Deleting `jev-trial.json` is equivalent to disabled but loses the config record — prefer `stop`.
+
 ## Subagents
 
 When a worker spawns its own subagents (e.g. Claude Code's `Agent` tool), the subagent inherits the parent worker's effective model by default. A subagent may use a different model only when the issue brief explicitly names one for that subagent. This preserves the existing repo-scoped subagent definitions in `.claude/agents/` (`explore`, `code-reviewer`), which intentionally do not pin a model in their frontmatter.

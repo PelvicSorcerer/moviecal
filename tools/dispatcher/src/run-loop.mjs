@@ -24,6 +24,7 @@ import { classifyUsageLimitFailure, decideUsageLimitOutcome, MAX_USAGE_LIMIT_DEF
 import { admitBudgetContinuation, admitUsageLimitResume } from "./usage-limit-resume.mjs";
 import { WORKERS as WORKER_POOLS } from "./worker-cooldown.mjs";
 import { trialAttribution } from "./worker-trial.mjs";
+import { jevAttribution } from "./jev-trial.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
 import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-signals.mjs";
@@ -707,6 +708,7 @@ async function dispatchIssue(issue, ctx) {
     resolvedRoute = null,
     writeRoutingEvidenceFn = () => {},
     workerTrialStore = null,
+    jevTrialStore = null,
     captureWorkerUsageFn = () => null,
   } = ctx;
 
@@ -898,6 +900,15 @@ async function dispatchIssue(issue, ctx) {
   // resumes and continuations of a trial-assigned issue stay attributed after
   // the trial ends. It never selects a worker -- routing.worker is already set.
   let trial = resolvedTrial && !resolvedTrial.pending ? trialAttribution(workerTrialStore?.get(issue.identifier)) : null;
+  // MOV-427: a resume, continuation or repair always keeps whatever arm
+  // (or no arm) the issue was originally admitted to -- this read never
+  // re-evaluates eligibility, the cap, expiry or spend. Only a fresh claim
+  // (the `else` branch below) can admit a new assignment. Admission here
+  // never selects a worker/model/provider: it is bookkeeping ahead of the
+  // live router transport (MOV-428/429), so a missed or refused admission
+  // never blocks or changes ordinary worker:*/model:* dispatch.
+  let jev = jevTrialStore ? jevAttribution(jevTrialStore.get(issue.identifier)) : null;
+  if (jev) routingEvidence.selected.jev = jev;
   if (resumePlan) {
     const admission = admitUsageLimitResume({
       issueId: issue.identifier,
@@ -993,9 +1004,22 @@ async function dispatchIssue(issue, ctx) {
       }
       trial = trialAttribution(admission.record);
     }
+    // MOV-427: same dispatcher-lock admission point as the worker trial
+    // above, but non-blocking -- an ineligible issue, an inactive/exhausted/
+    // spend-exhausted/invalid arm, or no store at all simply leaves `jev`
+    // null and the issue dispatches under its ordinary worker:*/model:*
+    // route unchanged. There is no live provider to fail closed against yet.
+    if (jevTrialStore) {
+      const jevAdmission = jevTrialStore.admit(issue, { tier: routing.model, now: now() });
+      if (jevAdmission.admitted) {
+        jev = jevAttribution(jevAdmission.record);
+        routingEvidence.selected.jev = jev;
+      }
+    }
     entry = worktreeManager.create({
       id: issue.identifier,
       trial,
+      jev,
       name,
       branch,
       worker: routing.worker,
@@ -1084,6 +1108,7 @@ async function dispatchIssue(issue, ctx) {
         diagnoseFailureFn,
         steeringEnabled,
         trial,
+        jev,
         now,
         logger,
         recordRouting,
@@ -1194,6 +1219,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     logger,
     iosSimLeaseId = null,
     trial = null,
+    jev = null,
     captureWorkerUsageFn = () => null,
     readWorkerProgressFn = readWorkerProgress,
     hasWorkerProgressFn = hasWorkerProgress,
@@ -1360,6 +1386,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
       },
       iosSimLeaseId,
       trial,
+      jev,
       dependencyInstall,
       // MOV-386: warn as soon as the worker's own init event shows a
       // permission mode or tool set other than the one requested. The usage
@@ -1390,6 +1417,7 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
       ...usageContextFromInvocation(invocation, routing.worker),
       tier: routing.model,
       trial,
+      jev,
       observedTurns,
       terminationReason,
       exitOutcome: result.exitCode === 0 ? "exited-0" : `exited-${result.exitCode}`,
