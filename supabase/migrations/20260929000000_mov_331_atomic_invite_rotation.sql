@@ -43,6 +43,13 @@ declare
   created_link public.watchlist_invite_links%rowtype;
   issued_at timestamptz;
 begin
+  -- Reject malformed input before taking a row lock that other owner
+  -- rotations need. This check reveals no watchlist data.
+  if new_token_hash is not null and
+    (length(new_token_hash) <> 64 or new_token_hash !~ '^[0-9a-f]+$') then
+    raise exception 'Invalid invite hash.' using errcode = '22023';
+  end if;
+
   -- Lock even when no invite row exists. A second owner request waits, then
   -- revokes the first request's link before inserting its own.
   select * into locked_watchlist
@@ -53,11 +60,6 @@ begin
   if not found or locked_watchlist.kind <> 'shared'
     or locked_watchlist.owner_user_id is distinct from (select auth.uid()) then
     raise exception 'Watchlist access denied.' using errcode = '42501';
-  end if;
-
-  if new_token_hash is not null and
-    (length(new_token_hash) <> 64 or new_token_hash !~ '^[0-9a-f]+$') then
-    raise exception 'Invalid invite hash.' using errcode = '22023';
   end if;
 
   issued_at := now();
