@@ -38,6 +38,7 @@ import path from "node:path";
 import { generateRepairBrief, generateRepairEvidence } from "./brief.mjs";
 import { DEFAULT_REPAIR_BUDGETS } from "./ci-outcomes.mjs";
 import { admitRepair, guardRepairTarget } from "./repair-policy.mjs";
+import { dependencyInstallBlockerSections, prepareWorkerDependencies, writeDependencyInstallFailureManifest } from "./worker-spawn.mjs";
 import { repairJobKey } from "./repair-ledger.mjs";
 import { workerInvocation } from "./worker-routing.mjs";
 import { evaluateClaudeInit, reportClaudeStartupCheck } from "./worker-startup-check.mjs";
@@ -398,6 +399,7 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
     budgets = DEFAULT_REPAIR_BUDGETS,
     worktreeManager,
     spawnWorkerFn,
+    prepareWorktreeDependenciesFn = null,
     auditWorkerResultFn,
     writeWorkerAuditFn,
     publishRepairResultFn,
@@ -475,6 +477,31 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
     ],
   });
 
+  // MOV-410/MOV-412: the same trusted pre-spawn install as an implementation
+  // worker. A failure starts no repair worker and hands the PR to a human. The
+  // entry keeps its `review` status so PR reconciliation still tracks the
+  // open pull request; the ledger records this attempt as failed.
+  const dependencyInstall = await prepareWorkerDependencies(prepareWorktreeDependenciesFn, { worktreePath: entry.path, logDir });
+  if (dependencyInstall && !dependencyInstall.ok) {
+    let manifestPath = null;
+    try {
+      manifestPath = writeDependencyInstallFailureManifest(logDir, { cwd: entry.path, dependencyInstall });
+    } catch (error) {
+      logger.error(`${entry.id}: could not write the dependency-install manifest: ${error.message}`);
+    }
+    ledger.complete(entry.id, decision.key, { outcome: "failed", detail: `dependency install failed: ${dependencyInstall.reason}`, now: now() });
+    return publishStop({
+      entry,
+      ctx,
+      reporter,
+      headSha: decision.headSha,
+      fingerprints: decision.fingerprints,
+      reason: `the dispatcher could not prepare dependencies (${dependencyInstall.reason}), so no repair worker started`,
+      sections: ["", ...dependencyInstallBlockerSections(dependencyInstall, { manifestPath })],
+      outcome: "dependency-install-failed",
+    });
+  }
+
   // The abort signal is what kills the worker's process group on timeout,
   // exactly as run-loop.mjs does for a dispatch worker.
   const abortController = new AbortController();
@@ -490,6 +517,7 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
       signal: abortController.signal,
       securityContext: { mode: REPAIR_WORKER_MODE },
       trial: entry.trial ?? null,
+      dependencyInstall,
       // MOV-386: the same startup check as an implementation worker.
       ...((entry.worker || "claude") === "claude"
         ? { onWorkerInit: (event) => reportClaudeStartupCheck(evaluateClaudeInit(event), { label: `${entry.id} repair`, logger }) }

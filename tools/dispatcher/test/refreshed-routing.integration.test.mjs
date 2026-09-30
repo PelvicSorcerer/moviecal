@@ -40,6 +40,7 @@ async function fixture(labels) {
   };
   Object.assign(ctx, {
     concurrencyLimit: 1, logRoot: path.join(root, "logs"), worktreeManager: manager,
+    prepareWorktreeDependenciesFn: async () => ({ ok: true, status: "current" }),
     stopPollIntervalMs: 0, secretPresent: () => true, issueSpecMode: "off", steeringEnabled: false,
     repositoryContextFn: () => ({}), auditWorkerResultFn: () => ({ ok: true, violations: [] }),
     writeWorkerAuditFn: () => ({}), captureVerificationEvidenceFn: () => null,

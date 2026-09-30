@@ -188,6 +188,22 @@ is absent. It does not alter #569, the evidence parser, the ledger, or the
 autonomy configuration; another clean application-code pilot after MOV-281 is
 merged is required.
 
+MOV-410 (delivered as MOV-411 and MOV-412) supersedes MOV-281's worker-side
+install. The Codex executor denies outbound networking, so MOV-331's
+worker-side `npm ci` failed and left a partial toolchain. Both workers are
+prohibited from installing dependencies. Claude's existing socket access is
+a documented limitation tracked separately in [MOV-415](https://linear.app/moviecal/issue/MOV-415/design-and-prove-claude-command-network-isolation-without-breaking-mac);
+this dependency-preparation change expands neither worker's authority. The trusted
+dispatcher now prepares dependencies itself: it runs the locked `npm ci`
+before every worker start and starts no worker if that install fails. Both
+briefs tell workers that the toolchain is prepared, that they must not install
+anything, and that they should report a missing toolchain and stop. The install
+record lives in the run manifest, not the worker transcript, so it is never
+verification evidence. The exact unwrapped `npm run verify` evidence rule, the
+parser, the ledger and the autonomy configuration are unchanged. An issue that
+must add or change a dependency still needs a human, because no trusted
+dependency-changing step exists yet.
+
 ## Action budget and sequence
 
 The cap is the total durable ledger count, not a per-run allowance. The only
