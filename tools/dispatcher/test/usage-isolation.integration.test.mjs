@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { configDir, workerUsageStatePath } from "../src/config.mjs";
 import { buildRunContext, RUN_STATE_NAMES } from "../src/run-context.mjs";
-import { WorkerUsageStore } from "../src/worker-usage.mjs";
+import { USAGE_SCHEMA_VERSION, WorkerUsageStore } from "../src/worker-usage.mjs";
 import { CODEX_SINGLE_TURN } from "./usage-fixtures.mjs";
 
 const DISPATCHER = path.resolve(import.meta.dirname, "../bin/dispatcher.mjs");
@@ -47,7 +47,7 @@ describe("worker usage isolation and export (MOV-382)", () => {
       fs.writeFileSync(sentinel, sentinelBody);
       const statePath = path.join(root, "temp-usage.json");
       const store = new WorkerUsageStore(statePath);
-      const record = (attemptId, issue, attemptKind, origin) => store.record({ schemaVersion: 2, attemptId, origin, issue, attemptKind, worker: "codex", startedAt: "2026-09-25T10:00:00.000Z", inputTokens: 5, availability: { inputTokens: "reported" } });
+      const record = (attemptId, issue, attemptKind, origin) => store.record({ schemaVersion: USAGE_SCHEMA_VERSION, attemptId, origin, issue, attemptKind, worker: "codex", startedAt: "2026-09-25T10:00:00.000Z", inputTokens: 5, availability: { inputTokens: "reported" } });
       record("real-impl", "MOV-382", "implementation", "dispatcher");
       record("real-repair", "MOV-382", "repair", "dispatcher");
       record("fixture", "MOV-382", "implementation", null);

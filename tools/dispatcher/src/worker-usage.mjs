@@ -13,8 +13,13 @@ import path from "node:path";
 import { JsonStateStore } from "./state-store.mjs";
 import { budgetUnitForWorker, isCodexWorkItemEvent } from "./budget-unit.mjs";
 import { evaluateClaudeInit, isClaudeInitEvent } from "./worker-startup-check.mjs";
+import { readRoutedRequestEvidence, summarizeRoutedInvoice } from "./routed-request.mjs";
 
-export const USAGE_SCHEMA_VERSION = 2;
+// MOV-426: schema 3 adds the per-attempt `routedRequests`/`routedInvoice`
+// rollup folded from routing-decisions.jsonl. Bumping the version keeps
+// isTrialRecord's `>=` gate meaning "this run was written with routed-request
+// accounting", the same way schema 2 marked MOV-382's usage fields.
+export const USAGE_SCHEMA_VERSION = 3;
 /** Origin stamped by the live dispatcher wiring only; fixtures and tests never set it. */
 export const DISPATCHER_ORIGIN = "dispatcher";
 
@@ -144,6 +149,10 @@ export function parseWorkerUsage(transcript, {
     // MOV-386: the effective permission mode and tool set from Claude's own
     // system/init event, against what workerInvocation() requested.
     startupCheck: null,
+    // MOV-426: filled in by captureWorkerUsage from this attempt's
+    // routing-decisions.jsonl, once a routed live arm exists; empty/null
+    // here because parseWorkerUsage only sees the worker transcript.
+    routedRequests: [], routedInvoice: summarizeRoutedInvoice([]),
   };
   let result = null;
   let initEvent = null;
@@ -307,6 +316,12 @@ export function captureWorkerUsage(logDir, context, { store = null, logger = con
     const summary = parseWorkerUsage(transcript, {
       ...context, exitOutcome: context.exitOutcome ?? manifestExit, ...timing, durationMs: null, attemptId,
     });
+    // MOV-426: fold this attempt's routed-request evidence (if any was
+    // written alongside it) into the usage record, deduplicated by request
+    // ID so a retried or replayed write is never counted twice.
+    const routedRequests = readRoutedRequestEvidence(logDir, { attemptId });
+    summary.routedRequests = routedRequests;
+    summary.routedInvoice = summarizeRoutedInvoice(routedRequests);
     fs.mkdirSync(logDir, { recursive: true });
     fs.writeFileSync(path.join(logDir, "usage.json"), JSON.stringify(summary, null, 2) + "\n", { mode: 0o600 });
     store?.record(summary, { now });
@@ -326,6 +341,7 @@ export function formatUsageLine(usage) {
   if (usage.durationMs != null) fields.push(`${Math.round(usage.durationMs / 60000)}m`);
   if (usage.costUsd != null) fields.push(`~$${usage.costUsd.toFixed(2)} API-equivalent`);
   if (usage.cacheReadTokens != null) fields.push(`${(usage.cacheReadTokens / 1e6).toFixed(1)}M cache-read`);
+  if (usage.routedInvoice?.requests) fields.push(`${usage.routedInvoice.requests} routed requests, ~$${(usage.routedInvoice.billedUsd.sum ?? 0).toFixed(2)} billed`);
   fields.push(`${usage.verifyRuns} verify runs`);
   return `Usage: ${fields.join(", ")}.`;
 }
@@ -460,6 +476,10 @@ export function summarizeByIssue(runs) {
       attemptsByExitOutcome: countBy(rows, "exitOutcome"),
       partialAttempts: rows.filter((row) => row.partial).length,
       ...fieldTotals(rows, ["durationMs", "wallDurationMs"]),
+      // MOV-426: every attempt kind (implementation, continuation, resume,
+      // repair) for this issue folds in here, deduplicated by requestId, so a
+      // retried or resumed attempt's routed requests are never counted twice.
+      routedInvoice: summarizeRoutedInvoice(rows.flatMap((row) => row.routedRequests || [])),
       byWorker: [...workers].map(([worker, workerRows]) => ({
         worker,
         attempts: workerRows.length,

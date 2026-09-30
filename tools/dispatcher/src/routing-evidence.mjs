@@ -13,6 +13,7 @@ export function writeRoutingEvidence(logDir, record) {
     reason: record.selected.reason,
   } : null;
   const evidence = {
+    kind: "routing-decision",
     issue: boundedId(record.issue),
     at: record.at,
     decision: record.decision,
