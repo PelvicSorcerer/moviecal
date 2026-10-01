@@ -25,7 +25,8 @@ export function requiredSecretPresent(name, { home = os.homedir(), envLocalPath 
 export function buildOpenRouterRequest(body, policy) {
   if (!body || typeof body !== "object" || Array.isArray(body)
     || body.model !== OPENROUTER_MODEL || policy?.model !== OPENROUTER_MODEL
-    || Object.hasOwn(body, "provider") || !Array.isArray(policy.providers) || policy.providers.length !== 0
+    || ["provider", "models", "route", "plugins", "debug"].some((field) => Object.hasOwn(body, field))
+    || !Array.isArray(policy.providers) || policy.providers.length !== 0
     || policy.zdr !== false || policy.dataCollection !== null) {
     throw new Error("OpenRouter request violates policy");
   }
@@ -40,12 +41,13 @@ function contained(root, target) {
 }
 
 /** Validates metadata and file ownership without ever opening the key. */
-export function validateOpenRouterTransport(transport, { cwd, home = os.homedir(), fixture = false } = {}) {
+export function validateOpenRouterTransport(transport, { cwd, home = os.homedir(), fixture = false,
+  approvedPolicyHashes = APPROVED_OPENROUTER_POLICY_HASHES } = {}) {
   if (!transport || transport.enabled !== true || !path.isAbsolute(cwd || "")) throw new Error("OpenRouter transport disabled or missing worktree");
   const { policy, credentialPath, upstream } = transport;
   if (!policy || typeof policy !== "object" || policy.model !== OPENROUTER_MODEL
     || typeof policy.hash !== "string" || !/^[a-f0-9]{64}$/.test(policy.hash)
-    || (!fixture && !APPROVED_OPENROUTER_POLICY_HASHES.includes(policy.hash))
+    || (!fixture && !approvedPolicyHashes.includes(policy.hash))
     || !Array.isArray(policy.providers) || policy.providers.length !== 0
     || policy.zdr !== false || policy.dataCollection !== null || policy.promptLogging !== false
     || policy.keyLimitUsd !== 69 || policy.spendCeilingUsd !== 75

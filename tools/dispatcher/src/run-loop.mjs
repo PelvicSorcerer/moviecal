@@ -24,7 +24,8 @@ import { classifyUsageLimitFailure, decideUsageLimitOutcome, MAX_USAGE_LIMIT_DEF
 import { admitBudgetContinuation, admitUsageLimitResume } from "./usage-limit-resume.mjs";
 import { WORKERS as WORKER_POOLS } from "./worker-cooldown.mjs";
 import { trialAttribution } from "./worker-trial.mjs";
-import { jevAttribution } from "./jev-trial.mjs";
+import { jevAttribution, isEligibleForJevArm } from "./jev-trial.mjs";
+import { validateOpenRouterTransport } from "./openrouter-transport.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
 import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-signals.mjs";
@@ -709,6 +710,8 @@ async function dispatchIssue(issue, ctx) {
     writeRoutingEvidenceFn = () => {},
     workerTrialStore = null,
     jevTrialStore = null,
+    resolveJevTransportFn = () => null,
+    validateJevTransportFn = validateOpenRouterTransport,
     captureWorkerUsageFn = () => null,
   } = ctx;
 
@@ -909,6 +912,25 @@ async function dispatchIssue(issue, ctx) {
   // never blocks or changes ordinary worker:*/model:* dispatch.
   let jev = jevTrialStore ? jevAttribution(jevTrialStore.get(issue.identifier)) : null;
   if (jev) routingEvidence.selected.jev = jev;
+  let providerTransport = null;
+  const armState = jevTrialStore?.state(now());
+  // Resolve and validate the guarded route BEFORE consuming a fresh Codex
+  // admission. Production has no resolver/approved hash until MOV-431.
+  const codexAdmission = !jev && armState?.status === "active" && armState.allowedWorker === "codex"
+    && isEligibleForJevArm(issue).eligible;
+  if (jev?.worker === "codex" || codexAdmission) {
+    try {
+      if (routing.worker !== "codex") throw new Error("recorded Jev worker binding does not match routing");
+      providerTransport = resolveJevTransportFn({ issue, assignment: jev, state: armState });
+      validateJevTransportFn(providerTransport, { cwd: candidatePath });
+      if (providerTransport.policy.hash !== (jev?.policyHash || armState.policyHash)) throw new Error("Jev transport policy does not match admission");
+    } catch {
+      recordRouting("deferred-jev-transport");
+      await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
+      await linearClient.addComment(issue.id, "**Jev route deferred:** missing, invalid or mismatched reviewed Codex transport; no admission consumed and no subscription/provider fallback.");
+      return { issue: issue.identifier, outcome: "needs-human", reason: "Jev transport unavailable or binding mismatch" };
+    }
+  }
   if (resumePlan) {
     const admission = admitUsageLimitResume({
       issueId: issue.identifier,
@@ -1010,7 +1032,7 @@ async function dispatchIssue(issue, ctx) {
     // null and the issue dispatches under its ordinary worker:*/model:*
     // route unchanged. There is no live provider to fail closed against yet.
     if (jevTrialStore) {
-      const jevAdmission = jevTrialStore.admit(issue, { tier: routing.model, now: now() });
+      const jevAdmission = jevTrialStore.admit(issue, { tier: routing.model, worker: routing.worker, now: now() });
       if (jevAdmission.admitted) {
         jev = jevAttribution(jevAdmission.record);
         routingEvidence.selected.jev = jev;
@@ -1109,6 +1131,8 @@ async function dispatchIssue(issue, ctx) {
         steeringEnabled,
         trial,
         jev,
+        providerTransport,
+        jevTrialStore,
         now,
         logger,
         recordRouting,
@@ -1220,6 +1244,8 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     iosSimLeaseId = null,
     trial = null,
     jev = null,
+    providerTransport = null,
+    jevTrialStore = null,
     captureWorkerUsageFn = () => null,
     readWorkerProgressFn = readWorkerProgress,
     hasWorkerProgressFn = hasWorkerProgress,
@@ -1387,6 +1413,8 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
       iosSimLeaseId,
       trial,
       jev,
+      providerTransport,
+      issueIdentifier: issue.identifier,
       dependencyInstall,
       // MOV-386: warn as soon as the worker's own init event shows a
       // permission mode or tool set other than the one requested. The usage
@@ -1421,7 +1449,14 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
       observedTurns,
       terminationReason,
       exitOutcome: result.exitCode === 0 ? "exited-0" : `exited-${result.exitCode}`,
-    })).catch((error) => { logger.error(`Could not capture usage for ${issue.identifier}: ${error.message}`); return null; });
+    })).then((summary) => {
+      for (const request of summary?.routedRequests || []) {
+        if (jev && request.invoiceId && request.billedUsd !== null) jevTrialStore?.recordSpend({
+          requestId: request.invoiceId, issue: issue.identifier, amountUsd: request.billedUsd, trialId: jev.trialId,
+        }, now());
+      }
+      return summary;
+    }).catch((error) => { logger.error(`Could not capture usage for ${issue.identifier}: ${error.message}`); return null; });
     if (steeringActive) {
       // A single-slot queue: `agent-stream-client.mjs` only ever calls
       // `queuePrompt`, never the real writeTurn directly, so a prompt can

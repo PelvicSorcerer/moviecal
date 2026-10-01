@@ -69,7 +69,7 @@ describe("jev router arm admission (MOV-427)", () => {
     it.each([
       ["an unapproved policy hash", { policyHash: "not-approved" }, /approved policy hash list/],
       ["a missing arm id", { armId: "not-a-real-arm" }, /armId must be one of/],
-      ["a non-claude allowed worker", { allowedWorker: "codex" }, /allowedWorker must be 'claude'/],
+      ["an unsupported allowed worker", { allowedWorker: "other" }, /allowedWorker must be/],
       ["a past expiry", { expiresAt: iso(-1000) }, /future|after activatedAt/],
       ["an expiry beyond 14 days", { expiresAt: iso(14 * DAY + 1000) }, /14 days/],
       ["a non-UTC expiry", { expiresAt: "2026-10-02T12:00:00+02:00" }, /UTC/],

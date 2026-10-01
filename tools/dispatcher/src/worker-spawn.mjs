@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { Transform } from "node:stream";
+import { randomUUID } from "node:crypto";
 import { isCodexWorkItemEvent } from "./budget-unit.mjs";
 import { prepareCodexContainment } from "./codex-containment.mjs";
 import { renderDependencyInstallBlocker, writeDependencyInstallRecord } from "./dependency-install.mjs";
@@ -228,6 +229,7 @@ export function spawnWorker({
   trial = null,
   jev = null,
   providerTransport = null,
+  issueIdentifier = null,
   dependencyInstall = null,
   prepareCodexContainmentFn = prepareCodexContainment,
 }) {
@@ -249,6 +251,7 @@ export function spawnWorker({
 
   const promise = new Promise((resolve, reject) => {
     const startedAt = new Date().toISOString();
+    const attemptId = randomUUID();
     let effectiveInvocation = invocation;
     let workerEnv = process.env;
     if (!securityContext && spawnImpl === spawn) {
@@ -294,6 +297,7 @@ export function spawnWorker({
         containment = prepareCodexContainmentFn({ invocation, cwd, logDir, repositoryPaths,
           mode: securityContext.mode || "implementation", home: securityContext.home,
           openRouterTransport: providerTransport,
+          accounting: { issue: issueIdentifier, attemptId },
           sourceEnvironment: { ...process.env, ...(iosSimLeaseId ? { MOVIECAL_IOS_SIM_LEASE_ID: iosSimLeaseId } : {}) } });
         effectiveInvocation = containment.invocation;
         workerEnv = containment.environment;
@@ -421,6 +425,7 @@ export function spawnWorker({
             args: invocation.args,
             cwd,
             startedAt,
+            attemptId,
             endedAt,
             exitCode,
             // MOV-383: worker-trial attribution; null outside a trial.
