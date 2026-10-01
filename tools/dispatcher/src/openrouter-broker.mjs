@@ -41,7 +41,7 @@ const server = http.createServer(async (request, response) => {
   }
   if (stopped) { response.writeHead(409); response.end('{"error":{"code":"route-stopped"}}'); return; }
   const requestId = randomUUID(), started = Date.now();
-  const observer = createResponseObserver();
+  const observer = createResponseObserver({ modelAliases: config.modelAliases });
   let recorded = false, toolOutputs = 0, requestedEffort = null;
   const record = (error = null) => {
     if (recorded) return;
@@ -59,6 +59,9 @@ const server = http.createServer(async (request, response) => {
     const evidence = parseRoutedRequests(events.map((event) => JSON.stringify(event)).join("\n")).records[0];
     writeRoutedRequestEvidence(path.dirname(process.argv[2]), { ...evidence, source: "openrouter-responses",
       toolCalls: observed.toolCalls, toolOutputs });
+    fs.appendFileSync(path.join(path.dirname(process.argv[2]), "openrouter-attribution.jsonl"),
+      `${JSON.stringify({ requestId, invoiceId: observed.invoiceId, canonicalModel: observed.canonicalModel,
+        routerStageKeys: observed.routerStageKeys })}\n`, { mode: 0o600 });
   };
   if (config.maxRequests && admitted >= config.maxRequests) {
     record("request-cap"); response.writeHead(409); response.end('{"error":{"code":"request-cap"}}'); return;

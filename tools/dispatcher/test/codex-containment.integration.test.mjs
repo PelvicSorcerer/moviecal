@@ -83,7 +83,7 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
         : [{ type: "response.output_item.done", item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Fixture complete." }] } }];
       events.push({ type: "response.completed", response: { id: `response-${requests}`, output: [],
         ...(broker ? { model: "google/fixture", reasoning: { effort: "low" },
-          openrouter_metadata: { attempt: 1, pipeline: [{ name: "jev-router", data: { reasoning_effort: "low" } }], endpoints: { available: [{ selected: true, provider: "Google", model: "google/fixture" }] } } } : {}),
+          openrouter_metadata: { attempt: 1, pipeline: [{ name: "jev-router", data: { reasoning_effort: "low" } }], endpoints: { available: [{ selected: true, provider: "Google", model: "google/fixture-20260929" }] } } } : {}),
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2,
           ...(broker ? { cost: 0.001, input_tokens_details: { cached_tokens: 0 } } : {}) } } });
       if (failure === "missing-metadata") delete events.at(-1).response.openrouter_metadata;
@@ -117,7 +117,7 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
         // Native installation, profiles, supervisor and process launch are real.
         prepareCodexContainmentFn: (args) => modifyContainment(prepareCodexContainment({ ...args,
           sourceEnvironment: { ...args.sourceEnvironment, HOME: home, CODEX_HOME: path.join(home, ".codex") },
-          openRouterFixture: broker })),
+          openRouterFixture: broker, openRouterModelAliases: { "google/fixture": "google/fixture-20260929" } })),
       });
       return { result, transcript: fs.readFileSync(path.join(logDir, "stdout.log"), "utf8"), logDir, requests };
     } finally {
@@ -163,6 +163,10 @@ Promise.all([...tcp,unix,udp]).then(()=>console.log('broker boundaries denied'))
     expect(accounting).toHaveLength(requests);
     expect(accounting.every((row) => row.resolvedModel === "google/fixture" && row.provider === "Google"
       && row.resolvedEffort === "low" && row.billedUsd === 0.001 && row.error === null)).toBe(true);
+    const attribution = fs.readFileSync(path.join(logDir, "openrouter-attribution.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+    expect(attribution).toHaveLength(requests);
+    expect(attribution.every((row) => row.canonicalModel === "google/fixture-20260929"
+      && row.routerStageKeys.length === 1 && row.routerStageKeys[0] === "reasoning_effort")).toBe(true);
     if (mode === "implementation") expect(captureVerificationEvidence(logDir).status).toBe("passed");
     const records = fs.readFileSync(path.join(root, `broker-${mode}-provider.jsonl`), "utf8").trim().split("\n").map(JSON.parse);
     expect(records.every((record) => record.authenticated && record.model === "typesafe/jev-router"

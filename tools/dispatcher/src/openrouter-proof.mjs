@@ -12,6 +12,19 @@ import { spawnWorker } from "./worker-spawn.mjs";
 import { captureVerificationEvidence } from "./readiness-evidence.mjs";
 import { readRoutedRequestEvidence, summarizeRoutedInvoice } from "./routed-request.mjs";
 
+/** Identity only: never use the public catalogue's prices/default effort. */
+export function modelAliasesFromCatalog(catalog) {
+  if (!Array.isArray(catalog?.data) || !catalog.data.length || catalog.data.length > 5000) throw new Error("invalid model catalogue");
+  const aliases = Object.create(null);
+  for (const model of catalog.data) {
+    if (![model?.id, model?.canonical_slug].every((value) => typeof value === "string"
+      && /^[A-Za-z0-9_.:/-]{1,200}$/.test(value))) throw new Error("invalid model catalogue identity");
+    if (Object.hasOwn(aliases, model.id) && aliases[model.id] !== model.canonical_slug) throw new Error("conflicting model catalogue identity");
+    aliases[model.id] = model.canonical_slug;
+  }
+  return aliases;
+}
+
 /** Read only an owner attestation; never the provider credential. */
 export function readProofApproval({ home = os.homedir(), now = new Date() } = {}) {
   const filename = path.join(home, ".config/moviecal/jev-proof-approval.json");
@@ -39,12 +52,21 @@ export function readProofApproval({ home = os.homedir(), now = new Date() } = {}
 
 export async function runDisposableProof() {
   const { approval, filename } = readProofApproval();
+  // Anonymous read-only preflight, before guarded processes or paid traffic.
+  // Keep the public id -> canonical_slug snapshot with the evidence; the
+  // broker has no additional network destination and never guesses aliases.
+  const catalogResponse = await fetch("https://openrouter.ai/api/v1/models", { signal: AbortSignal.timeout(10000), redirect: "error" });
+  if (!catalogResponse.ok) throw new Error("model catalogue unavailable");
+  const catalogText = await catalogResponse.text();
+  if (catalogText.length > 8 * 1024 * 1024) throw new Error("model catalogue too large");
+  const modelAliases = modelAliasesFromCatalog(JSON.parse(catalogText));
   // Exclusive owner-store fuse. Repeating the command cannot silently buy
   // another proof; a new reviewed approval must explicitly remove this fuse.
   fs.writeFileSync(`${filename}.used`, JSON.stringify({ consumedAt: new Date().toISOString() }), { flag: "wx", mode: 0o600 });
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "mov429-proof-")));
   const cwd = path.join(root, "repo"), logDir = path.join(root, "evidence");
   fs.mkdirSync(cwd); fs.mkdirSync(logDir);
+  fs.writeFileSync(path.join(logDir, "openrouter-model-aliases.json"), JSON.stringify(modelAliases), { mode: 0o600 });
   execFileSync("git", ["init", "-q"], { cwd });
   fs.writeFileSync(path.join(cwd, "package.json"), JSON.stringify({ scripts: { verify: "node verify.cjs" } }));
   fs.writeFileSync(path.join(cwd, "answer.txt"), "before\n");
@@ -62,7 +84,7 @@ export async function runDisposableProof() {
     securityContext: { mode: "implementation" }, signal: AbortSignal.timeout(180000),
     jev: { armId: "jev-hosted", policyHash: policy.hash, worker: "codex" }, providerTransport: transport,
     prepareCodexContainmentFn: (args) => prepareCodexContainment({ ...args,
-      approvedOpenRouterPolicyHashes: [policy.hash], providerRequestLimit: approval.maxRequests }),
+      approvedOpenRouterPolicyHashes: [policy.hash], providerRequestLimit: approval.maxRequests, openRouterModelAliases: modelAliases }),
   });
   const records = readRoutedRequestEvidence(logDir);
   const verification = captureVerificationEvidence(logDir);
@@ -75,7 +97,9 @@ export async function runDisposableProof() {
     && record.toolCalls > 0 && records[index + 1]?.toolOutputs > 0 && !record.error && !records[index + 1].error);
   const proof = { issue: "MOV-429", date: new Date().toISOString(), logDir, exitCode: result.exitCode,
     verification: verification.status, nonAnthropic, editedWithTool, routedInvoice: summarizeRoutedInvoice(records),
-    records, outcome: result.exitCode === 0 && verification.status === "passed" && nonAnthropic && editedWithTool
+    records, attribution: fs.existsSync(path.join(logDir, "openrouter-attribution.jsonl"))
+      ? fs.readFileSync(path.join(logDir, "openrouter-attribution.jsonl"), "utf8").trim().split("\n").map(JSON.parse) : [],
+    outcome: result.exitCode === 0 && verification.status === "passed" && nonAnthropic && editedWithTool
       && records.length >= 2 && records.every((record) => !record.error) ? "go" : "no-go",
     cohortEnabled: false };
   fs.writeFileSync(path.join(logDir, "proof.json"), JSON.stringify(proof, null, 2), { mode: 0o600 });

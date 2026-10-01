@@ -6,8 +6,8 @@ const completed = () => ({ type: "response.completed", response: {
   usage: { input_tokens: 20, output_tokens: 4, input_tokens_details: { cached_tokens: 10 }, cost: 0.002 },
   openrouter_metadata: { attempt: 1, pipeline: [{ name: "jev-router", data: { reasoning_effort: "low" } }], endpoints: { available: [{ model: "google/fixture", provider: "Google", selected: true }] } },
 } });
-function observe(events) {
-  const observer = createResponseObserver();
+function observe(events, options) {
+  const observer = createResponseObserver(options);
   const bytes = Buffer.from(events.map((event) => `data: ${JSON.stringify(event)}\r\n\r\n`).join(""));
   for (let offset = 0; offset < bytes.length; offset += 7) observer.push(bytes.subarray(offset, offset + 7));
   return observer.finish();
@@ -32,6 +32,23 @@ describe("OpenRouter Responses evidence", () => {
   it("does not infer served effort from echoed reasoning", () => {
     const event = completed(); delete event.response.openrouter_metadata.pipeline;
     expect(observe([event])).toMatchObject({ resolvedEffort: null, error: "missing-provider-attribution" });
+  });
+  it("recognizes only catalogue-confirmed canonical aliases", () => {
+    const event = completed();
+    event.response.openrouter_metadata.endpoints.available[0].model = "google/fixture-20260929";
+    const options = { modelAliases: { "google/fixture": "google/fixture-20260929" } };
+    expect(observe([event], options)).toMatchObject({ resolvedModel: "google/fixture", canonicalModel: "google/fixture-20260929", error: null });
+    expect(observe([event]).error).toBe("conflicting-served-model");
+    event.response.openrouter_metadata.endpoints.available[0].model = "google/fixture-20260928";
+    expect(observe([event], options).error).toBe("conflicting-served-model");
+  });
+  it("reports a missing effort after alias normalization and saves only router field names", () => {
+    const event = completed();
+    event.response.openrouter_metadata.endpoints.available[0].model = "google/fixture-20260929";
+    event.response.openrouter_metadata.pipeline[0].data = { resolved_models: ["google/fixture"], private_payload: "PRIVATE_SENTINEL" };
+    const result = observe([event], { modelAliases: { "google/fixture": "google/fixture-20260929" } });
+    expect(result).toMatchObject({ resolvedEffort: null, error: "missing-provider-attribution", routerStageKeys: ["resolved_models", "private_payload"] });
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
   });
   it("does not infer served model or effort from the requested model", () => {
     const event = completed(); event.response.model = "typesafe/jev-router";

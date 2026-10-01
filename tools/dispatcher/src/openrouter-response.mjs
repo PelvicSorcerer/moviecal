@@ -6,7 +6,8 @@ const id = (v) => typeof v === "string" && /^[A-Za-z0-9_.:/-]{1,200}$/.test(v) ?
 const count = (v) => Number.isSafeInteger(v) && v >= 0 ? v : null;
 const usd = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
 
-export function createResponseObserver() {
+export function createResponseObserver({ modelAliases = {} } = {}) {
+  const canonical = (model) => id(modelAliases[model]) || id(model);
   const decoder = new StringDecoder("utf8");
   let pending = "", completed = false, reason = null, snapshot = {}, toolCalls = 0;
   const fail = (code) => { reason ??= code; };
@@ -63,6 +64,10 @@ export function createResponseObserver() {
       const resolvedModel = model === "typesafe/jev-router" ? null : model;
       const record = {
         resolvedModel, provider: id(endpoint?.provider),
+        canonicalModel: canonical(resolvedModel),
+        // Bounded field names identify an upstream schema gap without saving
+        // arbitrary plugin data, prompt text or reasoning content.
+        routerStageKeys: Object.keys(jev || {}).filter((key) => id(key)).slice(0, 32),
         // Responses reasoning can echo the request; it is not proof of Jev's
         // effective selection. Only accept an explicit router-stage report.
         resolvedEffort: id(jev?.reasoning_effort),
@@ -72,7 +77,7 @@ export function createResponseObserver() {
         billedUsd: usd(usage.cost), invoiceId: id(snapshot.invoiceId), toolCalls,
         fallback: typeof snapshot.metadata?.attempt === "number" ? snapshot.metadata.attempt > 1 : null,
       };
-      if (resolvedModel && endpoint?.model && endpoint.model !== resolvedModel) fail("conflicting-served-model");
+      if (resolvedModel && endpoint?.model && canonical(endpoint.model) !== canonical(resolvedModel)) fail("conflicting-served-model");
       if (!reason && ["resolvedModel", "provider", "resolvedEffort", "inputTokens", "outputTokens", "cacheReadTokens", "billedUsd", "invoiceId"].some((field) => record[field] === null)) fail("missing-provider-attribution");
       return { ...record, error: reason };
     },

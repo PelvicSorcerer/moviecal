@@ -68,7 +68,15 @@ Run once in the human-led Mac session:
 node tools/dispatcher/src/openrouter-proof.mjs
 ```
 
-This consumes an exclusive `.used` fuse beside the approval before launching
+Before guarded startup, an anonymous read-only preflight fetches OpenRouter's
+public `/api/v1/models` catalogue and preserves only `id`/`canonical_slug`
+identities. The observer compares canonical identities so a response alias
+and its dated revision do not create a false conflict. Catalogue defaults and
+prices never supply served effort or billed cost. Failure to fetch/validate
+the catalogue stops before paid traffic. This does not add an executor or
+broker network destination.
+
+The command consumes an exclusive `.used` fuse beside the approval before launching
 the provider, creates a non-private disposable Git repository under the Mac
 temporary directory, and requests only `typesafe/jev-router` at
 `https://openrouter.ai/api/v1/responses`. One tool-loop session may need up to
@@ -104,6 +112,11 @@ counters that are not exposed remain null. No charge is derived from pricing.
 Accounting identifies its source as `openrouter-responses`; usage/export uses
 the same manifest attempt ID and the admission spend ledger deduplicates by
 provider generation/invoice ID.
+
+`openrouter-attribution.jsonl` also retains the canonical model identity and
+up to 32 bounded Jev-stage field names. It never saves arbitrary plugin data,
+prompt text or tool payloads. A schema gap remains a no-go and can be
+investigated using these diagnostics during a separately authorized proof.
 
 A go requires a completed real file-edit tool, exact `npm run verify` passing,
 a non-Anthropic selected model completing the tool round, and complete

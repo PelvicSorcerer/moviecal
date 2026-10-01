@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { readProofApproval } from "../src/openrouter-proof.mjs";
+import { readProofApproval, modelAliasesFromCatalog } from "../src/openrouter-proof.mjs";
 let root;
 afterEach(() => { if (root) fs.rmSync(root, { recursive: true, force: true }); });
 function setup() {
@@ -19,6 +19,13 @@ function setup() {
   save(); return { now, approval, file, save };
 }
 describe("disposable paid proof approval", () => {
+  it("takes identity from the public catalogue without inferring effort or pricing", () => {
+    expect(modelAliasesFromCatalog({ data: [{ id: "openai/fixture", canonical_slug: "openai/fixture-20260929",
+      reasoning: { default_effort: "high" }, pricing: { prompt: "100" } }] })).toEqual({ "openai/fixture": "openai/fixture-20260929" });
+    expect(() => modelAliasesFromCatalog({ data: [] })).toThrow(/catalogue/);
+    expect(() => modelAliasesFromCatalog({ data: [{ id: "fixture", canonical_slug: "invalid value" }] })).toThrow(/identity/);
+    expect(() => modelAliasesFromCatalog({ data: [{ id: "fixture", canonical_slug: "one" }, { id: "fixture", canonical_slug: "two" }] })).toThrow(/conflicting/);
+  });
   it("accepts a scoped current attestation without reading a provider key", () => {
     const { now, approval } = setup();
     expect(readProofApproval({ home: root, now }).approval).toEqual(approval);

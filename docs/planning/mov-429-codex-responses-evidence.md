@@ -5,7 +5,7 @@
 Validated on native macOS with installed `codex-cli 0.157.1`, outside the
 dispatcher worker sandbox, on 2026-09-30 (America/Chicago).
 
-- Exact `npm run verify`: production build, 2,461 unit tests and 404
+- Exact `npm run verify`: production build, 2,464 unit tests and 404
   integration tests passed. One pre-existing unit skip remains; the native
   Codex suite ran and passed rather than skipping.
 - Fake OpenRouter Responses drove the actual guarded Codex read/edit/command
@@ -21,37 +21,33 @@ dispatcher worker sandbox, on 2026-09-30 (America/Chicago).
 - Both production approval lists remain empty; the production dispatcher
   has no transport resolver. No cohort activation occurred.
 
-## Read-only live-account preflight
+## Owner-reviewed live preflight and proof
 
-Observed from the existing authenticated OpenRouter Safari session on
-2026-09-30. No key value was read, account setting changed or credit bought.
+Human testing: required. Automated evidence is local-agent evidence. Adam
+explicitly approved the containment boundary and one bounded paid disposable
+session after the draft branch was pushed. The agent operated that session
+under his approval, following the proof runbook. No account policies changed,
+no additional credits were purchased and input/output logging stayed off.
 
-- Credits: $19.13 available; automatic top-up disabled. Existing history
-  shows a $20 credit transaction; purchase/platform fees still require
-  reconciliation before recording the all-in outlay attestation.
-- Dedicated `moviecal-jev-hosted-trial` key: $0 usage, $69 TOTAL limit,
-  expiry December 29, 2026. Local file remains owner-owned mode 600.
-- `moviecal-jev-trial` guardrail: assigned only to that trial key, all policy
-  sections unconfigured. The Default key is not assigned to it.
-- Inherited Workspace Guardrail: $20 monthly credit limit; no model/provider,
-  prompt-injection or sensitive-info restriction. Shared policy was untouched.
-- Account ZDR switches: off. Paid/free training endpoint access enabled;
-  public-prompt free endpoints disabled. Eligibility preview: 612 available,
-  zero unavailable. No provider allow/deny entries.
-- Workspace input/output logging and observability broadcast: off.
-  Workspace data-discount opt-in: off.
+The read-only preflight checked the dedicated trial key, current eligibility,
+logging, limits and existing credit. The existing payment total and live
+request were reconciled against the provider's generation and key-usage
+records. Detailed generation identifiers, account metadata, token counts and
+billing remain in private local evidence, outside tracked source.
 
-## Remaining human-led proof
+Outcome: **no-go**. The original observer directly compared a response alias
+with a dated canonical endpoint model, creating a false conflict. Effective
+Jev-served effort was also absent. The guarded client stopped unsuccessfully
+with verification incomplete. No completed non-Anthropic tool round was
+proved, and no automatic retry or subscription fallback ran.
 
-Human testing: required. Native and deterministic evidence above is
-local-agent evidence, not a human test result.
+The alias defect is corrected using OpenRouter's public catalogue identity
+mapping, with unit and native integration evidence. Different revisions still
+fail. Bounded canonical identity and Jev-stage field-name diagnostics now
+support investigation of missing served-effort attribution. The original paid
+outcome remains unchanged; no second paid session has run.
 
-Review the pushed branch, confirm the boundary and current account preflight,
-reconcile existing fees/outlay, then authorize one bounded disposable session
-using [the proof runbook](../operators/mov-429-codex-responses-proof.md).
-Record the real response/generation IDs, actual charge reconciliation, served
-model/provider/effort and exact verification outcome, or an explicit no-go.
-Do not enable MOV-431's cohort here.
-
-Paid-proof outcome: pending. No live provider request has been sent by this
-implementation session.
+Both production policy lists remain empty. No cohort activation is authorized;
+MOV-431 stays disabled unless a later separately approved proof resolves this
+no-go. The approval fuse remains consumed. A new owner review is required for
+another paid session.

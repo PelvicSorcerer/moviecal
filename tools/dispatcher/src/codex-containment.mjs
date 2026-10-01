@@ -51,7 +51,7 @@ export function resolveCodexExecutable(command = "codex", env = process.env) {
 export function prepareCodexContainment({ invocation, cwd, logDir, repositoryPaths, mode, home = os.homedir(),
   resolveExecutable = resolveCodexExecutable, verifyVersion = verifyCodexVersion, sourceEnvironment = process.env,
   openRouterTransport = null, openRouterFixture = false, accounting = null,
-  approvedOpenRouterPolicyHashes, providerRequestLimit = null }) {
+  approvedOpenRouterPolicyHashes, providerRequestLimit = null, openRouterModelAliases = {} }) {
   const sandboxIndex = invocation.args.indexOf("--sandbox");
   if (!invocation.args.includes("exec") || sandboxIndex < 0 || invocation.args[sandboxIndex + 1] !== "workspace-write"
     || invocation.args.lastIndexOf("--sandbox") !== sandboxIndex || invocation.args.includes("--dangerously-bypass-approvals-and-sandbox")) {
@@ -121,7 +121,7 @@ export function prepareCodexContainment({ invocation, cwd, logDir, repositoryPat
         fs.chmodSync(target, 0o600);
       }
       fs.writeFileSync(brokerConfig, JSON.stringify({ ...openRouter, fixture: openRouterFixture, accounting,
-        maxRequests: providerRequestLimit }), { mode: 0o600 });
+        maxRequests: providerRequestLimit, modelAliases: openRouterModelAliases }), { mode: 0o600 });
     }
     const environment = Object.fromEntries(Object.entries(sanitizedWorkerEnvironment(sourceEnvironment, { worker: "codex" }))
       .filter(([key]) => ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TERM", "CI",
