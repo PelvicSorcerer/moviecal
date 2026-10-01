@@ -18,7 +18,7 @@ export function modelAliasesFromCatalog(catalog) {
   const aliases = Object.create(null);
   for (const model of catalog.data) {
     if (![model?.id, model?.canonical_slug].every((value) => typeof value === "string"
-      && /^[A-Za-z0-9_.:/-]{1,200}$/.test(value))) throw new Error("invalid model catalogue identity");
+      && /^~?[A-Za-z0-9_.:/-]{1,200}$/.test(value))) throw new Error("invalid model catalogue identity");
     if (Object.hasOwn(aliases, model.id) && aliases[model.id] !== model.canonical_slug) throw new Error("conflicting model catalogue identity");
     aliases[model.id] = model.canonical_slug;
   }

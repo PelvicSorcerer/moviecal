@@ -22,6 +22,8 @@ describe("disposable paid proof approval", () => {
   it("takes identity from the public catalogue without inferring effort or pricing", () => {
     expect(modelAliasesFromCatalog({ data: [{ id: "openai/fixture", canonical_slug: "openai/fixture-20260929",
       reasoning: { default_effort: "high" }, pricing: { prompt: "100" } }] })).toEqual({ "openai/fixture": "openai/fixture-20260929" });
+    expect(modelAliasesFromCatalog({ data: [{ id: "~openai/fixture-latest", canonical_slug: "~openai/fixture-latest" }] }))
+      .toEqual({ "~openai/fixture-latest": "~openai/fixture-latest" });
     expect(() => modelAliasesFromCatalog({ data: [] })).toThrow(/catalogue/);
     expect(() => modelAliasesFromCatalog({ data: [{ id: "fixture", canonical_slug: "invalid value" }] })).toThrow(/identity/);
     expect(() => modelAliasesFromCatalog({ data: [{ id: "fixture", canonical_slug: "one" }, { id: "fixture", canonical_slug: "two" }] })).toThrow(/conflicting/);
