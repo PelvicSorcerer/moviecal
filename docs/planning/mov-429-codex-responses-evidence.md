@@ -1,112 +1,70 @@
 # MOV-429 readiness evidence
 
-## Implementation and native fixtures
+## Current status
 
-Validated on native macOS with installed `codex-cli 0.157.1`, outside the
-dispatcher worker sandbox, on 2026-09-30 (America/Chicago).
+MOV-429 remains unfinished in Agent Working; PR #823 stays draft. The owner
+requested continued investigation within this issue. Both production policy
+allowlists remain empty, the dispatcher has no transport resolver, and MOV-431
+stays held. No cohort has been activated.
 
-- Exact `npm run verify`: production build, 2,464 unit tests and 404
-  integration tests passed. One pre-existing unit skip remains; the native
-  Codex suite ran and passed rather than skipping.
-- Fake OpenRouter Responses drove the actual guarded Codex read/edit/command
-  loop and exact verification command. Implementation and repair retained
-  socket, key, protected checkout and Git-metadata denials.
-- Native outage, timeout, refusal, malformed tool, missing attribution and
-  request-cap cases exited unsuccessfully without another upstream call or
-  subscription/provider fallback.
-- Codex admission validates a matching reviewed route before consuming an
-  assignment. Missing/invalid/mismatched transport leaves the ledger
-  untouched. Assigned retries preserve attribution; changed worker bindings
-  defer. Repeated provider invoice reports count once.
-- Both production approval lists remain empty; the production dispatcher
-  has no transport resolver. No cohort activation occurred.
+## Automated and native evidence
 
-## Owner-reviewed live preflight and proof
+On native macOS with installed `codex-cli 0.157.1`, exact `npm run verify`
+passed: production build, 2,477 unit tests (one pre-existing skip) and 406
+integration tests. The native containment suite executed without skips.
+Fake Responses drive real read/edit/command tools and exact verification.
+Implementation and repair deny TCP/UDP/Unix, key reads, protected checkouts
+and Git metadata. Outage, timeout, refusal, malformed/unoffered tools, missing
+attribution and request caps stop without fallback or another upstream call.
+Admission requires matching reviewed transport before consuming an assignment;
+retries retain attempt attribution and duplicate invoices count once.
 
-Human testing: required. Automated evidence is local-agent evidence. Adam
-explicitly approved the containment boundary and one bounded paid disposable
-session after the draft branch was pushed. The agent operated that session
-under his approval, following the proof runbook. No account policies changed,
-no additional credits were purchased and input/output logging stayed off.
+The diagnostic fixture proves a completed file-change event, resulting file
+content and exact verification success. It checks that debug prompt/tool
+sentinels never reach transcripts or evidence. Unit tests cover fragmented
+Unicode/SSE, model/attempt correlation, missing/conflicting effort, bounded
+nested discovery and rejection of uncapped or client-supplied debug.
 
-The read-only preflight checked the dedicated trial key, current eligibility,
-logging, limits and existing credit. The existing payment total and live
-request were reconciled against the provider's generation and key-usage
-records. Detailed generation identifiers, account metadata, token counts and
-billing remain in private local evidence, outside tracked source.
+## Two prior live attempts
 
-Outcome: **no-go**. The original observer directly compared a response alias
-with a dated canonical endpoint model, creating a false conflict. Effective
-Jev-served effort was also absent. The guarded client stopped unsuccessfully
-with verification incomplete. No completed non-Anthropic tool round was
-proved, and no automatic retry or subscription fallback ran.
+Human testing: required. Adam approved the boundary and each bounded disposable
+session separately; the agent operated them after read-only key/credit/privacy
+preflight. No account policies changed or extra credits were purchased.
+Generation IDs, exact charges, tokens and account details were reconciled
+privately and remain outside tracked source.
 
-The alias defect is corrected using OpenRouter's public catalogue identity
-mapping, with unit and native integration evidence. Different revisions still
-fail. Bounded canonical identity and Jev-stage field-name diagnostics now
-support investigation of missing served-effort attribution.
+The first attempt stopped with incomplete verification: our observer confused
+an alias with its dated canonical model, and selected effort was unresolved.
+Catalogue identity mapping fixed the alias defect; different revisions still
+fail. The second attempt stopped after one request with
+`missing-provider-attribution`, without the false alias conflict. Neither
+attempt proved a file edit or completed non-Anthropic tool round.
 
-After separate explicit owner authorization and a refreshed key/credit/privacy
-preflight, the corrected branch ran one bounded diagnostic session. It stopped
-after one request with `missing-provider-attribution`, not a model conflict.
-The client exited unsuccessfully, verification stayed incomplete, and no
-completed non-Anthropic tool round or file edit was proved. Its generation
-and exact charge were reconciled privately with the provider's generation
-record. No automatic retry, alternate route or additional credit purchase ran.
+Both attempts sent `X-OpenRouter-Metadata: enabled` and received metadata.
+The parser expected an unverified top-level `data.reasoning_effort` field.
+Only field names were saved, including nested candidates/evaluations/pipeline;
+this does not establish that effort is absent throughout the response.
 
-The bounded diagnostic reports Jev-stage fields including `resolved_models`,
-`evaluations`, `candidates` and nested `pipeline`, but no top-level
-`reasoning_effort`. Field names alone cannot establish whether deeper data
-contains trustworthy served effort. The selected model/provider and actual
-usage/charge were reported; served effort remains null. This confirms an
-explicit **no-go under the implemented attribution contract**, not a claim
-that the provider can never expose effort. A supported schema for deeper
-router data and a separately approved proof are prerequisites to reconsidering
-that result. The containment and missing-field stops were preserved.
+## Prepared diagnostic and remaining work
 
-Both production policy lists remain empty. No cohort activation is authorized;
-MOV-431 stays disabled unless a later separately approved proof resolves this
-no-go. The approval fuse remains consumed. A new owner review is required for
-another paid session.
+A [community provider-effort report](https://www.reddit.com/r/DeepSeek/comments/1vdqjwr/openrouter_reasoning_effort_levels_are_broken_for/)
+led to OpenRouter's [documented Responses debug envelope](https://openrouter.ai/docs/api_reference/errors-and-debugging).
+The capped disposable proof asks for upstream echo through trusted broker
+configuration, extracts validated model/effort scalars, and strips all debug
+frames before Codex/logs. Bounded nested Jev effort hints are discovery only;
+candidate/default values never count as selected effort.
 
-## Continued investigation in MOV-429
+Native testing also caught a fake-provider call to custom `apply_patch`, which
+Codex does not advertise for an unknown router slug. A [Codex fallback report](https://github.com/openai/codex/issues/44529)
+describes that mismatch. The corrected fixture/brief use the supported shell
+patch path through `exec_command`. Unoffered tool names/types now stop; no
+capability catalogue is spoofed and the guarded executor still performs edits.
 
-The owner directed continued research/fixes in this issue rather than closing
-it on a failed proof. MOV-429 is back in Agent Working; the draft PR remains
-open and MOV-431 stays held.
-
-Both live attempts already opted into `X-OpenRouter-Metadata: enabled` and
-received routing metadata. The missing effort result was produced by our
-parser's unverified expectation of a top-level `data.reasoning_effort`; it did
-not establish that effort is absent throughout the response.
-
-Community research found a [provider-effort debugging report](https://www.reddit.com/r/DeepSeek/comments/1vdqjwr/openrouter_reasoning_effort_levels_are_broken_for/)
-that uses upstream debug echo. This is a diagnostic lead, not evidence that our
-selected provider has the report's bug. OpenRouter's [official debugging reference](https://openrouter.ai/docs/api_reference/errors-and-debugging)
-documents the Responses `response.debug` envelope containing the transformed
-upstream request. The disposable proof now requests that envelope only through
-trusted broker configuration, extracts validated model/effort scalars and drops
-all debug frames before Codex. It also captures bounded nested metadata effort
-hints without treating candidate/default values as selected effort.
-
-The native test exposed a separate fixture error: the fake routed provider
-emitted a custom `apply_patch` call that Codex does not advertise for an unknown
-router slug. A [Codex fallback-tool report](https://github.com/openai/codex/issues/44529)
-describes this mismatch. The corrected routed fixture uses the supported shell
-patch path through `exec_command` and verifies the resulting file, rather than
-accepting the harness exit code alone. The broker now rejects tool names/types
-absent from the client's offered tools. No client capability catalogue is
-spoofed and the guarded executor still performs edits.
-
-This is a prepared diagnostic, not a third paid result. Upstream-request effort
-reports what OpenRouter forwarded; it cannot establish the provider's internal
-reasoning behavior. Debug is a development feature and remains disabled for
-production. A passing debug tool loop will be labeled `diagnostic-pass`, with
-`cohortReady: false`. MOV-429 still needs an observed, trustworthy effort path in
-normal router metadata and a real tool-loop proof without debug before cohort
-readiness. The previous paid approval remains consumed.
-
-Exact `npm run verify` on the diagnostic implementation passed: production
-build, 2,477 unit tests (one pre-existing skip) and 406 integration tests. Native
-Mac containment executed without skips, including debug-frame redaction,
-actual shell-patch edit/verification and unsupported-tool stopping.
+Upstream effort reports what OpenRouter forwarded, not provider-internal
+behavior. Debug remains a development diagnostic, disabled in production.
+Success is `diagnostic-pass` with `cohortReady: false`. Continue MOV-429 to
+identify an observed, trustworthy normal-metadata effort source and prove a
+real tool loop without debug before cohort readiness. No third paid result is
+claimed here; previous one-use approvals were consumed. See the
+[proof runbook](../operators/mov-429-codex-responses-proof.md) for fresh approval,
+preflight, private reconciliation and the six-request cap.
