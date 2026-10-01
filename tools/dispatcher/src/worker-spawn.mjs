@@ -204,6 +204,7 @@ function reapProcessGroup(pid, { graceMs, killImpl }) {
  *   while the worker runs. Observation only: a throwing callback is swallowed and never affects the worker.
  * @param {object|null} [opts.trial] - MOV-383: worker-trial attribution (trialId, requestedWorker, resolvedWorker, routingReason, assignedAt) recorded in manifest.json; null outside a trial
  * @param {object|null} [opts.jev] - MOV-427: Jev router-arm admission attribution (trialId, armId, policyHash, worker, routingReason, assignedAt) recorded in manifest.json; null outside the arm
+ * @param {object|null} [opts.providerTransport] - MOV-425: trusted, explicit Codex OpenRouter transport configuration; absent in production until MOV-429 wires a reviewed route
  * @param {object|null} [opts.dependencyInstall] - MOV-412: the dispatcher's pre-spawn dependency install result, recorded in manifest.json; null when the caller ran no install
  * @returns {Promise<{exitCode: number, logDir: string, pid: number|null}>|{promise: Promise<{exitCode: number, logDir: string, pid: number|null}>, writeTurn: (text: string) => void, requestClose: () => void, nextTurnBoundary: () => Promise<{ended: boolean}>}}
  */
@@ -226,6 +227,7 @@ export function spawnWorker({
   onWorkerInit = null,
   trial = null,
   jev = null,
+  providerTransport = null,
   dependencyInstall = null,
   prepareCodexContainmentFn = prepareCodexContainment,
 }) {
@@ -253,6 +255,26 @@ export function spawnWorker({
       reject(new Error("production worker launch requires a securityContext and OS guard"));
       return;
     }
+    if (jev?.armId === "jev-hosted" && !providerTransport) {
+      childClosed = true;
+      reject(new Error("Jev hosted transport is disabled; routed issue requires human review before dispatch"));
+      return;
+    }
+    if (providerTransport && (jev?.armId !== "jev-hosted" || jev.policyHash !== providerTransport.policy?.hash)) {
+      childClosed = true;
+      reject(new Error("OpenRouter transport requires matching Jev admission and policy"));
+      return;
+    }
+    if (providerTransport && path.basename(invocation.command) !== "codex") {
+      childClosed = true;
+      reject(new Error("OpenRouter transport is restricted to guarded Codex workers"));
+      return;
+    }
+    if (providerTransport && !securityContext) {
+      childClosed = true;
+      reject(new Error("OpenRouter transport requires the native worker guard"));
+      return;
+    }
     if (securityContext) {
       if (platform !== "darwin") {
         childClosed = true; // no child will ever spawn; nextTurnBoundary() must not hang
@@ -271,6 +293,7 @@ export function spawnWorker({
       if (path.basename(invocation.command) === "codex") {
         containment = prepareCodexContainmentFn({ invocation, cwd, logDir, repositoryPaths,
           mode: securityContext.mode || "implementation", home: securityContext.home,
+          openRouterTransport: providerTransport,
           sourceEnvironment: { ...process.env, ...(iosSimLeaseId ? { MOVIECAL_IOS_SIM_LEASE_ID: iosSimLeaseId } : {}) } });
         effectiveInvocation = containment.invocation;
         workerEnv = containment.environment;

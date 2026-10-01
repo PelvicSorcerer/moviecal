@@ -306,7 +306,7 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
     ["bin/dispatcher.mjs", source],
   ];
 
-  it("opens no listener except the isolated Codex loopback transport", () => {
+  it("opens no listener except isolated Codex executor and provider loopback transports", () => {
     // Agent Sessions must not expose an inbound endpoint. Enabling Agent
     // Sessions needs a reachable HTTPS receiver; MOV-159 is the decision gate
     // for whether a signed relay is worth its attack surface, and MOV-158
@@ -330,6 +330,17 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
         expect(text).toContain('const endpoint = `ws://127.0.0.1:${port}`');
         expect(text).toContain('EXECUTOR_LISTENER=localhost:${port}');
         expect(text).not.toMatch(/from\s+["'](?:express|ws|node:(?:http|https|tls|dgram))["']/);
+        continue;
+      }
+      if (name === path.join("src", "openrouter-broker.mjs")) {
+        // MOV-425: this per-run broker requires an unguessable local bearer
+        // token and accepts only Responses POSTs on occupied IPv4 loopback.
+        expect(text.match(/\.listen\s*\(/g)).toHaveLength(1);
+        expect(text).toContain('server.listen(port, "127.0.0.1"');
+        expect(text).toContain('request.method !== "POST"');
+        expect(text).toContain('request.url !== "/v1/responses"');
+        expect(text).toContain('authorized(request.headers.authorization)');
+        expect(text).not.toMatch(/from\s+["'](?:express|ws|node:(?:tls|dgram))["']/);
         continue;
       }
       for (const pattern of listenerPatterns) {
@@ -359,7 +370,8 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       "issueSpecAuditStatePath",
       // MOV-427: the bounded Jev router-arm admission config and its
       // assignment/spend ledger -- dispatcher state, not credentials. No
-      // provider key lives here; MOV-428/429 own actual credential storage.
+      // provider key lives here; MOV-425 stores the dedicated Codex key
+      // outside the repository and does not add a config.mjs path helper.
       "jevTrialAssignmentsPath",
       "jevTrialConfigPath",
       "linearAppEnvPath",

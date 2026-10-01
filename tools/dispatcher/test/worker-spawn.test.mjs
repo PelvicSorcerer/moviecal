@@ -57,6 +57,18 @@ describe("spawnWorker", () => {
       brief: "must never run", logDir: path.join(tmpDir, "logs") })).rejects.toThrow(/requires a securityContext and OS guard/);
   });
 
+  it("defers an admitted hosted Jev issue when its guarded transport is absent or mismatched", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mov425-no-fallback-"));
+    const spawnImpl = vi.fn();
+    const base = { invocation: { command: "codex", args: ["--sandbox", "workspace-write", "exec"] }, cwd: tmpDir,
+      brief: "must never run", logDir: path.join(tmpDir, "logs"), spawnImpl,
+      jev: { armId: "jev-hosted", policyHash: "a".repeat(64) } };
+    await expect(spawnWorker(base)).rejects.toThrow(/transport is disabled/);
+    await expect(spawnWorker({ ...base, providerTransport: { policy: { hash: "b".repeat(64) } } }))
+      .rejects.toThrow(/matching Jev admission/);
+    expect(spawnImpl).not.toHaveBeenCalled();
+  });
+
   it.each(["implementation", "repair"])("does not spawn after Codex containment setup fails in %s", async (mode) => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mov401-setup-fail-"));
     const spawnImpl = vi.fn();
