@@ -240,7 +240,9 @@ describe("bounded Jev router arm admission through the run loop (MOV-427)", () =
     }
 
     it("reaches the manifest and the exported usage record, and stays null for unattributed attempts", async () => {
-      activate();
+      // The hosted arm now requires a guarded transport. The OSS admission
+      // fixture still exercises manifest/usage serialization independently.
+      activate({ armId: "jev-oss" });
       const admission = jevStore.admit(issue(1), { tier: "default", now: T0 });
       const attribution = jevAttribution(admission.record);
       const invocation = workerInvocation("claude", "default");

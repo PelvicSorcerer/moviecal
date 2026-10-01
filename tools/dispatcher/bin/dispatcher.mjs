@@ -62,6 +62,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { requiredSecretPresent } from "../src/openrouter-transport.mjs";
 import {
   configDir,
   envLocalPath,
@@ -662,7 +663,7 @@ async function cmdDryRun({ fixturePath } = {}) {
       iosRunnerOnline: true, // dry-run: does not hit the network; use `doctor` for the live check
       activeWorktreeCount: activeWorktreeCount.ok ? activeWorktreeCount.value : 0,
       concurrencyLimit: DEFAULT_CONCURRENCY,
-      secretPresent: () => fs.existsSync(envLocalPath()),
+      secretPresent: (name) => requiredSecretPresent(name, { envLocalPath: envLocalPath() }),
       // dry-run: deliberately plain isPathFree, not isPathFreeForIssue
       // (MOV-181) -- the latter performs a real `git worktree remove` when
       // it reclaims, which would violate this command's "no worktree,

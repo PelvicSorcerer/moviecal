@@ -13,6 +13,7 @@
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { requiredSecretPresent } from "./openrouter-transport.mjs";
 import { writeRoutingEvidence } from "./routing-evidence.mjs";
 import {
   worktreeRoot,
@@ -175,7 +176,7 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     // MOV-303: forwarded to evaluatePreflight() so an incomplete issue is
     // caught at dispatch regardless of how it reached Ready for Agent.
     issueSpecMode: resolveIssueSpecMode(),
-    secretPresent: () => fs.existsSync(envLocalPath()),
+    secretPresent: (name) => requiredSecretPresent(name, { envLocalPath: envLocalPath() }),
     worktreeRoot: worktreeRoot(),
     envLocalSource: fs.existsSync(envLocalPath()) ? envLocalPath() : undefined,
     ghRepo: GITHUB_REPO,

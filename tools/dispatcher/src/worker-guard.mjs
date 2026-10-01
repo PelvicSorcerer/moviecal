@@ -143,6 +143,7 @@ export function buildWorkerSandboxProfile({
   writablePaths,
   executablePaths,
   networkRole,
+  providerBroker = false,
   immutablePaths = [],
   unreadablePaths = [],
 } = {}) {
@@ -155,6 +156,7 @@ export function buildWorkerSandboxProfile({
   if (networkRole === "harness" && (!Array.isArray(executablePaths) || !executablePaths.length || executablePaths.some((file) => !path.isAbsolute(file)))) {
     throw new Error("client sandbox requires installed executable paths");
   }
+  if (providerBroker && networkRole !== "harness") throw new Error("provider broker requires a client sandbox");
 
   const deniedExecutables = [
     "/usr/bin/git",
@@ -287,9 +289,16 @@ export function buildWorkerSandboxProfile({
       '(allow network-bind network-inbound (require-all (local tcp (param "EXECUTOR_LISTENER")) (socket-domain AF_INET)))',
     ] : []),
     ...(networkRole === "harness" ? [
-      "(allow network-outbound)",
-      '(allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))',
-      '(allow mach-lookup (global-name "com.apple.bsd.dirhelper") (global-name "com.apple.system.opendirectoryd.membership") (global-name "com.apple.SecurityServer") (global-name "com.apple.networkd") (global-name "com.apple.ocspd") (global-name "com.apple.trustd.agent") (global-name "com.apple.SystemConfiguration.DNSConfiguration") (global-name "com.apple.SystemConfiguration.configd"))',
+      ...(providerBroker ? [
+        // A routed client reaches only its occupied executor and authenticated
+        // local provider broker. The broker alone can contact the upstream.
+        '(allow network-outbound (require-all (remote tcp (param "EXECUTOR_LISTENER")) (socket-domain AF_INET)))',
+        '(allow network-outbound (require-all (remote tcp (param "PROVIDER_BROKER")) (socket-domain AF_INET)))',
+      ] : [
+        "(allow network-outbound)",
+        '(allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))',
+        '(allow mach-lookup (global-name "com.apple.bsd.dirhelper") (global-name "com.apple.system.opendirectoryd.membership") (global-name "com.apple.SecurityServer") (global-name "com.apple.networkd") (global-name "com.apple.ocspd") (global-name "com.apple.trustd.agent") (global-name "com.apple.SystemConfiguration.DNSConfiguration") (global-name "com.apple.SystemConfiguration.configd"))',
+      ]),
     ] : []),
     ...deniedExecutables.map((file) => `(deny process-exec (literal ${quoteSandboxString(file)}))`),
     ...deniedReadRules.map(([kind, file]) => `(deny file-read* (${kind} ${quoteSandboxString(file)}))`),

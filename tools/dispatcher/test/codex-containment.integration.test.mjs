@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
+import net from "node:net";
 import { execFileSync, spawnSync } from "node:child_process";
 import { spawnWorker } from "../src/worker-spawn.mjs";
 import { workerInvocation } from "../src/worker-routing.mjs";
@@ -30,6 +31,7 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
     for (const dir of [".config/moviecal", ".config/gh", ".ssh", ".codex", ".claude", "Library/Keychains"]) fs.mkdirSync(path.join(home, dir), { recursive: true });
     credential = path.join(home, ".config/moviecal/linear.env"); fs.writeFileSync(credential, "FAKE_CREDENTIAL=fixture-only\n");
     fs.writeFileSync(path.join(home, ".codex/auth.json"), "{}\n");
+    fs.writeFileSync(path.join(home, ".config/moviecal/openrouter-jev.key"), "fake-openrouter-key\n", { mode: 0o600 });
     for (const dir of ["docs/product", "docs/operators", "src", "test", ".github/workflows"]) fs.mkdirSync(path.join(own, dir), { recursive: true });
     for (const file of ["AGENTS.md", ".github/copilot-instructions.md", "docs/product/brief.md", "test/protected.txt"]) fs.writeFileSync(path.join(own, file), "fixture guidance\n");
     fs.writeFileSync(path.join(own, "package.json"), JSON.stringify({ scripts: { verify: "node verify.cjs" } }));
@@ -57,8 +59,11 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
     fs.writeFileSync(path.join(root, "native-collision.json"), JSON.stringify({ direct: { exitCode: direct.status, stdout: direct.stdout }, nested: { exitCode: nested.status, stderr: nested.stderr } }));
   });
 
-  async function fixture(mode, commands, name, modifyContainment = (value) => value) {
+  async function fixture(mode, commands, name, modifyContainment = (value) => value, { broker = false } = {}) {
     let requests = 0;
+    const unixPath = path.join(root, `${name}.sock`);
+    const unixServer = broker ? net.createServer() : null;
+    if (unixServer) await new Promise((resolve) => unixServer.listen(unixPath, resolve));
     const provider = http.createServer(async (req, res) => {
       if (req.method !== "POST" || !req.url.endsWith("/responses")) {
         res.writeHead(200, { "content-type": "application/json" });
@@ -68,7 +73,8 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
       let body = "";
       for await (const chunk of req) body += chunk;
       const parsed = JSON.parse(body);
-      const command = commands[requests++];
+      const command = commands[requests++]?.replaceAll?.("PROVIDER_PORT", String(provider.address().port))
+        ?.replaceAll("FIXTURE_SOCKET_PATH", unixPath) ?? commands[requests - 1];
       const events = command ? [{ type: "response.output_item.done", item: typeof command === "string" ? { type: "function_call", name: "exec_command", call_id: `call-${requests}`,
         arguments: JSON.stringify({ cmd: command, workdir: own, login: false, max_output_tokens: 2000 }) }
         : { type: "custom_tool_call", name: command.code ? "exec" : "apply_patch", call_id: `call-${requests}`, input: command.code || command.patch } }]
@@ -77,23 +83,37 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
       res.writeHead(200, { "content-type": "text/event-stream" });
       for (const event of events) res.write(`data: ${JSON.stringify(event)}\n\n`);
       res.end();
-      fs.appendFileSync(path.join(root, `${name}-provider.jsonl`), JSON.stringify({ request: requests, toolOutputs: parsed.input?.filter((item) => ["function_call_output", "custom_tool_call_output"].includes(item.type)) }) + "\n");
+      fs.appendFileSync(path.join(root, `${name}-provider.jsonl`), JSON.stringify({ request: requests,
+        authenticated: req.headers.authorization === "Bearer fake-openrouter-key", model: parsed.model,
+        providerPolicy: parsed.provider, toolOutputs: parsed.input?.filter((item) => ["function_call_output", "custom_tool_call_output"].includes(item.type)) }) + "\n");
     });
     await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
     const invocation = workerInvocation("codex", "cheap");
-    invocation.args.push("--skip-git-repo-check", "-c", 'model_provider="fixture"', "-c",
+    invocation.args.push("--skip-git-repo-check");
+    if (!broker) invocation.args.push("-c", 'model_provider="fixture"', "-c",
       `model_providers.fixture={name="fixture",base_url="http://127.0.0.1:${provider.address().port}/v1",wire_api="responses",requires_openai_auth=false,supports_websockets=false}`);
     const logDir = path.join(root, name);
+    const providerTransport = broker ? { enabled: true,
+      credentialPath: path.join(home, ".config/moviecal/openrouter-jev.key"),
+      upstream: `http://127.0.0.1:${provider.address().port}/v1/responses`,
+      policy: { hash: "a".repeat(64), model: "typesafe/jev-router", providers: ["FixtureProvider"],
+        zdr: true, dataCollection: "deny", promptLogging: false, keyId: "fake-key-id", workspaceId: "fake-workspace",
+        keyLimitUsd: 75, spendCeilingUsd: 75, ownerReviewed: true } } : null;
     try {
       const result = await spawnWorker({ invocation, cwd: own, logDir, brief: "Run the bounded disposable fixture only.",
         securityContext: { mode, home }, killGraceMs: 10, signal: AbortSignal.timeout(25000),
+        ...(broker ? { jev: { armId: "jev-hosted", policyHash: "a".repeat(64) }, providerTransport } : {}),
         repositoryGuardPathsFn: () => repositoryGuardPaths(own, undefined, undefined, home),
         // Native installation, profiles, supervisor and process launch are real.
         prepareCodexContainmentFn: (args) => modifyContainment(prepareCodexContainment({ ...args,
-          sourceEnvironment: { ...args.sourceEnvironment, HOME: home, CODEX_HOME: path.join(home, ".codex") } })),
+          sourceEnvironment: { ...args.sourceEnvironment, HOME: home, CODEX_HOME: path.join(home, ".codex") },
+          openRouterFixture: broker })),
       });
       return { result, transcript: fs.readFileSync(path.join(logDir, "stdout.log"), "utf8"), logDir, requests };
-    } finally { await new Promise((resolve) => provider.close(resolve)); }
+    } finally {
+      await new Promise((resolve) => provider.close(resolve));
+      if (unixServer) await new Promise((resolve) => unixServer.close(resolve));
+    }
   }
 
   it("completes real Codex guidance, pwd, own build writes and verification through guarded spawn", async () => {
@@ -109,6 +129,45 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
     expect(captureVerificationEvidence(logDir).status).toBe("passed");
     expect(JSON.parse(fs.readFileSync(path.join(logDir, "manifest.json"), "utf8")).securityGuard)
       .toMatchObject({ enforced: true, arrangement: "codex-sibling-exec-server" });
+  }, 30000);
+
+  it.each(["implementation", "repair"])("routes only the approved Responses call through the key-isolated broker in %s", async (mode) => {
+    const probe = `const fs=require('fs'),net=require('net'),dgram=require('dgram');
+if(process.env.MOVIECAL_PROVIDER_BROKER_TOKEN||process.env.OPENROUTER_API_KEY)throw Error('provider credential inherited');
+const key=${JSON.stringify(path.join(home, ".config/moviecal/openrouter-jev.key"))};
+try{fs.readFileSync(key);throw Error('key readable')}catch(e){if(!['EPERM','EACCES'].includes(e.code))throw e}
+const ports=[Number(process.env.FIXTURE_PORT),1];
+const tcp=ports.map(port=>new Promise((resolve,reject)=>{const s=net.connect({host:'127.0.0.1',port});s.on('connect',()=>reject(Error('TCP allowed')));s.on('error',e=>['EPERM','EACCES'].includes(e.code)?resolve():reject(e))}));
+const unix=new Promise((resolve,reject)=>{const s=net.connect({path:process.env.FIXTURE_SOCKET});s.on('connect',()=>reject(Error('Unix socket allowed')));s.on('error',e=>['EPERM','EACCES'].includes(e.code)?resolve():reject(e))});
+const udp=new Promise((resolve,reject)=>{const s=dgram.createSocket('udp4');s.send(Buffer.from('probe'),Number(process.env.FIXTURE_PORT),'127.0.0.1',e=>{s.close();e&&['EPERM','EACCES'].includes(e.code)?resolve():reject(Error('UDP allowed'))})});
+Promise.all([...tcp,unix,udp]).then(()=>console.log('broker boundaries denied')).catch(e=>{console.error(e);process.exitCode=1});`;
+    fs.writeFileSync(path.join(own, `broker-${mode}.cjs`), probe);
+    const { result, transcript, logDir, requests } = await fixture(mode,
+      [`FIXTURE_PORT=PROVIDER_PORT FIXTURE_SOCKET=FIXTURE_SOCKET_PATH node broker-${mode}.cjs`],
+      `broker-${mode}`, (value) => value, { broker: true });
+    expect(result.exitCode, transcript).toBe(0);
+    expect(requests).toBeGreaterThanOrEqual(2);
+    expect(transcript).toContain("broker boundaries denied");
+    const records = fs.readFileSync(path.join(root, `broker-${mode}-provider.jsonl`), "utf8").trim().split("\n").map(JSON.parse);
+    expect(records.every((record) => record.authenticated && record.model === "typesafe/jev-router"
+      && record.providerPolicy?.zdr === true && record.providerPolicy?.data_collection === "deny"
+      && record.providerPolicy?.allow_fallbacks === false)).toBe(true);
+    for (const file of ["codex-launch.json", "manifest.json", "stdout.log", "stderr.log"]) {
+      expect(fs.readFileSync(path.join(logDir, file), "utf8")).not.toContain("fake-openrouter-key");
+    }
+  }, 30000);
+
+  it("starts no routed client when the dedicated credential is invalid", async () => {
+    const key = path.join(home, ".config/moviecal/openrouter-jev.key");
+    fs.writeFileSync(key, "invalid key with spaces\n", { mode: 0o600 });
+    try {
+      const { result, transcript, requests } = await fixture("implementation", ["echo should-not-run > src/escape.txt"],
+        "broker-bad-key", (value) => value, { broker: true });
+      expect(result.exitCode).not.toBe(0);
+      expect(requests).toBe(0);
+      expect(transcript).not.toContain("command_execution");
+      expect(fs.existsSync(path.join(own, "src/escape.txt"))).toBe(false);
+    } finally { fs.writeFileSync(key, "fake-openrouter-key\n", { mode: 0o600 }); }
   }, 30000);
 
   it.each(["missing", "invalid"])("fails closed on a %s executor profile before client or command activity", async (failure) => {
