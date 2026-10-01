@@ -66,7 +66,8 @@ const server = http.createServer(async (request, response) => {
       `${JSON.stringify({ requestId, invoiceId: observed.invoiceId, canonicalModel: observed.canonicalModel,
         routerStageKeys: observed.routerStageKeys, routerEffortHints: observed.routerEffortHints,
         resolvedEffortSource: observed.resolvedEffortSource,
-        debugCount: observed.debugCount, upstreamModel: observed.upstreamModel, upstreamKeys: observed.upstreamKeys })}\n`, { mode: 0o600 });
+        debugCount: observed.debugCount, upstreamModel: observed.upstreamModel,
+        upstreamEffort: observed.upstreamEffort, upstreamKeys: observed.upstreamKeys })}\n`, { mode: 0o600 });
   };
   if (config.maxRequests && admitted >= config.maxRequests) {
     record("request-cap"); response.writeHead(409); response.end('{"error":{"code":"request-cap"}}'); return;

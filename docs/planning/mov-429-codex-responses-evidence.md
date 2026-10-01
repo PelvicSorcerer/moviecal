@@ -1,49 +1,32 @@
 # MOV-429 readiness evidence
 
-## Current status
-
-MOV-429 remains unfinished in Agent Working; PR #823 stays draft. The owner
-requested continued investigation within this issue. Both production policy
+MOV-429 remains unfinished in Agent Working; PR #823 stays draft. The owner requested continued investigation within this issue. Both production policy
 allowlists remain empty, the dispatcher has no transport resolver, and MOV-431
 stays held. No cohort has been activated.
 
 ## Automated and native evidence
 
 On native macOS with installed `codex-cli 0.157.1`, exact `npm run verify`
-passed: production build, 2,477 unit tests (one pre-existing skip) and 406
+passed: production build, 2,478 unit tests (one pre-existing skip) and 406
 integration tests. The native containment suite executed without skips.
-Fake Responses drive real read/edit/command tools and exact verification.
-Implementation and repair deny TCP/UDP/Unix, key reads, protected checkouts
-and Git metadata. Outage, timeout, refusal, malformed/unoffered tools, missing
-attribution and request caps stop without fallback or another upstream call.
-Admission requires matching reviewed transport before consuming an assignment;
-retries retain attempt attribution and duplicate invoices count once.
+Fake Responses prove read/edit/verification with socket, key and filesystem
+denials in implementation and repair. Failure fixtures stop without fallback;
+admission requires matching transport and invoices are deduplicated.
 
-The diagnostic fixture proves a completed file-change event, resulting file
-content and exact verification success. It checks that debug prompt/tool
-sentinels never reach transcripts or evidence. Unit tests cover fragmented
-Unicode/SSE, model/attempt correlation, missing/conflicting effort, bounded
-nested discovery and rejection of uncapped or client-supplied debug.
+The diagnostic fixture checks real file-change completion and content, exact
+verification and debug redaction. Unit tests cover fragmented Unicode/SSE,
+model/attempt/effort conflicts, nested hints and capped trusted debug gating.
 
 ## Two prior live attempts
 
-Human testing: required. Adam approved the boundary and each bounded disposable
-session separately; the agent operated them after read-only key/credit/privacy
-preflight. No account policies changed or extra credits were purchased.
-Generation IDs, exact charges, tokens and account details were reconciled
-privately and remain outside tracked source.
-
-The first attempt stopped with incomplete verification: our observer confused
-an alias with its dated canonical model, and selected effort was unresolved.
-Catalogue identity mapping fixed the alias defect; different revisions still
-fail. The second attempt stopped after one request with
-`missing-provider-attribution`, without the false alias conflict. Neither
-attempt proved a file edit or completed non-Anthropic tool round.
-
-Both attempts sent `X-OpenRouter-Metadata: enabled` and received metadata.
-The parser expected an unverified top-level `data.reasoning_effort` field.
-Only field names were saved, including nested candidates/evaluations/pipeline;
-this does not establish that effort is absent throughout the response.
+Human testing: required. Adam approved the boundary and two bounded disposable
+sessions separately, after read-only account checks. No account policy changed
+or extra credits were purchased. Detailed generation/billing evidence remains
+private. Both attempts opted into `X-OpenRouter-Metadata` and received metadata.
+The first exposed an alias/canonical comparison bug, now fixed by catalogue
+identity. The second stopped on missing effort. Neither proved a complete tool
+round or edit. The unverified top-level effort expectation did not establish
+that effort was absent deeper in the response.
 
 ## Prepared diagnostic and remaining work
 
@@ -60,11 +43,24 @@ describes that mismatch. The corrected fixture/brief use the supported shell
 patch path through `exec_command`. Unoffered tool names/types now stop; no
 capability catalogue is spoofed and the guarded executor still performs edits.
 
-Upstream effort reports what OpenRouter forwarded, not provider-internal
-behavior. Debug remains a development diagnostic, disabled in production.
-Success is `diagnostic-pass` with `cohortReady: false`. Continue MOV-429 to
-identify an observed, trustworthy normal-metadata effort source and prove a
-real tool loop without debug before cohort readiness. No third paid result is
-claimed here; previous one-use approvals were consumed. See the
-[proof runbook](../operators/mov-429-codex-responses-proof.md) for fresh approval,
-preflight, private reconciliation and the six-request cap.
+Forwarded effort is not provider-internal behavior. Debug stays off in
+production; diagnostic success has `cohortReady: false`. MOV-429 still needs
+normal-metadata effort and a real tool loop without debug.
+
+## Third paid diagnostic and correction
+
+Adam approved the pushed diagnostic and explicitly directed reuse of the
+recorded MOV-424 account safeguards without another browser check. The third
+session sent one Responses request and stopped with `conflicting-debug-model`;
+no full tool loop, edit or verification passed. Private evidence contains the
+provider-reported charge and generation ID; no Activity reconciliation is
+claimed. No automatic paid retry or additional credit purchase ran.
+
+The response used an OpenAI model's native ID through Azure. Our prefix
+normalizer only admitted the direct OpenAI provider. The correction admits
+Azure's OpenAI IDs using the same catalogue mapping, rejects other revisions,
+and retains a validated upstream effort scalar even when correlation fails.
+The native fake-provider diagnostic now mirrors this Azure identity shape.
+Nested effort hints appeared in selection probabilities and evaluations;
+these candidate values are not accepted as served effort. The issue stays
+unfinished. See the [proof runbook](../operators/mov-429-codex-responses-proof.md).

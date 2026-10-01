@@ -91,9 +91,12 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
           ...(broker ? { cost: 0.001, input_tokens_details: { cached_tokens: 0 } } : {}) } } });
       if (failure === "missing-metadata") delete events.at(-1).response.openrouter_metadata;
       if (proofDebug) {
-        delete events.at(-1).response.openrouter_metadata.pipeline;
+        const response = events.at(-1).response;
+        delete response.openrouter_metadata.pipeline;
+        response.model = "openai/fixture";
+        response.openrouter_metadata.endpoints.available = [{ selected: true, provider: "Azure", model: "openai/fixture-20260929" }];
         events.unshift({ type: "response.debug", sequence_number: 0, debug: { echo_upstream_body: {
-          model: "google/fixture", reasoning_effort: "medium", messages: [{ content: "private-debug-prompt-sentinel" }],
+          model: "fixture", reasoning: { effort: "medium" }, messages: [{ content: "private-debug-prompt-sentinel" }],
           tools: [{ description: "private-debug-tool-sentinel" }] } } });
       }
       if (failure === "refusal") events.unshift({ type: "response.refusal.done", refusal: "private-refusal-sentinel" });
@@ -129,7 +132,7 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
         // Native installation, profiles, supervisor and process launch are real.
         prepareCodexContainmentFn: (args) => modifyContainment(prepareCodexContainment({ ...args,
           sourceEnvironment: { ...args.sourceEnvironment, HOME: home, CODEX_HOME: path.join(home, ".codex") },
-          openRouterFixture: broker, openRouterModelAliases: { "google/fixture": "google/fixture-20260929" },
+          openRouterFixture: broker, openRouterModelAliases: { "google/fixture": "google/fixture-20260929", "openai/fixture": "openai/fixture-20260929" },
           openRouterProofDebug: proofDebug, providerRequestLimit: proofDebug ? 6 : null })),
       });
       return { result, transcript: fs.readFileSync(path.join(logDir, "stdout.log"), "utf8"), logDir, requests };
@@ -149,7 +152,7 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
     expect(transcript.split("\n").filter(Boolean).map(JSON.parse).some((event) => event.type === "item.completed"
       && event.item?.type === "file_change" && event.item.status === "completed")).toBe(true);
     const records = fs.readFileSync(path.join(logDir, "routing-decisions.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
-    expect(records.every((row) => row.resolvedEffort === "medium" && row.error === null)).toBe(true);
+    expect(records.every((row) => row.resolvedEffort === "medium" && row.provider === "Azure" && row.error === null)).toBe(true);
     const attribution = fs.readFileSync(path.join(logDir, "openrouter-attribution.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
     expect(attribution.every((row) => row.resolvedEffortSource === "upstream-request" && row.debugCount === 1)).toBe(true);
     const provider = fs.readFileSync(path.join(root, "proof-debug-provider.jsonl"), "utf8").trim().split("\n").map(JSON.parse);

@@ -23,13 +23,15 @@ describe("OpenRouter Responses evidence", () => {
     expect(observe([debugEvent(), debugCompletion()], { proofDebug: true })).toMatchObject({
       resolvedEffort: "medium", resolvedEffortSource: "upstream-request", debugCount: 1, error: null });
   });
-  it("correlates native OpenAI IDs using catalogue identities", () => {
+  it.each(["OpenAI", "Azure"])("correlates native OpenAI IDs from %s using catalogue identities", (provider) => {
     const event = debugCompletion(); event.response.model = "openai/fixture";
-    event.response.openrouter_metadata.endpoints.available[0] = { provider: "OpenAI", model: "openai/fixture-20260929", selected: true };
+    event.response.openrouter_metadata.endpoints.available[0] = { provider, model: "openai/fixture-20260929", selected: true };
     const debug = debugEvent("fixture"); delete debug.debug.echo_upstream_body.reasoning_effort;
     debug.debug.echo_upstream_body.reasoning = { effort: "high" };
     expect(observe([debug, event], { proofDebug: true, modelAliases: { "openai/fixture": "openai/fixture-20260929" } }))
       .toMatchObject({ resolvedEffort: "high", error: null });
+    event.response.openrouter_metadata.endpoints.available[0].model = "openai/fixture-20260928";
+    expect(observe([debug, event], { proofDebug: true, modelAliases: { "openai/fixture": "openai/fixture-20260929" } }).error).toBe("conflicting-debug-model");
   });
   it("uses the last debug attempt when routing metadata confirms the attempt count", () => {
     const event = debugCompletion(); event.response.openrouter_metadata.attempt = 2;
@@ -44,7 +46,8 @@ describe("OpenRouter Responses evidence", () => {
   });
   it("rejects unsolicited, conflicting and ambiguous debug evidence", () => {
     expect(observe([debugEvent(), completed()]).error).toBe("unexpected-provider-debug");
-    expect(observe([debugEvent("other/model"), debugCompletion()], { proofDebug: true }).error).toBe("conflicting-debug-model");
+    expect(observe([debugEvent("other/model"), debugCompletion()], { proofDebug: true }))
+      .toMatchObject({ error: "conflicting-debug-model", resolvedEffort: null, upstreamEffort: "medium" });
     expect(observe([debugEvent(), debugEvent(), debugCompletion()], { proofDebug: true }).error).toBe("ambiguous-upstream-debug");
     expect(observe([debugEvent(), completed()], { proofDebug: true }).error).toBe("conflicting-served-effort");
     const debug = debugEvent(); debug.debug.echo_upstream_body.reasoning = { effort: "low" };

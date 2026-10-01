@@ -29,6 +29,8 @@ live preflight does not prevent implementation or fake-provider tests.
 Adam reviews the MOV-425 boundary and confirms current dedicated-key/workspace
 eligibility, no account/key ZDR or data-collection restriction, prompt logging
 off, available credit, the $69 TOTAL key limit and the $75 all-in arm ceiling.
+For a later diagnostic, the owner may explicitly direct reuse of recorded
+account safeguards. Record that basis rather than claiming a fresh check.
 Inspect metadata only; never reveal or copy the key into a prompt or shell.
 Do not modify shared workspace policies or the existing Default key. This
 command does not buy credits or change any account setting.
@@ -129,7 +131,7 @@ Normal SSE frames retain their Unicode content and backpressure handling.
 
 The observer extracts only validated upstream model and effort scalars. It
 requires the last debug model to match the selected endpoint, using catalogue
-identity (or the known OpenAI native-ID prefix), and the number of debug events
+identity (or the known OpenAI/Azure native-ID prefix), and the number of debug events
 to match the reported provider-attempt count. Conflicts, unknown effort values
 and ambiguous attempt counts stop. It records source `upstream-request`: this
 is evidence of what OpenRouter forwarded, not proof of a provider's internal

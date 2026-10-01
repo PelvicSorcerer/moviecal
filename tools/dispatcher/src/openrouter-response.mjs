@@ -126,7 +126,7 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false }
       // Native OpenAI IDs have the provider prefix removed; never guess other
       // providers' native naming schemes or derive effort from token budgets.
       const debugMatches = debug?.model && (canonical(debug.model) === canonical(endpoint?.model)
-        || (endpoint?.provider === "OpenAI" && canonical(endpoint?.model)?.startsWith("openai/")
+        || (["OpenAI", "Azure"].includes(endpoint?.provider) && canonical(endpoint?.model)?.startsWith("openai/")
           && canonical(`openai/${debug.model}`) === canonical(endpoint.model)));
       const forwardedEffort = proofDebug && debugMatches && debugCount === snapshot.metadata?.attempt ? debug?.effort : null;
       if (proofDebug && debugCount && !debugMatches) fail("conflicting-debug-model");
@@ -144,7 +144,7 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false }
         // the correlated upstream request with an explicit source marker.
         resolvedEffort: routerEffort || forwardedEffort,
         resolvedEffortSource: routerEffort ? "jev-router" : forwardedEffort ? "upstream-request" : null,
-        debugCount, upstreamModel: debug?.model || null, upstreamKeys: debug?.keys || [],
+        debugCount, upstreamModel: debug?.model || null, upstreamEffort: debug?.effort || null, upstreamKeys: debug?.keys || [],
         inputTokens: count(usage.input_tokens), outputTokens: count(usage.output_tokens),
         cacheReadTokens: count(usage.input_tokens_details?.cached_tokens),
         cacheWriteTokens: count(usage.input_tokens_details?.cache_write_tokens),
