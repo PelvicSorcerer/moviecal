@@ -59,7 +59,7 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
     fs.writeFileSync(path.join(root, "native-collision.json"), JSON.stringify({ direct: { exitCode: direct.status, stdout: direct.stdout }, nested: { exitCode: nested.status, stderr: nested.stderr } }));
   });
 
-  async function fixture(mode, commands, name, modifyContainment = (value) => value, { broker = false, failure = null } = {}) {
+  async function fixture(mode, commands, name, modifyContainment = (value) => value, { broker = false, failure = null, proofDebug = false } = {}) {
     let requests = 0;
     const unixPath = path.join(root, `${name}.sock`);
     const unixServer = broker ? net.createServer() : null;
@@ -75,8 +75,11 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
       const parsed = JSON.parse(body);
       if (failure === "outage") { requests++; res.writeHead(503); res.end('private-error-sentinel'); return; }
       if (failure === "timeout") { requests++; return; }
-      const command = commands[requests++]?.replaceAll?.("PROVIDER_PORT", String(provider.address().port))
+      let command = commands[requests++]?.replaceAll?.("PROVIDER_PORT", String(provider.address().port))
         ?.replaceAll("FIXTURE_SOCKET_PATH", unixPath) ?? commands[requests - 1];
+      // Unknown router slugs use Codex's fallback tool set: shell patches,
+      // not the native custom apply_patch tool offered by known Codex models.
+      if (broker && command?.patch) command = `apply_patch <<'PATCH'\n${command.patch}\nPATCH`;
       const events = command ? [{ type: "response.output_item.done", item: typeof command === "string" ? { type: "function_call", name: "exec_command", call_id: `call-${requests}`,
         arguments: JSON.stringify({ cmd: command, workdir: own, login: false, max_output_tokens: 2000 }) }
         : { type: "custom_tool_call", name: command.code ? "exec" : "apply_patch", call_id: `call-${requests}`, input: command.code || command.patch } }]
@@ -87,15 +90,24 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2,
           ...(broker ? { cost: 0.001, input_tokens_details: { cached_tokens: 0 } } : {}) } } });
       if (failure === "missing-metadata") delete events.at(-1).response.openrouter_metadata;
+      if (proofDebug) {
+        delete events.at(-1).response.openrouter_metadata.pipeline;
+        events.unshift({ type: "response.debug", sequence_number: 0, debug: { echo_upstream_body: {
+          model: "google/fixture", reasoning_effort: "medium", messages: [{ content: "private-debug-prompt-sentinel" }],
+          tools: [{ description: "private-debug-tool-sentinel" }] } } });
+      }
       if (failure === "refusal") events.unshift({ type: "response.refusal.done", refusal: "private-refusal-sentinel" });
       if (failure === "malformed-tool") events.unshift({ type: "response.output_item.done", item: {
         type: "function_call", name: "exec_command", call_id: "bad-call", arguments: "not-json" } });
+      if (failure === "unsupported-tool") events.unshift({ type: "response.output_item.done", item: {
+        type: "custom_tool_call", name: "apply_patch", call_id: "bad-call", input: "private-unsupported-tool-sentinel" } });
       res.writeHead(200, { "content-type": "text/event-stream" });
       for (const event of events) res.write(`data: ${JSON.stringify(event)}\n\n`);
       res.end();
       fs.appendFileSync(path.join(root, `${name}-provider.jsonl`), JSON.stringify({ request: requests,
         authenticated: req.headers.authorization === "Bearer fake-openrouter-key", model: parsed.model,
-        providerPolicy: parsed.provider, toolOutputs: parsed.input?.filter((item) => ["function_call_output", "custom_tool_call_output"].includes(item.type)) }) + "\n");
+        providerPolicy: parsed.provider, debugRequested: parsed.debug?.echo_upstream_body === true,
+        toolOutputs: parsed.input?.filter((item) => ["function_call_output", "custom_tool_call_output"].includes(item.type)) }) + "\n");
     });
     await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
     const invocation = workerInvocation("codex", "cheap");
@@ -117,7 +129,8 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
         // Native installation, profiles, supervisor and process launch are real.
         prepareCodexContainmentFn: (args) => modifyContainment(prepareCodexContainment({ ...args,
           sourceEnvironment: { ...args.sourceEnvironment, HOME: home, CODEX_HOME: path.join(home, ".codex") },
-          openRouterFixture: broker, openRouterModelAliases: { "google/fixture": "google/fixture-20260929" } })),
+          openRouterFixture: broker, openRouterModelAliases: { "google/fixture": "google/fixture-20260929" },
+          openRouterProofDebug: proofDebug, providerRequestLimit: proofDebug ? 6 : null })),
       });
       return { result, transcript: fs.readFileSync(path.join(logDir, "stdout.log"), "utf8"), logDir, requests };
     } finally {
@@ -125,6 +138,26 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
       if (unixServer) await new Promise((resolve) => unixServer.close(resolve));
     }
   }
+
+  it("completes real Codex tools using forwarded-effort diagnostics without logging upstream payloads", async () => {
+    const { result, logDir, transcript, requests } = await fixture("implementation",
+      ["cat AGENTS.md", { patch: `*** Begin Patch\n*** Add File: ${own}/src/debug-proof.txt\n+debug-proof\n*** End Patch` }, "npm run verify"],
+      "proof-debug", (value) => value, { broker: true, proofDebug: true });
+    expect(result.exitCode, transcript).toBe(0); expect(requests).toBe(4);
+    expect(captureVerificationEvidence(logDir).status).toBe("passed");
+    expect(fs.readFileSync(path.join(own, "src/debug-proof.txt"), "utf8")).toBe("debug-proof\n");
+    expect(transcript.split("\n").filter(Boolean).map(JSON.parse).some((event) => event.type === "item.completed"
+      && event.item?.type === "file_change" && event.item.status === "completed")).toBe(true);
+    const records = fs.readFileSync(path.join(logDir, "routing-decisions.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+    expect(records.every((row) => row.resolvedEffort === "medium" && row.error === null)).toBe(true);
+    const attribution = fs.readFileSync(path.join(logDir, "openrouter-attribution.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+    expect(attribution.every((row) => row.resolvedEffortSource === "upstream-request" && row.debugCount === 1)).toBe(true);
+    const provider = fs.readFileSync(path.join(root, "proof-debug-provider.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+    expect(provider.every((row) => row.debugRequested)).toBe(true);
+    for (const file of fs.readdirSync(logDir).filter((name) => /\.(json|jsonl|log)$/.test(name))) {
+      expect(fs.readFileSync(path.join(logDir, file), "utf8")).not.toMatch(/private-debug-(prompt|tool)-sentinel/);
+    }
+  }, 30000);
 
   it("completes real Codex guidance, pwd, own build writes and verification through guarded spawn", async () => {
     const { result, transcript, logDir } = await fixture("implementation", ["cat AGENTS.md", "pwd", "echo harmless > src/fixture.txt",
@@ -189,7 +222,7 @@ Promise.all([...tcp,unix,udp]).then(()=>console.log('broker boundaries denied'))
     } finally { fs.writeFileSync(key, "OPENROUTER_API_KEY=fake-openrouter-key\n", { mode: 0o600 }); }
   }, 30000);
 
-  it.each(["outage", "timeout", "refusal", "malformed-tool", "missing-metadata"])("stops the real routed Codex client on %s without fallback", async (failure) => {
+  it.each(["outage", "timeout", "refusal", "malformed-tool", "missing-metadata", "unsupported-tool"])("stops the real routed Codex client on %s without fallback", async (failure) => {
     const { result, logDir, requests } = await fixture("implementation", [], `route-${failure}`,
       (value) => value, { broker: true, failure });
     expect(result.exitCode).not.toBe(0);

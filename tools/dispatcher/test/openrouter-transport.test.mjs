@@ -48,6 +48,7 @@ describe("OpenRouter transport policy", () => {
     expect(body).toEqual({ model: OPENROUTER_MODEL, input: "fixture" });
     expect(() => buildOpenRouterRequest({ model: OPENROUTER_MODEL, provider: { zdr: false } }, transport.policy)).toThrow(/policy/);
     expect(() => buildOpenRouterRequest({ model: "openai/gpt-6" }, transport.policy)).toThrow(/policy/);
+    expect(() => buildOpenRouterRequest({ model: OPENROUTER_MODEL, debug: { echo_upstream_body: true } }, transport.policy)).toThrow(/policy/);
   });
   it("keeps the key out of launch artifacts and both worker environments", () => {
     const opts = setup(); containment = prepare(opts);
@@ -65,6 +66,13 @@ describe("OpenRouter transport policy", () => {
     expect(harness).toContain(`(deny file-read* (subpath "${opts.transport.credentialPath}"))`);
     expect(executor).toContain(`(deny file-read* (subpath "${opts.transport.credentialPath}"))`);
     expect(fs.existsSync(path.join(launch.harnessHome, "auth.json"))).toBe(false);
+    expect(JSON.parse(brokerConfig).proofDebug).toBe(false);
+  });
+  it("rejects debug without a bounded disposable proof", () => {
+    const opts = setup();
+    expect(() => prepareCodexContainment({ invocation: workerInvocation("codex", "strong"), ...opts,
+      repositoryPaths: { protectedRepositoryPaths: [], gitMetadataPaths: [] }, mode: "implementation",
+      openRouterTransport: opts.transport, openRouterFixture: true, openRouterProofDebug: true })).toThrow(/capped disposable proof/);
   });
   it.each([
     ["missing", (o) => fs.unlinkSync(o.transport.credentialPath)],

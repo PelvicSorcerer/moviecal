@@ -27,6 +27,9 @@ const credential = fs.readFileSync(config.credentialPath, "utf8").trim();
 const match = /^OPENROUTER_API_KEY=([A-Za-z0-9_-]{8,256})$/.exec(credential);
 if (!match) throw new Error("provider credential invalid");
 const key = match[1];
+if (config.proofDebug === true && (!Number.isInteger(config.maxRequests) || config.maxRequests < 1 || config.maxRequests > 6)) {
+  throw new Error("provider debug requires a capped disposable proof");
+}
 let stopped = false, turn = 0, admitted = 0;
 if (config.maxRequests !== null && config.maxRequests !== undefined
   && (!Number.isInteger(config.maxRequests) || config.maxRequests < 1 || config.maxRequests > 6)) throw new Error("provider request cap invalid");
@@ -41,7 +44,7 @@ const server = http.createServer(async (request, response) => {
   }
   if (stopped) { response.writeHead(409); response.end('{"error":{"code":"route-stopped"}}'); return; }
   const requestId = randomUUID(), started = Date.now();
-  const observer = createResponseObserver({ modelAliases: config.modelAliases });
+  const observer = createResponseObserver({ modelAliases: config.modelAliases, proofDebug: config.proofDebug === true });
   let recorded = false, toolOutputs = 0, requestedEffort = null;
   const record = (error = null) => {
     if (recorded) return;
@@ -61,7 +64,9 @@ const server = http.createServer(async (request, response) => {
       toolCalls: observed.toolCalls, toolOutputs });
     fs.appendFileSync(path.join(path.dirname(process.argv[2]), "openrouter-attribution.jsonl"),
       `${JSON.stringify({ requestId, invoiceId: observed.invoiceId, canonicalModel: observed.canonicalModel,
-        routerStageKeys: observed.routerStageKeys })}\n`, { mode: 0o600 });
+        routerStageKeys: observed.routerStageKeys, routerEffortHints: observed.routerEffortHints,
+        resolvedEffortSource: observed.resolvedEffortSource,
+        debugCount: observed.debugCount, upstreamModel: observed.upstreamModel, upstreamKeys: observed.upstreamKeys })}\n`, { mode: 0o600 });
   };
   if (config.maxRequests && admitted >= config.maxRequests) {
     record("request-cap"); response.writeHead(409); response.end('{"error":{"code":"request-cap"}}'); return;
@@ -74,6 +79,8 @@ const server = http.createServer(async (request, response) => {
       if (body.length > 16 * 1024 * 1024) throw new Error("request too large");
     }
     const parsed = buildOpenRouterRequest(JSON.parse(body), config.policy);
+    observer.setTools(parsed.tools);
+    if (config.proofDebug === true) parsed.debug = { echo_upstream_body: true };
     toolOutputs = Array.isArray(parsed.input) ? parsed.input.filter((item) => ["function_call_output", "custom_tool_call_output"].includes(item.type)).length : 0;
     requestedEffort = parsed.reasoning?.effort;
     const outbound = (upstream.protocol === "https:" ? https : http).request(upstream, {
@@ -91,13 +98,16 @@ const server = http.createServer(async (request, response) => {
         record("unsupported-response-protocol"); upstreamResponse.resume();
         response.writeHead(502); response.end(); return;
       }
-      upstreamResponse.on("data", (chunk) => observer.push(chunk));
-      upstreamResponse.on("end", () => record());
+      upstreamResponse.on("data", (chunk) => {
+        const safe = observer.push(chunk);
+        if (safe && !response.write(safe)) upstreamResponse.pause();
+      });
+      response.on("drain", () => upstreamResponse.resume());
+      upstreamResponse.on("end", () => { const safe = observer.end(); if (safe) response.write(safe); record(); response.end(); });
       upstreamResponse.on("error", () => { record("provider-stream-error"); response.destroy(); });
       response.writeHead(upstreamResponse.statusCode || 502, {
         "content-type": upstreamResponse.headers["content-type"] || "application/json",
       });
-      upstreamResponse.pipe(response);
     });
     outbound.setTimeout(config.fixture ? 1000 : 30000, () => { record("provider-timeout"); outbound.destroy(); });
     response.on("close", () => { if (!recorded) record("client-disconnected"); outbound.destroy(); });

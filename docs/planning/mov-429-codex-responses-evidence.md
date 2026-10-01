@@ -68,3 +68,45 @@ Both production policy lists remain empty. No cohort activation is authorized;
 MOV-431 stays disabled unless a later separately approved proof resolves this
 no-go. The approval fuse remains consumed. A new owner review is required for
 another paid session.
+
+## Continued investigation in MOV-429
+
+The owner directed continued research/fixes in this issue rather than closing
+it on a failed proof. MOV-429 is back in Agent Working; the draft PR remains
+open and MOV-431 stays held.
+
+Both live attempts already opted into `X-OpenRouter-Metadata: enabled` and
+received routing metadata. The missing effort result was produced by our
+parser's unverified expectation of a top-level `data.reasoning_effort`; it did
+not establish that effort is absent throughout the response.
+
+Community research found a [provider-effort debugging report](https://www.reddit.com/r/DeepSeek/comments/1vdqjwr/openrouter_reasoning_effort_levels_are_broken_for/)
+that uses upstream debug echo. This is a diagnostic lead, not evidence that our
+selected provider has the report's bug. OpenRouter's [official debugging reference](https://openrouter.ai/docs/api_reference/errors-and-debugging)
+documents the Responses `response.debug` envelope containing the transformed
+upstream request. The disposable proof now requests that envelope only through
+trusted broker configuration, extracts validated model/effort scalars and drops
+all debug frames before Codex. It also captures bounded nested metadata effort
+hints without treating candidate/default values as selected effort.
+
+The native test exposed a separate fixture error: the fake routed provider
+emitted a custom `apply_patch` call that Codex does not advertise for an unknown
+router slug. A [Codex fallback-tool report](https://github.com/openai/codex/issues/44529)
+describes this mismatch. The corrected routed fixture uses the supported shell
+patch path through `exec_command` and verifies the resulting file, rather than
+accepting the harness exit code alone. The broker now rejects tool names/types
+absent from the client's offered tools. No client capability catalogue is
+spoofed and the guarded executor still performs edits.
+
+This is a prepared diagnostic, not a third paid result. Upstream-request effort
+reports what OpenRouter forwarded; it cannot establish the provider's internal
+reasoning behavior. Debug is a development feature and remains disabled for
+production. A passing debug tool loop will be labeled `diagnostic-pass`, with
+`cohortReady: false`. MOV-429 still needs an observed, trustworthy effort path in
+normal router metadata and a real tool-loop proof without debug before cohort
+readiness. The previous paid approval remains consumed.
+
+Exact `npm run verify` on the diagnostic implementation passed: production
+build, 2,477 unit tests (one pre-existing skip) and 406 integration tests. Native
+Mac containment executed without skips, including debug-frame redaction,
+actual shell-patch edit/verification and unsupported-tool stopping.

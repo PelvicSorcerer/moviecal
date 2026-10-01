@@ -104,10 +104,9 @@ The broker observes split SSE frames, including standalone terminal router
 metadata. It reports the served response model, the unique selected endpoint,
 actual `usage.cost`, response/generation ID and reported token/cache counters.
 Missing fields stay null. `reasoning.effort` can echo the request and is not
-treated as served effort: the observer requires an explicit
-`jev-router` pipeline `data.reasoning_effort` report. That optional field's
-availability is a live-proof question, not a claim about the provider schema.
-Missing it produces `missing-provider-attribution` and a no-go. Cache-write
+treated as served effort. The original observer expected a
+`jev-router` pipeline `data.reasoning_effort` report; the live attempts did not
+supply that field. Its availability remains unproved. Cache-write
 counters that are not exposed remain null. No charge is derived from pricing.
 Accounting identifies its source as `openrouter-responses`; usage/export uses
 the same manifest attempt ID and the admission spend ledger deduplicates by
@@ -118,7 +117,42 @@ up to 32 bounded Jev-stage field names. It never saves arbitrary plugin data,
 prompt text or tool payloads. A schema gap remains a no-go and can be
 investigated using these diagnostics during a separately authorized proof.
 
-A go requires a completed real file-edit tool, exact `npm run verify` passing,
+### Disposable effort diagnostic
+
+The proof command now asks the broker to add `debug.echo_upstream_body: true`,
+using OpenRouter's documented [Responses debugging event](https://openrouter.ai/docs/api_reference/errors-and-debugging).
+Only a capped, scoped disposable proof can enable it; caller-supplied debug
+remains rejected and production defaults keep it off. The broker removes whole
+`response.debug` frames before forwarding the stream to Codex. Neither client
+transcripts nor evidence save upstream prompts, tools or arbitrary body values.
+Normal SSE frames retain their Unicode content and backpressure handling.
+
+The observer extracts only validated upstream model and effort scalars. It
+requires the last debug model to match the selected endpoint, using catalogue
+identity (or the known OpenAI native-ID prefix), and the number of debug events
+to match the reported provider-attempt count. Conflicts, unknown effort values
+and ambiguous attempt counts stop. It records source `upstream-request`: this
+is evidence of what OpenRouter forwarded, not proof of a provider's internal
+reasoning behavior. Never convert token budgets into an invented effort.
+
+The private attribution file also records up to 16 nested Jev effort hints,
+with bounded paths and enum values only (depth 8, 1,024 visited nodes/entries).
+These are discovery hints, not accepted attribution: a candidate or default
+effort can differ from the selected value. Compare them with the forwarded
+effort to identify a normal metadata path before implementing cohort support.
+
+Codex uses fallback tool metadata for the literal router slug. Its native
+custom `apply_patch` tool is absent; the disposable brief uses the supported
+`exec_command` shell patch path, which the native fixture proves produces a
+real file edit. The broker rejects calls to tools/types the client did not
+offer. It does not add tools or spoof a known model's capability catalogue.
+
+OpenRouter documents debug echo for development, not production. A successful
+debug tool loop is labeled `diagnostic-pass`, with `cohortReady: false`; it
+does not establish a supported normal-metadata effort source. Continue MOV-429
+to resolve that source and prove the route without debug before activation.
+
+A successful tool-loop diagnostic requires a completed real file-edit tool, exact `npm run verify` passing,
 a non-Anthropic selected model completing the tool round, and complete
 attribution. Cross-check generation IDs and actual billed amounts with
 OpenRouter Activity/invoice records and retain the redacted reconciliation.

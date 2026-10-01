@@ -80,11 +80,12 @@ export async function runDisposableProof() {
   const invocation = workerInvocation("codex", "cheap");
   invocation.args.push("--skip-git-repo-check");
   const result = await spawnWorker({ invocation, cwd, logDir, issueIdentifier: "MOV-429",
-    brief: "Disposable proof: read answer.txt with a tool, edit it from before to after with a file editing tool, then run the exact command npm run verify. Report the result. Do not delegate, access the network or inspect credentials. Stop after verification.",
+    brief: "Disposable proof: read answer.txt with exec_command, edit it from before to after using apply_patch through exec_command (a quoted shell heredoc), then run the exact command npm run verify. The unknown router model uses Codex's shell patch path; use only tools offered in this request. Report the result. Do not delegate, access the network or inspect credentials. Stop after verification.",
     securityContext: { mode: "implementation" }, signal: AbortSignal.timeout(180000),
     jev: { armId: "jev-hosted", policyHash: policy.hash, worker: "codex" }, providerTransport: transport,
     prepareCodexContainmentFn: (args) => prepareCodexContainment({ ...args,
-      approvedOpenRouterPolicyHashes: [policy.hash], providerRequestLimit: approval.maxRequests, openRouterModelAliases: modelAliases }),
+      approvedOpenRouterPolicyHashes: [policy.hash], providerRequestLimit: approval.maxRequests,
+      openRouterModelAliases: modelAliases, openRouterProofDebug: true }),
   });
   const records = readRoutedRequestEvidence(logDir);
   const verification = captureVerificationEvidence(logDir);
@@ -95,12 +96,15 @@ export async function runDisposableProof() {
     && event.item.status === "completed");
   const nonAnthropic = records.some((record, index) => record.resolvedModel && !record.resolvedModel.startsWith("anthropic/")
     && record.toolCalls > 0 && records[index + 1]?.toolOutputs > 0 && !record.error && !records[index + 1].error);
+  const toolLoopPassed = result.exitCode === 0 && verification.status === "passed" && nonAnthropic && editedWithTool
+    && records.length >= 2 && records.every((record) => !record.error);
   const proof = { issue: "MOV-429", date: new Date().toISOString(), logDir, exitCode: result.exitCode,
     verification: verification.status, nonAnthropic, editedWithTool, routedInvoice: summarizeRoutedInvoice(records),
     records, attribution: fs.existsSync(path.join(logDir, "openrouter-attribution.jsonl"))
       ? fs.readFileSync(path.join(logDir, "openrouter-attribution.jsonl"), "utf8").trim().split("\n").map(JSON.parse) : [],
-    outcome: result.exitCode === 0 && verification.status === "passed" && nonAnthropic && editedWithTool
-      && records.length >= 2 && records.every((record) => !record.error) ? "go" : "no-go",
+    // Debug echo is a development diagnostic, not an approved cohort source.
+    toolLoopPassed, attributionMode: "upstream-request-diagnostic", cohortReady: false,
+    outcome: toolLoopPassed ? "diagnostic-pass" : "no-go",
     cohortEnabled: false };
   fs.writeFileSync(path.join(logDir, "proof.json"), JSON.stringify(proof, null, 2), { mode: 0o600 });
   return proof;
