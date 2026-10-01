@@ -52,7 +52,7 @@ export function readProofApproval({ home = os.homedir(), now = new Date() } = {}
   return { approval, filename };
 }
 
-export async function runDisposableProof() {
+export async function runDisposableProof({ proofDebug = true } = {}) {
   const { approval, filename } = readProofApproval();
   // Anonymous read-only preflight, before guarded processes or paid traffic.
   // Keep the public id -> canonical_slug snapshot with the evidence; the
@@ -87,7 +87,7 @@ export async function runDisposableProof() {
     jev: { armId: "jev-hosted", policyHash: policy.hash, worker: "codex" }, providerTransport: transport,
     prepareCodexContainmentFn: (args) => prepareCodexContainment({ ...args,
       approvedOpenRouterPolicyHashes: [policy.hash], providerRequestLimit: approval.maxRequests,
-      openRouterModelAliases: modelAliases, openRouterProofDebug: true }),
+      openRouterModelAliases: modelAliases, openRouterProofDebug: proofDebug }),
   });
   const records = readRoutedRequestEvidence(logDir);
   const verification = captureVerificationEvidence(logDir);
@@ -105,14 +105,17 @@ export async function runDisposableProof() {
     records, attribution: fs.existsSync(path.join(logDir, "openrouter-attribution.jsonl"))
       ? fs.readFileSync(path.join(logDir, "openrouter-attribution.jsonl"), "utf8").trim().split("\n").map(JSON.parse) : [],
     // Debug echo is a development diagnostic, not an approved cohort source.
-    toolLoopPassed, attributionMode: "upstream-request-diagnostic", cohortReady: false,
-    outcome: toolLoopPassed ? "diagnostic-pass" : "no-go",
+    toolLoopPassed, attributionMode: proofDebug ? "upstream-request-diagnostic" : "response-and-jev-selection", cohortReady: false,
+    outcome: toolLoopPassed ? proofDebug ? "diagnostic-pass" : "pass" : "no-go",
     cohortEnabled: false };
   fs.writeFileSync(path.join(logDir, "proof.json"), JSON.stringify(proof, null, 2), { mode: 0o600 });
   return proof;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try { console.log(JSON.stringify(await runDisposableProof(), null, 2)); }
+  try {
+    if (process.argv.length > 3 || (process.argv[2] && process.argv[2] !== "--normal-metadata")) throw new Error("unsupported proof option");
+    console.log(JSON.stringify(await runDisposableProof({ proofDebug: process.argv[2] !== "--normal-metadata" }), null, 2));
+  }
   catch (error) { console.error(`MOV-429 proof stopped: ${error.code === "EEXIST" ? "approval already consumed" : "approval/setup incomplete"}`); process.exitCode = 1; }
 }

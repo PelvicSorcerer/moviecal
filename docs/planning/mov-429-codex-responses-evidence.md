@@ -7,7 +7,7 @@ stays held. The owner requested continued work within this issue.
 ## Automated and native evidence
 
 Native macOS `codex-cli 0.157.1`: exact `npm run verify` passes production build,
-2,481 unit tests (one pre-existing skip) and 406 integration tests, including
+2,488 unit tests (one pre-existing skip) and 407 integration tests, including
 native containment without skips. Fixtures prove real read/edit/verification,
 implementation/repair TCP/UDP/Unix/key/filesystem denial, failure without fallback,
 scoped admission and invoice deduplication. Diagnostic coverage includes debug
@@ -35,10 +35,13 @@ private proof/charges are preserved without an Activity reconciliation claim.
 A [community effort report](https://www.reddit.com/r/DeepSeek/comments/1vdqjwr/openrouter_reasoning_effort_levels_are_broken_for/)
 led to the documented [Responses debug envelope](https://openrouter.ai/docs/api_reference/errors-and-debugging).
 
-## Remaining work
+## Ordinary effort path and remaining proof
 
-Debug stays off in production; success is diagnostic-pass, `cohortReady: false`.
-Find trustworthy ordinary effort attribution, prove the loop without debug and
-reconcile invoices before readiness. The next diagnostic keeps response,
-incumbent and matched candidate effort as separate hints, never served values.
+The sixth diagnostic also passed. Caller effort was low while terminal response,
+unique candidate for the served model and forwarded effort were high on all four
+turns. This validates `response-and-jev-selection`: corroborate terminal effort
+with the unique model-matched candidate and documented `resolved_models`; never
+infer from general candidates, evaluations, probabilities or incumbents.
+The temporary shape collector is retired. Ordinary-mode native fixtures pass;
+live proof without debug and private invoice reconciliation remain pending.
 See the [proof runbook](../operators/mov-429-codex-responses-proof.md).

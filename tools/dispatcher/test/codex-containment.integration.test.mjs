@@ -87,7 +87,7 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
         : [{ type: "response.output_item.done", item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Fixture complete." }] } }];
       events.push({ type: "response.completed", response: { id: `response-${requests}`, output: [],
         ...(broker ? { model: "google/fixture", reasoning: { effort: "low" },
-          openrouter_metadata: { attempt: 1, pipeline: [{ name: "jev-router", data: { reasoning_effort: "low" } }], endpoints: { available: [{ selected: true, provider: "Google", model: "google/fixture-20260929" }] } } } : {}),
+          openrouter_metadata: { attempt: 1, pipeline: [{ name: "jev-router", data: { resolved_models: ["google/fixture"], candidates: [{ model: "google/fixture", effort: "low" }] } }], endpoints: { available: [{ selected: true, provider: "Google", model: "google/fixture-20260929" }] } } } : {}),
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2,
           ...(broker ? { cost: 0.001, input_tokens_details: { cached_tokens: 0 } } : {}) } } });
       if (failure === "missing-metadata") delete events.at(-1).response.openrouter_metadata;
@@ -145,13 +145,13 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
     }
   }
 
-  it("completes real Codex tools using forwarded-effort diagnostics without logging upstream payloads", async () => {
+  it.each([true, false])("completes real read/edit/verify with debug=%s and private payloads redacted", async (proofDebug) => {
     fs.writeFileSync(path.join(own, "answer.txt"), "before\n");
     const originalVerifier = fs.readFileSync(path.join(own, "verify.cjs"), "utf8");
     fs.writeFileSync(path.join(own, "verify.cjs"), PROOF_VERIFIER);
     const { result, logDir, transcript, requests } = await fixture("implementation",
       ["cat answer.txt", { patch: `*** Begin Patch\n*** Update File: ${own}/answer.txt\n@@\n-before\n+after\n*** End Patch` }, "npm run verify"],
-      "proof-debug", (value) => value, { broker: true, proofDebug: true });
+      proofDebug ? "proof-debug" : "proof-normal", (value) => value, { broker: true, proofDebug });
     fs.writeFileSync(path.join(own, "verify.cjs"), originalVerifier);
     expect(result.exitCode, transcript).toBe(0); expect(requests).toBe(4);
     expect(captureVerificationEvidence(logDir).status).toBe("passed");
@@ -159,12 +159,12 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
     expect(transcript.split("\n").filter(Boolean).map(JSON.parse).some((event) => event.type === "item.completed"
       && event.item?.type === "file_change" && event.item.status === "completed")).toBe(true);
     const records = fs.readFileSync(path.join(logDir, "routing-decisions.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
-    expect(records.every((row) => row.resolvedEffort === "medium" && row.provider === "Azure" && row.error === null)).toBe(true);
+    expect(records.every((row) => row.resolvedEffort === (proofDebug ? "medium" : "low") && row.provider === (proofDebug ? "Azure" : "Google") && row.error === null)).toBe(true);
     const attribution = fs.readFileSync(path.join(logDir, "openrouter-attribution.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
-    expect(attribution.every((row) => row.resolvedEffortSource === "upstream-request" && row.debugCount === 1)).toBe(true);
-    expect(attribution.every((row) => row.responseEffort === "low" && row.routerSelectionHints[0].effort === "medium")).toBe(true);
-    const provider = fs.readFileSync(path.join(root, "proof-debug-provider.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
-    expect(provider.every((row) => row.debugRequested)).toBe(true);
+    expect(attribution.every((row) => row.resolvedEffortSource === (proofDebug ? "upstream-request" : "response-and-jev-selection") && row.debugCount === (proofDebug ? 1 : 0))).toBe(true);
+    expect(attribution.every((row) => row.responseEffort === "low")).toBe(true);
+    const provider = fs.readFileSync(path.join(root, `${proofDebug ? "proof-debug" : "proof-normal"}-provider.jsonl`), "utf8").trim().split("\n").map(JSON.parse);
+    expect(provider.every((row) => row.debugRequested === proofDebug)).toBe(true);
     for (const file of fs.readdirSync(logDir).filter((name) => /\.(json|jsonl|log)$/.test(name))) {
       expect(fs.readFileSync(path.join(logDir, file), "utf8")).not.toMatch(/private-debug-(prompt|tool)-sentinel/);
     }
@@ -210,7 +210,7 @@ Promise.all([...tcp,unix,udp]).then(()=>console.log('broker boundaries denied'))
     const attribution = fs.readFileSync(path.join(logDir, "openrouter-attribution.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
     expect(attribution).toHaveLength(requests);
     expect(attribution.every((row) => row.canonicalModel === "google/fixture-20260929"
-      && row.routerStageKeys.length === 1 && row.routerStageKeys[0] === "reasoning_effort")).toBe(true);
+      && row.resolvedEffortSource === "response-and-jev-selection" && row.routerStageKeys.join() === "resolved_models,candidates")).toBe(true);
     if (mode === "implementation") expect(captureVerificationEvidence(logDir).status).toBe("passed");
     const records = fs.readFileSync(path.join(root, `broker-${mode}-provider.jsonl`), "utf8").trim().split("\n").map(JSON.parse);
     expect(records.every((record) => record.authenticated && record.model === "typesafe/jev-router"

@@ -27,27 +27,6 @@ function effortHints(data) {
   return hints;
 }
 
-// Selection-schema discovery only. Keep shapes, enums and identity matches,
-// never candidate descriptions, scores, reasoning or arbitrary string values.
-function selectionHints(data, canonical, servedModel) {
-  const hints = [];
-  for (const field of ["resolved_models", "candidates", "evaluations", "selection_probabilities"]) {
-    const value = data?.[field];
-    const rows = Array.isArray(value) ? value.slice(0, 128) : value == null ? [] : [value];
-    for (const [index, row] of rows.entries()) {
-      const models = [typeof row === "string" ? row : null, row?.model, row?.model_id, row?.slug];
-      const matchesServed = Boolean(servedModel && models.some((model) => id(model) && canonical(model) === canonical(servedModel)));
-      if (index >= 2 && !matchesServed) continue;
-      if (hints.length >= 16) return hints;
-      hints.push({ field, index, kind: Array.isArray(row) ? "array" : typeof row,
-        keys: row && typeof row === "object" ? Object.keys(row).filter((key) => key.length <= 64 && id(key)).slice(0, 16) : [],
-        matchesServed, effort: effort(row?.effort) || effort(row?.reasoning_effort) || effort(row?.reasoning?.effort),
-        selected: typeof row?.selected === "boolean" ? row.selected : null });
-    }
-  }
-  return hints;
-}
-
 export function createResponseObserver({ modelAliases = {}, proofDebug = false, deferCompletion = false } = {}) {
   const canonical = (model) => id(modelAliases[model]) || id(model);
   const decoder = new StringDecoder("utf8");
@@ -148,10 +127,21 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
       const selected = snapshot.metadata?.endpoints?.available?.filter?.((entry) => entry.selected === true) || [];
       const endpoint = selected.length === 1 ? selected[0] : null;
       const usage = snapshot.usage || {};
-      const jev = snapshot.metadata?.pipeline?.find?.((stage) => stage.name === "jev-router")?.data;
+      const stages = Array.isArray(snapshot.metadata?.pipeline) && snapshot.metadata.pipeline.length <= 64
+        ? snapshot.metadata.pipeline.filter((stage) => stage?.name === "jev-router") : [];
+      const jev = stages.length === 1 ? stages[0].data : null;
       const model = id(snapshot.model);
       const resolvedModel = model === "typesafe/jev-router" ? null : model;
-      const routerEffort = effort(jev?.reasoning_effort);
+      const candidates = Array.isArray(jev?.candidates) && jev.candidates.length <= 128
+        ? jev.candidates.filter((row) => id(row?.model) && canonical(row.model) === canonical(resolvedModel)) : [];
+      const selectedByJev = Array.isArray(jev?.resolved_models) && jev.resolved_models.length <= 128
+        && jev.resolved_models.some((model) => id(model) && canonical(model) === canonical(resolvedModel));
+      const candidateEffort = candidates.length === 1 ? effort(candidates[0].effort) : null;
+      // Live contrast: caller low, completed response/candidate/upstream high.
+      // Responses effort alone, evaluations and incumbent defaults are not proof.
+      const responseEffort = snapshot.responseEffort || null;
+      const routerEffort = selectedByJev && candidateEffort && responseEffort === candidateEffort ? responseEffort : null;
+      if (selectedByJev && candidateEffort && responseEffort && responseEffort !== candidateEffort) fail("conflicting-served-effort");
       // The last debug event is the last attempted upstream request. Require
       // the documented attempt count and a matching final selected model.
       // Native OpenAI IDs have the provider prefix removed; never guess other
@@ -170,14 +160,12 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
         // arbitrary plugin data, prompt text or reasoning content.
         routerStageKeys: Object.keys(jev || {}).filter((key) => id(key)).slice(0, 32),
         routerEffortHints: proofDebug ? effortHints(jev) : [],
-        routerSelectionHints: proofDebug ? selectionHints(jev, canonical, resolvedModel) : [],
-        responseEffort: proofDebug ? snapshot.responseEffort || null : null,
-        incumbentEffort: proofDebug ? effort(jev?.incumbent_effort) : null,
+        responseEffort,
         // Responses reasoning can echo the request; it is not proof of Jev's
         // effective selection. A disposable diagnostic can instead report
         // the correlated upstream request with an explicit source marker.
         resolvedEffort: routerEffort || forwardedEffort,
-        resolvedEffortSource: routerEffort ? "jev-router" : forwardedEffort ? "upstream-request" : null,
+        resolvedEffortSource: routerEffort ? "response-and-jev-selection" : forwardedEffort ? "upstream-request" : null,
         debugCount, upstreamModel: debug?.model || null, upstreamEffort: debug?.effort || null, upstreamKeys: debug?.keys || [],
         inputTokens: count(usage.input_tokens), outputTokens: count(usage.output_tokens),
         cacheReadTokens: count(usage.input_tokens_details?.cached_tokens),

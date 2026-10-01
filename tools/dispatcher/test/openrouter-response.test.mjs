@@ -4,7 +4,7 @@ import { createResponseObserver } from "../src/openrouter-response.mjs";
 const completed = () => ({ type: "response.completed", response: {
   id: "gen-fixture", model: "google/fixture", reasoning: { effort: "low" },
   usage: { input_tokens: 20, output_tokens: 4, input_tokens_details: { cached_tokens: 10 }, cost: 0.002 },
-  openrouter_metadata: { attempt: 1, pipeline: [{ name: "jev-router", data: { reasoning_effort: "low" } }], endpoints: { available: [{ model: "google/fixture", provider: "Google", selected: true }] } },
+  openrouter_metadata: { attempt: 1, pipeline: [{ name: "jev-router", data: { resolved_models: ["google/fixture"], candidates: [{ model: "google/fixture", effort: "low" }] } }], endpoints: { available: [{ model: "google/fixture", provider: "Google", selected: true }] } },
 } });
 function observe(events, options) {
   const observer = createResponseObserver(options);
@@ -108,18 +108,21 @@ describe("OpenRouter Responses evidence", () => {
       inputTokens: 20, outputTokens: 4, cacheReadTokens: 10, cacheWriteTokens: null, billedUsd: 0, error: null, fallback: false });
     expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
   });
-  it("projects selection shapes and matched effort without promoting candidate or caller values", () => {
-    const event = debugCompletion(); event.response.reasoning.effort = "low";
-    event.response.openrouter_metadata.pipeline = [{ name: "jev-router", data: {
-      incumbent_effort: "high", resolved_models: ["google/fixture"],
-      candidates: Array.from({ length: 1000 }, () => ({ model: "google/fixture", effort: "high", prompt: "PRIVATE_SENTINEL" })) } }];
-    const result = observe([event], { proofDebug: true });
-    expect(result).toMatchObject({ resolvedEffort: null, error: "missing-provider-attribution", responseEffort: "low", incumbentEffort: "high" });
-    expect(result.routerSelectionHints).toHaveLength(16);
-    expect(result.routerSelectionHints[0]).toMatchObject({ field: "resolved_models", kind: "string", matchesServed: true });
-    expect(result.routerSelectionHints[1]).toMatchObject({ matchesServed: true, effort: "high", keys: ["model", "effort", "prompt"] });
-    expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
-    expect(observe([event]).routerSelectionHints).toEqual([]);
+  it("attributes ordinary effort only to the unique served candidate and terminal response", () => {
+    expect(observe([completed()])).toMatchObject({ resolvedEffort: "low", resolvedEffortSource: "response-and-jev-selection", debugCount: 0, error: null });
+    const event = completed(); event.response.reasoning.effort = "high";
+    expect(observe([event]).error).toBe("conflicting-served-effort");
+  });
+  it.each(["missing-selection", "other-candidate", "duplicate-candidate", "unknown-effort", "missing-response", "oversized-candidates", "duplicate-stage"])("rejects ordinary attribution for %s", (failure) => {
+    const event = completed(), data = event.response.openrouter_metadata.pipeline[0].data;
+    if (failure === "duplicate-stage") event.response.openrouter_metadata.pipeline.push({ name: "jev-router", data });
+    if (failure === "missing-selection") data.resolved_models = [];
+    if (failure === "other-candidate") data.candidates[0].model = "other/model";
+    if (failure === "duplicate-candidate") data.candidates.push({ ...data.candidates[0] });
+    if (failure === "unknown-effort") data.candidates[0].effort = "invented";
+    if (failure === "missing-response") delete event.response.reasoning;
+    if (failure === "oversized-candidates") data.candidates = Array(129).fill(data.candidates[0]);
+    expect(observe([event])).toMatchObject({ resolvedEffort: null, error: "missing-provider-attribution" });
   });
   it("accepts terminal standalone routing metadata and records upstream fallback", () => {
     const event = completed(); const metadata = event.response.openrouter_metadata;

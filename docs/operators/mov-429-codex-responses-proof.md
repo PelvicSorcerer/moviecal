@@ -46,7 +46,7 @@ use actual identities/balances and expiry within one hour. This example refuses:
 Run once in the human-led Mac session:
 
 ```sh
-node tools/dispatcher/src/openrouter-proof.mjs
+node tools/dispatcher/src/openrouter-proof.mjs --normal-metadata
 ```
 
 An anonymous `/api/v1/models` preflight saves validated `id`/`canonical_slug`
@@ -72,9 +72,13 @@ streams still stop. It records selected model/provider, invoice ID, actual
 `usage.cost`, token/cache counters and source `openrouter-responses`. Missing
 fields stay null; admission accounting deduplicates invoices by generation ID
 and manifest attempt IDs link export. Responses reasoning can echo caller
-configuration; the proposed Jev `data.reasoning_effort` path is unproved live.
+configuration. Ordinary attribution requires terminal `reasoning.effort` to
+match the unique Jev candidate for the served canonical model, which must also
+appear in `resolved_models`. Missing, duplicate or conflicting entries stop.
+Collections exceeding 128 entries fail closed. Source is `response-and-jev-selection`,
+validated by a live caller-low/response-candidate-upstream-high contrast.
 
-The capped proof enables the documented [Responses debug echo](https://openrouter.ai/docs/api_reference/errors-and-debugging)
+Omit `--normal-metadata` only for a separately authorized diagnostic using the [Responses debug echo](https://openrouter.ai/docs/api_reference/errors-and-debugging)
 through trusted configuration only. Caller debug is rejected; production keeps
 it off. Whole debug frames are removed before Codex/logs, preserving normal
 Unicode SSE/backpressure. Only validated model/effort scalars and bounded field
@@ -83,21 +87,17 @@ catalogue mapping (including OpenAI/Azure native IDs), and debug/attempt counts
 must match. Conflict, unknown effort or ambiguity stops. Source
 `upstream-request` proves forwarding, not provider-internal reasoning.
 
-Private attribution includes up to 16 nested effort hints (depth 8, 1,024 visited
-nodes) and 16 selection-shape hints: bounded field names, effort enums, selected
-booleans and matches to the served model from resolved models/candidates/
-evaluations/probabilities (at most 128 entries per collection). Terminal response
-and incumbent effort are separate diagnostic scalars. None supplies served
-attribution: candidate, incumbent and caller values can differ. No descriptions,
-scores, reasoning text or arbitrary values are saved. These hints locate a
-normal metadata path to validate against forwarded effort, not invent one.
+Private diagnostics retain at most 16 nested effort hints (depth 8, 1,024 visited
+nodes), terminal response effort and bounded stage keys. General candidates,
+evaluations/probabilities and incumbents never supply attribution. The temporary
+selection-shape collector was retired after identifying the ordinary path.
 
 The unknown router slug lacks Codex's custom patch tool; use the supported shell
 patch path through `exec_command`. Unoffered tools stop; no capability catalogue
 is spoofed. Success requires a completed actual file-change tool, exact
 `npm run verify`, a non-Anthropic tool round, exit zero and complete attribution.
-Debug success is `diagnostic-pass`, `cohortReady: false`: resolve normal effort
-and prove without development debug before activation. Cross-check actual bills
+Debug success is `diagnostic-pass`; ordinary success is `pass`. Both keep the
+cohort disabled pending MOV-431 approval. Cross-check actual bills
 against Activity/invoices privately. Protocol/tool/refusal/provider/metadata
 failure stops without subscription, worker, model or provider substitution.
 
