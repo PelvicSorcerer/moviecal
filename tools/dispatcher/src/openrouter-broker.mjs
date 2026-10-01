@@ -44,7 +44,7 @@ const server = http.createServer(async (request, response) => {
   }
   if (stopped) { response.writeHead(409); response.end('{"error":{"code":"route-stopped"}}'); return; }
   const requestId = randomUUID(), started = Date.now();
-  const observer = createResponseObserver({ modelAliases: config.modelAliases, proofDebug: config.proofDebug === true });
+  const observer = createResponseObserver({ modelAliases: config.modelAliases, proofDebug: config.proofDebug === true, deferCompletion: true });
   let recorded = false, toolOutputs = 0, requestedEffort = null;
   const record = (error = null) => {
     if (recorded) return;
@@ -104,7 +104,7 @@ const server = http.createServer(async (request, response) => {
         if (safe && !response.write(safe)) upstreamResponse.pause();
       });
       response.on("drain", () => upstreamResponse.resume());
-      upstreamResponse.on("end", () => { const safe = observer.end(); if (safe) response.write(safe); record(); response.end(); });
+      upstreamResponse.on("end", () => { const safe = observer.end(); record(); response.end(safe); });
       upstreamResponse.on("error", () => { record("provider-stream-error"); response.destroy(); });
       response.writeHead(upstreamResponse.statusCode || 502, {
         "content-type": upstreamResponse.headers["content-type"] || "application/json",

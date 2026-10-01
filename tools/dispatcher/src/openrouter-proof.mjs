@@ -12,6 +12,8 @@ import { spawnWorker } from "./worker-spawn.mjs";
 import { captureVerificationEvidence } from "./readiness-evidence.mjs";
 import { readRoutedRequestEvidence, summarizeRoutedInvoice } from "./routed-request.mjs";
 
+export const PROOF_VERIFIER = "require('node:assert/strict').equal(require('node:fs').readFileSync('answer.txt','utf8'),'after\\n');\n";
+
 /** Identity only: never use the public catalogue's prices/default effort. */
 export function modelAliasesFromCatalog(catalog) {
   if (!Array.isArray(catalog?.data) || !catalog.data.length || catalog.data.length > 5000) throw new Error("invalid model catalogue");
@@ -70,7 +72,7 @@ export async function runDisposableProof() {
   execFileSync("git", ["init", "-q"], { cwd });
   fs.writeFileSync(path.join(cwd, "package.json"), JSON.stringify({ scripts: { verify: "node verify.cjs" } }));
   fs.writeFileSync(path.join(cwd, "answer.txt"), "before\n");
-  fs.writeFileSync(path.join(cwd, "verify.cjs"), "require('node:assert/strict').equal(require('node:fs').readFileSync('answer.txt','utf8'),'after\\n');\n");
+  fs.writeFileSync(path.join(cwd, "verify.cjs"), PROOF_VERIFIER);
   const policy = { model: OPENROUTER_MODEL, providers: [], zdr: false, dataCollection: null,
     promptLogging: false, keyLimitUsd: 69, spendCeilingUsd: 75, keyId: approval.keyId,
     workspaceId: approval.workspaceId, ownerReviewed: true };

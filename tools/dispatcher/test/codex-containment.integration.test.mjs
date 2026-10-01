@@ -10,6 +10,7 @@ import { workerInvocation } from "../src/worker-routing.mjs";
 import { isInsideWorkerSandboxEnv, repositoryGuardPaths, auditWorkerTranscript, buildWorkerSandboxProfile, guardedInvocation } from "../src/worker-guard.mjs";
 import { resolveCodexExecutable, prepareCodexContainment } from "../src/codex-containment.mjs";
 import { captureVerificationEvidence } from "../src/readiness-evidence.mjs";
+import { PROOF_VERIFIER } from "../src/openrouter-proof.mjs";
 
 // Requires the installed CLI and a real, unnested Mac session. Never call a
 // live provider, read a real credential, or change the daemon. The fake SSE
@@ -106,6 +107,7 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
         type: "custom_tool_call", name: "apply_patch", call_id: "bad-call", input: "private-unsupported-tool-sentinel" } });
       res.writeHead(200, { "content-type": "text/event-stream" });
       for (const event of events) res.write(`data: ${JSON.stringify(event)}\n\n`);
+      if (proofDebug) await new Promise((resolve) => setTimeout(resolve, 100));
       res.end();
       fs.appendFileSync(path.join(root, `${name}-provider.jsonl`), JSON.stringify({ request: requests,
         authenticated: req.headers.authorization === "Bearer fake-openrouter-key", model: parsed.model,
@@ -143,12 +145,16 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
   }
 
   it("completes real Codex tools using forwarded-effort diagnostics without logging upstream payloads", async () => {
+    fs.writeFileSync(path.join(own, "answer.txt"), "before\n");
+    const originalVerifier = fs.readFileSync(path.join(own, "verify.cjs"), "utf8");
+    fs.writeFileSync(path.join(own, "verify.cjs"), PROOF_VERIFIER);
     const { result, logDir, transcript, requests } = await fixture("implementation",
-      ["cat AGENTS.md", { patch: `*** Begin Patch\n*** Add File: ${own}/src/debug-proof.txt\n+debug-proof\n*** End Patch` }, "npm run verify"],
+      ["cat answer.txt", { patch: `*** Begin Patch\n*** Update File: ${own}/answer.txt\n@@\n-before\n+after\n*** End Patch` }, "npm run verify"],
       "proof-debug", (value) => value, { broker: true, proofDebug: true });
+    fs.writeFileSync(path.join(own, "verify.cjs"), originalVerifier);
     expect(result.exitCode, transcript).toBe(0); expect(requests).toBe(4);
     expect(captureVerificationEvidence(logDir).status).toBe("passed");
-    expect(fs.readFileSync(path.join(own, "src/debug-proof.txt"), "utf8")).toBe("debug-proof\n");
+    expect(fs.readFileSync(path.join(own, "answer.txt"), "utf8")).toBe("after\n");
     expect(transcript.split("\n").filter(Boolean).map(JSON.parse).some((event) => event.type === "item.completed"
       && event.item?.type === "file_change" && event.item.status === "completed")).toBe(true);
     const records = fs.readFileSync(path.join(logDir, "routing-decisions.jsonl"), "utf8").trim().split("\n").map(JSON.parse);

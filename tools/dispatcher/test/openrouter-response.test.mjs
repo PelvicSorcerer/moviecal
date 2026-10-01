@@ -13,6 +13,17 @@ function observe(events, options) {
   return observer.finish();
 }
 describe("OpenRouter Responses evidence", () => {
+  it("holds completion until final standalone metadata has been drained", () => {
+    const observer = createResponseObserver({ deferCompletion: true });
+    const event = completed(), metadata = event.response.openrouter_metadata;
+    delete event.response.openrouter_metadata;
+    const terminal = `data: ${JSON.stringify(event)}\n\n`;
+    expect(observer.push(terminal)).toBe("");
+    const final = `data: ${JSON.stringify({ openrouter_metadata: metadata })}\n\n`;
+    expect(observer.push(final + "data: [DONE]\n\n")).toBe("");
+    expect(observer.end()).toBe(terminal + final + "data: [DONE]\n\n");
+    expect(observer.finish().error).toBe(null);
+  });
   const debugEvent = (model = "google/fixture", value = "medium") => ({ type: "response.debug", sequence_number: 0,
     debug: { echo_upstream_body: { model, reasoning_effort: value, messages: [{ content: "PRIVATE_DEBUG_SENTINEL" }] } } });
   function debugCompletion() {

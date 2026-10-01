@@ -27,13 +27,21 @@ function effortHints(data) {
   return hints;
 }
 
-export function createResponseObserver({ modelAliases = {}, proofDebug = false } = {}) {
+export function createResponseObserver({ modelAliases = {}, proofDebug = false, deferCompletion = false } = {}) {
   const canonical = (model) => id(modelAliases[model]) || id(model);
   const decoder = new StringDecoder("utf8");
   let pending = "", completed = false, reason = null, snapshot = {}, toolCalls = 0;
   let ended = false, debugCount = 0, debug = null;
   let offeredTools = null;
+  let terminal = "";
   const fail = (code) => { reason ??= code; };
+  function forward(raw) {
+    if (!deferCompletion || !completed) return `${raw}\n\n`;
+    // Codex stops reading on completion; drain final routing metadata first.
+    terminal += `${raw}\n\n`;
+    if (terminal.length > 1024 * 1024) { terminal = ""; fail("response-frame-too-large"); }
+    return "";
+  }
   function event(value) {
     if (!value || typeof value !== "object") return fail("malformed-response");
     if (value.type === "response.debug") {
@@ -81,11 +89,11 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false }
   function frame(raw) {
     if (raw.length > 1024 * 1024) { fail("response-frame-too-large"); return ""; }
     const data = raw.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
-    if (!data || data === "[DONE]") return `${raw}\n\n`;
+    if (!data || data === "[DONE]") return forward(raw);
     try {
       const value = JSON.parse(data); event(value);
       if (value.type === "response.debug" || Object.hasOwn(value, "debug")) return "";
-      return `${raw}\n\n`;
+      return forward(raw);
     } catch { fail("malformed-response"); return ""; }
   }
   function end() {
@@ -94,7 +102,8 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false }
     pending += decoder.end();
     const tail = pending.trim() ? frame(pending) : "";
     pending = "";
-    return tail;
+    const result = tail + terminal; terminal = "";
+    return result;
   }
   return {
     setTools(tools) {

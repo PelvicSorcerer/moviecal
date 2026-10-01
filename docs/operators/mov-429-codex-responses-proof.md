@@ -1,9 +1,8 @@
 # Contained Codex Jev Responses proof (MOV-429)
 
-This proves one disposable hosted Jev session, not cohort activation. The
-dispatcher supplies no production transport resolver and both production
-policy-hash allowlists remain empty. MOV-431 owns any subsequent activation.
-Subscription routing remains unchanged.
+This disposable proof keeps subscription routing unchanged and the cohort off.
+The dispatcher has no production transport resolver; both policy allowlists
+remain empty. MOV-431 owns activation.
 
 ## Automated evidence before paid traffic
 
@@ -15,14 +14,10 @@ npx vitest --config vitest.integration.config.ts --run tools/dispatcher/test/cod
 npm run verify
 ```
 
-The disposable fake provider drives the real client's read, apply-patch and
-exact verification tools. Implementation and repair fixtures deny TCP, UDP,
-Unix sockets, key reads and protected filesystem access. Provider failures,
-refusals, malformed tools, missing attribution and request caps stop the
-route. No fake key is a live credential and no skip is native evidence.
-
-Review those results before recording a paid-proof authorization. A missing
-live preflight does not prevent implementation or fake-provider tests.
+The fake provider drives real read/edit/verification and implementation/repair
+socket, key and filesystem denial checks. Failure fixtures and request caps
+stop without fallback. Review native results before paid authorization;
+missing live preflight does not prevent implementation or fixture tests.
 
 ## Human-led preflight and one-use authorization
 
@@ -43,24 +38,13 @@ deliberately refuses to run. The expiry must be within one hour of review.
 
 ```json
 {
-  "issue": "MOV-429",
-  "owner": "Adam Moore",
-  "ownerApproved": false,
-  "securityReviewPassed": false,
-  "effectiveEligibilityUnrestricted": false,
-  "promptLoggingOff": false,
-  "zdrOff": false,
-  "dataCollectionUnrestricted": false,
-  "keyLimitUsd": 69,
-  "allInCeilingUsd": 75,
-  "availableCreditUsd": 0,
-  "keyRemainingUsd": 0,
-  "allInOutlayUsd": 0,
-  "keyId": "DEDICATED_KEY_IDENTIFIER",
-  "workspaceId": "DEDICATED_WORKSPACE_IDENTIFIER",
-  "maxRequests": 6,
-  "reviewedAt": "REVIEW_TIME_UTC",
-  "expiresAt": "EXPIRY_TIME_UTC"
+  "issue": "MOV-429", "owner": "Adam Moore", "ownerApproved": false,
+  "securityReviewPassed": false, "effectiveEligibilityUnrestricted": false,
+  "promptLoggingOff": false, "zdrOff": false, "dataCollectionUnrestricted": false,
+  "keyLimitUsd": 69, "allInCeilingUsd": 75,
+  "availableCreditUsd": 0, "keyRemainingUsd": 0, "allInOutlayUsd": 0,
+  "keyId": "DEDICATED_KEY_IDENTIFIER", "workspaceId": "DEDICATED_WORKSPACE_IDENTIFIER",
+  "maxRequests": 6, "reviewedAt": "REVIEW_TIME_UTC", "expiresAt": "EXPIRY_TIME_UTC"
 }
 ```
 
@@ -70,13 +54,9 @@ Run once in the human-led Mac session:
 node tools/dispatcher/src/openrouter-proof.mjs
 ```
 
-Before guarded startup, an anonymous read-only preflight fetches OpenRouter's
-public `/api/v1/models` catalogue and preserves only `id`/`canonical_slug`
-identities. The observer compares canonical identities so a response alias
-and its dated revision do not create a false conflict. Catalogue defaults and
-prices never supply served effort or billed cost. Failure to fetch/validate
-the catalogue stops before paid traffic. This does not add an executor or
-broker network destination.
+An anonymous `/api/v1/models` preflight validates and saves `id`/`canonical_slug`
+identities before paid traffic. Catalogue aliases resolve identity only; defaults
+and prices never supply effort or charges. No broker/executor destination is added.
 
 The command consumes an exclusive `.used` fuse beside the approval before launching
 the provider, creates a non-private disposable Git repository under the Mac
@@ -89,53 +69,41 @@ estimate. Record actual key usage and all fees, and never purchase additional
 credit as part of this proof. Removing the fuse requires a new owner review;
 do not automatically retry a failed paid proof.
 
-Only the broker opens the key. The executor and its descendants have no
-network or key access; the guarded client can contact only the broker and
-executor ports. The proof's scoped policy approval is supplied only by this
-command and cannot activate either production policy allowlist.
+Only the broker opens the key; executor descendants retain network/key denial.
+The guarded client reaches only broker/executor ports. Scoped proof approval
+cannot activate production allowlists.
 
 ## Outcome and review
 
-The command preserves `proof.json`, manifest, redacted transcript, native
-profiles, exact verification evidence and bounded request accounting under
-the printed temporary evidence directory. Copy needed redacted evidence to a
-durable location and link it from MOV-429 before temporary-file cleanup.
-Never commit the approval file, key or raw provider payloads.
+Preserve private `proof.json`, manifest, redacted transcript, native profiles,
+verification and request evidence before temporary cleanup. Link the private
+location from MOV-429; never commit approval, credentials or raw payloads.
 
-The broker observes split SSE frames, including standalone terminal router
-metadata. It reports the served response model, the unique selected endpoint,
-actual `usage.cost`, response/generation ID and reported token/cache counters.
-Missing fields stay null. `reasoning.effort` can echo the request and is not
-treated as served effort. The original observer expected a
-`jev-router` pipeline `data.reasoning_effort` report; the live attempts did not
-supply that field. Its availability remains unproved. Cache-write
-counters that are not exposed remain null. No charge is derived from pricing.
-Accounting identifies its source as `openrouter-responses`; usage/export uses
-the same manifest attempt ID and the admission spend ledger deduplicates by
-provider generation/invoice ID.
-
-`openrouter-attribution.jsonl` also retains the canonical model identity and
-up to 32 bounded Jev-stage field names. It never saves arbitrary plugin data,
-prompt text or tool payloads. A schema gap remains a no-go and can be
-investigated using these diagnostics during a separately authorized proof.
+The broker holds a bounded completion tail until upstream EOF, records final
+metadata, then forwards completion because Codex stops reading at that event.
+Early disconnects, malformed streams and timeouts still stop. It records the
+served model, unique selected provider, generation ID, actual `usage.cost` and
+reported token/cache counters with source `openrouter-responses`. Admission
+accounting deduplicates invoices; manifest attempt IDs link usage/export.
+Missing fields stay null; no cost or effort is inferred from catalogue prices.
+Responses `reasoning.effort` may echo the caller and is not served attribution.
+The proposed Jev pipeline `data.reasoning_effort` path remains unproved live.
+Private `openrouter-attribution.jsonl` preserves canonical identity and up to
+32 stage field names, never arbitrary plugin data. Missing attribution stops;
+investigate schema gaps in a separately authorized disposable diagnostic.
 
 ### Disposable effort diagnostic
 
-The proof command now asks the broker to add `debug.echo_upstream_body: true`,
-using OpenRouter's documented [Responses debugging event](https://openrouter.ai/docs/api_reference/errors-and-debugging).
-Only a capped, scoped disposable proof can enable it; caller-supplied debug
-remains rejected and production defaults keep it off. The broker removes whole
-`response.debug` frames before forwarding the stream to Codex. Neither client
-transcripts nor evidence save upstream prompts, tools or arbitrary body values.
-Normal SSE frames retain their Unicode content and backpressure handling.
+The broker requests `debug.echo_upstream_body: true` using the documented
+[Responses debugging event](https://openrouter.ai/docs/api_reference/errors-and-debugging).
+Only capped disposable proofs enable it; caller debug is rejected and production
+keeps it off. Whole debug frames are stripped before Codex/logs; normal Unicode
+SSE and backpressure remain intact. No arbitrary upstream body is persisted.
 
-The observer extracts only validated upstream model and effort scalars. It
-requires the last debug model to match the selected endpoint, using catalogue
-identity (or the known OpenAI/Azure native-ID prefix), and the number of debug events
-to match the reported provider-attempt count. Conflicts, unknown effort values
-and ambiguous attempt counts stop. It records source `upstream-request`: this
-is evidence of what OpenRouter forwarded, not proof of a provider's internal
-reasoning behavior. Never convert token budgets into an invented effort.
+Validated model/effort scalars require catalogue-correlated final model
+identity (including OpenAI/Azure native IDs) and matching provider-attempt/debug
+counts. Conflicts, unknown efforts and ambiguity stop. Source `upstream-request`
+proves forwarding, not internal reasoning; token budgets never imply effort.
 
 The private attribution file also records up to 16 nested Jev effort hints,
 with bounded paths and enum values only (depth 8, 1,024 visited nodes/entries).
@@ -162,7 +130,5 @@ An HTTP error, unsupported protocol/tool response, refusal, timeout, outage,
 missing metadata or absent non-Anthropic proof is an explicit no-go. There is
 no subscription, worker, model or provider substitution after failure.
 
-Review the pushed draft branch's manual checklist and attach the outcome to
-MOV-429. A provider incompatibility is a valid documented no-go, not permission
-to weaken confinement. Keep the cohort disabled in either outcome; do not
-promote the PR until required human review and evidence are complete.
+Review the pushed draft manual checklist and record the outcome in MOV-429.
+Keep the cohort disabled and the PR draft until required review/evidence pass.

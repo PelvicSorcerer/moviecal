@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { readProofApproval, modelAliasesFromCatalog } from "../src/openrouter-proof.mjs";
+import { execFileSync } from "node:child_process";
+import { readProofApproval, modelAliasesFromCatalog, PROOF_VERIFIER } from "../src/openrouter-proof.mjs";
 let root;
 afterEach(() => { if (root) fs.rmSync(root, { recursive: true, force: true }); });
 function setup() {
@@ -19,6 +20,13 @@ function setup() {
   save(); return { now, approval, file, save };
 }
 describe("disposable paid proof approval", () => {
+  it("verifies the real newline file and rejects the unchanged file", () => {
+    setup(); fs.writeFileSync(path.join(root, "verify.cjs"), PROOF_VERIFIER);
+    fs.writeFileSync(path.join(root, "answer.txt"), "before\n");
+    expect(() => execFileSync(process.execPath, ["verify.cjs"], { cwd: root, stdio: "pipe" })).toThrow();
+    fs.writeFileSync(path.join(root, "answer.txt"), "after\n");
+    expect(() => execFileSync(process.execPath, ["verify.cjs"], { cwd: root, stdio: "pipe" })).not.toThrow();
+  });
   it("takes identity from the public catalogue without inferring effort or pricing", () => {
     expect(modelAliasesFromCatalog({ data: [{ id: "openai/fixture", canonical_slug: "openai/fixture-20260929",
       reasoning: { default_effort: "high" }, pricing: { prompt: "100" } }] })).toEqual({ "openai/fixture": "openai/fixture-20260929" });
