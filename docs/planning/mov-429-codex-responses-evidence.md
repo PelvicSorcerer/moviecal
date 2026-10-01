@@ -44,8 +44,25 @@ proved, and no automatic retry or subscription fallback ran.
 The alias defect is corrected using OpenRouter's public catalogue identity
 mapping, with unit and native integration evidence. Different revisions still
 fail. Bounded canonical identity and Jev-stage field-name diagnostics now
-support investigation of missing served-effort attribution. The original paid
-outcome remains unchanged; no second paid session has run.
+support investigation of missing served-effort attribution.
+
+After separate explicit owner authorization and a refreshed key/credit/privacy
+preflight, the corrected branch ran one bounded diagnostic session. It stopped
+after one request with `missing-provider-attribution`, not a model conflict.
+The client exited unsuccessfully, verification stayed incomplete, and no
+completed non-Anthropic tool round or file edit was proved. Its generation
+and exact charge were reconciled privately with the provider's generation
+record. No automatic retry, alternate route or additional credit purchase ran.
+
+The bounded diagnostic reports Jev-stage fields including `resolved_models`,
+`evaluations`, `candidates` and nested `pipeline`, but no top-level
+`reasoning_effort`. Field names alone cannot establish whether deeper data
+contains trustworthy served effort. The selected model/provider and actual
+usage/charge were reported; served effort remains null. This confirms an
+explicit **no-go under the implemented attribution contract**, not a claim
+that the provider can never expose effort. A supported schema for deeper
+router data and a separately approved proof are prerequisites to reconsidering
+that result. The containment and missing-field stops were preserved.
 
 Both production policy lists remain empty. No cohort activation is authorized;
 MOV-431 stays disabled unless a later separately approved proof resolves this
