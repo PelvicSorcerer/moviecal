@@ -1,6 +1,6 @@
 # MOV-429 readiness evidence
 
-MOV-429 awaits owner invoice verification; PR #823 remains draft. Production policy
+MOV-429 is ready for review; the owner confirmed final charges match. Production policy
 allowlists remain empty, no dispatcher transport resolver exists and MOV-431
 stays held. The owner requested continued work within this issue.
 
@@ -46,6 +46,6 @@ The temporary shape collector is retired. The seventh live proof passed without
 debug: four requests, real read/edit/exact verification, exit zero, no errors or
 retries. All turns served GPT-6.1 Sol via Azure at medium effort with
 `response-and-jev-selection` attribution and zero debug envelopes. The owner
-approved the implementation and final proof; their private Activity check remains
-before ready promotion. MOV-429 closes after merge; MOV-431 controls activation.
+approved the implementation and final proof, then confirmed the four final prices
+matched Activity. MOV-429 closes after merge; MOV-431 controls activation.
 See the [proof runbook](../operators/mov-429-codex-responses-proof.md).
