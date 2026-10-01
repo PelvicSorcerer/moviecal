@@ -19,8 +19,10 @@ const stat = fs.lstatSync(config.credentialPath);
 if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o600 || stat.uid !== process.getuid()) {
   throw new Error("provider credential unavailable");
 }
-const key = fs.readFileSync(config.credentialPath, "utf8").trim();
-if (!/^[A-Za-z0-9_-]{8,256}$/.test(key)) throw new Error("provider credential invalid");
+const credential = fs.readFileSync(config.credentialPath, "utf8").trim();
+const match = /^OPENROUTER_API_KEY=([A-Za-z0-9_-]{8,256})$/.exec(credential);
+if (!match) throw new Error("provider credential invalid");
+const key = match[1];
 const authorized = (header) => {
   const expected = Buffer.from(`Bearer ${token}`);
   const actual = Buffer.from(String(header || ""));

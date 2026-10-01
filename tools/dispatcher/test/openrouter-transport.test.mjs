@@ -15,12 +15,12 @@ function setup() {
   const logDir = path.join(root, "logs");
   const store = path.join(home, ".config", "moviecal");
   for (const dir of [store, cwd, logDir]) fs.mkdirSync(dir, { recursive: true });
-  const credentialPath = path.join(store, "openrouter-jev.key");
-  fs.writeFileSync(credentialPath, "fake-key-only\n", { mode: 0o600 });
+  const credentialPath = path.join(store, "openrouter-jev.env");
+  fs.writeFileSync(credentialPath, "OPENROUTER_API_KEY=fake-key-only\n", { mode: 0o600 });
   const transport = { enabled: true, credentialPath, upstream: "http://127.0.0.1:12345/v1/responses",
-    policy: { hash: "a".repeat(64), model: OPENROUTER_MODEL, providers: ["FixtureProvider"], zdr: true,
-      dataCollection: "deny", promptLogging: false, keyId: "fixture-key-id", workspaceId: "fixture-workspace",
-      keyLimitUsd: 75, spendCeilingUsd: 75, ownerReviewed: true } };
+    policy: { hash: "a".repeat(64), model: OPENROUTER_MODEL, providers: [], zdr: false,
+      dataCollection: null, promptLogging: false, keyId: "fixture-key-id", workspaceId: "fixture-workspace",
+      keyLimitUsd: 69, spendCeilingUsd: 75, ownerReviewed: true } };
   return { home, cwd, logDir, transport };
 }
 function prepare({ home, cwd, logDir, transport }) {
@@ -42,11 +42,10 @@ describe("OpenRouter transport policy", () => {
     fs.unlinkSync(opts.transport.credentialPath);
     expect(requiredSecretPresent("openrouter-jev", { home: opts.home, envLocalPath })).toBe(false);
   });
-  it("injects restrictive provider policy and rejects caller overrides or another model", () => {
+  it("keeps approved Jev routing unrestricted and rejects caller overrides or another model", () => {
     const { transport } = setup();
     const body = buildOpenRouterRequest({ model: OPENROUTER_MODEL, input: "fixture" }, transport.policy);
-    expect(body.provider).toEqual({ order: ["FixtureProvider"], allow_fallbacks: false,
-      data_collection: "deny", zdr: true });
+    expect(body).toEqual({ model: OPENROUTER_MODEL, input: "fixture" });
     expect(() => buildOpenRouterRequest({ model: OPENROUTER_MODEL, provider: { zdr: false } }, transport.policy)).toThrow(/policy/);
     expect(() => buildOpenRouterRequest({ model: "openai/gpt-6" }, transport.policy)).toThrow(/policy/);
   });
@@ -73,6 +72,10 @@ describe("OpenRouter transport policy", () => {
     ["bad endpoint", (o) => { o.transport.upstream = "http://localhost:12345/v1/responses"; }],
     ["wrong model", (o) => { o.transport.policy.model = "openai/gpt-6"; }],
     ["logging enabled", (o) => { o.transport.policy.promptLogging = true; }],
+    ["provider restriction", (o) => { o.transport.policy.providers = ["FixtureProvider"]; }],
+    ["ZDR restriction", (o) => { o.transport.policy.zdr = true; }],
+    ["data collection restriction", (o) => { o.transport.policy.dataCollection = "deny"; }],
+    ["wrong key limit", (o) => { o.transport.policy.keyLimitUsd = 75; }],
     ["spend over cap", (o) => { o.transport.policy.spendCeilingUsd = 76; }],
     ["no owner review", (o) => { o.transport.policy.ownerReviewed = false; }],
   ])("fails closed on %s", (_label, change) => {

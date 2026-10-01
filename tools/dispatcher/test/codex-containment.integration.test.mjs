@@ -31,7 +31,7 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
     for (const dir of [".config/moviecal", ".config/gh", ".ssh", ".codex", ".claude", "Library/Keychains"]) fs.mkdirSync(path.join(home, dir), { recursive: true });
     credential = path.join(home, ".config/moviecal/linear.env"); fs.writeFileSync(credential, "FAKE_CREDENTIAL=fixture-only\n");
     fs.writeFileSync(path.join(home, ".codex/auth.json"), "{}\n");
-    fs.writeFileSync(path.join(home, ".config/moviecal/openrouter-jev.key"), "fake-openrouter-key\n", { mode: 0o600 });
+    fs.writeFileSync(path.join(home, ".config/moviecal/openrouter-jev.env"), "OPENROUTER_API_KEY=fake-openrouter-key\n", { mode: 0o600 });
     for (const dir of ["docs/product", "docs/operators", "src", "test", ".github/workflows"]) fs.mkdirSync(path.join(own, dir), { recursive: true });
     for (const file of ["AGENTS.md", ".github/copilot-instructions.md", "docs/product/brief.md", "test/protected.txt"]) fs.writeFileSync(path.join(own, file), "fixture guidance\n");
     fs.writeFileSync(path.join(own, "package.json"), JSON.stringify({ scripts: { verify: "node verify.cjs" } }));
@@ -94,11 +94,11 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
       `model_providers.fixture={name="fixture",base_url="http://127.0.0.1:${provider.address().port}/v1",wire_api="responses",requires_openai_auth=false,supports_websockets=false}`);
     const logDir = path.join(root, name);
     const providerTransport = broker ? { enabled: true,
-      credentialPath: path.join(home, ".config/moviecal/openrouter-jev.key"),
+      credentialPath: path.join(home, ".config/moviecal/openrouter-jev.env"),
       upstream: `http://127.0.0.1:${provider.address().port}/v1/responses`,
-      policy: { hash: "a".repeat(64), model: "typesafe/jev-router", providers: ["FixtureProvider"],
-        zdr: true, dataCollection: "deny", promptLogging: false, keyId: "fake-key-id", workspaceId: "fake-workspace",
-        keyLimitUsd: 75, spendCeilingUsd: 75, ownerReviewed: true } } : null;
+      policy: { hash: "a".repeat(64), model: "typesafe/jev-router", providers: [],
+        zdr: false, dataCollection: null, promptLogging: false, keyId: "fake-key-id", workspaceId: "fake-workspace",
+        keyLimitUsd: 69, spendCeilingUsd: 75, ownerReviewed: true } } : null;
     try {
       const result = await spawnWorker({ invocation, cwd: own, logDir, brief: "Run the bounded disposable fixture only.",
         securityContext: { mode, home }, killGraceMs: 10, signal: AbortSignal.timeout(25000),
@@ -134,12 +134,12 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
   it.each(["implementation", "repair"])("routes only the approved Responses call through the key-isolated broker in %s", async (mode) => {
     const probe = `const fs=require('fs'),net=require('net'),dgram=require('dgram');
 if(process.env.MOVIECAL_PROVIDER_BROKER_TOKEN||process.env.OPENROUTER_API_KEY)throw Error('provider credential inherited');
-const key=${JSON.stringify(path.join(home, ".config/moviecal/openrouter-jev.key"))};
+const key=${JSON.stringify(path.join(home, ".config/moviecal/openrouter-jev.env"))};
 try{fs.readFileSync(key);throw Error('key readable')}catch(e){if(!['EPERM','EACCES'].includes(e.code))throw e}
 const ports=[Number(process.env.FIXTURE_PORT),1];
 const tcp=ports.map(port=>new Promise((resolve,reject)=>{const s=net.connect({host:'127.0.0.1',port});s.on('connect',()=>reject(Error('TCP allowed')));s.on('error',e=>['EPERM','EACCES'].includes(e.code)?resolve():reject(e))}));
 const unix=new Promise((resolve,reject)=>{const s=net.connect({path:process.env.FIXTURE_SOCKET});s.on('connect',()=>reject(Error('Unix socket allowed')));s.on('error',e=>['EPERM','EACCES'].includes(e.code)?resolve():reject(e))});
-const udp=new Promise((resolve,reject)=>{const s=dgram.createSocket('udp4');s.send(Buffer.from('probe'),Number(process.env.FIXTURE_PORT),'127.0.0.1',e=>{s.close();e&&['EPERM','EACCES'].includes(e.code)?resolve():reject(Error('UDP allowed'))})});
+const udp=new Promise((resolve,reject)=>{const s=dgram.createSocket('udp4');let settled=false;const finish=e=>{if(settled)return;settled=true;s.close();e&&['EPERM','EACCES'].includes(e.code)?resolve():reject(e||Error('UDP allowed'))};s.on('error',finish);s.send(Buffer.from('probe'),Number(process.env.FIXTURE_PORT),'127.0.0.1',finish)});
 Promise.all([...tcp,unix,udp]).then(()=>console.log('broker boundaries denied')).catch(e=>{console.error(e);process.exitCode=1});`;
     fs.writeFileSync(path.join(own, `broker-${mode}.cjs`), probe);
     const { result, transcript, logDir, requests } = await fixture(mode,
@@ -150,16 +150,15 @@ Promise.all([...tcp,unix,udp]).then(()=>console.log('broker boundaries denied'))
     expect(transcript).toContain("broker boundaries denied");
     const records = fs.readFileSync(path.join(root, `broker-${mode}-provider.jsonl`), "utf8").trim().split("\n").map(JSON.parse);
     expect(records.every((record) => record.authenticated && record.model === "typesafe/jev-router"
-      && record.providerPolicy?.zdr === true && record.providerPolicy?.data_collection === "deny"
-      && record.providerPolicy?.allow_fallbacks === false)).toBe(true);
+      && record.providerPolicy === undefined)).toBe(true);
     for (const file of ["codex-launch.json", "manifest.json", "stdout.log", "stderr.log"]) {
       expect(fs.readFileSync(path.join(logDir, file), "utf8")).not.toContain("fake-openrouter-key");
     }
   }, 30000);
 
   it("starts no routed client when the dedicated credential is invalid", async () => {
-    const key = path.join(home, ".config/moviecal/openrouter-jev.key");
-    fs.writeFileSync(key, "invalid key with spaces\n", { mode: 0o600 });
+    const key = path.join(home, ".config/moviecal/openrouter-jev.env");
+    fs.writeFileSync(key, "OPENROUTER_API_KEY=invalid key with spaces\n", { mode: 0o600 });
     try {
       const { result, transcript, requests } = await fixture("implementation", ["echo should-not-run > src/escape.txt"],
         "broker-bad-key", (value) => value, { broker: true });
@@ -167,7 +166,7 @@ Promise.all([...tcp,unix,udp]).then(()=>console.log('broker boundaries denied'))
       expect(requests).toBe(0);
       expect(transcript).not.toContain("command_execution");
       expect(fs.existsSync(path.join(own, "src/escape.txt"))).toBe(false);
-    } finally { fs.writeFileSync(key, "fake-openrouter-key\n", { mode: 0o600 }); }
+    } finally { fs.writeFileSync(key, "OPENROUTER_API_KEY=fake-openrouter-key\n", { mode: 0o600 }); }
   }, 30000);
 
   it.each(["missing", "invalid"])("fails closed on a %s executor profile before client or command activity", async (failure) => {
