@@ -1,0 +1,49 @@
+{
+  "issue": "MOV-415",
+  "date": "2026-09-30",
+  "platform": "macOS 27.0 (26A428)",
+  "claudeCode": "2.1.282",
+  "node": "24.16.0",
+  "fixture": "disposable Git worktrees, fake home, fake API key, local SSE provider, occupied TCP and Unix listeners",
+  "implementation": {
+    "providerRequests": 5,
+    "installedRead": "completed",
+    "allowedWrite": "completed",
+    "exactVerifyCommand": "completed in fixture; readiness evidence incomplete",
+    "installedBashTcp": "CONNECTED",
+    "nativeTcp": "CONNECTED",
+    "nativeUdp": "SENT",
+    "nativeUnix": "CONNECTED",
+    "descendantTcp": "CONNECTED",
+    "siblingMainCredentialReads": "EPERM/EPERM/EPERM",
+    "linkedAndSharedGitMetadataWrites": "EPERM/EPERM",
+    "agentsWrite": "EPERM",
+    "operatorDocWrite": "allowed by current implementation profile"
+  },
+  "repair": {
+    "providerRequests": 5,
+    "installedRead": "completed",
+    "allowedWrite": "completed",
+    "exactVerifyCommand": "completed in fixture; readiness evidence incomplete",
+    "installedBashTcp": "CONNECTED",
+    "nativeTcp": "CONNECTED",
+    "nativeUdp": "SENT",
+    "nativeUnix": "CONNECTED",
+    "descendantTcp": "CONNECTED",
+    "siblingMainCredentialReads": "EPERM/EPERM/EPERM",
+    "linkedAndSharedGitMetadataWrites": "EPERM/EPERM",
+    "agentsWrite": "EPERM",
+    "operatorDocWrite": "EPERM"
+  },
+  "nestedSandbox": {
+    "pureAllowOuter": "inner exit 0",
+    "oneUnrelatedDenyOuter": "inner exit 71: sandbox_apply Operation not permitted",
+    "currentClaudeOuter": "inner exit 71: sandbox_apply Operation not permitted"
+  },
+  "strictCommandProfile": {
+    "tcp": "EPERM",
+    "udp": "EPERM",
+    "unix": "EPERM"
+  },
+  "decision": "no viable installed Claude command transport proved; production unchanged"
+}
