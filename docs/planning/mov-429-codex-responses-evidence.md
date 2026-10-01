@@ -1,6 +1,6 @@
 # MOV-429 readiness evidence
 
-MOV-429 is unfinished in Agent Working and PR #823 draft. Production policy
+MOV-429 awaits owner invoice verification; PR #823 remains draft. Production policy
 allowlists remain empty, no dispatcher transport resolver exists and MOV-431
 stays held. The owner requested continued work within this issue.
 
@@ -35,13 +35,17 @@ private proof/charges are preserved without an Activity reconciliation claim.
 A [community effort report](https://www.reddit.com/r/DeepSeek/comments/1vdqjwr/openrouter_reasoning_effort_levels_are_broken_for/)
 led to the documented [Responses debug envelope](https://openrouter.ai/docs/api_reference/errors-and-debugging).
 
-## Ordinary effort path and remaining proof
+## Ordinary effort path and final proof
 
 The sixth diagnostic also passed. Caller effort was low while terminal response,
 unique candidate for the served model and forwarded effort were high on all four
 turns. This validates `response-and-jev-selection`: corroborate terminal effort
 with the unique model-matched candidate and documented `resolved_models`; never
 infer from general candidates, evaluations, probabilities or incumbents.
-The temporary shape collector is retired. Ordinary-mode native fixtures pass;
-live proof without debug and private invoice reconciliation remain pending.
+The temporary shape collector is retired. The seventh live proof passed without
+debug: four requests, real read/edit/exact verification, exit zero, no errors or
+retries. All turns served GPT-6.1 Sol via Azure at medium effort with
+`response-and-jev-selection` attribution and zero debug envelopes. The owner
+approved the implementation and final proof; their private Activity check remains
+before ready promotion. MOV-429 closes after merge; MOV-431 controls activation.
 See the [proof runbook](../operators/mov-429-codex-responses-proof.md).
