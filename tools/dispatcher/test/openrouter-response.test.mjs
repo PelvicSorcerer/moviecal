@@ -108,6 +108,19 @@ describe("OpenRouter Responses evidence", () => {
       inputTokens: 20, outputTokens: 4, cacheReadTokens: 10, cacheWriteTokens: null, billedUsd: 0, error: null, fallback: false });
     expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
   });
+  it("projects selection shapes and matched effort without promoting candidate or caller values", () => {
+    const event = debugCompletion(); event.response.reasoning.effort = "low";
+    event.response.openrouter_metadata.pipeline = [{ name: "jev-router", data: {
+      incumbent_effort: "high", resolved_models: ["google/fixture"],
+      candidates: Array.from({ length: 1000 }, () => ({ model: "google/fixture", effort: "high", prompt: "PRIVATE_SENTINEL" })) } }];
+    const result = observe([event], { proofDebug: true });
+    expect(result).toMatchObject({ resolvedEffort: null, error: "missing-provider-attribution", responseEffort: "low", incumbentEffort: "high" });
+    expect(result.routerSelectionHints).toHaveLength(16);
+    expect(result.routerSelectionHints[0]).toMatchObject({ field: "resolved_models", kind: "string", matchesServed: true });
+    expect(result.routerSelectionHints[1]).toMatchObject({ matchesServed: true, effort: "high", keys: ["model", "effort", "prompt"] });
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
+    expect(observe([event]).routerSelectionHints).toEqual([]);
+  });
   it("accepts terminal standalone routing metadata and records upstream fallback", () => {
     const event = completed(); const metadata = event.response.openrouter_metadata;
     delete event.response.openrouter_metadata; metadata.attempt = 2;

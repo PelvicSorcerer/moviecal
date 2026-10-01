@@ -93,7 +93,8 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
       if (failure === "missing-metadata") delete events.at(-1).response.openrouter_metadata;
       if (proofDebug) {
         const response = events.at(-1).response;
-        delete response.openrouter_metadata.pipeline;
+        response.openrouter_metadata.pipeline = [{ name: "jev-router", data: {
+          candidates: [{ model: "openai/fixture", effort: "medium", prompt: "private-debug-prompt-sentinel" }] } }];
         response.model = "openai/fixture";
         response.openrouter_metadata.endpoints.available = [{ selected: true, provider: "Azure", model: "openai/fixture-20260929" }];
         events.unshift({ type: "response.debug", sequence_number: 0, debug: { echo_upstream_body: {
@@ -161,6 +162,7 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
     expect(records.every((row) => row.resolvedEffort === "medium" && row.provider === "Azure" && row.error === null)).toBe(true);
     const attribution = fs.readFileSync(path.join(logDir, "openrouter-attribution.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
     expect(attribution.every((row) => row.resolvedEffortSource === "upstream-request" && row.debugCount === 1)).toBe(true);
+    expect(attribution.every((row) => row.responseEffort === "low" && row.routerSelectionHints[0].effort === "medium")).toBe(true);
     const provider = fs.readFileSync(path.join(root, "proof-debug-provider.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
     expect(provider.every((row) => row.debugRequested)).toBe(true);
     for (const file of fs.readdirSync(logDir).filter((name) => /\.(json|jsonl|log)$/.test(name))) {

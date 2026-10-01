@@ -27,6 +27,27 @@ function effortHints(data) {
   return hints;
 }
 
+// Selection-schema discovery only. Keep shapes, enums and identity matches,
+// never candidate descriptions, scores, reasoning or arbitrary string values.
+function selectionHints(data, canonical, servedModel) {
+  const hints = [];
+  for (const field of ["resolved_models", "candidates", "evaluations", "selection_probabilities"]) {
+    const value = data?.[field];
+    const rows = Array.isArray(value) ? value.slice(0, 128) : value == null ? [] : [value];
+    for (const [index, row] of rows.entries()) {
+      const models = [typeof row === "string" ? row : null, row?.model, row?.model_id, row?.slug];
+      const matchesServed = Boolean(servedModel && models.some((model) => id(model) && canonical(model) === canonical(servedModel)));
+      if (index >= 2 && !matchesServed) continue;
+      if (hints.length >= 16) return hints;
+      hints.push({ field, index, kind: Array.isArray(row) ? "array" : typeof row,
+        keys: row && typeof row === "object" ? Object.keys(row).filter((key) => key.length <= 64 && id(key)).slice(0, 16) : [],
+        matchesServed, effort: effort(row?.effort) || effort(row?.reasoning_effort) || effort(row?.reasoning?.effort),
+        selected: typeof row?.selected === "boolean" ? row.selected : null });
+    }
+  }
+  return hints;
+}
+
 export function createResponseObserver({ modelAliases = {}, proofDebug = false, deferCompletion = false } = {}) {
   const canonical = (model) => id(modelAliases[model]) || id(model);
   const decoder = new StringDecoder("utf8");
@@ -85,6 +106,7 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
     if (response.model) snapshot.model = response.model;
     if (response.id) snapshot.invoiceId = response.id;
     if (response.usage) snapshot.usage = response.usage;
+    if (value.type === "response.completed") snapshot.responseEffort = effort(response.reasoning?.effort);
   }
   function frame(raw) {
     if (raw.length > 1024 * 1024) { fail("response-frame-too-large"); return ""; }
@@ -148,6 +170,9 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
         // arbitrary plugin data, prompt text or reasoning content.
         routerStageKeys: Object.keys(jev || {}).filter((key) => id(key)).slice(0, 32),
         routerEffortHints: proofDebug ? effortHints(jev) : [],
+        routerSelectionHints: proofDebug ? selectionHints(jev, canonical, resolvedModel) : [],
+        responseEffort: proofDebug ? snapshot.responseEffort || null : null,
+        incumbentEffort: proofDebug ? effort(jev?.incumbent_effort) : null,
         // Responses reasoning can echo the request; it is not proof of Jev's
         // effective selection. A disposable diagnostic can instead report
         // the correlated upstream request with an explicit source marker.
