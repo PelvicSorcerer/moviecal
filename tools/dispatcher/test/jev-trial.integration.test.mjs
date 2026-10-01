@@ -108,6 +108,44 @@ describe("bounded Jev router arm admission through the run loop (MOV-427)", () =
     expect(jevStore.get("MOV-1")).toBeNull();
   });
 
+  it("defers a Codex arm before admission when the reviewed transport is absent", async () => {
+    activate({ allowedWorker: "codex" });
+    const context = ctx();
+    const [result] = await runOnce([issue(90, [ELIGIBLE_LABEL, "worker:codex"])], context);
+    expect(result.outcome).toBe("needs-human");
+    expect(created).toEqual([]); expect(spawned).toEqual([]);
+    expect(jevStore.state(T0).assigned).toBe(0);
+    expect(context.linearClient.addComment).toHaveBeenCalled();
+  });
+
+  it("passes the reviewed Codex transport, pins retries and records invoices once", async () => {
+    activate({ allowedWorker: "codex" });
+    const transport = { enabled: true, policy: { hash: APPROVED_HASH } };
+    const context = ctx({ resolveJevTransportFn: () => transport, validateJevTransportFn: vi.fn(),
+      captureWorkerUsageFn: () => ({ routedRequests: [{ invoiceId: "gen-fixture", billedUsd: 0.02 }] }) });
+    await runOnce([issue(91, [ELIGIBLE_LABEL, "worker:codex"])], context);
+    expect(created[0].jev.worker).toBe("codex");
+    expect(spawned[0].providerTransport).toBe(transport);
+    expect(spawned[0].issueIdentifier).toBe("MOV-91");
+    jevStore.stop({ now: clock });
+    await runOnce([issue(91, ["worker:codex"])], context);
+    expect(spawned[1].jev).toEqual(spawned[0].jev);
+    expect(jevStore.state(clock)).toMatchObject({ assigned: 1, spentUsd: 0.02 });
+    const [mismatch] = await runOnce([issue(91, ["worker:claude"])], context);
+    expect(mismatch.outcome).toBe("needs-human");
+    expect(spawned).toHaveLength(2);
+  });
+
+  it.each(["invalid", "mismatch"])("refuses %s Codex transport without consuming admission", async (failure) => {
+    activate({ allowedWorker: "codex" });
+    const [result] = await runOnce([issue(92, [ELIGIBLE_LABEL, "worker:codex"])], ctx({
+      resolveJevTransportFn: () => ({ policy: { hash: "wrong-hash" } }),
+      validateJevTransportFn: () => { if (failure === "invalid") throw new Error("fixture invalid"); },
+    }));
+    expect(result.outcome).toBe("needs-human");
+    expect(jevStore.state(clock).assigned).toBe(0); expect(spawned).toEqual([]);
+  });
+
   it("admits an eligible, opted-in issue when active, without changing its resolved worker/model", async () => {
     activate();
     await runOnce([issue(1), issue(2, [ELIGIBLE_LABEL, "model:cheap"])], ctx());

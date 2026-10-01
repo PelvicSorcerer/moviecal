@@ -232,6 +232,9 @@ export function writeRoutedRequestEvidence(logDir, record) {
   const evidence = {
     kind: "routed-request",
     schemaVersion: ROUTED_REQUEST_SCHEMA_VERSION,
+    source: identifier(record?.source),
+    toolCalls: Number.isSafeInteger(record?.toolCalls) && record.toolCalls >= 0 ? record.toolCalls : null,
+    toolOutputs: Number.isSafeInteger(record?.toolOutputs) && record.toolOutputs >= 0 ? record.toolOutputs : null,
     requestId: boundedId(record?.requestId),
     issue: boundedId(record?.issue),
     attemptId: boundedId(record?.attemptId),

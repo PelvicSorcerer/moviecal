@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 import net from "node:net";
 import { randomBytes } from "node:crypto";
+import path from "node:path";
 
 const config = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 let executor;
@@ -84,7 +85,7 @@ executor.stdout.on("data", (chunk) => {
   fs.writeFileSync(`${config.harnessHome}/environments.toml`,
     `default = "worker"\ninclude_local = false\n[[environments]]\nid = "worker"\nurl = ${JSON.stringify(url)}\n`, { mode: 0o600 });
   const providerArgs = brokerPort ? ["-c", 'model_provider="moviecal_openrouter"', "-c",
-    `model_providers.moviecal_openrouter={name="moviecal_openrouter",base_url="http://127.0.0.1:${brokerPort}/v1",wire_api="responses",env_key="MOVIECAL_PROVIDER_BROKER_TOKEN",requires_openai_auth=false,supports_websockets=false}`] : [];
+    `model_providers.moviecal_openrouter={name="moviecal_openrouter",base_url="http://127.0.0.1:${brokerPort}/v1",wire_api="responses",env_key="MOVIECAL_PROVIDER_BROKER_TOKEN",requires_openai_auth=false,supports_websockets=false,request_max_retries=0,stream_max_retries=0}`] : [];
   harness = spawn("/usr/bin/sandbox-exec", ["-D", `EXECUTOR_LISTENER=localhost:${port}`,
     ...(brokerPort ? ["-D", `PROVIDER_BROKER=localhost:${brokerPort}`] : []),
     "-f", config.harnessProfile, config.binary, ...config.args, ...providerArgs],
@@ -100,7 +101,18 @@ executor.stdout.on("data", (chunk) => {
     finished = true;
     executor.kill("SIGTERM");
     broker?.kill("SIGTERM");
-    process.exitCode = code ?? 1;
+    let routeError = null;
+    if (config.broker) {
+      try {
+        const attemptId = JSON.parse(fs.readFileSync(config.brokerConfig, "utf8")).accounting?.attemptId;
+        const rows = fs.readFileSync(path.join(path.dirname(config.brokerConfig), "routing-decisions.jsonl"), "utf8")
+          .trim().split("\n").map(JSON.parse).filter((row) => row.kind === "routed-request"
+            && (!attemptId || row.attemptId === attemptId));
+        routeError = rows.find((row) => row.error)?.error || (rows.length ? null : "missing-provider-evidence");
+      } catch { routeError = "missing-provider-evidence"; }
+    }
+    if (routeError) process.stderr.write(`Jev route stopped: ${/^[a-z0-9-]{1,80}$/.test(routeError) ? routeError : "invalid-provider-evidence"}\n`);
+    process.exitCode = routeError ? 1 : code ?? 1;
     process.stdin.destroy();
   });
 });

@@ -50,7 +50,13 @@ export function resolveCodexExecutable(command = "codex", env = process.env) {
 
 export function prepareCodexContainment({ invocation, cwd, logDir, repositoryPaths, mode, home = os.homedir(),
   resolveExecutable = resolveCodexExecutable, verifyVersion = verifyCodexVersion, sourceEnvironment = process.env,
-  openRouterTransport = null, openRouterFixture = false }) {
+  openRouterTransport = null, openRouterFixture = false, accounting = null,
+  approvedOpenRouterPolicyHashes, providerRequestLimit = null, openRouterModelAliases = {}, openRouterProofDebug = false }) {
+  if (openRouterProofDebug && (!openRouterTransport || !Number.isInteger(providerRequestLimit)
+    || providerRequestLimit < 1 || providerRequestLimit > 6
+    || (!openRouterFixture && !approvedOpenRouterPolicyHashes?.includes(openRouterTransport.policy?.hash)))) {
+    throw new Error("OpenRouter debug requires a capped disposable proof approval");
+  }
   const sandboxIndex = invocation.args.indexOf("--sandbox");
   if (!invocation.args.includes("exec") || sandboxIndex < 0 || invocation.args[sandboxIndex + 1] !== "workspace-write"
     || invocation.args.lastIndexOf("--sandbox") !== sandboxIndex || invocation.args.includes("--dangerously-bypass-approvals-and-sandbox")) {
@@ -70,7 +76,7 @@ export function prepareCodexContainment({ invocation, cwd, logDir, repositoryPat
   }
   const version = verifyVersion(binary);
   const openRouter = openRouterTransport && validateOpenRouterTransport(openRouterTransport,
-    { cwd, home, fixture: openRouterFixture });
+    { cwd, home, fixture: openRouterFixture, approvedPolicyHashes: approvedOpenRouterPolicyHashes });
   if (openRouter && invocation.args.some((arg) => /^model_providers?\./.test(arg) || /^model_provider=/.test(arg))) {
     throw new Error("OpenRouter transport refuses caller provider overrides");
   }
@@ -114,7 +120,13 @@ export function prepareCodexContainment({ invocation, cwd, logDir, repositoryPat
       const brokerPolicy = path.join(logDir, "openrouter-transport.mjs");
       fs.copyFileSync(fileURLToPath(new URL("./openrouter-transport.mjs", import.meta.url)), brokerPolicy);
       fs.chmodSync(brokerPolicy, 0o600);
-      fs.writeFileSync(brokerConfig, JSON.stringify(openRouter), { mode: 0o600 });
+      for (const name of ["openrouter-response.mjs", "routed-request.mjs"]) {
+        const target = path.join(logDir, name);
+        fs.copyFileSync(fileURLToPath(new URL(`./${name}`, import.meta.url)), target);
+        fs.chmodSync(target, 0o600);
+      }
+      fs.writeFileSync(brokerConfig, JSON.stringify({ ...openRouter, fixture: openRouterFixture, accounting,
+        maxRequests: providerRequestLimit, modelAliases: openRouterModelAliases, proofDebug: openRouterProofDebug === true }), { mode: 0o600 });
     }
     const environment = Object.fromEntries(Object.entries(sanitizedWorkerEnvironment(sourceEnvironment, { worker: "codex" }))
       .filter(([key]) => ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TERM", "CI",

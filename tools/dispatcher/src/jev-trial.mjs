@@ -112,8 +112,8 @@ export function validateJevArmConfig(config, { approvedPolicyHashes = APPROVED_P
   if (!approvedPolicyHashes.includes(config.policyHash)) {
     return `policyHash '${config.policyHash}' is not in the approved policy hash list; add it to APPROVED_POLICY_HASHES in a reviewed change before activating`;
   }
-  if (config.allowedWorker !== "claude") {
-    return "allowedWorker must be 'claude' (Codex transport is not proved for this arm yet, MOV-429)";
+  if (!["claude", "codex"].includes(config.allowedWorker) || (config.allowedWorker === "codex" && config.armId !== "jev-hosted")) {
+    return "allowedWorker must be 'claude' or hosted 'codex'";
   }
   const activated = parseUtc(config.activatedAt);
   if (activated === null) return "activatedAt must be an ISO-8601 UTC timestamp ending in Z";
@@ -204,6 +204,7 @@ export class JevArmStore {
       armId: typeof config.armId === "string" ? config.armId : null,
       policyHash: typeof config.policyHash === "string" ? config.policyHash : null,
       enabled: config.enabled,
+      allowedWorker: config.allowedWorker ?? null,
       activatedAt: config.activatedAt ?? null,
       expiresAt: config.expiresAt ?? null,
       stoppedAt: config.stoppedAt ?? null,
@@ -236,7 +237,7 @@ export class JevArmStore {
    * eligibility, so a restart, retry, resume or repair of an already
    * assigned issue keeps its recorded arm and model policy unconditionally.
    */
-  admit(issue, { tier, now = new Date(), eligibleLabel = ELIGIBLE_LABEL } = {}) {
+  admit(issue, { tier, worker = "claude", now = new Date(), eligibleLabel = ELIGIBLE_LABEL } = {}) {
     const existing = this.get(issue.identifier);
     if (existing) return { admitted: true, existing: true, record: existing, state: this.state(now), reason: null };
     const state = this.state(now);
@@ -247,12 +248,13 @@ export class JevArmStore {
     if (!eligibility.eligible) {
       return { admitted: false, existing: false, record: null, state, reason: eligibility.reason };
     }
+    if (worker !== state.allowedWorker) return { admitted: false, existing: false, record: null, state, reason: "worker does not match arm" };
     const record = {
       trialId: state.trialId,
       armId: state.armId,
       policyHash: state.policyHash,
       issue: issue.identifier,
-      worker: "claude",
+      worker,
       tier,
       reason: jevRoutingReason(state.trialId, state.armId),
       assignedAt: now.toISOString(),

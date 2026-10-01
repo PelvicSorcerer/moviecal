@@ -321,13 +321,15 @@ export function captureWorkerUsage(logDir, context, { store = null, logger = con
     try { transcript = fs.readFileSync(path.join(logDir, "stdout.log"), "utf8"); } catch { /* missing log is partial */ }
     let timing = {};
     let manifestExit = null;
+    let manifestAttemptId = null;
     try {
       const manifest = JSON.parse(fs.readFileSync(path.join(logDir, "manifest.json"), "utf8"));
       const duration = Date.parse(manifest.endedAt) - Date.parse(manifest.startedAt);
       timing = { startedAt: manifest.startedAt, endedAt: manifest.endedAt, ...(Number.isFinite(duration) && duration >= 0 ? { wallDurationMs: duration } : {}) };
       if (typeof manifest.exitCode === "number") manifestExit = `exited-${manifest.exitCode}`;
+      manifestAttemptId = identifier(manifest.attemptId);
     } catch { /* incomplete attempt */ }
-    const attemptId = context.attemptId || `${identifier(context.attemptKind) || "attempt"}-${crypto.randomUUID()}`;
+    const attemptId = context.attemptId || manifestAttemptId || `${identifier(context.attemptKind) || "attempt"}-${crypto.randomUUID()}`;
     const summary = parseWorkerUsage(transcript, {
       ...context, exitOutcome: context.exitOutcome ?? manifestExit, ...timing, durationMs: null, attemptId,
     });
