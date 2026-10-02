@@ -62,6 +62,9 @@ the cohort.
 The broker also compares its protected attempt snapshot with the current
 approval before each payment, including after the account lookup. Changed
 policy or aliases refuse traffic rather than continuing under stale approval.
+It checks approval again before terminal success. If approval is revoked in
+flight, the completed invoice remains attributed to the original assignment,
+but the turn fails and further requests stop.
 
 ## Commands and lifecycle
 

@@ -123,6 +123,10 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
       if (proofDebug) await new Promise((resolve) => setTimeout(resolve, 100));
       res.end();
       if (failure === "stop-after-first" && requests === 1) cohortStore.stop("fixture-operator-stop");
+      if (failure === "approval-after-first" && requests === 1) {
+        const approval = JSON.parse(fs.readFileSync(cohortStore.approvalPath, "utf8"));
+        fs.writeFileSync(cohortStore.approvalPath, JSON.stringify({ ...approval, ownerApproved: false }));
+      }
       fs.appendFileSync(path.join(root, `${name}-provider.jsonl`), JSON.stringify({ request: requests,
         authenticated: req.headers.authorization === "Bearer fake-openrouter-key", model: parsed.model,
         providerPolicy: parsed.provider, debugRequested: parsed.debug?.echo_upstream_body === true,
@@ -301,7 +305,7 @@ Promise.all([...tcp,unix,udp]).then(()=>console.log('broker boundaries denied'))
     expect(cohortEvidence.requests.every((row) => row.status === "complete" && row.model === "google/fixture")).toBe(true);
   }, 30000);
 
-  it.each(["stop-after-first", "excess-invoice"])("stops further cohort payment and fails visibly on %s", async (failure) => {
+  it.each(["stop-after-first", "approval-after-first", "excess-invoice"])("stops further cohort payment and fails visibly on %s", async (failure) => {
     const { result, transcript, requests, cohortEvidence } = await fixture("implementation",
       ["cat AGENTS.md", "echo should-not-run"], `cohort-${failure}`, (value) => value,
       { broker: true, control: true, failure });
@@ -310,6 +314,7 @@ Promise.all([...tcp,unix,udp]).then(()=>console.log('broker boundaries denied'))
     expect(transcript).not.toContain('"aggregated_output":"should-not-run');
     expect(cohortEvidence.stoppedReason).toBeTruthy();
     if (failure === "excess-invoice") expect(cohortEvidence.requests[0].status).toBe("pending");
+    else expect(cohortEvidence.requests[0]).toMatchObject({ status: "complete", amountUsd: 0.001 });
   }, 30000);
 
   it("starts no routed client when the dedicated credential is invalid", async () => {

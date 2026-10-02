@@ -64,8 +64,15 @@ const server = http.createServer(async (request, response) => {
     if (failure) { stopped = true; cohort?.stop(failure); }
     if (cohort && reserved && !failure) {
       try { cohort.finish(requestId, { invoiceId: observed.invoiceId, amountUsd: observed.billedUsd,
-        model: observed.resolvedModel, provider: observed.provider, effort: observed.resolvedEffort, account }); }
+        model: observed.resolvedModel, provider: observed.provider, effort: observed.resolvedEffort, account });
+      }
       catch { stopped = true; cohort.stop("invoice-reconciliation-failed"); failure = "invoice-reconciliation-failed"; }
+      if (!failure) {
+        // Account for already-paid work under its original assignment even
+        // when approval was revoked in flight, then refuse terminal success.
+        try { assertCohortBinding(cohort, config); }
+        catch { stopped = true; cohort.stop("cohort-approval-changed-in-flight"); failure = "cohort-approval-changed-in-flight"; }
+      }
     }
     const events = [
       { type: "request.start", requestId, ...config.accounting, turn: ++turn,
