@@ -76,8 +76,7 @@ function readProtected(file, label) {
   try {
     const stat = fs.fstatSync(fd);
     if (!stat.isFile() || stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o600
-      || stat.size > 1024 * 1024 || stat.nlink !== 1
-      || fs.realpathSync(file) !== path.join(fs.realpathSync(path.dirname(file)), path.basename(file))) {
+      || stat.size > 1024 * 1024 || stat.nlink !== 1) {
       throw new Error(`${label} must be owner-owned mode 600 and unlinked`);
     }
     return JSON.parse(fs.readFileSync(fd, "utf8"));
