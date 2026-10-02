@@ -14,7 +14,7 @@ repository, under `~/.config/moviecal/`. No key value appears in either file.
 `jev-cohort.json` starts with `enabled: false` and a complete `policy` object.
 `jev-cohort-approval.json` is a second, owner-reviewed attestation. The
 dedicated `openrouter-jev.env` remains the only key source and is opened only
-by the trusted broker. The exact policy digest is SHA-256 of
+by the trusted broker. The exact policy digest is SHA-256 of the prefix `moviecal-jev-cohort-policy-v1` and a newline, then
 `JSON.stringify(policy)`; changing any policy field invalidates approval.
 
 The policy identifies one trial, `route: "codex-openrouter-responses"`,
