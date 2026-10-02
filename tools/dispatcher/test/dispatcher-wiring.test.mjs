@@ -343,6 +343,13 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
         expect(text).not.toMatch(/from\s+["'](?:express|ws|node:(?:tls|dgram))["']/);
         continue;
       }
+      if (name === path.join("src", "openrouter-account.mjs")) {
+        // MOV-437: broker-only outbound GETs of key/credit metadata. A client
+        // only: it never listens, and the origin is allowlisted to openrouter.ai.
+        expect(text).not.toMatch(/createServer\s*\(|\.listen\s*\(/);
+        expect(text).toContain('origin.origin !== "https://openrouter.ai"');
+        continue;
+      }
       for (const pattern of listenerPatterns) {
         expect(pattern.test(text), `${name} matches ${pattern}`).toBe(false);
       }
@@ -372,6 +379,9 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       // assignment/spend ledger -- dispatcher state, not credentials. No
       // provider key lives here; MOV-425 stores the dedicated Codex key
       // outside the repository and does not add a config.mjs path helper.
+      "jevCohortApprovalPath",
+      "jevCohortConfigPath",
+      "jevCohortLedgerPath",
       "jevTrialAssignmentsPath",
       "jevTrialConfigPath",
       "linearAppEnvPath",

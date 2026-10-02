@@ -13,6 +13,22 @@ function observe(events, options) {
   return observer.finish();
 }
 describe("OpenRouter Responses evidence", () => {
+  it("attributes a fixed control without inventing a Jev selection", () => {
+    const event = completed();
+    event.response.model = "openai/fixture";
+    event.response.reasoning.effort = "medium";
+    event.response.openrouter_metadata.pipeline = [];
+    event.response.openrouter_metadata.endpoints.available = [{ selected: true, provider: "OpenAI", model: "openai/fixture-20261001" }];
+    const opts = { control: { model: "openai/fixture", provider: "OpenAI", effort: "medium" },
+      modelAliases: { "openai/fixture": "openai/fixture-20261001" } };
+    expect(observe([event], opts)).toMatchObject({ error: null, resolvedEffort: "medium",
+      resolvedEffortSource: "completed-fixed-response", routerStageKeys: [], billedUsd: 0.002 });
+    event.response.openrouter_metadata.endpoints.available[0].provider = "Azure";
+    expect(observe([event], opts).error).toBe("fixed-control-identity-mismatch");
+    event.response.openrouter_metadata.endpoints.available[0].provider = "OpenAI";
+    delete event.response.reasoning;
+    expect(observe([event], opts).error).toBe("fixed-control-identity-mismatch");
+  });
   it("holds completion until final standalone metadata has been drained", () => {
     const observer = createResponseObserver({ deferCompletion: true });
     const event = completed(), metadata = event.response.openrouter_metadata;

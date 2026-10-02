@@ -40,12 +40,13 @@ import { DEFAULT_REPAIR_BUDGETS } from "./ci-outcomes.mjs";
 import { admitRepair, guardRepairTarget } from "./repair-policy.mjs";
 import { dependencyInstallBlockerSections, prepareWorkerDependencies, writeDependencyInstallFailureManifest } from "./worker-spawn.mjs";
 import { repairJobKey } from "./repair-ledger.mjs";
-import { workerInvocation } from "./worker-routing.mjs";
+import { workerInvocation, codexReasoningEffortForTier } from "./worker-routing.mjs";
 import { evaluateClaudeInit, reportClaudeStartupCheck } from "./worker-startup-check.mjs";
 import { formatUsageLine, usageContextFromInvocation } from "./worker-usage.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
+import { validateOpenRouterTransport } from "./openrouter-transport.mjs";
 
 /** The worker mode every repair runs in — stricter sandbox, stricter diff audit. */
 export const REPAIR_WORKER_MODE = "repair";
@@ -509,6 +510,16 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
   let usagePromise = Promise.resolve(null);
   try {
     const invocation = workerInvocationFn(entry.worker || "claude", entry.model || "default");
+    let providerTransport = null;
+    if (entry.jev?.side) {
+      const decision = ctx.jevCohortStore?.preview(issue, { worker: entry.worker,
+        tier: entry.model, effort: codexReasoningEffortForTier(entry.model), now: now() });
+      if (!decision?.admitted) throw new Error(`repair cohort refused: ${decision?.reason || "missing store"}`);
+      const record = ctx.jevCohortStore?.get(entry.id);
+      providerTransport = ctx.resolveCohortTransportFn?.(record);
+      validateOpenRouterTransport(providerTransport, { cwd: entry.path });
+      if (record?.policyHash !== entry.jev.policyHash) throw new Error("repair cohort binding changed");
+    }
     const workerPromise = spawnWorkerFn({
       invocation,
       cwd: entry.path,
@@ -518,6 +529,7 @@ async function runCodeRepair({ entry, issue, ctx, decision, observation, reporte
       securityContext: { mode: REPAIR_WORKER_MODE },
       trial: entry.trial ?? null,
       jev: entry.jev ?? null,
+      providerTransport,
       dependencyInstall,
       // MOV-386: the same startup check as an implementation worker.
       ...((entry.worker || "claude") === "claude"

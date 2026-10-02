@@ -92,6 +92,9 @@ vi.mock("../src/config.mjs", async (importOriginal) => {
     // paths, so every fixture worker run here appended a fixture row to the
     // real worker-usage ledger.
     workerUsageStatePath: () => `${TMP_ROOT}/worker-usage.json`,
+    jevCohortConfigPath: () => `${TMP_ROOT}/.config/moviecal/jev-cohort.json`,
+    jevCohortApprovalPath: () => `${TMP_ROOT}/.config/moviecal/jev-cohort-approval.json`,
+    jevCohortLedgerPath: () => `${TMP_ROOT}/.config/moviecal/jev-cohort-ledger.json`,
     repairLedgerStatePath: () => `${TMP_ROOT}/repair-ledger.json`,
     workerCooldownStatePath: () => `${TMP_ROOT}/worker-cooldowns.json`,
     envLocalPath: () => `${TMP_ROOT}/env.local`,

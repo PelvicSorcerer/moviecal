@@ -27,7 +27,7 @@ function effortHints(data) {
   return hints;
 }
 
-export function createResponseObserver({ modelAliases = {}, proofDebug = false, deferCompletion = false } = {}) {
+export function createResponseObserver({ modelAliases = {}, proofDebug = false, deferCompletion = false, control = null, rejectFallback = false } = {}) {
   const canonical = (model) => id(modelAliases[model]) || id(model);
   const decoder = new StringDecoder("utf8");
   let pending = "", completed = false, reason = null, snapshot = {}, toolCalls = 0;
@@ -164,8 +164,9 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
         // Responses reasoning can echo the request; it is not proof of Jev's
         // effective selection. A disposable diagnostic can instead report
         // the correlated upstream request with an explicit source marker.
-        resolvedEffort: routerEffort || forwardedEffort,
-        resolvedEffortSource: routerEffort ? "response-and-jev-selection" : forwardedEffort ? "upstream-request" : null,
+        resolvedEffort: control ? responseEffort : routerEffort || forwardedEffort,
+        resolvedEffortSource: control ? (responseEffort ? "completed-fixed-response" : null)
+          : routerEffort ? "response-and-jev-selection" : forwardedEffort ? "upstream-request" : null,
         debugCount, upstreamModel: debug?.model || null, upstreamEffort: debug?.effort || null, upstreamKeys: debug?.keys || [],
         inputTokens: count(usage.input_tokens), outputTokens: count(usage.output_tokens),
         cacheReadTokens: count(usage.input_tokens_details?.cached_tokens),
@@ -174,6 +175,11 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
         fallback: typeof snapshot.metadata?.attempt === "number" ? snapshot.metadata.attempt > 1 : null,
       };
       if (resolvedModel && endpoint?.model && canonical(endpoint.model) !== canonical(resolvedModel)) fail("conflicting-served-model");
+      if (control && (canonical(resolvedModel) !== canonical(control.model)
+        || canonical(endpoint?.model) !== canonical(control.model)
+        || endpoint?.provider !== control.provider || responseEffort !== control.effort
+        || snapshot.metadata?.attempt !== 1)) fail("fixed-control-identity-mismatch");
+      if (rejectFallback && snapshot.metadata?.attempt !== 1) fail("unapproved-provider-fallback");
       if (!reason && ["resolvedModel", "provider", "resolvedEffort", "inputTokens", "outputTokens", "cacheReadTokens", "billedUsd", "invoiceId"].some((field) => record[field] === null)) fail("missing-provider-attribution");
       return { ...record, error: reason };
     },
