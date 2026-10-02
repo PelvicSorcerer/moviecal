@@ -8,7 +8,7 @@ import path from "node:path";
 import { buildOpenRouterRequest, OPENROUTER_UPSTREAM } from "./openrouter-transport.mjs";
 import { createResponseObserver } from "./openrouter-response.mjs";
 import { parseRoutedRequests, writeRoutedRequestEvidence } from "./routed-request.mjs";
-import { JevCohortStore } from "./jev-cohort.mjs";
+import { JevCohortStore, assertCohortBinding } from "./jev-cohort.mjs";
 import { readOpenRouterAccount } from "./openrouter-account.mjs";
 
 const config = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
@@ -32,6 +32,7 @@ if (!match) throw new Error("provider credential invalid");
 const key = match[1];
 const cohort = config.cohort ? new JevCohortStore(config.cohort) : null;
 if (cohort && (!cohort.get(config.cohort.issue) || cohort.state().status !== "active")) throw new Error("cohort broker admission unavailable");
+if (cohort) assertCohortBinding(cohort, config);
 if (config.proofDebug === true && (!Number.isInteger(config.maxRequests) || config.maxRequests < 1 || config.maxRequests > 6)) {
   throw new Error("provider debug requires a capped disposable proof");
 }
@@ -60,7 +61,7 @@ const server = http.createServer(async (request, response) => {
     recorded = true;
     const observed = observer.finish();
     let failure = error || observed.error;
-    if (failure) { stopped = true; if (reserved) cohort?.stop(failure); }
+    if (failure) { stopped = true; cohort?.stop(failure); }
     if (cohort && reserved && !failure) {
       try { cohort.finish(requestId, { invoiceId: observed.invoiceId, amountUsd: observed.billedUsd,
         model: observed.resolvedModel, provider: observed.provider, effort: observed.resolvedEffort, account }); }
@@ -84,6 +85,7 @@ const server = http.createServer(async (request, response) => {
         resolvedEffortSource: observed.resolvedEffortSource,
         debugCount: observed.debugCount, upstreamModel: observed.upstreamModel,
         upstreamEffort: observed.upstreamEffort, upstreamKeys: observed.upstreamKeys })}\n`, { mode: 0o600 });
+    return failure;
   };
   if (config.maxRequests && admitted >= config.maxRequests) {
     record("request-cap"); response.writeHead(409); response.end('{"error":{"code":"request-cap"}}'); return;
@@ -102,12 +104,15 @@ const server = http.createServer(async (request, response) => {
     requestedEffort = parsed.reasoning?.effort;
     if (cohort) {
       try {
+        assertCohortBinding(cohort, config);
         account = await readOpenRouterAccount(config.upstream, key, { fixture: config.fixture === true });
+        assertCohortBinding(cohort, config);
         cohort.reserve(requestId, config.cohort.issue, account);
         reserved = true;
       } catch {
         stopped = true;
         cohort.stop("account-preflight-or-budget-failed");
+        record("account-preflight-or-budget-failed");
         response.writeHead(409); response.end('{"error":{"code":"cohort-budget-stopped"}}'); return;
       }
     }
@@ -131,7 +136,11 @@ const server = http.createServer(async (request, response) => {
         if (safe && !response.write(safe)) upstreamResponse.pause();
       });
       response.on("drain", () => upstreamResponse.resume());
-      upstreamResponse.on("end", () => { const safe = observer.end(); record(); response.end(safe); });
+      upstreamResponse.on("end", () => {
+        const safe = observer.end();
+        if (record()) response.destroy();
+        else response.end(safe);
+      });
       upstreamResponse.on("error", () => { record("provider-stream-error"); response.destroy(); });
       response.writeHead(upstreamResponse.statusCode || 502, {
         "content-type": upstreamResponse.headers["content-type"] || "application/json",

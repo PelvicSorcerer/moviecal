@@ -34,7 +34,8 @@ export function validateCohortPolicy(policy) {
     || new Set(pairs.flatMap((p) => [p.routed, p.control])).size !== pairs.length * 2) return "cohort requires 1-12 distinct preselected pairs";
   const control = policy.control;
   if (!control || control.worker !== "codex" || !ID.test(control.model || "") || control.model === "typesafe/jev-router"
-    || !ID.test(control.provider || "") || !["low", "medium", "high", "xhigh", "max"].includes(control.effort)
+    || !ID.test(control.provider || "") || !/^[a-z0-9][a-z0-9_.:/-]{0,199}$/.test(control.providerSlug || "")
+    || !["low", "medium", "high", "xhigh", "max"].includes(control.effort)
     || !["cheap", "default", "strong"].includes(control.tier)) return "fixed control identity is invalid";
   if (policy.routed?.model !== "typesafe/jev-router" || policy.routed?.worker !== "codex"
     || policy.routed?.tier !== control.tier) return "Jev route identity or matched tier is invalid";
@@ -70,25 +71,44 @@ export function validateCohortApproval(policy, approval, now = new Date()) {
 }
 
 function readProtected(file, label) {
-  const stat = fs.lstatSync(file);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid()
-    || (stat.mode & 0o777) !== 0o600 || stat.size > 1024 * 1024
-    || fs.realpathSync(file) !== path.join(fs.realpathSync(path.dirname(file)), path.basename(file))) throw new Error(`${label} must be owner-owned mode 600 and unlinked`);
-  return JSON.parse(fs.readFileSync(file, "utf8"));
+  // Validate and read the same descriptor. O_NONBLOCK also makes a FIFO
+  // replacement fail promptly instead of hanging before fstat can reject it.
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o600
+      || stat.size > 1024 * 1024 || stat.nlink !== 1) {
+      throw new Error(`${label} must be owner-owned mode 600 and unlinked`);
+    }
+    return JSON.parse(fs.readFileSync(fd, "utf8"));
+  } finally { fs.closeSync(fd); }
+}
+
+class CohortLedger extends JsonStateStore {
+  load() {
+    try { return readProtected(this.statePath, "cohort ledger"); }
+    catch (error) {
+      // Restoring an older backup can erase a paid request's reservation.
+      // A missing primary with a retained backup is also lost evidence.
+      if (error.code === "ENOENT" && !fs.existsSync(`${this.statePath}.bak`)) return {};
+      throw new Error("cohort ledger evidence unavailable");
+    }
+  }
 }
 
 export class JevCohortStore {
-  constructor({ configPath, approvalPath, ledgerPath, home = null }) {
+  constructor({ configPath, approvalPath, ledgerPath, home = null, storeRoot = null }) {
     // The store is the dispatcher's config dir (MOVIECAL_CONFIG_DIR aware), or
     // exactly `<home>/.config/moviecal` when a home is pinned. All three files
     // must share it, so none can live in a repository or worktree.
-    const root = home ? path.join(home, ".config", "moviecal") : path.dirname(configPath || "");
+    const root = storeRoot || (home ? path.join(home, ".config", "moviecal") : path.dirname(configPath || ""));
     for (const file of [configPath, approvalPath, ledgerPath]) {
       if (!file || !path.isAbsolute(file) || path.dirname(file) !== root) throw new Error("cohort files must be in the dedicated external store");
     }
     this.configPath = configPath;
     this.approvalPath = approvalPath;
-    this.ledger = new JsonStateStore(ledgerPath);
+    this.storeRoot = root;
+    this.ledger = new CohortLedger(ledgerPath);
   }
 
   updateLedger(mutator) {
@@ -226,7 +246,8 @@ export class JevCohortStore {
       armId: side === "routed" ? "jev-hosted" : "fixed-control", policyHash: policyDigest(policy),
       worker, tier, effort, assignedAt: now.toISOString() };
     this.updateLedger((data) => {
-      if (data.stoppedReason || this.state(now).status !== "active") throw new Error("cohort changed during admission");
+      if (data.stoppedReason || this.state(now).status !== "active"
+        || policyDigest(this.policy(now)) !== record.policyHash) throw new Error("cohort changed during admission");
       data.assignments ||= {};
       if (!data.assignments[issue.identifier]) data.assignments[issue.identifier] = record;
     });
@@ -328,12 +349,26 @@ export function resolveCohortTransport(store, assignment, { home = os.homedir(),
       hash: assignment.policyHash, side,
       model: side === "routed" ? "typesafe/jev-router" : policy.control.model,
       provider: side === "control" ? policy.control.provider : null,
+      providerSlug: side === "control" ? policy.control.providerSlug : null,
       effort: side === "control" ? policy.control.effort : null,
       providers: [], zdr: false, dataCollection: null, promptLogging: false,
       keyLimitUsd: 69, spendCeilingUsd: 75,
       keyId: policy.keyId, workspaceId: policy.workspaceId, ownerReviewed: true,
     },
-    cohort: { configPath: store.configPath, approvalPath: store.approvalPath,
+    cohort: { configPath: store.configPath, approvalPath: store.approvalPath, storeRoot: store.storeRoot,
       ledgerPath: store.ledger.statePath, issue: assignment.issue, side, home },
   };
+}
+
+/** Compare the protected per-attempt snapshot with the current owner approval. */
+export function assertCohortBinding(store, transport) {
+  const assignment = store.get(transport.cohort.issue);
+  const current = resolveCohortTransport(store, assignment, { home: transport.cohort.home });
+  if (store.state().status !== "active" || assignment.side !== transport.cohort.side
+    || ["hash", "side", "model", "provider", "providerSlug", "effort", "keyId", "workspaceId"].some((field) =>
+      current.policy[field] !== transport.policy[field])
+    || transport.credentialPath !== current.credentialPath
+    || JSON.stringify(transport.modelAliases) !== JSON.stringify(store.policy().modelAliases)) {
+    throw new Error("cohort attempt policy changed");
+  }
 }

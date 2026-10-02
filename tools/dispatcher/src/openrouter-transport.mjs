@@ -27,7 +27,8 @@ export function buildOpenRouterRequest(body, policy) {
   if (!policy || !body || typeof body !== "object" || Array.isArray(body)
     || body.model !== policy?.model
     || (policy.model !== OPENROUTER_MODEL && (policy.side !== "control"
-      || body.reasoning?.effort !== policy.effort))
+      || body.reasoning?.effort !== policy.effort
+      || !/^[a-z0-9][a-z0-9_.:/-]{0,199}$/.test(policy.providerSlug || "")))
     || ["provider", "models", "route", "plugins", "debug"].some((field) => Object.hasOwn(body, field))
     || !Array.isArray(policy.providers) || policy.providers.length !== 0
     || policy.zdr !== false || policy.dataCollection !== null) {
@@ -35,7 +36,9 @@ export function buildOpenRouterRequest(body, policy) {
   }
   // MOV-424 approved unrestricted downstream routing. An absent provider
   // object lets Jev select compatible providers without request-level filters.
-  return { ...body };
+  return policy.side === "control"
+    ? { ...body, provider: { only: [policy.providerSlug], allow_fallbacks: false, require_parameters: true } }
+    : { ...body };
 }
 
 function contained(root, target) {
@@ -69,7 +72,8 @@ export function validateOpenRouterTransport(transport, { cwd, home = os.homedir(
     || (cohortPolicy && (policy.hash !== policyDigest(cohortPolicy)
       || policy.model !== (transport.cohort.side === "control" ? cohortPolicy.control.model : OPENROUTER_MODEL)
       || policy.side !== transport.cohort.side
-      || (policy.side === "control" && (policy.provider !== cohortPolicy.control.provider || policy.effort !== cohortPolicy.control.effort))
+      || (policy.side === "control" && (policy.provider !== cohortPolicy.control.provider
+        || policy.providerSlug !== cohortPolicy.control.providerSlug || policy.effort !== cohortPolicy.control.effort))
       || policy.keyId !== cohortPolicy.keyId || policy.workspaceId !== cohortPolicy.workspaceId))
     || !Array.isArray(policy.providers) || policy.providers.length !== 0
     || policy.zdr !== false || policy.dataCollection !== null || policy.promptLogging !== false
@@ -98,9 +102,10 @@ export function validateOpenRouterTransport(transport, { cwd, home = os.homedir(
   }
   return { credentialPath, upstream, policy: {
     hash: policy.hash, model: policy.model, providers: [],
-    ...(cohortPolicy ? { side: policy.side, provider: policy.provider || null, effort: policy.effort || null,
+    ...(cohortPolicy ? { side: policy.side, provider: policy.provider || null, providerSlug: policy.providerSlug || null, effort: policy.effort || null,
       keyId: policy.keyId, workspaceId: policy.workspaceId } : {}),
     zdr: false, dataCollection: null, promptLogging: false,
     keyLimitUsd: 69, spendCeilingUsd: 75,
-  }, ...(cohortPolicy ? { cohort: transport.cohort, modelAliases: cohortPolicy.modelAliases } : {}) };
+  }, ...(cohortPolicy ? { cohort: { ...transport.cohort, home,
+    storeRoot: path.dirname(transport.cohort.configPath) }, modelAliases: cohortPolicy.modelAliases } : {}) };
 }

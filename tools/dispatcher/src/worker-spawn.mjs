@@ -258,7 +258,7 @@ export function spawnWorker({
       reject(new Error("production worker launch requires a securityContext and OS guard"));
       return;
     }
-    if (jev?.armId === "jev-hosted" && !providerTransport) {
+    if (["jev-hosted", "fixed-control"].includes(jev?.armId) && !providerTransport) {
       childClosed = true;
       reject(new Error("Jev hosted transport is disabled; routed issue requires human review before dispatch"));
       return;

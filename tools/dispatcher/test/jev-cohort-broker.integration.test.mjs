@@ -19,7 +19,7 @@ describe.skipIf(isInsideWorkerSandboxEnv())("shared fixed Responses broker bound
     const policy = { trialId: "fake-control", route: "codex-openrouter-responses",
       activatedAt: now.toISOString(), expiresAt: later, pairs: [{ routed: "MOV-10", control: "MOV-11" }],
       routed: { model: "typesafe/jev-router", worker: "codex", tier: "default" },
-      control: { model: "openai/fixture", worker: "codex", provider: "OpenAI", effort: "medium", tier: "default" },
+      control: { model: "openai/fixture", worker: "codex", provider: "OpenAI", providerSlug: "openai", effort: "medium", tier: "default" },
       keyId: "fake_key", workspaceId: "fake_workspace", keyLimitUsd: 69, allInCeilingUsd: 75,
       priorOutlayUsd: 5, baselineKeyUsageUsd: 1, purchaseFeesUsd: 0,
       modelAliases: { "openai/fixture": "openai/fixture" } };

@@ -16,6 +16,10 @@ repository, under `~/.config/moviecal/`. No key value appears in either file.
 dedicated `openrouter-jev.env` remains the only key source and is opened only
 by the trusted broker. The exact policy digest is SHA-256 of the prefix `moviecal-jev-cohort-policy-v1` and a newline, then
 `JSON.stringify(policy)`; changing any policy field invalidates approval.
+`MOVIECAL_CONFIG_DIR` may relocate the cohort state independently of the key
+store. The broker keeps the actual credential home; both the model client and
+command executor are denied reads of the relocated cohort directory. Config,
+approval and ledger reads validate and read the same no-follow descriptor.
 
 The policy identifies one trial, `route: "codex-openrouter-responses"`,
 explicit UTC `activatedAt` and `expiresAt` no more than 14 days apart, and
@@ -24,10 +28,16 @@ objects. IDs cannot repeat. Routed issues need `router:jev`; both sides must
 resolve to `worker:codex`. Excluded labels (`human-only`, high risk, auth,
 security, database, deployment, migrations and secrets) refuse admission.
 The `control` object pins `worker: "codex"`, a concrete Responses `model`, served `provider`,
+and a separate lowercase API routing `providerSlug` (for example,
+`provider: "OpenAI"` with `providerSlug: "openai"`),
 `effort`, and dispatcher model `tier`; `routed` pins `typesafe/jev-router`,
 Codex, and the same matched `tier`. `modelAliases` is an identity-only snapshot reviewed for the selected
 models. It maps observed aliases to canonical model IDs, never prices or
 default effort. A changed alias map invalidates approval.
+Fixed controls send the reviewed `providerSlug` in `provider.only`, with
+`allow_fallbacks: false` and `require_parameters: true`, as documented in
+[OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection).
+Served model, provider and effort must still match the approved control.
 
 The policy also names the dedicated `keyId`, `workspaceId`, the `$69` TOTAL
 key limit, `$75` combined ceiling, `baselineKeyUsageUsd`, `priorOutlayUsd`,
@@ -49,6 +59,9 @@ expiry. These fields are an operator attestation of a concrete account review;
 a bare hash is insufficient. The live broker checks current key usage and
 available credit before every paid request. Unknown or changed evidence stops
 the cohort.
+The broker also compares its protected attempt snapshot with the current
+approval before each payment, including after the account lookup. Changed
+policy or aliases refuse traffic rather than continuing under stale approval.
 
 ## Commands and lifecycle
 
@@ -92,6 +105,11 @@ missing model/effort/provider, protocol error, refused response, fallback, or
 account-metadata failure leaves the reservation unresolved and stops further
 paid traffic. Human reconciliation is required; no subscription substitution
 occurs.
+Failed final attribution or invoice reconciliation withholds terminal
+completion from Codex, so it cannot report a successful turn for that request.
+A corrupt ledger, or a missing primary with a retained backup, requires human
+reconciliation: the cohort never restores an older backup that could discard
+an unresolved paid-request reservation. Keep all ledger evidence for review.
 
 Before MOV-431 ready promotion, review the exact cohort/approval files,
 remaining key allowance and fee basis, fake routed and fixed Responses tool

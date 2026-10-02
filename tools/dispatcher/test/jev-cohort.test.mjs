@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { JevCohortStore, policyDigest, validateCohortPolicy,
-  validateCohortApproval, resolveCohortTransport } from "../src/jev-cohort.mjs";
+  validateCohortApproval, resolveCohortTransport, assertCohortBinding } from "../src/jev-cohort.mjs";
 import { validateOpenRouterTransport, buildOpenRouterRequest } from "../src/openrouter-transport.mjs";
 
 const NOW = new Date("2026-10-01T12:00:00.000Z");
@@ -11,7 +11,7 @@ const policy = () => ({ trialId: "fixture-1", route: "codex-openrouter-responses
   activatedAt: "2026-10-01T12:00:00.000Z", expiresAt: "2026-10-10T12:00:00.000Z",
   pairs: [{ routed: "MOV-10", control: "MOV-11" }, { routed: "MOV-12", control: "MOV-13" }],
   routed: { model: "typesafe/jev-router", worker: "codex", tier: "default" },
-  control: { model: "openai/fixture", worker: "codex", provider: "OpenAI", effort: "medium", tier: "default" },
+  control: { model: "openai/fixture", worker: "codex", provider: "OpenAI", providerSlug: "openai", effort: "medium", tier: "default" },
   keyId: "fixture_key", workspaceId: "fixture_workspace", keyLimitUsd: 69,
   allInCeilingUsd: 75, priorOutlayUsd: 5, baselineKeyUsageUsd: 1, purchaseFeesUsd: 0.5,
   modelAliases: { "openai/fixture": "openai/fixture", "~fixture": "openai/fixture" } });
@@ -36,7 +36,7 @@ describe("reviewed production Jev cohort", () => {
     store = new JevCohortStore({ home, configPath: path.join(dir, "jev-cohort.json"),
       approvalPath: path.join(dir, "jev-cohort-approval.json"), ledgerPath: path.join(dir, "jev-cohort-ledger.json") });
   });
-  afterEach(() => fs.rmSync(home, { recursive: true, force: true }));
+  afterEach(() => { vi.restoreAllMocks(); fs.rmSync(home, { recursive: true, force: true }); });
   const issue = (id, labels = ["worker:codex", "router:jev"]) => ({ identifier: id, labels });
   const account = { keyUsageUsd: 1, keyRemainingUsd: 68, availableCreditUsd: 69 };
 
@@ -51,6 +51,8 @@ describe("reviewed production Jev cohort", () => {
 
   it("requires distinct exact pairs, UTC expiry and reviewed aliases", () => {
     expect(validateCohortPolicy({ ...p, control: { ...p.control, worker: "claude" } })).toMatch(/control/);
+    expect(validateCohortPolicy({ ...p, control: { ...p.control, providerSlug: undefined } })).toMatch(/control/);
+    expect(validateCohortPolicy({ ...p, control: { ...p.control, providerSlug: "OpenAI" } })).toMatch(/control/);
     expect(validateCohortPolicy({ ...p, pairs: [{ routed: "MOV-10", control: "MOV-10" }] })).toMatch(/pairs/);
     expect(validateCohortPolicy({ ...p, pairs: Array.from({ length: 13 }, (_, n) => ({ routed: `MOV-${n + 1}`, control: `MOV-${n + 21}` })) })).toMatch(/pairs/);
     expect(validateCohortPolicy({ ...p, expiresAt: "2026-10-16T12:00:00.000Z" })).toMatch(/14 days/);
@@ -76,7 +78,61 @@ describe("reviewed production Jev cohort", () => {
     const checked = validateOpenRouterTransport(transport, { cwd: path.join(home, "worktree"), home });
     expect(checked.policy).toMatchObject({ side: "control", model: "openai/fixture", provider: "OpenAI", effort: "medium" });
     expect(buildOpenRouterRequest({ model: "openai/fixture", reasoning: { effort: "medium" }, input: "fixture" }, checked.policy).model).toBe("openai/fixture");
+    expect(buildOpenRouterRequest({ model: "openai/fixture", reasoning: { effort: "medium" } }, checked.policy).provider)
+      .toEqual({ only: ["openai"], allow_fallbacks: false, require_parameters: true });
     expect(() => buildOpenRouterRequest({ model: "openai/fixture", reasoning: { effort: "high" } }, checked.policy)).toThrow(/policy/);
+  });
+
+  it("reads the validated descriptor even if the config path is replaced after open", () => {
+    store.activate(NOW);
+    const replacement = path.join(dir, "replacement.json");
+    fs.writeFileSync(replacement, JSON.stringify({ enabled: true, policy: { ...p, priorOutlayUsd: 74 } }), { mode: 0o600 });
+    const open = fs.openSync;
+    let swapped = false;
+    vi.spyOn(fs, "openSync").mockImplementation((file, ...args) => {
+      const fd = open(file, ...args);
+      if (file === store.configPath && !swapped) {
+        swapped = true;
+        fs.renameSync(file, path.join(dir, "original-config.json"));
+        fs.symlinkSync(replacement, file);
+      }
+      return fd;
+    });
+    expect(store.policy(NOW)).toEqual(p);
+    expect(store.state(NOW).status).toBe("invalid");
+  });
+
+  it("rejects linked approvals and does not recover a pending invoice from an older backup", () => {
+    const linked = path.join(dir, "linked-approval.json");
+    fs.linkSync(store.approvalPath, linked);
+    expect(() => store.activate(NOW)).toThrow(/unlinked/);
+    fs.unlinkSync(linked);
+    store.activate(NOW);
+    store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+    store.reserve("request-1", "MOV-10", account, NOW);
+    expect(fs.existsSync(`${store.ledger.statePath}.bak`)).toBe(true);
+    fs.writeFileSync(store.ledger.statePath, "broken JSON");
+    expect(store.state(NOW)).toMatchObject({ status: "invalid", error: "cohort ledger evidence unavailable" });
+    expect(() => store.reserve("request-2", "MOV-10", account, NOW)).toThrow();
+    fs.unlinkSync(store.ledger.statePath);
+    expect(store.state(NOW).status).toBe("invalid");
+  });
+
+  it("binds every attempt to the exact current approval and supports a relocated config store", () => {
+    store.activate(NOW);
+    const record = store.admit(issue("MOV-11", []), { worker: "codex", tier: "default", effort: "medium", now: NOW }).record;
+    const transport = resolveCohortTransport(store, record, { home });
+    transport.modelAliases = p.modelAliases;
+    expect(() => assertCohortBinding(store, transport)).not.toThrow();
+    expect(() => assertCohortBinding(store, { ...transport, policy: { ...transport.policy, provider: "Azure" } })).toThrow(/changed/);
+    const relocated = path.join(home, "relocated-state");
+    fs.cpSync(dir, relocated, { recursive: true });
+    const relocatedStore = new JevCohortStore({ storeRoot: relocated, home,
+      configPath: path.join(relocated, "jev-cohort.json"), approvalPath: path.join(relocated, "jev-cohort-approval.json"),
+      ledgerPath: path.join(relocated, "jev-cohort-ledger.json") });
+    const relocatedTransport = resolveCohortTransport(relocatedStore, record, { home });
+    expect(validateOpenRouterTransport(relocatedTransport, { cwd: path.join(home, "worktree"), home }).cohort.storeRoot).toBe(relocated);
+    expect(relocatedTransport.credentialPath).toBe(path.join(dir, "openrouter-jev.env"));
   });
 
   it("checks approval and dedicated key before a fresh assignment is consumed", () => {
