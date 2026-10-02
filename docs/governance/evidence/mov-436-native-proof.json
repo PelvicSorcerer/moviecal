@@ -1,0 +1,100 @@
+{
+  "platform": "27.0",
+  "claudeVersion": "2.1.282 (Claude Code)",
+  "positiveListeners": {
+    "tcp": "connected",
+    "unix": "connected"
+  },
+  "modes": {
+    "implementation": {
+      "exitCode": 0,
+      "providerPosts": 16,
+      "tools": [
+        "Edit",
+        "Read",
+        "mcp__broker__run"
+      ],
+      "readGuidance": true,
+      "editedFile": true,
+      "brokerWrote": true,
+      "built": true,
+      "bashRejected": true,
+      "correlatedVerify": "passed",
+      "currentReadiness": "incomplete",
+      "controls": {
+        "tcp": "EPERM",
+        "udp": "EPERM",
+        "unix": "EPERM",
+        "descendant": "EPERM",
+        "protectedReads": [
+          "EPERM",
+          "EPERM",
+          "EPERM"
+        ],
+        "protectedWrites": [
+          "EPERM",
+          "WROTE",
+          "EPERM",
+          "EPERM"
+        ],
+        "security": "zsh:1: operation not permitted: security",
+        "osascript": {
+          "exitCode": 0,
+          "stdout": "1",
+          "stderr": ""
+        },
+        "commandCredential": "ABSENT"
+      }
+    },
+    "repair": {
+      "exitCode": 0,
+      "providerPosts": 16,
+      "tools": [
+        "Edit",
+        "Read",
+        "mcp__broker__run"
+      ],
+      "readGuidance": true,
+      "editedFile": true,
+      "brokerWrote": true,
+      "built": true,
+      "bashRejected": true,
+      "correlatedVerify": "passed",
+      "currentReadiness": "incomplete",
+      "controls": {
+        "tcp": "EPERM",
+        "udp": "EPERM",
+        "unix": "EPERM",
+        "descendant": "EPERM",
+        "protectedReads": [
+          "EPERM",
+          "EPERM",
+          "EPERM"
+        ],
+        "protectedWrites": [
+          "EPERM",
+          "EPERM",
+          "EPERM",
+          "EPERM"
+        ],
+        "security": "zsh:1: operation not permitted: security",
+        "osascript": {
+          "exitCode": 0,
+          "stdout": "1",
+          "stderr": ""
+        },
+        "commandCredential": "ABSENT"
+      }
+    }
+  },
+  "missingGuard": {
+    "exitCode": null,
+    "error": "guard missing",
+    "escaped": false
+  },
+  "invalidGuard": {
+    "exitCode": 65,
+    "error": null,
+    "escaped": false
+  }
+}
