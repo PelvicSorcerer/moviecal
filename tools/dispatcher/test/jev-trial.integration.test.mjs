@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { runOnce } from "../src/run-loop.mjs";
 import { JevArmStore, jevAttribution, ELIGIBLE_LABEL } from "../src/jev-trial.mjs";
+import { JevCohortStore, policyDigest, resolveCohortTransport } from "../src/jev-cohort.mjs";
 import { resolveRouting, workerInvocation } from "../src/worker-routing.mjs";
 import { spawnWorker } from "../src/worker-spawn.mjs";
 import { captureWorkerUsage, WorkerUsageStore, buildUsageExport, DISPATCHER_ORIGIN } from "../src/worker-usage.mjs";
@@ -106,6 +107,41 @@ describe("bounded Jev router arm admission through the run loop (MOV-427)", () =
     expect(created[0]).toMatchObject({ worker: "claude", model: "default", jev: null });
     expect(spawned[0].jev).toBeNull();
     expect(jevStore.get("MOV-1")).toBeNull();
+  });
+
+  it("wires preselected routed and fixed API controls through run-loop with no substitution", async () => {
+    const home = path.join(dir, "home"), storeDir = path.join(home, ".config", "moviecal");
+    fs.mkdirSync(storeDir, { recursive: true });
+    const policy = { trialId: "paired-1", route: "codex-openrouter-responses",
+      activatedAt: T0.toISOString(), expiresAt: iso(DAY),
+      pairs: [{ routed: "MOV-1", control: "MOV-2" }],
+      routed: { model: "typesafe/jev-router", worker: "codex", tier: "default" },
+      control: { model: "openai/fixture", worker: "codex", provider: "OpenAI", effort: "medium", tier: "default" },
+      keyId: "fixture_key", workspaceId: "fixture_workspace", keyLimitUsd: 69,
+      allInCeilingUsd: 75, priorOutlayUsd: 5, baselineKeyUsageUsd: 1, purchaseFeesUsd: 0,
+      modelAliases: { "openai/fixture": "openai/fixture" } };
+    const configPath = path.join(storeDir, "jev-cohort.json"), approvalPath = path.join(storeDir, "jev-cohort-approval.json");
+    fs.writeFileSync(configPath, JSON.stringify({ enabled: false, policy }), { mode: 0o600 });
+    fs.writeFileSync(approvalPath, JSON.stringify({ issue: "MOV-431", owner: "Adam Moore", ownerApproved: true,
+      securityReviewPassed: true, accountPolicyReviewed: true, effectiveEligibilityUnrestricted: true,
+      promptLoggingOff: true, zdrOff: true, dataCollectionUnrestricted: true,
+      priorOutlayBasisReviewed: true, keyLimitUsd: 69, allInCeilingUsd: 75,
+      keyId: policy.keyId, workspaceId: policy.workspaceId, policySha256: policyDigest(policy),
+      reviewedAt: T0.toISOString(), expiresAt: policy.expiresAt,
+      availableCreditUsd: 69, keyRemainingUsd: 68 }), { mode: 0o600 });
+    const cohort = new JevCohortStore({ home, configPath, approvalPath, ledgerPath: path.join(storeDir, "jev-cohort-ledger.json") });
+    cohort.activate(T0);
+    const context = ctx({ jevCohortStore: cohort,
+      resolveCohortTransportFn: (record, options = {}) => resolveCohortTransport(cohort, record, { ...options, home }),
+      validateJevTransportFn: vi.fn() });
+    await runOnce([issue(1, ["router:jev", "worker:codex"]), issue(2, ["worker:codex"])], context);
+    expect(created.map((item) => item.jev?.side)).toEqual(["routed", "control"]);
+    expect(spawned.map((item) => item.providerTransport?.policy.model)).toEqual(["typesafe/jev-router", "openai/fixture"]);
+    expect(cohort.state(T0)).toMatchObject({ routed: 1, control: 1 });
+    cohort.stop("operator-stop", T0);
+    const result = await runOnce([issue(2, ["worker:codex"])], context);
+    expect(result[0].outcome).toBe("needs-human");
+    expect(spawned).toHaveLength(2);
   });
 
   it("defers a Codex arm before admission when the reviewed transport is absent", async () => {

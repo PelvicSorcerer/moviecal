@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { JevCohortStore, policyDigest } from "./jev-cohort.mjs";
 
 export const OPENROUTER_MODEL = "typesafe/jev-router";
 export const OPENROUTER_UPSTREAM = "https://openrouter.ai/api/v1/responses";
@@ -23,8 +24,10 @@ export function requiredSecretPresent(name, { home = os.homedir(), envLocalPath 
 }
 
 export function buildOpenRouterRequest(body, policy) {
-  if (!body || typeof body !== "object" || Array.isArray(body)
-    || body.model !== OPENROUTER_MODEL || policy?.model !== OPENROUTER_MODEL
+  if (!policy || !body || typeof body !== "object" || Array.isArray(body)
+    || body.model !== policy?.model
+    || (policy.model !== OPENROUTER_MODEL && (policy.side !== "control"
+      || body.reasoning?.effort !== policy.effort))
     || ["provider", "models", "route", "plugins", "debug"].some((field) => Object.hasOwn(body, field))
     || !Array.isArray(policy.providers) || policy.providers.length !== 0
     || policy.zdr !== false || policy.dataCollection !== null) {
@@ -42,12 +45,32 @@ function contained(root, target) {
 
 /** Validates metadata and file ownership without ever opening the key. */
 export function validateOpenRouterTransport(transport, { cwd, home = os.homedir(), fixture = false,
-  approvedPolicyHashes = APPROVED_OPENROUTER_POLICY_HASHES } = {}) {
+  approvedPolicyHashes = APPROVED_OPENROUTER_POLICY_HASHES, cohortAdmissionPreview = false } = {}) {
   if (!transport || transport.enabled !== true || !path.isAbsolute(cwd || "")) throw new Error("OpenRouter transport disabled or missing worktree");
   const { policy, credentialPath, upstream } = transport;
-  if (!policy || typeof policy !== "object" || policy.model !== OPENROUTER_MODEL
+  let cohortPolicy = null;
+  if (transport.cohort) {
+    const store = new JevCohortStore({ ...transport.cohort, home });
+    cohortPolicy = store.policy();
+    const assignment = store.get(transport.cohort.issue);
+    const preselectedSide = cohortPolicy?.pairs?.some((pair) => pair[transport.cohort.side] === transport.cohort.issue);
+    if (!cohortPolicy || (!assignment && !(cohortAdmissionPreview && preselectedSide))
+      || !preselectedSide || (assignment && (assignment.policyHash !== policyDigest(cohortPolicy)
+        || assignment.issue !== transport.cohort.issue || assignment.side !== transport.cohort.side
+        || assignment.worker !== "codex" || assignment.tier !== cohortPolicy.control.tier
+        || (assignment.side === "control" && assignment.effort !== cohortPolicy.control.effort)))
+      || store.state().status !== "active") {
+      throw new Error("OpenRouter cohort approval or assignment changed");
+    }
+  }
+  if (!policy || typeof policy !== "object" || ![OPENROUTER_MODEL, cohortPolicy?.control?.model].includes(policy.model)
     || typeof policy.hash !== "string" || !/^[a-f0-9]{64}$/.test(policy.hash)
-    || (!fixture && !approvedPolicyHashes.includes(policy.hash))
+    || (!fixture && !cohortPolicy && !approvedPolicyHashes.includes(policy.hash))
+    || (cohortPolicy && (policy.hash !== policyDigest(cohortPolicy)
+      || policy.model !== (transport.cohort.side === "control" ? cohortPolicy.control.model : OPENROUTER_MODEL)
+      || policy.side !== transport.cohort.side
+      || (policy.side === "control" && (policy.provider !== cohortPolicy.control.provider || policy.effort !== cohortPolicy.control.effort))
+      || policy.keyId !== cohortPolicy.keyId || policy.workspaceId !== cohortPolicy.workspaceId))
     || !Array.isArray(policy.providers) || policy.providers.length !== 0
     || policy.zdr !== false || policy.dataCollection !== null || policy.promptLogging !== false
     || policy.keyLimitUsd !== 69 || policy.spendCeilingUsd !== 75
@@ -75,7 +98,9 @@ export function validateOpenRouterTransport(transport, { cwd, home = os.homedir(
   }
   return { credentialPath, upstream, policy: {
     hash: policy.hash, model: policy.model, providers: [],
+    ...(cohortPolicy ? { side: policy.side, provider: policy.provider || null, effort: policy.effort || null,
+      keyId: policy.keyId, workspaceId: policy.workspaceId } : {}),
     zdr: false, dataCollection: null, promptLogging: false,
     keyLimitUsd: 69, spendCeilingUsd: 75,
-  } };
+  }, ...(cohortPolicy ? { cohort: transport.cohort, modelAliases: cohortPolicy.modelAliases } : {}) };
 }

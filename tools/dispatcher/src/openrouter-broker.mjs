@@ -8,6 +8,8 @@ import path from "node:path";
 import { buildOpenRouterRequest, OPENROUTER_UPSTREAM } from "./openrouter-transport.mjs";
 import { createResponseObserver } from "./openrouter-response.mjs";
 import { parseRoutedRequests, writeRoutedRequestEvidence } from "./routed-request.mjs";
+import { JevCohortStore } from "./jev-cohort.mjs";
+import { readOpenRouterAccount } from "./openrouter-account.mjs";
 
 const config = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const token = process.env.MOVIECAL_PROVIDER_BROKER_TOKEN;
@@ -16,7 +18,8 @@ const upstream = new URL(config.upstream);
 if (!token || !Number.isSafeInteger(port) || port < 1 || port > 65535
   || !(upstream.href === OPENROUTER_UPSTREAM || (config.fixture === true
     && upstream.protocol === "http:" && upstream.hostname === "127.0.0.1" && upstream.pathname === "/v1/responses"))
-  || upstream.search || upstream.hash || config.policy?.model !== "typesafe/jev-router") {
+  || upstream.search || upstream.hash || !/^[A-Za-z0-9_.:/-]{1,200}$/.test(config.policy?.model || "")
+  || (config.policy.model !== "typesafe/jev-router" && config.policy.side !== "control")) {
   throw new Error("provider broker setup invalid");
 }
 const stat = fs.lstatSync(config.credentialPath);
@@ -27,6 +30,8 @@ const credential = fs.readFileSync(config.credentialPath, "utf8").trim();
 const match = /^OPENROUTER_API_KEY=([A-Za-z0-9_-]{8,256})$/.exec(credential);
 if (!match) throw new Error("provider credential invalid");
 const key = match[1];
+const cohort = config.cohort ? new JevCohortStore(config.cohort) : null;
+if (cohort && (!cohort.get(config.cohort.issue) || cohort.state().status !== "active")) throw new Error("cohort broker admission unavailable");
 if (config.proofDebug === true && (!Number.isInteger(config.maxRequests) || config.maxRequests < 1 || config.maxRequests > 6)) {
   throw new Error("provider debug requires a capped disposable proof");
 }
@@ -42,19 +47,29 @@ const server = http.createServer(async (request, response) => {
   if (!authorized(request.headers.authorization) || request.method !== "POST" || request.url !== "/v1/responses") {
     response.writeHead(403); response.end(); return;
   }
-  if (stopped) { response.writeHead(409); response.end('{"error":{"code":"route-stopped"}}'); return; }
+  if (stopped || (cohort && cohort.state().status !== "active")) {
+    response.writeHead(409); response.end('{"error":{"code":"route-stopped"}}'); return;
+  }
   const requestId = randomUUID(), started = Date.now();
-  const observer = createResponseObserver({ modelAliases: config.modelAliases, proofDebug: config.proofDebug === true, deferCompletion: true });
-  let recorded = false, toolOutputs = 0, requestedEffort = null;
+  const observer = createResponseObserver({ modelAliases: config.modelAliases, proofDebug: config.proofDebug === true,
+    deferCompletion: true, rejectFallback: Boolean(cohort), control: config.policy.side === "control" ? { model: config.policy.model,
+      provider: config.policy.provider, effort: config.policy.effort } : null });
+  let recorded = false, toolOutputs = 0, requestedEffort = null, account = null, reserved = false;
   const record = (error = null) => {
     if (recorded) return;
     recorded = true;
     const observed = observer.finish();
-    const failure = error || observed.error;
-    if (failure) stopped = true;
+    let failure = error || observed.error;
+    if (failure) { stopped = true; if (reserved) cohort?.stop(failure); }
+    if (cohort && reserved && !failure) {
+      try { cohort.finish(requestId, { invoiceId: observed.invoiceId, amountUsd: observed.billedUsd,
+        model: observed.resolvedModel, provider: observed.provider, effort: observed.resolvedEffort, account }); }
+      catch { stopped = true; cohort.stop("invoice-reconciliation-failed"); failure = "invoice-reconciliation-failed"; }
+    }
     const events = [
       { type: "request.start", requestId, ...config.accounting, turn: ++turn,
-        routerArm: "jev-hosted", policyHash: config.policy.hash, requestedModel: config.policy.model, requestedEffort },
+        routerArm: config.policy.side === "control" ? "fixed-control" : "jev-hosted",
+        policyHash: config.policy.hash, requestedModel: config.policy.model, requestedEffort },
       { type: "request.chunk", requestId, ...observed, streamed: true },
       { type: "request.usage", requestId, usage: observed },
       { type: "request.end", requestId, ...observed, latencyMs: Date.now() - started, error: failure },
@@ -85,6 +100,17 @@ const server = http.createServer(async (request, response) => {
     if (config.proofDebug === true) parsed.debug = { echo_upstream_body: true };
     toolOutputs = Array.isArray(parsed.input) ? parsed.input.filter((item) => ["function_call_output", "custom_tool_call_output"].includes(item.type)).length : 0;
     requestedEffort = parsed.reasoning?.effort;
+    if (cohort) {
+      try {
+        account = await readOpenRouterAccount(config.upstream, key, { fixture: config.fixture === true });
+        cohort.reserve(requestId, config.cohort.issue, account);
+        reserved = true;
+      } catch {
+        stopped = true;
+        cohort.stop("account-preflight-or-budget-failed");
+        response.writeHead(409); response.end('{"error":{"code":"cohort-budget-stopped"}}'); return;
+      }
+    }
     const outbound = (upstream.protocol === "https:" ? https : http).request(upstream, {
       method: "POST", timeout: 30000,
       headers: { authorization: `Bearer ${key}`, "content-type": "application/json", "x-openrouter-metadata": "enabled" },

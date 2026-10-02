@@ -70,17 +70,11 @@ export function validateCohortApproval(policy, approval, now = new Date()) {
 }
 
 function readProtected(file, label) {
-  // Open without following links, then check the SAME descriptor we read, so a
-  // swap between a path check and the read cannot expose a different file.
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-  try {
-    const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o600
-      || stat.size > 1024 * 1024 || stat.nlink !== 1) {
-      throw new Error(`${label} must be owner-owned mode 600 and unlinked`);
-    }
-    return JSON.parse(fs.readFileSync(fd, "utf8"));
-  } finally { fs.closeSync(fd); }
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid()
+    || (stat.mode & 0o777) !== 0o600 || stat.size > 1024 * 1024
+    || fs.realpathSync(file) !== path.join(fs.realpathSync(path.dirname(file)), path.basename(file))) throw new Error(`${label} must be owner-owned mode 600 and unlinked`);
+  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 export class JevCohortStore {

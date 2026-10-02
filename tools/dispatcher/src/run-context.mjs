@@ -13,6 +13,7 @@
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { requiredSecretPresent } from "./openrouter-transport.mjs";
 import { writeRoutingEvidence } from "./routing-evidence.mjs";
 import {
@@ -25,6 +26,9 @@ import {
   workerTrialAssignmentsPath,
   jevTrialConfigPath,
   jevTrialAssignmentsPath,
+  jevCohortConfigPath,
+  jevCohortApprovalPath,
+  jevCohortLedgerPath,
   workerUsageStatePath,
   repairLedgerStatePath,
   envLocalPath,
@@ -47,6 +51,7 @@ import { UsageLimitStore } from "./usage-limit.mjs";
 import { WorkerCooldownStore } from "./worker-cooldown.mjs";
 import { WorkerTrialStore } from "./worker-trial.mjs";
 import { JevArmStore } from "./jev-trial.mjs";
+import { JevCohortStore, resolveCohortTransport } from "./jev-cohort.mjs";
 import { WorkerUsageStore, captureWorkerUsage, DISPATCHER_ORIGIN } from "./worker-usage.mjs";
 import { RepairLedger } from "./repair-ledger.mjs";
 import { buildIsIssueSatisfied } from "./dependency-gate.mjs";
@@ -106,7 +111,7 @@ export async function checkIosRunnerOnline() {
  * ledger. Only this live wiring stamps `origin: "dispatcher"`, which is what
  * the trial export keys on to tell real attempts from fixtures.
  */
-export async function buildRunContext(linearClient, teamKey, issues, { repairLockHeld = false, workerUsageStore = null, workerTrialStore = null, jevTrialStore = null } = {}) {
+export async function buildRunContext(linearClient, teamKey, issues, { repairLockHeld = false, workerUsageStore = null, workerTrialStore = null, jevTrialStore = null, jevCohortStore = null } = {}) {
   const usageStore = workerUsageStore || new WorkerUsageStore(workerUsageStatePath());
   const states = await linearClient.workflowStates(teamKey);
   const stateId = (name) => {
@@ -121,6 +126,9 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     statePath: worktreesStatePath(),
   });
 
+  const cohortPath = jevCohortConfigPath();
+  const cohortStore = jevCohortStore || new JevCohortStore({ configPath: cohortPath,
+    approvalPath: jevCohortApprovalPath(), ledgerPath: jevCohortLedgerPath() });
   return {
     linearClient,
     stateIds: {
@@ -149,6 +157,9 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     // only from the run loop, which holds the dispatcher lock. Never selects
     // a worker/model/provider itself -- see jev-trial.mjs.
     jevTrialStore: jevTrialStore || new JevArmStore({ configPath: jevTrialConfigPath(), ledgerPath: jevTrialAssignmentsPath() }),
+    jevCohortStore: cohortStore,
+    resolveCohortTransportFn: (assignment, options = {}) => resolveCohortTransport(cohortStore, assignment,
+      { ...options, home: path.dirname(path.dirname(path.dirname(cohortStore.configPath))) }),
     captureWorkerUsageFn: (logDir, context) => captureWorkerUsage(logDir, { ...context, origin: DISPATCHER_ORIGIN }, { store: usageStore }),
     writeRoutingEvidenceFn: writeRoutingEvidence,
     // MOV-179: advisory-only diagnosis for the residual "unrecognized

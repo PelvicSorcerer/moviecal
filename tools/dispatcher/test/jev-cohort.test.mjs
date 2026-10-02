@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { JevCohortStore, policyDigest, validateCohortPolicy,
   validateCohortApproval, resolveCohortTransport } from "../src/jev-cohort.mjs";
+import { validateOpenRouterTransport, buildOpenRouterRequest } from "../src/openrouter-transport.mjs";
 
 const NOW = new Date("2026-10-01T12:00:00.000Z");
 const policy = () => ({ trialId: "fixture-1", route: "codex-openrouter-responses",
@@ -66,6 +67,26 @@ describe("reviewed production Jev cohort", () => {
     expect([routed.record.side, fixed.record.side]).toEqual(["routed", "control"]);
     expect(store.state(NOW)).toMatchObject({ routed: 1, control: 1 });
     expect(store.admit(issue("MOV-11", []), { worker: "codex", tier: "default", effort: "medium", now: NOW }).existing).toBe(true);
+  });
+
+  it("runs fixed control through the guarded transport with a pinned model and effort", () => {
+    store.activate(NOW);
+    const record = store.admit(issue("MOV-11", []), { worker: "codex", tier: "default", effort: "medium", now: NOW }).record;
+    const transport = resolveCohortTransport(store, record, { home });
+    const checked = validateOpenRouterTransport(transport, { cwd: path.join(home, "worktree"), home });
+    expect(checked.policy).toMatchObject({ side: "control", model: "openai/fixture", provider: "OpenAI", effort: "medium" });
+    expect(buildOpenRouterRequest({ model: "openai/fixture", reasoning: { effort: "medium" }, input: "fixture" }, checked.policy).model).toBe("openai/fixture");
+    expect(() => buildOpenRouterRequest({ model: "openai/fixture", reasoning: { effort: "high" } }, checked.policy)).toThrow(/policy/);
+  });
+
+  it("checks approval and dedicated key before a fresh assignment is consumed", () => {
+    store.activate(NOW);
+    const prospective = { issue: "MOV-11", side: "control", policyHash: policyDigest(p) };
+    const transport = resolveCohortTransport(store, prospective, { home, preview: true });
+    expect(validateOpenRouterTransport(transport, { cwd: path.join(home, "worktree"), home, cohortAdmissionPreview: true }).policy.side).toBe("control");
+    fs.chmodSync(path.join(dir, "openrouter-jev.env"), 0o644);
+    expect(() => validateOpenRouterTransport(transport, { cwd: path.join(home, "worktree"), home, cohortAdmissionPreview: true })).toThrow(/credential/);
+    expect(store.get("MOV-11")).toBeNull();
   });
 
   it("reserves the full remaining key allowance, counts invoices and fees once, and survives restart", () => {

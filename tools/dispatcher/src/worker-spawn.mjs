@@ -263,7 +263,9 @@ export function spawnWorker({
       reject(new Error("Jev hosted transport is disabled; routed issue requires human review before dispatch"));
       return;
     }
-    if (providerTransport && (jev?.armId !== "jev-hosted" || jev.policyHash !== providerTransport.policy?.hash)) {
+    if (providerTransport && (!["jev-hosted", "fixed-control"].includes(jev?.armId)
+      || jev.policyHash !== providerTransport.policy?.hash
+      || (jev.armId === "fixed-control" && providerTransport.policy?.side !== "control"))) {
       childClosed = true;
       reject(new Error("OpenRouter transport requires matching Jev admission and policy"));
       return;

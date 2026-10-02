@@ -81,6 +81,9 @@ import {
   workerTrialAssignmentsPath,
   jevTrialConfigPath,
   jevTrialAssignmentsPath,
+  jevCohortConfigPath,
+  jevCohortApprovalPath,
+  jevCohortLedgerPath,
   workerUsageStatePath,
   repairLedgerStatePath,
   masterIncidentLedgerStatePath,
@@ -118,10 +121,11 @@ import { LinearClient } from "../src/linear-client.mjs";
 import { getAppToken } from "../src/linear-app-auth.mjs";
 import { evaluatePreflight, worktreeName, branchName } from "../src/preflight.mjs";
 import { describeWorkerBudget } from "../src/turn-budget.mjs";
-import { resolveRouting, resolveDispatchWorker, workerProbeWinners, workerInvocation, modelIdForTier, claudeEffortForTier, claudeModelDoesNotSupportEffort } from "../src/worker-routing.mjs";
+import { resolveRouting, resolveDispatchWorker, workerProbeWinners, workerInvocation, modelIdForTier, claudeEffortForTier, claudeModelDoesNotSupportEffort, codexReasoningEffortForTier } from "../src/worker-routing.mjs";
 import { WorkerCooldownStore, WORKERS as WORKER_POOLS } from "../src/worker-cooldown.mjs";
 import { WorkerTrialStore, describeTrialState } from "../src/worker-trial.mjs";
 import { JevArmStore, describeJevState, isEligibleForJevArm, ELIGIBLE_LABEL as JEV_ELIGIBLE_LABEL } from "../src/jev-trial.mjs";
+import { JevCohortStore } from "../src/jev-cohort.mjs";
 import { inferExecutionRoute, resolveExecutionRoute } from "../src/execution-routing.mjs";
 import {
   describeDelegate,
@@ -375,6 +379,10 @@ async function cmdDoctor() {
     const state = buildJevArmStore().state(new Date());
     checks.push({ name: "jev arm admission", ok: state.status !== "invalid", detail: describeJevState(state) });
   }
+  {
+    const state = buildJevCohortStore().state(new Date());
+    checks.push({ name: "guarded Jev cohort", ok: state.status !== "invalid", detail: JSON.stringify(state) });
+  }
 
   // MOV-386: the last effective Claude worker permission mode and tool set,
   // read from the usage ledger (each run's own system/init event). Read-only;
@@ -536,6 +544,11 @@ function buildJevArmStore() {
   return new JevArmStore({ configPath: jevTrialConfigPath(), ledgerPath: jevTrialAssignmentsPath() });
 }
 
+function buildJevCohortStore() {
+  return new JevCohortStore({ configPath: jevCohortConfigPath(),
+    approvalPath: jevCohortApprovalPath(), ledgerPath: jevCohortLedgerPath() });
+}
+
 /**
  * MOV-427: `dispatcher jev status|activate|stop`. Activation and early stop
  * touch only the arm config file: stop never deletes an assignment/spend
@@ -583,6 +596,32 @@ function cmdJev(args) {
   return 1;
 }
 
+function cmdJevCohort(args) {
+  const store = buildJevCohortStore();
+  const [action, ...flags] = args;
+  const flag = (name) => { const i = flags.indexOf(name); return i < 0 ? undefined : flags[i + 1]; };
+  try {
+    if (action === "status") { console.log(JSON.stringify(store.state(), null, 2)); return store.state().status === "invalid" ? 1 : 0; }
+    if (action === "preview") {
+      const state = store.state();
+      const issue = flag("--issue");
+      console.log(JSON.stringify({ state, issue: issue || null,
+        side: issue ? store.side(issue) : null, assignment: issue ? store.get(issue) : null }, null, 2));
+      return state.status === "invalid" ? 1 : 0;
+    }
+    if (action === "activate") { console.log(JSON.stringify(store.activate(), null, 2)); return 0; }
+    if (action === "stop") { console.log(JSON.stringify(store.stop(), null, 2)); return 0; }
+    if (action === "export") { console.log(JSON.stringify(store.export(), null, 2)); return 0; }
+    if (action === "fee") {
+      console.log(JSON.stringify(store.recordFee({ id: flag("--id"), amountUsd: Number(flag("--usd")),
+        description: flag("--description") || "fee" }), null, 2));
+      return 0;
+    }
+  } catch (error) { console.error(`jev-cohort ${action} failed: ${error.message}`); return 1; }
+  console.error("Usage: dispatcher jev-cohort status|preview [--issue MOV-N]|activate|stop|export|fee --id ID --usd N [--description ID]");
+  return 1;
+}
+
 async function cmdDryRun({ fixturePath } = {}) {
   let issues;
   if (fixturePath) {
@@ -618,6 +657,8 @@ async function cmdDryRun({ fixturePath } = {}) {
   // uses. Previewing never admits, so it never consumes a slot or spend.
   const jevArm = buildJevArmStore();
   const jevState = jevArm.state(new Date());
+  const cohort = buildJevCohortStore();
+  const cohortState = cohort.state(new Date());
 
   const requestedRoutes = issues.map((issue) => resolveDispatchWorker(issue, {
     boundWorker: usageLimits.get(issue.identifier)?.worker ?? null,
@@ -635,6 +676,7 @@ async function cmdDryRun({ fixturePath } = {}) {
 
   console.log(`worker:any trial: ${describeTrialState(trialState)}`);
   console.log(`jev arm:         ${describeJevState(jevState)}\n`);
+  console.log(`jev cohort:      ${JSON.stringify(cohortState)}\n`);
   console.log(`${issues.length} issue(s) in Ready for Agent:\n`);
   let routingError = false;
   const trialConfigError = trialState.status === "invalid";
@@ -699,6 +741,13 @@ async function cmdDryRun({ fixturePath } = {}) {
         const eligibility = isEligibleForJevArm(issue, { eligibleLabel: JEV_ELIGIBLE_LABEL });
         console.log(`  jev arm:  ${eligibility.eligible ? `would be admitted to ${jevState.trialId}/${jevState.armId} at dispatch` : `not eligible — ${eligibility.reason}`}`);
       }
+    }
+    if (cohortState.status !== "disabled") {
+      const preview = tryRun(() => cohort.preview(issue, { worker: resolvedWorker.worker,
+        tier: routing.model, effort: resolvedWorker.worker === "codex" ? codexReasoningEffortForTier(routing.model) : null,
+        now: previewNow }));
+      if (preview.ok && preview.value.side) console.log(`  jev cohort: ${preview.value.side} — ${preview.value.admitted ? "would use guarded API route" : `refused: ${preview.value.reason}`}`);
+      if (!preview.ok) console.log("  jev cohort: invalid policy; guarded route refused");
     }
     const quota = cooldownSnapshot[resolvedWorker.worker];
     if (quota?.cooling || quota?.probeOwed) console.log(`  worker cooldown: ${quota.cooling ? "COOLING" : "PROBE OWED"} until ${quota.resetAt}`);
@@ -1662,6 +1711,9 @@ async function main() {
       break;
     case "jev":
       process.exitCode = cmdJev(rest);
+      break;
+    case "jev-cohort":
+      process.exitCode = cmdJevCohort(rest);
       break;
     case "doctor":
       process.exitCode = await cmdDoctor();
