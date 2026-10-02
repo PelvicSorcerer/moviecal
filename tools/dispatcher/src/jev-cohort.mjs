@@ -20,7 +20,7 @@ const iso = (s) => typeof s === "string" && UTC.test(s) && Number.isFinite(Date.
 const round = (n) => Math.round(n * 1e6) / 1e6;
 
 export function policyDigest(policy) {
-  return createHash("sha256").update(JSON.stringify(policy)).digest("hex");
+  return createHash("sha256").update(`moviecal-jev-cohort-policy-v1\n${JSON.stringify(policy)}`).digest("hex");
 }
 
 export function validateCohortPolicy(policy) {
