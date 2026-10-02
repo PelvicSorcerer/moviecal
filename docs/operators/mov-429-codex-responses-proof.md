@@ -1,8 +1,9 @@
 # Contained Codex Jev Responses proof (MOV-429)
 
 This disposable proof keeps subscription routing unchanged and the cohort off.
-The dispatcher has no production transport resolver; both policy allowlists
-remain empty. MOV-431 owns activation.
+The separate MOV-437 production cohort resolver is disabled until a concrete
+MOV-431 policy and account approval are installed. The proof fixture and both
+legacy policy allowlists cannot activate it. MOV-431 owns activation.
 
 ## Automated evidence before paid traffic
 

@@ -233,6 +233,12 @@ node tools/dispatcher/bin/dispatcher.mjs trial stop
 
 ## Bounded Jev router arm admission (MOV-427)
 
+MOV-437 adds a separate disabled production Codex cohort with exact routed
+and fixed API control pairs, a reviewed account/policy approval, and one
+durable all-in budget. It does not activate the cohort or change ordinary
+worker/model routing. See [guarded Codex Jev cohort](./jev-cohort.md) for the
+operator contract; MOV-431 owns live activation.
+
 A bounded, **disabled-by-default** admission ledger for the Jev router trial designed in [MOV-422](https://linear.app/moviecal/issue/MOV-422/research-the-jev-router-trial-compare-hosted-and-open-source-routers). **This build has no live routing.** Admitting an issue to a Jev arm here never selects a worker, model, or provider — `worker:*`/`model:*` routing (the tables above) is completely unaffected, and `resolveDispatchWorker`/`resolveRouting` never consult this state. It exists to build and test the admission/eligibility/attribution contract ahead of the actual router transport and credential broker ([MOV-428](https://linear.app/moviecal/issue/MOV-428), [MOV-429](https://linear.app/moviecal/issue/MOV-429)), the same way [MOV-426](https://linear.app/moviecal/issue/MOV-426)'s `routed-request.mjs` built the per-request accounting contract ahead of any live broker.
 
 **Opt-in only.** An issue is only eligible once it carries the explicit `router:jev` label (`ELIGIBLE_LABEL` in `jev-trial.mjs`) **and** none of the excluded labels: `human-only`, `risk:high`, `area:auth`, `area:security`, `area:database`, `area:deployment`, `area:migrations`, `area:secrets`, `security-sensitive`. This mirrors MOV-422's "exclude auth, migrations, secrets, high-risk work, and human-only issues" cohort rule. No other label or the absence of `router:jev` ever triggers admission.
