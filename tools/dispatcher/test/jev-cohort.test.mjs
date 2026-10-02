@@ -18,10 +18,12 @@ const policy = () => ({ trialId: "fixture-1", route: "codex-openrouter-responses
 const approval = (p) => ({ issue: "MOV-431", owner: "Adam Moore", ownerApproved: true,
   securityReviewPassed: true, accountPolicyReviewed: true, effectiveEligibilityUnrestricted: true,
   promptLoggingOff: true, zdrOff: true, dataCollectionUnrestricted: true,
-  priorOutlayBasisReviewed: true, keyLimitUsd: 69, allInCeilingUsd: 75,
+  priorOutlayBasisReviewed: true, existingCreditOnlyReviewed: true, hardKeyCapReviewed: true,
+  dedicatedKeyExclusiveReviewed: true, paymentBound: "dedicated-key-total-limit",
+  keyLimitUsd: 69, allInCeilingUsd: 75,
   keyId: p.keyId, workspaceId: p.workspaceId, policySha256: policyDigest(p),
   reviewedAt: "2026-10-01T11:00:00.000Z", expiresAt: p.expiresAt,
-  availableCreditUsd: 69, keyRemainingUsd: 68 });
+  availableCreditUsd: 69, totalCreditsUsd: 69, totalUsageUsd: 0, keyRemainingUsd: 68 });
 
 describe("reviewed production Jev cohort", () => {
   let home, dir, store, p;
@@ -38,7 +40,8 @@ describe("reviewed production Jev cohort", () => {
   });
   afterEach(() => { vi.restoreAllMocks(); fs.rmSync(home, { recursive: true, force: true }); });
   const issue = (id, labels = ["worker:codex", "router:jev"]) => ({ identifier: id, labels });
-  const account = { keyUsageUsd: 1, keyRemainingUsd: 68, availableCreditUsd: 69 };
+  const account = { keyUsageUsd: 1, keyRemainingUsd: 68, availableCreditUsd: 69,
+    totalCreditsUsd: 69, totalUsageUsd: 0 };
 
   it("binds complete policy and account review before activation", () => {
     expect(store.state(NOW).status).toBe("disabled");
@@ -57,6 +60,8 @@ describe("reviewed production Jev cohort", () => {
     expect(validateCohortPolicy({ ...p, pairs: Array.from({ length: 13 }, (_, n) => ({ routed: `MOV-${n + 1}`, control: `MOV-${n + 21}` })) })).toMatch(/pairs/);
     expect(validateCohortPolicy({ ...p, expiresAt: "2026-10-16T12:00:00.000Z" })).toMatch(/14 days/);
     expect(validateCohortPolicy({ ...p, modelAliases: {} })).toMatch(/aliases/);
+    expect(validateCohortPolicy({ ...p, priorOutlayUsd: 7.1 })).toMatch(/key liability/);
+    expect(validateCohortApproval(p, { ...approval(p), hardKeyCapReviewed: false }, NOW)).toMatch(/approval/);
   });
 
   it("admits only exact eligible Codex issues and preserves both side caps and pins", () => {
@@ -81,6 +86,14 @@ describe("reviewed production Jev cohort", () => {
     expect(buildOpenRouterRequest({ model: "openai/fixture", reasoning: { effort: "medium" } }, checked.policy).provider)
       .toEqual({ only: ["openai"], allow_fallbacks: false, require_parameters: true });
     expect(() => buildOpenRouterRequest({ model: "openai/fixture", reasoning: { effort: "high" } }, checked.policy)).toThrow(/policy/);
+    const serial = buildOpenRouterRequest({ model: "openai/fixture", reasoning: { effort: "medium" },
+      parallel_tool_calls: false, tools: [{ type: "function", name: "exec_command" }] }, checked.policy);
+    expect(serial).not.toHaveProperty("parallel_tool_calls");
+    expect(serial.tools).toHaveLength(1);
+    expect(buildOpenRouterRequest({ model: "openai/fixture", reasoning: { effort: "medium" },
+      parallel_tool_calls: true }, checked.policy)).not.toHaveProperty("parallel_tool_calls");
+    expect(() => buildOpenRouterRequest({ model: "openai/fixture", reasoning: { effort: "medium" },
+      parallel_tool_calls: "true" }, checked.policy)).toThrow(/policy/);
   });
 
   it("reads the validated descriptor even if the config path is replaced after open", () => {
@@ -145,7 +158,7 @@ describe("reviewed production Jev cohort", () => {
     expect(store.get("MOV-11")).toBeNull();
   });
 
-  it("reserves the full remaining key allowance, counts invoices and fees once, and survives restart", () => {
+  it("reserves the provider-enforced liability, counts invoices once, and survives restart", () => {
     store.activate(NOW);
     store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
     store.reserve("request-1", "MOV-10", account, NOW);
@@ -154,12 +167,62 @@ describe("reviewed production Jev cohort", () => {
     const invoice = { invoiceId: "invoice-1", amountUsd: 0.2, model: "openai/fixture", provider: "OpenAI", effort: "medium", account };
     store.finish("request-1", invoice, NOW);
     store.finish("request-1", invoice, NOW);
+    const restarted = new JevCohortStore({ home, configPath: store.configPath,
+      approvalPath: store.approvalPath, ledgerPath: store.ledger.statePath });
+    expect(restarted.state(NOW)).toMatchObject({ routed: 1, spentUsd: 5.7, pending: 0, keyRemainingUsd: 67.8 });
     store.recordFee({ id: "fee-1", amountUsd: 0.1 });
     store.recordFee({ id: "fee-1", amountUsd: 0.1 });
     expect(() => store.recordFee({ id: "fee-1", amountUsd: 0.2 })).toThrow(/changed/);
+    expect(store.export()).toMatchObject({ stoppedReason: "new-fee-requires-owner-reconciliation" });
+  });
+
+  it("uses existing credit with a delayed balance without losing the hard in-flight bound", () => {
+    const reviewed = { ...approval(p), availableCreditUsd: 0.5, totalCreditsUsd: 10.5, totalUsageUsd: 10 };
+    save("jev-cohort-approval.json", reviewed);
+    store.activate(NOW);
+    store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+    const funded = { ...account, availableCreditUsd: 0.5, totalCreditsUsd: 10.5, totalUsageUsd: 10 };
+    store.reserve("request-1", "MOV-10", funded, NOW);
+    expect(store.export().requests[0].reservedUsd).toBe(68);
+    const invoice = { invoiceId: "invoice-1", amountUsd: 0.2, model: "openai/fixture",
+      provider: "OpenAI", effort: "medium", account: funded };
+    store.finish("request-1", invoice, NOW);
+    expect(store.state(NOW)).toMatchObject({ spentUsd: 5.7, keyRemainingUsd: 67.8 });
+    store.reserve("request-2", "MOV-10", funded, NOW);
+    expect(store.export().requests[1].reservedUsd).toBe(67.8);
     const restarted = new JevCohortStore({ home, configPath: store.configPath,
       approvalPath: store.approvalPath, ledgerPath: store.ledger.statePath });
-    expect(restarted.state(NOW)).toMatchObject({ routed: 1, spentUsd: 5.8, pending: 0 });
+    expect(restarted.state(NOW).status).toBe("pending-invoice");
+    expect(() => restarted.reserve("request-3", "MOV-10", funded, NOW)).toThrow();
+  });
+
+  it("stops on an unreviewed top-up or unexplained account charge", () => {
+    store.activate(NOW);
+    store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+    expect(() => store.reserve("request-1", "MOV-10", { ...account,
+      totalCreditsUsd: 70, availableCreditUsd: 70 }, NOW)).toThrow(/exposure/);
+    expect(store.export().requests).toHaveLength(0);
+  });
+
+  it("refuses account usage without a matching local invoice", () => {
+    store.activate(NOW);
+    store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+    expect(() => store.reserve("request-1", "MOV-10", { ...account,
+      totalUsageUsd: 0.1, availableCreditUsd: 68.9 }, NOW)).toThrow(/exposure/);
+    expect(store.export().stoppedReason).toBe("unknown-or-excess-account-exposure");
+  });
+
+  it("retains the reservation and stops on a duplicate or missing invoice", () => {
+    store.activate(NOW);
+    store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+    store.reserve("request-1", "MOV-10", account, NOW);
+    const invoice = { invoiceId: "invoice-1", amountUsd: 0.2, model: "openai/fixture",
+      provider: "OpenAI", effort: "medium", account };
+    store.finish("request-1", invoice, NOW);
+    store.reserve("request-2", "MOV-10", account, NOW);
+    expect(() => store.finish("request-2", invoice, NOW)).toThrow(/duplicate provider invoice/);
+    expect(store.export()).toMatchObject({ stoppedReason: "invoice-reconciliation-failed",
+      requests: [{ status: "complete" }, { status: "pending" }] });
   });
 
   it("stops immediately on unknown account evidence and cannot resume paid work by restart", () => {

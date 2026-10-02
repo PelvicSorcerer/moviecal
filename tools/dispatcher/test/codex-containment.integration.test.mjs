@@ -76,7 +76,7 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
       }
       if ((control || production) && req.url === "/api/v1/credits") {
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ data: { total_credits: 69, total_usage: 0 } })); return;
+        res.end(JSON.stringify({ data: { total_credits: 10.5, total_usage: 10 } })); return;
       }
       if (req.method !== "POST" || !req.url.endsWith("/responses")) {
         res.writeHead(200, { "content-type": "application/json" });
@@ -86,7 +86,13 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
       let body = "";
       for await (const chunk of req) body += chunk;
       const parsed = JSON.parse(body);
+      if (control && Object.hasOwn(parsed, "parallel_tool_calls")) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { code: "unsupported_parameters", message: "private-parameter-detail" } })); return;
+      }
       if (failure === "outage") { requests++; res.writeHead(503); res.end('private-error-sentinel'); return; }
+      if (failure === "parameter-404") { requests++; res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { code: "unsupported_parameters", message: "private-parameter-detail" } })); return; }
       if (failure === "timeout") { requests++; return; }
       let command = commands[requests++]?.replaceAll?.("PROVIDER_PORT", String(provider.address().port))
         ?.replaceAll("FIXTURE_SOCKET_PATH", unixPath) ?? commands[requests - 1];
@@ -130,6 +136,8 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
       fs.appendFileSync(path.join(root, `${name}-provider.jsonl`), JSON.stringify({ request: requests,
         authenticated: req.headers.authorization === "Bearer fake-openrouter-key", model: parsed.model,
         providerPolicy: parsed.provider, debugRequested: parsed.debug?.echo_upstream_body === true,
+        parallelPresent: Object.hasOwn(parsed, "parallel_tool_calls"), requestedEffort: parsed.reasoning?.effort,
+        tools: parsed.tools?.map((tool) => tool.name || tool.function?.name),
         toolOutputs: parsed.input?.filter((item) => ["function_call_output", "custom_tool_call_output"].includes(item.type)) }) + "\n");
     });
     await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
@@ -164,9 +172,11 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
       fs.writeFileSync(approvalPath, JSON.stringify({ issue: "MOV-431", owner: "Adam Moore", ownerApproved: true,
         securityReviewPassed: true, accountPolicyReviewed: true, effectiveEligibilityUnrestricted: true,
         promptLoggingOff: true, zdrOff: true, dataCollectionUnrestricted: true, priorOutlayBasisReviewed: true,
+        existingCreditOnlyReviewed: true, hardKeyCapReviewed: true, dedicatedKeyExclusiveReviewed: true,
+        paymentBound: "dedicated-key-total-limit",
         keyLimitUsd: 69, allInCeilingUsd: 75, keyId: policy.keyId, workspaceId: policy.workspaceId,
         policySha256: policyDigest(policy), reviewedAt: now.toISOString(), expiresAt,
-        availableCreditUsd: 69, keyRemainingUsd: 68 }), { mode: 0o600 });
+        availableCreditUsd: 0.5, totalCreditsUsd: 10.5, totalUsageUsd: 10, keyRemainingUsd: 68 }), { mode: 0o600 });
       const store = new JevCohortStore({ home, storeRoot: storeDir, configPath, approvalPath, ledgerPath });
       cohortStore = store;
       store.activate(now);
@@ -185,7 +195,7 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
         prepareCodexContainmentFn: (args) => modifyContainment(prepareCodexContainment({ ...args,
           sourceEnvironment: { ...args.sourceEnvironment, HOME: home, CODEX_HOME: path.join(home, ".codex") },
           openRouterFixture: broker, openRouterModelAliases: { "google/fixture": "google/fixture-20260929", "openai/fixture": "openai/fixture-20260929" },
-          openRouterProofDebug: proofDebug, providerRequestLimit: proofDebug ? 6 : null })),
+          openRouterProofDebug: proofDebug, providerRequestLimit: broker ? 6 : null })),
       });
       return { result, transcript: fs.readFileSync(path.join(logDir, "stdout.log"), "utf8"), logDir, requests,
         cohortEvidence: cohortStore?.export() };
@@ -288,6 +298,10 @@ Promise.all([...tcp,unix,udp]).then(()=>console.log('broker boundaries denied'))
       const providerRows = fs.readFileSync(path.join(root, "fixed-control-provider.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
       expect(providerRows.every((row) => JSON.stringify(row.providerPolicy)
         === JSON.stringify({ only: ["openai"], allow_fallbacks: false, require_parameters: true }))).toBe(true);
+      expect(providerRows.every((row) => !row.parallelPresent && row.requestedEffort === "low"
+        && row.tools?.includes("exec_command"))).toBe(true);
+      const launch = JSON.parse(fs.readFileSync(path.join(logDir, "codex-launch.json"), "utf8"));
+      expect(launch.args).toContain("features.multi_agent=false");
     } finally { fs.writeFileSync(path.join(own, "verify.cjs"), originalVerifier); }
   }, 30000);
 
@@ -330,7 +344,7 @@ Promise.all([...tcp,unix,udp]).then(()=>console.log('broker boundaries denied'))
     } finally { fs.writeFileSync(key, "OPENROUTER_API_KEY=fake-openrouter-key\n", { mode: 0o600 }); }
   }, 30000);
 
-  it.each(["outage", "timeout", "refusal", "malformed-tool", "missing-metadata", "unsupported-tool"])("stops the real routed Codex client on %s without fallback", async (failure) => {
+  it.each(["outage", "parameter-404", "timeout", "refusal", "malformed-tool", "missing-metadata", "unsupported-tool"])("stops the real routed Codex client on %s without fallback", async (failure) => {
     const { result, logDir, requests } = await fixture("implementation", [], `route-${failure}`,
       (value) => value, { broker: true, failure });
     expect(result.exitCode).not.toBe(0);
@@ -338,6 +352,7 @@ Promise.all([...tcp,unix,udp]).then(()=>console.log('broker boundaries denied'))
     const records = fs.readFileSync(path.join(logDir, "routing-decisions.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
     expect(records).toHaveLength(1);
     expect(records[0].error).toBeTruthy();
+    if (failure === "parameter-404") expect(records[0].error).toBe("provider-http-404-unsupported_parameters");
     expect(JSON.stringify(records)).not.toContain("private-");
     expect(fs.readFileSync(path.join(logDir, "stderr.log"), "utf8")).toContain("Jev route stopped:");
   }, 30000);
@@ -352,6 +367,20 @@ Promise.all([...tcp,unix,udp]).then(()=>console.log('broker boundaries denied'))
     expect(result.exitCode).not.toBe(0); expect(requests).toBe(1);
     const records = fs.readFileSync(path.join(logDir, "routing-decisions.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
     expect(records.at(-1).error).toBe("request-cap");
+  }, 30000);
+
+  it("fails if the request cap prevents the final report after read, edit and exact verify", async () => {
+    fs.writeFileSync(path.join(own, "answer.txt"), "before\n");
+    const { result, requests } = await fixture("implementation",
+      ["cat answer.txt", { patch: `*** Begin Patch\n*** Update File: ${own}/answer.txt\n@@\n-before\n+after\n*** End Patch` }, "npm run verify"],
+      "report-cap", (containment) => {
+        const launch = JSON.parse(fs.readFileSync(containment.invocation.args[1], "utf8"));
+        const config = JSON.parse(fs.readFileSync(launch.brokerConfig, "utf8"));
+        config.maxRequests = 3; fs.writeFileSync(launch.brokerConfig, JSON.stringify(config));
+        return containment;
+      }, { broker: true });
+    expect(result.exitCode).not.toBe(0);
+    expect(requests).toBe(3);
   }, 30000);
 
   it("does not carry a previous attempt's failure into a separately authorized retry", async () => {

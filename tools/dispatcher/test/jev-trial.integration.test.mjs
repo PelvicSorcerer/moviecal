@@ -125,10 +125,12 @@ describe("bounded Jev router arm admission through the run loop (MOV-427)", () =
     fs.writeFileSync(approvalPath, JSON.stringify({ issue: "MOV-431", owner: "Adam Moore", ownerApproved: true,
       securityReviewPassed: true, accountPolicyReviewed: true, effectiveEligibilityUnrestricted: true,
       promptLoggingOff: true, zdrOff: true, dataCollectionUnrestricted: true,
-      priorOutlayBasisReviewed: true, keyLimitUsd: 69, allInCeilingUsd: 75,
+      priorOutlayBasisReviewed: true, existingCreditOnlyReviewed: true, hardKeyCapReviewed: true,
+      dedicatedKeyExclusiveReviewed: true, paymentBound: "dedicated-key-total-limit",
+      keyLimitUsd: 69, allInCeilingUsd: 75,
       keyId: policy.keyId, workspaceId: policy.workspaceId, policySha256: policyDigest(policy),
       reviewedAt: T0.toISOString(), expiresAt: policy.expiresAt,
-      availableCreditUsd: 69, keyRemainingUsd: 68 }), { mode: 0o600 });
+      availableCreditUsd: 69, totalCreditsUsd: 69, totalUsageUsd: 0, keyRemainingUsd: 68 }), { mode: 0o600 });
     const cohort = new JevCohortStore({ home, configPath, approvalPath, ledgerPath: path.join(storeDir, "jev-cohort-ledger.json") });
     cohort.activate(T0);
     const context = ctx({ jevCohortStore: cohort,

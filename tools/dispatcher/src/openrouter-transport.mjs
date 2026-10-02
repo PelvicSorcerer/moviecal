@@ -30,15 +30,21 @@ export function buildOpenRouterRequest(body, policy) {
       || body.reasoning?.effort !== policy.effort
       || !/^[a-z0-9][a-z0-9_.:/-]{0,199}$/.test(policy.providerSlug || "")))
     || ["provider", "models", "route", "plugins", "debug"].some((field) => Object.hasOwn(body, field))
+    || (Object.hasOwn(body, "parallel_tool_calls") && typeof body.parallel_tool_calls !== "boolean")
     || !Array.isArray(policy.providers) || policy.providers.length !== 0
     || policy.zdr !== false || policy.dataCollection !== null) {
     throw new Error("OpenRouter request violates policy");
   }
   // MOV-424 approved unrestricted downstream routing. An absent provider
   // object lets Jev select compatible providers without request-level filters.
+  // OpenRouter's strict fixed-control route rejects this optional Codex
+  // parameter. The transport explicitly serializes tool calls by omitting
+  // the optional concurrency hint; tool definitions and tool results remain
+  // untouched. Non-boolean values are refused above.
+  const { parallel_tool_calls: _serialOnly, ...supported } = body;
   return policy.side === "control"
-    ? { ...body, provider: { only: [policy.providerSlug], allow_fallbacks: false, require_parameters: true } }
-    : { ...body };
+    ? { ...supported, provider: { only: [policy.providerSlug], allow_fallbacks: false, require_parameters: true } }
+    : { ...supported };
 }
 
 function contained(root, target) {

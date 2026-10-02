@@ -35,5 +35,6 @@ export function parseOpenRouterAccount(keyResponse, creditResponse) {
     || data.usage + data.limit_remaining > 69 + 1e-6
     || credit.total_usage > credit.total_credits) throw new Error("unknown or changed account allowance");
   return { keyUsageUsd: data.usage, keyRemainingUsd: data.limit_remaining,
-    availableCreditUsd: credit.total_credits - credit.total_usage };
+    availableCreditUsd: credit.total_credits - credit.total_usage,
+    totalCreditsUsd: credit.total_credits, totalUsageUsd: credit.total_usage };
 }

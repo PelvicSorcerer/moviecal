@@ -28,9 +28,11 @@ describe.skipIf(isInsideWorkerSandboxEnv())("shared fixed Responses broker bound
     fs.writeFileSync(approvalPath, JSON.stringify({ issue: "MOV-431", owner: "Adam Moore", ownerApproved: true,
       securityReviewPassed: true, accountPolicyReviewed: true, effectiveEligibilityUnrestricted: true,
       promptLoggingOff: true, zdrOff: true, dataCollectionUnrestricted: true, priorOutlayBasisReviewed: true,
+      existingCreditOnlyReviewed: true, hardKeyCapReviewed: true, dedicatedKeyExclusiveReviewed: true,
+      paymentBound: "dedicated-key-total-limit",
       keyLimitUsd: 69, allInCeilingUsd: 75, keyId: policy.keyId, workspaceId: policy.workspaceId,
       policySha256: policyDigest(policy), reviewedAt: now.toISOString(), expiresAt: later,
-      availableCreditUsd: 69, keyRemainingUsd: 68 }), { mode: 0o600 });
+      availableCreditUsd: 0.5, totalCreditsUsd: 10.5, totalUsageUsd: 10, keyRemainingUsd: 68 }), { mode: 0o600 });
     fs.writeFileSync(path.join(dir, "openrouter-jev.env"), "OPENROUTER_API_KEY=fake-openrouter-key\n", { mode: 0o600 });
     const store = new JevCohortStore({ home, configPath, approvalPath, ledgerPath });
     store.activate(now);
@@ -40,10 +42,13 @@ describe.skipIf(isInsideWorkerSandboxEnv())("shared fixed Responses broker bound
     const provider = http.createServer(async (req, res) => {
       expect(req.headers.authorization).toBe("Bearer fake-openrouter-key");
       if (req.url === "/api/v1/key") { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ data: { limit: 69, usage: 1, limit_remaining: 68 } })); return; }
-      if (req.url === "/api/v1/credits") { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ data: { total_credits: 69, total_usage: 0 } })); return; }
+      if (req.url === "/api/v1/credits") { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ data: { total_credits: 10.5, total_usage: 10 } })); return; }
       seen++;
       const chunks = []; for await (const chunk of req) chunks.push(chunk);
-      expect(JSON.parse(Buffer.concat(chunks).toString()).model).toBe("openai/fixture");
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      expect(body.model).toBe("openai/fixture");
+      expect(body).not.toHaveProperty("parallel_tool_calls");
+      expect(body.provider).toEqual({ only: ["openai"], allow_fallbacks: false, require_parameters: true });
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.end(`data: ${JSON.stringify({ type: "response.completed", response: {
         id: "invoice-1", model: "openai/fixture", reasoning: { effort: "medium" }, status: "completed",
@@ -71,7 +76,8 @@ describe.skipIf(isInsideWorkerSandboxEnv())("shared fixed Responses broker bound
       });
       const request = () => fetch(`http://127.0.0.1:${brokerPort}/v1/responses`, { method: "POST",
         headers: { authorization: "Bearer fixture-broker-token", "content-type": "application/json" },
-        body: JSON.stringify({ model: "openai/fixture", reasoning: { effort: "medium" }, input: "fake only", stream: true }) });
+        body: JSON.stringify({ model: "openai/fixture", reasoning: { effort: "medium" },
+          parallel_tool_calls: true, input: "fake only", stream: true }) });
       const first = await request(); expect(first.status).toBe(200); await first.text();
       expect(store.state()).toMatchObject({ status: "active", control: 1, spentUsd: 5.2, pending: 0 });
       expect(seen).toBe(1);

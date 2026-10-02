@@ -18,6 +18,7 @@ const MONEY = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n 
 const BALANCE = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1e9;
 const iso = (s) => typeof s === "string" && UTC.test(s) && Number.isFinite(Date.parse(s));
 const round = (n) => Math.round(n * 1e6) / 1e6;
+const floor = (n) => Math.floor(Math.max(0, n) * 1e6) / 1e6;
 
 export function policyDigest(policy) {
   return createHash("sha256").update(`moviecal-jev-cohort-policy-v1\n${JSON.stringify(policy)}`).digest("hex");
@@ -41,8 +42,9 @@ export function validateCohortPolicy(policy) {
     || policy.routed?.tier !== control.tier) return "Jev route identity or matched tier is invalid";
   if (!ID.test(policy.keyId || "") || !ID.test(policy.workspaceId || "") || policy.keyLimitUsd !== 69
     || policy.allInCeilingUsd !== 75 || !MONEY(policy.priorOutlayUsd)
-    || !MONEY(policy.baselineKeyUsageUsd) || !MONEY(policy.purchaseFeesUsd)
-    || policy.priorOutlayUsd + policy.purchaseFeesUsd > 75) return "account or prior outlay basis is invalid";
+    || !MONEY(policy.baselineKeyUsageUsd) || policy.baselineKeyUsageUsd > 69 || !MONEY(policy.purchaseFeesUsd)
+    || policy.priorOutlayUsd + policy.purchaseFeesUsd + (69 - policy.baselineKeyUsageUsd) > 75)
+    return "account or prior outlay basis cannot bound the total key liability";
   if (!policy.modelAliases || typeof policy.modelAliases !== "object" || Array.isArray(policy.modelAliases)
     || !Object.keys(policy.modelAliases).length || Object.keys(policy.modelAliases).length > 5000
     || Object.entries(policy.modelAliases).some(([alias, model]) => !MODEL_ALIAS.test(alias) || !MODEL_ALIAS.test(model))) return "reviewed model aliases missing";
@@ -57,14 +59,20 @@ export function validateCohortApproval(policy, approval, now = new Date()) {
     || approval.ownerApproved !== true || approval.securityReviewPassed !== true
     || approval.accountPolicyReviewed !== true || approval.effectiveEligibilityUnrestricted !== true
     || approval.promptLoggingOff !== true || approval.zdrOff !== true || approval.dataCollectionUnrestricted !== true
-    || approval.priorOutlayBasisReviewed !== true || approval.keyLimitUsd !== 69 || approval.allInCeilingUsd !== 75
+    || approval.priorOutlayBasisReviewed !== true || approval.existingCreditOnlyReviewed !== true
+    || approval.hardKeyCapReviewed !== true || approval.dedicatedKeyExclusiveReviewed !== true
+    || approval.paymentBound !== "dedicated-key-total-limit"
+    || approval.keyLimitUsd !== 69 || approval.allInCeilingUsd !== 75
     || approval.keyId !== policy.keyId || approval.workspaceId !== policy.workspaceId
     || approval.policySha256 !== policyDigest(policy) || !SHA.test(approval.policySha256 || "")
     || !iso(approval.reviewedAt) || !iso(approval.expiresAt)
     || Date.parse(approval.reviewedAt) > now.getTime() || Date.parse(approval.expiresAt) <= now.getTime()
     || Date.parse(approval.expiresAt) > Date.parse(policy.expiresAt)
     || !BALANCE(approval.availableCreditUsd) || !MONEY(approval.keyRemainingUsd)
-    || approval.availableCreditUsd <= 0 || approval.keyRemainingUsd <= 0 || approval.keyRemainingUsd > 69) {
+    || !BALANCE(approval.totalCreditsUsd) || !BALANCE(approval.totalUsageUsd)
+    || Math.abs(approval.totalCreditsUsd - approval.totalUsageUsd - approval.availableCreditUsd) > 1e-6
+    || approval.availableCreditUsd <= 0 || approval.keyRemainingUsd <= 0
+    || approval.keyRemainingUsd > 69 - policy.baselineKeyUsageUsd) {
     return "owner/security account and exact cohort approval missing, expired or changed";
   }
   return null;
@@ -194,8 +202,10 @@ export class JevCohortStore {
     const spent = round(policy.priorOutlayUsd + policy.purchaseFeesUsd + fees.reduce((n, f) => n + f.amountUsd, 0) + Math.max(invoiced, observed));
     const routed = Object.values(ledger.assignments || {}).filter((r) => r.side === "routed").length;
     const control = Object.values(ledger.assignments || {}).filter((r) => r.side === "control").length;
-    const base = { trialId: policy.trialId, routed, control, spentUsd: spent, remainingUsd: round(Math.max(0, 75 - spent)),
-      keyRemainingUsd: ledger.keyRemainingUsd ?? approval.keyRemainingUsd,
+    const effectiveKeyUsage = Math.max(ledger.observedKeyUsageUsd ?? policy.baselineKeyUsageUsd,
+      policy.baselineKeyUsageUsd + invoiced);
+    const base = { trialId: policy.trialId, routed, control, spentUsd: spent, remainingUsd: floor(75 - spent),
+      keyRemainingUsd: floor(Math.min(ledger.keyRemainingUsd ?? approval.keyRemainingUsd, 69 - effectiveKeyUsage)),
       pending: rows.filter((r) => r.status === "pending").length, expiresAt: policy.expiresAt,
       policySha256: policyDigest(policy), stoppedReason: ledger.stoppedReason || null };
     if (ledger.stoppedReason) return { ...base, status: "stopped" };
@@ -273,28 +283,44 @@ export class JevCohortStore {
 
   recordFee({ id, amountUsd, description = "fee" }) {
     if (!ID.test(id || "") || !MONEY(amountUsd) || !ID.test(description)) throw new Error("invalid fee evidence");
+    let added = false;
     this.updateLedger((data) => {
       data.fees ||= [];
       const existing = data.fees.find((f) => f.id === id);
       if (existing && (existing.amountUsd !== amountUsd || existing.description !== description)) throw new Error("fee identity changed");
-      if (!existing) data.fees.push({ id, amountUsd, description });
+      if (!existing) { data.fees.push({ id, amountUsd, description }); added = true; }
     });
+    if (added) this.stop("new-fee-requires-owner-reconciliation");
     return this.state();
   }
 
-  // Reserve the *entire remaining key allowance*, not a guessed token price.
-  // One unresolved request or crash blocks all later paid requests. The key's
-  // independently enforced $69 TOTAL cap bounds that request's maximum cash
-  // exposure; an invoice releases the reservation after durable accounting.
+  // The independently enforced TOTAL key cap bounds one in-flight request.
+  // Invoices reduce the remaining liability even when key/account metadata
+  // lags. Available credit is checked for positive funds, never used as the
+  // monetary cap; no price estimate or token ceiling is a payment bound.
   reserve(requestId, issue, account, now = new Date()) {
     if (!ID.test(requestId) || !ISSUE.test(issue)) throw new Error("invalid request identity");
     const state = this.state(now);
     if (state.status !== "active" || !this.get(issue)) throw new Error(`cohort request stopped: ${state.status}`);
+    const approval = readProtected(this.approvalPath, "cohort approval");
+    const ledger = this.ledger.load();
+    const invoiced = Object.values(ledger.requests || {}).filter((r) => r.status === "complete")
+      .reduce((n, r) => n + r.amountUsd, 0);
+    const observed = Math.max(0, (ledger.observedKeyUsageUsd ?? this.policy(now).baselineKeyUsageUsd)
+      - this.policy(now).baselineKeyUsageUsd);
+    const creditLag = Math.max(0, invoiced - (account.totalUsageUsd - approval.totalUsageUsd));
+    const effectiveCredit = account.availableCreditUsd - creditLag;
+    const reserveUsd = floor(Math.min(account.keyRemainingUsd,
+      69 - Math.max(account.keyUsageUsd, this.policy(now).baselineKeyUsageUsd + invoiced)));
     if (!MONEY(account.keyUsageUsd) || !MONEY(account.keyRemainingUsd) || !BALANCE(account.availableCreditUsd)
-      || account.keyRemainingUsd <= 0 || account.availableCreditUsd <= 0
+      || !BALANCE(account.totalCreditsUsd) || !BALANCE(account.totalUsageUsd)
+      || Math.abs(account.totalCreditsUsd - approval.totalCreditsUsd) > 1e-6
+      || account.totalUsageUsd < approval.totalUsageUsd
+      || account.totalUsageUsd > approval.totalUsageUsd + Math.max(invoiced, observed, account.keyUsageUsd - this.policy(now).baselineKeyUsageUsd) + 1e-6
+      || reserveUsd <= 0 || effectiveCredit <= 0
       || account.keyUsageUsd < this.policy(now).baselineKeyUsageUsd
       || account.keyRemainingUsd > 69 - account.keyUsageUsd
-      || account.keyRemainingUsd > state.remainingUsd || account.keyRemainingUsd > account.availableCreditUsd) {
+      || reserveUsd > state.remainingUsd) {
       this.stop("unknown-or-excess-account-exposure", now);
       throw new Error("unknown or excessive account exposure");
     }
@@ -302,11 +328,11 @@ export class JevCohortStore {
       if (data.stoppedReason || Object.values(data.requests || {}).some((r) => r.status === "pending"))
         throw new Error("cohort stopped or another request is unresolved");
       const fresh = this.state(now);
-      if (fresh.status !== "active" || account.keyRemainingUsd > fresh.remainingUsd)
+      if (fresh.status !== "active" || reserveUsd > fresh.remainingUsd)
         throw new Error("cohort budget changed during request reservation");
       data.requests ||= {};
       if (data.requests[requestId]) throw new Error("duplicate paid request identity");
-      data.requests[requestId] = { requestId, issue, status: "pending", reservedUsd: account.keyRemainingUsd, startedAt: now.toISOString() };
+      data.requests[requestId] = { requestId, issue, status: "pending", reservedUsd: reserveUsd, startedAt: now.toISOString() };
       data.observedKeyUsageUsd = Math.max(data.observedKeyUsageUsd || 0, account.keyUsageUsd);
       data.keyRemainingUsd = account.keyRemainingUsd;
     });
@@ -319,17 +345,22 @@ export class JevCohortStore {
       this.stop("missing-request-invoice-or-model", now);
       throw new Error("missing request invoice or served identity");
     }
-    this.updateLedger((data) => {
-      const row = data.requests?.[requestId];
-      if (row?.status === "complete" && row.invoiceId === invoiceId && row.amountUsd === amountUsd
-        && row.model === model && row.provider === provider && row.effort === effort) return;
-      if (!row || row.status !== "pending") throw new Error("request reservation missing");
-      if (amountUsd > row.reservedUsd) throw new Error("invoice exceeds reserved key allowance");
-      if (Object.values(data.requests).some((r) => r.invoiceId === invoiceId)) throw new Error("duplicate provider invoice");
-      Object.assign(row, { status: "complete", invoiceId, amountUsd, model, provider, effort, completedAt: now.toISOString() });
-      data.observedKeyUsageUsd = Math.max(data.observedKeyUsageUsd || 0, account.keyUsageUsd);
-      data.keyRemainingUsd = account.keyRemainingUsd;
-    });
+    try {
+      this.updateLedger((data) => {
+        const row = data.requests?.[requestId];
+        if (row?.status === "complete" && row.invoiceId === invoiceId && row.amountUsd === amountUsd
+          && row.model === model && row.provider === provider && row.effort === effort) return;
+        if (!row || row.status !== "pending") throw new Error("request reservation missing");
+        if (amountUsd > row.reservedUsd) throw new Error("invoice exceeds reserved key allowance");
+        if (Object.values(data.requests).some((r) => r.invoiceId === invoiceId)) throw new Error("duplicate provider invoice");
+        Object.assign(row, { status: "complete", invoiceId, amountUsd, model, provider, effort, completedAt: now.toISOString() });
+        data.observedKeyUsageUsd = Math.max(data.observedKeyUsageUsd || 0, account.keyUsageUsd);
+        data.keyRemainingUsd = account.keyRemainingUsd;
+      });
+    } catch (error) {
+      this.stop("invoice-reconciliation-failed", now);
+      throw error;
+    }
     if (this.state(now).spentUsd > 75) this.stop("all-in-ceiling", now);
   }
 }
