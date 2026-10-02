@@ -23,7 +23,7 @@ explicit UTC `activatedAt` and `expiresAt` no more than 14 days apart, and
 objects. IDs cannot repeat. Routed issues need `router:jev`; both sides must
 resolve to `worker:codex`. Excluded labels (`human-only`, high risk, auth,
 security, database, deployment, migrations and secrets) refuse admission.
-The `control` object pins a concrete Responses `model`, served `provider`,
+The `control` object pins `worker: "codex"`, a concrete Responses `model`, served `provider`,
 `effort`, and dispatcher model `tier`; `routed` pins `typesafe/jev-router`,
 Codex, and the same matched `tier`. `modelAliases` is an identity-only snapshot reviewed for the selected
 models. It maps observed aliases to canonical model IDs, never prices or
