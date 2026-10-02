@@ -77,6 +77,7 @@ export function prepareCodexContainment({ invocation, cwd, logDir, repositoryPat
   const version = verifyVersion(binary);
   const openRouter = openRouterTransport && validateOpenRouterTransport(openRouterTransport,
     { cwd, home, fixture: openRouterFixture, approvedPolicyHashes: approvedOpenRouterPolicyHashes });
+  const cohortPaths = openRouter?.cohort ? [openRouter.cohort.storeRoot] : [];
   if (openRouter && invocation.args.some((arg) => /^model_providers?\./.test(arg) || /^model_provider=/.test(arg))) {
     throw new Error("OpenRouter transport refuses caller provider overrides");
   }
@@ -98,11 +99,11 @@ export function prepareCodexContainment({ invocation, cwd, logDir, repositoryPat
     const harnessProfile = path.join(logDir, "codex-harness.sb");
     fs.writeFileSync(executorProfile, buildWorkerSandboxProfile({ ...context,
       writablePaths: [cwd, executorHome, executorScratch], networkRole: "executor",
-      unreadablePaths: [harnessHome, harnessScratch, auth, authTarget, ...(openRouter ? [openRouter.credentialPath] : [])],
+      unreadablePaths: [harnessHome, harnessScratch, auth, authTarget, ...cohortPaths, ...(openRouter ? [openRouter.credentialPath] : [])],
     }), { mode: 0o600 });
     fs.writeFileSync(harnessProfile, buildWorkerSandboxProfile({ ...context,
       writablePaths: [harnessHome, harnessScratch], executablePaths: [binary, codeModeHost], networkRole: "harness",
-      providerBroker: Boolean(openRouter), unreadablePaths: [executorHome, executorScratch, ...(openRouter ? [openRouter.credentialPath, auth, authTarget] : [])],
+      providerBroker: Boolean(openRouter), unreadablePaths: [executorHome, executorScratch, ...cohortPaths, ...(openRouter ? [openRouter.credentialPath, auth, authTarget] : [])],
       immutablePaths: [path.join(harnessHome, "environments.toml"), path.join(harnessHome, "auth.json")],
     }), { mode: 0o600 });
 

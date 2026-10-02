@@ -13,7 +13,6 @@
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
 import { requiredSecretPresent } from "./openrouter-transport.mjs";
 import { writeRoutingEvidence } from "./routing-evidence.mjs";
 import {
@@ -158,8 +157,7 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     // a worker/model/provider itself -- see jev-trial.mjs.
     jevTrialStore: jevTrialStore || new JevArmStore({ configPath: jevTrialConfigPath(), ledgerPath: jevTrialAssignmentsPath() }),
     jevCohortStore: cohortStore,
-    resolveCohortTransportFn: (assignment, options = {}) => resolveCohortTransport(cohortStore, assignment,
-      { ...options, home: path.dirname(path.dirname(path.dirname(cohortStore.configPath))) }),
+    resolveCohortTransportFn: (assignment, options = {}) => resolveCohortTransport(cohortStore, assignment, options),
     captureWorkerUsageFn: (logDir, context) => captureWorkerUsage(logDir, { ...context, origin: DISPATCHER_ORIGIN }, { store: usageStore }),
     writeRoutingEvidenceFn: writeRoutingEvidence,
     // MOV-179: advisory-only diagnosis for the residual "unrecognized

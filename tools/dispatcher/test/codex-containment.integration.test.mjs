@@ -61,17 +61,20 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
     fs.writeFileSync(path.join(root, "native-collision.json"), JSON.stringify({ direct: { exitCode: direct.status, stdout: direct.stdout }, nested: { exitCode: nested.status, stderr: nested.stderr } }));
   });
 
-  async function fixture(mode, commands, name, modifyContainment = (value) => value, { broker = false, failure = null, proofDebug = false, control = false } = {}) {
+  async function fixture(mode, commands, name, modifyContainment = (value) => value, { broker = false, failure = null, proofDebug = false, control = false, production = false } = {}) {
     let requests = 0;
-    const unixPath = path.join(root, `${name}.sock`);
+    let cohortStore = null;
+    const unixPath = path.join(root, `${name.slice(-12)}.sock`);
     const unixServer = broker ? net.createServer() : null;
-    if (unixServer) await new Promise((resolve) => unixServer.listen(unixPath, resolve));
+    if (unixServer) await new Promise((resolve, reject) => {
+      unixServer.once("error", reject); unixServer.listen(unixPath, resolve);
+    });
     const provider = http.createServer(async (req, res) => {
-      if (control && req.url === "/api/v1/key") {
+      if ((control || production) && req.url === "/api/v1/key") {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ data: { limit: 69, usage: 1, limit_remaining: 68 } })); return;
       }
-      if (control && req.url === "/api/v1/credits") {
+      if ((control || production) && req.url === "/api/v1/credits") {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ data: { total_credits: 69, total_usage: 0 } })); return;
       }
@@ -98,7 +101,7 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
         ...(broker ? { model: control ? "openai/fixture" : "google/fixture", reasoning: { effort: "low" },
           openrouter_metadata: { attempt: 1, pipeline: control ? [] : [{ name: "jev-router", data: { resolved_models: ["google/fixture"], candidates: [{ model: "google/fixture", effort: "low" }] } }], endpoints: { available: [{ selected: true, provider: control ? "OpenAI" : "Google", model: control ? "openai/fixture-20260929" : "google/fixture-20260929" }] } } } : {}),
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2,
-          ...(broker ? { cost: 0.001, input_tokens_details: { cached_tokens: 0 } } : {}) } } });
+          ...(broker ? { cost: failure === "excess-invoice" ? 70 : 0.001, input_tokens_details: { cached_tokens: 0 } } : {}) } } });
       if (failure === "missing-metadata") delete events.at(-1).response.openrouter_metadata;
       if (proofDebug) {
         const response = events.at(-1).response;
@@ -119,6 +122,11 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
       for (const event of events) res.write(`data: ${JSON.stringify(event)}\n\n`);
       if (proofDebug) await new Promise((resolve) => setTimeout(resolve, 100));
       res.end();
+      if (failure === "stop-after-first" && requests === 1) cohortStore.stop("fixture-operator-stop");
+      if (failure === "approval-after-first" && requests === 1) {
+        const approval = JSON.parse(fs.readFileSync(cohortStore.approvalPath, "utf8"));
+        fs.writeFileSync(cohortStore.approvalPath, JSON.stringify({ ...approval, ownerApproved: false }));
+      }
       fs.appendFileSync(path.join(root, `${name}-provider.jsonl`), JSON.stringify({ request: requests,
         authenticated: req.headers.authorization === "Bearer fake-openrouter-key", model: parsed.model,
         providerPolicy: parsed.provider, debugRequested: parsed.debug?.echo_upstream_body === true,
@@ -137,18 +145,21 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
         zdr: false, dataCollection: null, promptLogging: false, keyId: "fake-key-id", workspaceId: "fake-workspace",
         keyLimitUsd: 69, spendCeilingUsd: 75, ownerReviewed: true } } : null;
     let jev = broker ? { armId: "jev-hosted", policyHash: "a".repeat(64) } : null;
-    if (control) {
-      const storeDir = path.join(home, ".config/moviecal");
+    if (control || production) {
+      // A relocated dispatcher store must stay unreadable to commands, while
+      // the dedicated credential still belongs to the actual fake home.
+      const storeDir = path.join(root, `external-state-${name}`);
+      fs.mkdirSync(storeDir, { mode: 0o700 });
       const configPath = path.join(storeDir, `jev-cohort-${name}.json`);
       const approvalPath = path.join(storeDir, `jev-cohort-${name}-approval.json`);
       const ledgerPath = path.join(storeDir, `jev-cohort-${name}-ledger.json`);
       const now = new Date(), expiresAt = new Date(now.getTime() + 86400000).toISOString();
       const policy = { trialId: name, route: "codex-openrouter-responses", activatedAt: now.toISOString(), expiresAt,
         pairs: [{ routed: "MOV-10", control: "MOV-11" }], routed: { model: "typesafe/jev-router", worker: "codex", tier: "cheap" },
-        control: { model: "openai/fixture", worker: "codex", provider: "OpenAI", effort: "low", tier: "cheap" },
+        control: { model: "openai/fixture", worker: "codex", provider: "OpenAI", providerSlug: "openai", effort: "low", tier: "cheap" },
         keyId: "fake-key-id", workspaceId: "fake-workspace", keyLimitUsd: 69, allInCeilingUsd: 75,
         priorOutlayUsd: 0, baselineKeyUsageUsd: 1, purchaseFeesUsd: 0,
-        modelAliases: { "openai/fixture": "openai/fixture-20260929" } };
+        modelAliases: { "openai/fixture": "openai/fixture-20260929", "google/fixture": "google/fixture-20260929" } };
       fs.writeFileSync(configPath, JSON.stringify({ enabled: false, policy }), { mode: 0o600 });
       fs.writeFileSync(approvalPath, JSON.stringify({ issue: "MOV-431", owner: "Adam Moore", ownerApproved: true,
         securityReviewPassed: true, accountPolicyReviewed: true, effectiveEligibilityUnrestricted: true,
@@ -156,13 +167,14 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
         keyLimitUsd: 69, allInCeilingUsd: 75, keyId: policy.keyId, workspaceId: policy.workspaceId,
         policySha256: policyDigest(policy), reviewedAt: now.toISOString(), expiresAt,
         availableCreditUsd: 69, keyRemainingUsd: 68 }), { mode: 0o600 });
-      const store = new JevCohortStore({ home, configPath, approvalPath, ledgerPath });
+      const store = new JevCohortStore({ home, storeRoot: storeDir, configPath, approvalPath, ledgerPath });
+      cohortStore = store;
       store.activate(now);
-      const assignment = store.admit({ identifier: "MOV-11", labels: ["worker:codex"] },
+      const assignment = store.admit({ identifier: control ? "MOV-11" : "MOV-10", labels: control ? ["worker:codex"] : ["worker:codex", "router:jev"] },
         { worker: "codex", tier: "cheap", effort: "low", now }).record;
       providerTransport = resolveCohortTransport(store, assignment, { home });
       providerTransport.upstream = `http://127.0.0.1:${provider.address().port}/v1/responses`;
-      jev = { armId: "fixed-control", policyHash: assignment.policyHash, side: "control" };
+      jev = { armId: assignment.armId, policyHash: assignment.policyHash, side: assignment.side };
     }
     try {
       const result = await spawnWorker({ invocation, cwd: own, logDir, brief: "Run the bounded disposable fixture only.",
@@ -175,7 +187,8 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
           openRouterFixture: broker, openRouterModelAliases: { "google/fixture": "google/fixture-20260929", "openai/fixture": "openai/fixture-20260929" },
           openRouterProofDebug: proofDebug, providerRequestLimit: proofDebug ? 6 : null })),
       });
-      return { result, transcript: fs.readFileSync(path.join(logDir, "stdout.log"), "utf8"), logDir, requests };
+      return { result, transcript: fs.readFileSync(path.join(logDir, "stdout.log"), "utf8"), logDir, requests,
+        cohortEvidence: cohortStore?.export() };
     } finally {
       await new Promise((resolve) => provider.close(resolve));
       if (unixServer) await new Promise((resolve) => unixServer.close(resolve));
@@ -272,7 +285,36 @@ Promise.all([...tcp,unix,udp]).then(()=>console.log('broker boundaries denied'))
       const rows = fs.readFileSync(path.join(logDir, "routing-decisions.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
       expect(rows.every((row) => row.routerArm === "fixed-control" && row.resolvedModel === "openai/fixture"
         && row.provider === "OpenAI" && row.resolvedEffort === "low" && row.billedUsd === 0.001 && row.error === null)).toBe(true);
+      const providerRows = fs.readFileSync(path.join(root, "fixed-control-provider.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+      expect(providerRows.every((row) => JSON.stringify(row.providerPolicy)
+        === JSON.stringify({ only: ["openai"], allow_fallbacks: false, require_parameters: true }))).toBe(true);
     } finally { fs.writeFileSync(path.join(own, "verify.cjs"), originalVerifier); }
+  }, 30000);
+
+  it.each(["implementation", "repair"])("uses the production Jev cohort and denies its relocated state in %s", async (mode) => {
+    const name = `production-cohort-${mode}`;
+    const storePath = path.join(root, `external-state-${name}`, `jev-cohort-${name}.json`);
+    const probe = `node -e 'try{require("fs").readFileSync(${JSON.stringify(storePath)});process.exit(1)}catch(e){if(!["EPERM","EACCES"].includes(e.code))throw e;console.log("cohort state denied")}'`;
+    const { result, transcript, requests, cohortEvidence } = await fixture(mode,
+      ["cat AGENTS.md", probe,
+        ...(mode === "implementation" ? [{ patch: `*** Begin Patch\n*** Add File: ${own}/src/cohort-proof.txt\n+cohort proof\n*** End Patch` }, "npm run verify"] : [])],
+      name, (value) => value, { broker: true, production: true });
+    expect(result.exitCode, transcript).toBe(0);
+    expect(transcript).toContain("cohort state denied");
+    expect(cohortEvidence.requests).toHaveLength(requests);
+    expect(cohortEvidence.requests.every((row) => row.status === "complete" && row.model === "google/fixture")).toBe(true);
+  }, 30000);
+
+  it.each(["stop-after-first", "approval-after-first", "excess-invoice"])("stops further cohort payment and fails visibly on %s", async (failure) => {
+    const { result, transcript, requests, cohortEvidence } = await fixture("implementation",
+      ["cat AGENTS.md", "echo should-not-run"], `cohort-${failure}`, (value) => value,
+      { broker: true, control: true, failure });
+    expect(result.exitCode, transcript).not.toBe(0);
+    expect(requests).toBe(1);
+    expect(transcript).not.toContain('"aggregated_output":"should-not-run');
+    expect(cohortEvidence.stoppedReason).toBeTruthy();
+    if (failure === "excess-invoice") expect(cohortEvidence.requests[0].status).toBe("pending");
+    else expect(cohortEvidence.requests[0]).toMatchObject({ status: "complete", amountUsd: 0.001 });
   }, 30000);
 
   it("starts no routed client when the dedicated credential is invalid", async () => {

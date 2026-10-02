@@ -116,7 +116,7 @@ describe("bounded Jev router arm admission through the run loop (MOV-427)", () =
       activatedAt: T0.toISOString(), expiresAt: iso(DAY),
       pairs: [{ routed: "MOV-1", control: "MOV-2" }],
       routed: { model: "typesafe/jev-router", worker: "codex", tier: "default" },
-      control: { model: "openai/fixture", worker: "codex", provider: "OpenAI", effort: "medium", tier: "default" },
+      control: { model: "openai/fixture", worker: "codex", provider: "OpenAI", providerSlug: "openai", effort: "medium", tier: "default" },
       keyId: "fixture_key", workspaceId: "fixture_workspace", keyLimitUsd: 69,
       allInCeilingUsd: 75, priorOutlayUsd: 5, baselineKeyUsageUsd: 1, purchaseFeesUsd: 0,
       modelAliases: { "openai/fixture": "openai/fixture" } };
