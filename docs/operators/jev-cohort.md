@@ -112,7 +112,11 @@ meter counts routed and control invoices across implementation, resume,
 continuation, and repair, plus later fees and the approved prior outlay. It
 uses the larger of invoiced charges and the key-usage delta since the reviewed
 baseline to avoid double counting while catching charges absent from local
-rows. Each request durably reserves the remaining liability under the hard
+rows. A key-usage increase without matching local invoices refuses payment;
+account usage may lag those invoices but cannot authorize unexplained spend.
+An increased allowance above the reviewed snapshot also refuses payment.
+Liabilities round up to microdollars and remaining capacity rounds down.
+Each request durably reserves the remaining liability under the hard
 $69 key cap, reduced by actual invoices even when key metadata lags. The
 reservation must fit the remaining `$75` all-in ceiling. Available credit
 only needs to be positive after accounting for invoices absent from delayed
@@ -144,7 +148,9 @@ The contained client sets `features.multi_agent=false`. Both arms retain the
 same guarded executor and read/edit/shell tools. The Jev model uses the
 explicit shell `apply_patch` helper through `exec_command`; check helper
 availability in the disposable fixture. Provider failure evidence retains
-only bounded HTTP status and safe error code, never raw body or credentials.
+only bounded HTTP status and an alphanumeric/underscore/hyphen error code of
+at most 48 characters, never raw body or credentials. Oversized, malformed or
+unsafe codes leave only the HTTP status.
 
 Before MOV-431 ready promotion, review the exact cohort/approval files,
 remaining key allowance and fee basis, fake routed and fixed Responses tool

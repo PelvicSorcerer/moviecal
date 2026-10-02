@@ -104,8 +104,8 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
         : { type: "custom_tool_call", name: command.code ? "exec" : "apply_patch", call_id: `call-${requests}`, input: command.code || command.patch } }]
         : [{ type: "response.output_item.done", item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Fixture complete." }] } }];
       events.push({ type: "response.completed", response: { id: `response-${requests}`, output: [],
-        ...(broker ? { model: control ? "openai/fixture" : "google/fixture", reasoning: { effort: "low" },
-          openrouter_metadata: { attempt: 1, pipeline: control ? [] : [{ name: "jev-router", data: { resolved_models: ["google/fixture"], candidates: [{ model: "google/fixture", effort: "low" }] } }], endpoints: { available: [{ selected: true, provider: control ? "OpenAI" : "Google", model: control ? "openai/fixture-20260929" : "google/fixture-20260929" }] } } } : {}),
+        ...(broker ? { model: control ? "openai/gpt-6.1-sol" : "google/fixture", reasoning: { effort: control ? "medium" : "low" },
+          openrouter_metadata: { attempt: 1, pipeline: control ? [] : [{ name: "jev-router", data: { resolved_models: ["google/fixture"], candidates: [{ model: "google/fixture", effort: "low" }] } }], endpoints: { available: [{ selected: true, provider: control ? "OpenAI" : "Google", model: control ? "openai/gpt-6.1-sol-20260929" : "google/fixture-20260929" }] } } } : {}),
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2,
           ...(broker ? { cost: failure === "excess-invoice" ? 70 : 0.001, input_tokens_details: { cached_tokens: 0 } } : {}) } } });
       if (failure === "missing-metadata") delete events.at(-1).response.openrouter_metadata;
@@ -141,7 +141,7 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
         toolOutputs: parsed.input?.filter((item) => ["function_call_output", "custom_tool_call_output"].includes(item.type)) }) + "\n");
     });
     await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
-    const invocation = workerInvocation("codex", "cheap");
+    const invocation = workerInvocation("codex", control ? "default" : "cheap");
     invocation.args.push("--skip-git-repo-check");
     if (!broker) invocation.args.push("-c", 'model_provider="fixture"', "-c",
       `model_providers.fixture={name="fixture",base_url="http://127.0.0.1:${provider.address().port}/v1",wire_api="responses",requires_openai_auth=false,supports_websockets=false}`);
@@ -163,11 +163,11 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
       const ledgerPath = path.join(storeDir, `jev-cohort-${name}-ledger.json`);
       const now = new Date(), expiresAt = new Date(now.getTime() + 86400000).toISOString();
       const policy = { trialId: name, route: "codex-openrouter-responses", activatedAt: now.toISOString(), expiresAt,
-        pairs: [{ routed: "MOV-10", control: "MOV-11" }], routed: { model: "typesafe/jev-router", worker: "codex", tier: "cheap" },
-        control: { model: "openai/fixture", worker: "codex", provider: "OpenAI", providerSlug: "openai", effort: "low", tier: "cheap" },
+        pairs: [{ routed: "MOV-10", control: "MOV-11" }], routed: { model: "typesafe/jev-router", worker: "codex", tier: control ? "default" : "cheap" },
+        control: { model: "openai/gpt-6.1-sol", worker: "codex", provider: "OpenAI", providerSlug: "openai", effort: "medium", tier: control ? "default" : "cheap" },
         keyId: "fake-key-id", workspaceId: "fake-workspace", keyLimitUsd: 69, allInCeilingUsd: 75,
         priorOutlayUsd: 0, baselineKeyUsageUsd: 1, purchaseFeesUsd: 0,
-        modelAliases: { "openai/fixture": "openai/fixture-20260929", "google/fixture": "google/fixture-20260929" } };
+        modelAliases: { "openai/gpt-6.1-sol": "openai/gpt-6.1-sol-20260929", "google/fixture": "google/fixture-20260929" } };
       fs.writeFileSync(configPath, JSON.stringify({ enabled: false, policy }), { mode: 0o600 });
       fs.writeFileSync(approvalPath, JSON.stringify({ issue: "MOV-431", owner: "Adam Moore", ownerApproved: true,
         securityReviewPassed: true, accountPolicyReviewed: true, effectiveEligibilityUnrestricted: true,
@@ -181,7 +181,7 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
       cohortStore = store;
       store.activate(now);
       const assignment = store.admit({ identifier: control ? "MOV-11" : "MOV-10", labels: control ? ["worker:codex"] : ["worker:codex", "router:jev"] },
-        { worker: "codex", tier: "cheap", effort: "low", now }).record;
+        { worker: "codex", tier: control ? "default" : "cheap", effort: control ? "medium" : "low", now }).record;
       providerTransport = resolveCohortTransport(store, assignment, { home });
       providerTransport.upstream = `http://127.0.0.1:${provider.address().port}/v1/responses`;
       jev = { armId: assignment.armId, policyHash: assignment.policyHash, side: assignment.side };
@@ -194,7 +194,8 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
         // Native installation, profiles, supervisor and process launch are real.
         prepareCodexContainmentFn: (args) => modifyContainment(prepareCodexContainment({ ...args,
           sourceEnvironment: { ...args.sourceEnvironment, HOME: home, CODEX_HOME: path.join(home, ".codex") },
-          openRouterFixture: broker, openRouterModelAliases: { "google/fixture": "google/fixture-20260929", "openai/fixture": "openai/fixture-20260929" },
+          openRouterFixture: broker, openRouterModelAliases: { "google/fixture": "google/fixture-20260929", "openai/fixture": "openai/fixture-20260929",
+            "openai/gpt-6.1-sol": "openai/gpt-6.1-sol-20260929" },
           openRouterProofDebug: proofDebug, providerRequestLimit: broker ? 6 : null })),
       });
       return { result, transcript: fs.readFileSync(path.join(logDir, "stdout.log"), "utf8"), logDir, requests,
@@ -286,19 +287,19 @@ Promise.all([...tcp,unix,udp]).then(()=>console.log('broker boundaries denied'))
     fs.writeFileSync(path.join(own, "verify.cjs"), PROOF_VERIFIER);
     try {
       const { result, transcript, logDir, requests } = await fixture("implementation",
-        ["cat answer.txt", { patch: `*** Begin Patch\n*** Update File: ${own}/answer.txt\n@@\n-before\n+after\n*** End Patch` }, "npm run verify"],
+        ["command -v apply_patch", "cat answer.txt", { patch: `*** Begin Patch\n*** Update File: ${own}/answer.txt\n@@\n-before\n+after\n*** End Patch` }, "npm run verify"],
         "fixed-control", (value) => value, { broker: true, control: true });
       expect(result.exitCode, transcript).toBe(0);
-      expect(requests).toBe(4);
+      expect(requests).toBe(5);
       expect(captureVerificationEvidence(logDir).status).toBe("passed");
       expect(fs.readFileSync(path.join(own, "answer.txt"), "utf8")).toBe("after\n");
       const rows = fs.readFileSync(path.join(logDir, "routing-decisions.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
-      expect(rows.every((row) => row.routerArm === "fixed-control" && row.resolvedModel === "openai/fixture"
-        && row.provider === "OpenAI" && row.resolvedEffort === "low" && row.billedUsd === 0.001 && row.error === null)).toBe(true);
+      expect(rows.every((row) => row.routerArm === "fixed-control" && row.resolvedModel === "openai/gpt-6.1-sol"
+        && row.provider === "OpenAI" && row.resolvedEffort === "medium" && row.billedUsd === 0.001 && row.error === null)).toBe(true);
       const providerRows = fs.readFileSync(path.join(root, "fixed-control-provider.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
       expect(providerRows.every((row) => JSON.stringify(row.providerPolicy)
         === JSON.stringify({ only: ["openai"], allow_fallbacks: false, require_parameters: true }))).toBe(true);
-      expect(providerRows.every((row) => !row.parallelPresent && row.requestedEffort === "low"
+      expect(providerRows.every((row) => !row.parallelPresent && row.requestedEffort === "medium"
         && row.tools?.includes("exec_command"))).toBe(true);
       const launch = JSON.parse(fs.readFileSync(path.join(logDir, "codex-launch.json"), "utf8"));
       expect(launch.args).toContain("features.multi_agent=false");

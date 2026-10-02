@@ -64,6 +64,27 @@ describe("reviewed production Jev cohort", () => {
     expect(validateCohortApproval(p, { ...approval(p), hardKeyCapReviewed: false }, NOW)).toMatch(/approval/);
   });
 
+  it.each([false, undefined])("refuses activation without a hard in-flight key cap (%s)", (value) => {
+    const reviewed = approval(p);
+    if (value === undefined) delete reviewed.hardKeyCapReviewed;
+    else reviewed.hardKeyCapReviewed = value;
+    save("jev-cohort-approval.json", reviewed);
+    expect(validateCohortApproval(p, reviewed, NOW)).toMatch(/approval/);
+    expect(() => store.activate(NOW)).toThrow(/approval/);
+    expect(store.state(NOW).status).toBe("disabled");
+  });
+
+  it("bounds reviewed remaining allowance independently of available credit", () => {
+    p.priorOutlayUsd = 6.5; // Exactly $75 including fees and all $68 unused allowance.
+    const reviewed = { ...approval(p), availableCreditUsd: 0.5, totalCreditsUsd: 0.5 };
+    expect(validateCohortApproval(p, reviewed, NOW)).toBeNull();
+    expect(validateCohortApproval(p, { ...reviewed, keyRemainingUsd: 68.000001 }, NOW)).toMatch(/approval/);
+    expect(validateCohortPolicy({ ...p, priorOutlayUsd: 6.500001 })).toMatch(/key liability/);
+    save("jev-cohort.json", { enabled: false, policy: p });
+    save("jev-cohort-approval.json", { ...reviewed, keyRemainingUsd: 69 });
+    expect(() => store.activate(NOW)).toThrow(/approval/);
+  });
+
   it("admits only exact eligible Codex issues and preserves both side caps and pins", () => {
     store.activate(NOW);
     expect(store.admit(issue("MOV-14"), { worker: "codex", tier: "default", effort: "medium", now: NOW }).admitted).toBe(false);
@@ -196,6 +217,29 @@ describe("reviewed production Jev cohort", () => {
     expect(() => restarted.reserve("request-3", "MOV-10", funded, NOW)).toThrow();
   });
 
+  it("refuses fresh payment when delayed invoices consume the last existing credit", () => {
+    const reviewed = { ...approval(p), availableCreditUsd: 0.2, totalCreditsUsd: 10.2, totalUsageUsd: 10 };
+    save("jev-cohort-approval.json", reviewed);
+    store.activate(NOW);
+    store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+    const funded = { ...account, availableCreditUsd: 0.2, totalCreditsUsd: 10.2, totalUsageUsd: 10 };
+    store.reserve("request-1", "MOV-10", funded, NOW);
+    store.finish("request-1", { invoiceId: "invoice-1", amountUsd: 0.2, model: "openai/fixture",
+      provider: "OpenAI", effort: "medium", account: funded }, NOW);
+    expect(() => store.reserve("request-2", "MOV-10", funded, NOW)).toThrow(/exposure/);
+    expect(store.export().requests).toHaveLength(1);
+  });
+
+  it("retains unresolved payment when the provider invoice is missing", () => {
+    store.activate(NOW);
+    store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+    store.reserve("request-1", "MOV-10", account, NOW);
+    expect(() => store.finish("request-1", { amountUsd: 0.2, model: "openai/fixture",
+      provider: "OpenAI", effort: "medium", account }, NOW)).toThrow(/invoice/);
+    expect(store.export()).toMatchObject({ stoppedReason: "missing-request-invoice-or-model",
+      requests: [{ status: "pending", reservedUsd: 68 }] });
+  });
+
   it("stops on an unreviewed top-up or unexplained account charge", () => {
     store.activate(NOW);
     store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
@@ -210,6 +254,33 @@ describe("reviewed production Jev cohort", () => {
     expect(() => store.reserve("request-1", "MOV-10", { ...account,
       totalUsageUsd: 0.1, availableCreditUsd: 68.9 }, NOW)).toThrow(/exposure/);
     expect(store.export().stoppedReason).toBe("unknown-or-excess-account-exposure");
+  });
+
+  it("refuses an increase to the reviewed remaining key allowance", () => {
+    save("jev-cohort-approval.json", { ...approval(p), keyRemainingUsd: 67 });
+    store.activate(NOW);
+    store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+    expect(() => store.reserve("request-1", "MOV-10", account, NOW)).toThrow(/exposure/);
+    expect(store.export().requests).toHaveLength(0);
+  });
+
+  it("refuses observed key charges without an invoice even when account usage lags", () => {
+    store.activate(NOW);
+    store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+    expect(() => store.reserve("request-1", "MOV-10", { ...account,
+      keyUsageUsd: 1.2, keyRemainingUsd: 67.8 }, NOW)).toThrow(/exposure/);
+    expect(store.export().requests).toHaveLength(0);
+  });
+
+  it("rounds fractional liabilities upward without overstating remaining capacity", () => {
+    store.activate(NOW);
+    store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+    store.reserve("request-1", "MOV-10", { ...account, keyRemainingUsd: 67.9999999 }, NOW);
+    expect(store.export().requests[0].reservedUsd).toBeGreaterThanOrEqual(67.9999999);
+    store.finish("request-1", { invoiceId: "invoice-1", amountUsd: 0.0000001,
+      model: "openai/fixture", provider: "OpenAI", effort: "medium", account }, NOW);
+    expect(store.state(NOW).spentUsd).toBeGreaterThanOrEqual(5.5000001);
+    expect(store.state(NOW).remainingUsd).toBeLessThanOrEqual(75 - 5.5000001);
   });
 
   it("retains the reservation and stops on a duplicate or missing invoice", () => {

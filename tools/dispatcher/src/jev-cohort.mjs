@@ -17,7 +17,8 @@ const SHA = /^[a-f0-9]{64}$/;
 const MONEY = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 75;
 const BALANCE = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1e9;
 const iso = (s) => typeof s === "string" && UTC.test(s) && Number.isFinite(Date.parse(s));
-const round = (n) => Math.round(n * 1e6) / 1e6;
+// Round liabilities up and remaining capacity down; never under-reserve a bill.
+const liability = (n) => Math.ceil(n * 1e6) / 1e6;
 const floor = (n) => Math.floor(Math.max(0, n) * 1e6) / 1e6;
 
 export function policyDigest(policy) {
@@ -72,7 +73,8 @@ export function validateCohortApproval(policy, approval, now = new Date()) {
     || !BALANCE(approval.totalCreditsUsd) || !BALANCE(approval.totalUsageUsd)
     || Math.abs(approval.totalCreditsUsd - approval.totalUsageUsd - approval.availableCreditUsd) > 1e-6
     || approval.availableCreditUsd <= 0 || approval.keyRemainingUsd <= 0
-    || approval.keyRemainingUsd > 69 - policy.baselineKeyUsageUsd) {
+    || approval.keyRemainingUsd > 69 - policy.baselineKeyUsageUsd
+    || policy.priorOutlayUsd + policy.purchaseFeesUsd + approval.keyRemainingUsd > 75) {
     return "owner/security account and exact cohort approval missing, expired or changed";
   }
   return null;
@@ -199,7 +201,7 @@ export class JevCohortStore {
       return { status: "invalid", error: "cohort invoice or fee evidence invalid" };
     const invoiced = rows.filter((r) => r.status === "complete").reduce((n, r) => n + r.amountUsd, 0);
     const observed = Math.max(0, (ledger.observedKeyUsageUsd ?? policy.baselineKeyUsageUsd) - policy.baselineKeyUsageUsd);
-    const spent = round(policy.priorOutlayUsd + policy.purchaseFeesUsd + fees.reduce((n, f) => n + f.amountUsd, 0) + Math.max(invoiced, observed));
+    const spent = liability(policy.priorOutlayUsd + policy.purchaseFeesUsd + fees.reduce((n, f) => n + f.amountUsd, 0) + Math.max(invoiced, observed));
     const routed = Object.values(ledger.assignments || {}).filter((r) => r.side === "routed").length;
     const control = Object.values(ledger.assignments || {}).filter((r) => r.side === "control").length;
     const effectiveKeyUsage = Math.max(ledger.observedKeyUsageUsd ?? policy.baselineKeyUsageUsd,
@@ -310,15 +312,19 @@ export class JevCohortStore {
       - this.policy(now).baselineKeyUsageUsd);
     const creditLag = Math.max(0, invoiced - (account.totalUsageUsd - approval.totalUsageUsd));
     const effectiveCredit = account.availableCreditUsd - creditLag;
-    const reserveUsd = floor(Math.min(account.keyRemainingUsd,
+    const reserveUsd = liability(Math.min(account.keyRemainingUsd,
       69 - Math.max(account.keyUsageUsd, this.policy(now).baselineKeyUsageUsd + invoiced)));
     if (!MONEY(account.keyUsageUsd) || !MONEY(account.keyRemainingUsd) || !BALANCE(account.availableCreditUsd)
       || !BALANCE(account.totalCreditsUsd) || !BALANCE(account.totalUsageUsd)
+      || Math.abs(account.totalCreditsUsd - account.totalUsageUsd - account.availableCreditUsd) > 1e-6
       || Math.abs(account.totalCreditsUsd - approval.totalCreditsUsd) > 1e-6
       || account.totalUsageUsd < approval.totalUsageUsd
       || account.totalUsageUsd > approval.totalUsageUsd + Math.max(invoiced, observed, account.keyUsageUsd - this.policy(now).baselineKeyUsageUsd) + 1e-6
       || reserveUsd <= 0 || effectiveCredit <= 0
       || account.keyUsageUsd < this.policy(now).baselineKeyUsageUsd
+      || account.keyUsageUsd > this.policy(now).baselineKeyUsageUsd + invoiced + 1e-6
+      || account.keyRemainingUsd > approval.keyRemainingUsd
+      || reserveUsd > state.keyRemainingUsd
       || account.keyRemainingUsd > 69 - account.keyUsageUsd
       || reserveUsd > state.remainingUsd) {
       this.stop("unknown-or-excess-account-exposure", now);
