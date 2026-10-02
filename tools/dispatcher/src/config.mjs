@@ -96,6 +96,10 @@ export function jevTrialAssignmentsPath() {
   return path.join(configDir(), "jev-trial-assignments.json");
 }
 
+export function jevCohortConfigPath() { return path.join(configDir(), "jev-cohort.json"); }
+export function jevCohortApprovalPath() { return path.join(configDir(), "jev-cohort-approval.json"); }
+export function jevCohortLedgerPath() { return path.join(configDir(), "jev-cohort-ledger.json"); }
+
 /** Numeric, redacted summaries of completed worker attempts (MOV-363). */
 export function workerUsageStatePath() {
   return path.join(configDir(), "worker-usage.json");
