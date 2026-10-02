@@ -5,7 +5,8 @@ describe("OpenRouter account metadata", () => {
   const key = { data: { limit: 69, usage: 1.25, limit_remaining: 67.75 } };
   const credits = { data: { total_credits: 80, total_usage: 12 } };
   it("returns only verified numeric usage and credit evidence", () => {
-    expect(parseOpenRouterAccount(key, credits)).toEqual({ keyUsageUsd: 1.25, keyRemainingUsd: 67.75, availableCreditUsd: 68 });
+    expect(parseOpenRouterAccount(key, credits)).toEqual({ keyUsageUsd: 1.25, keyRemainingUsd: 67.75,
+      availableCreditUsd: 68, totalCreditsUsd: 80, totalUsageUsd: 12 });
   });
   it.each([
     [{ data: { ...key.data, limit: 75 } }, credits],

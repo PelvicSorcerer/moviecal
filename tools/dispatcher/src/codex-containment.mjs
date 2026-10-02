@@ -147,6 +147,7 @@ export function prepareCodexContainment({ invocation, cwd, logDir, repositoryPat
     }
     args.push("-c", "features.shell_snapshot=false", "-c", "features.shell_snapshot_v2=false",
       "-c", "features.plugins=false", "-c", "features.apps=false",
+      "-c", "features.multi_agent=false",
       "-c", 'web_search="disabled"',
       "-c", "features.code_mode_host={enabled=true,disable_in_process_fallback=true}",
       "-c", "allow_login_shell=false", "-c", `projects.${JSON.stringify(cwd)}.trust_level=\"untrusted\"`);

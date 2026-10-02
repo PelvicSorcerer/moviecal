@@ -44,6 +44,15 @@ const authorized = (header) => {
   const actual = Buffer.from(String(header || ""));
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 };
+function providerFailure(status, body) {
+  let code = null;
+  try {
+    const value = JSON.parse(body);
+    const candidate = value?.error?.code;
+    if (typeof candidate === "string" && /^[a-z0-9_-]{1,48}$/i.test(candidate)) code = candidate.toLowerCase();
+  } catch { /* HTTP status remains the bounded diagnostic. */ }
+  return `provider-http-${Number.isInteger(status) && status >= 400 && status <= 599 ? status : 502}${code ? `-${code}` : ""}`;
+}
 const server = http.createServer(async (request, response) => {
   if (!authorized(request.headers.authorization) || request.method !== "POST" || request.url !== "/v1/responses") {
     response.writeHead(403); response.end(); return;
@@ -128,10 +137,15 @@ const server = http.createServer(async (request, response) => {
       headers: { authorization: `Bearer ${key}`, "content-type": "application/json", "x-openrouter-metadata": "enabled" },
     }, (upstreamResponse) => {
       if (upstreamResponse.statusCode !== 200) {
-        record(`provider-http-${upstreamResponse.statusCode || 502}`);
-        upstreamResponse.resume();
-        response.writeHead(502, { "content-type": "application/json" });
-        response.end('{"error":{"code":"provider-request-failed"}}');
+        let diagnostic = "";
+        upstreamResponse.setEncoding("utf8");
+        upstreamResponse.on("data", (chunk) => { if (diagnostic.length <= 4096) diagnostic += chunk.slice(0, 4097 - diagnostic.length); });
+        upstreamResponse.on("end", () => {
+          record(providerFailure(upstreamResponse.statusCode, diagnostic));
+          response.writeHead(502, { "content-type": "application/json" });
+          response.end('{"error":{"code":"provider-request-failed"}}');
+        });
+        upstreamResponse.on("error", () => { record("provider-stream-error"); response.destroy(); });
         return;
       }
       if (!String(upstreamResponse.headers["content-type"]).startsWith("text/event-stream")) {

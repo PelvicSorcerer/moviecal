@@ -111,7 +111,7 @@ executor.stdout.on("data", (chunk) => {
         routeError = rows.find((row) => row.error)?.error || (rows.length ? null : "missing-provider-evidence");
       } catch { routeError = "missing-provider-evidence"; }
     }
-    if (routeError) process.stderr.write(`Jev route stopped: ${/^[a-z0-9-]{1,80}$/.test(routeError) ? routeError : "invalid-provider-evidence"}\n`);
+    if (routeError) process.stderr.write(`Jev route stopped: ${/^[a-z0-9_-]{1,80}$/.test(routeError) ? routeError : "invalid-provider-evidence"}\n`);
     process.exitCode = routeError ? 1 : code ?? 1;
     process.stdin.destroy();
   });
