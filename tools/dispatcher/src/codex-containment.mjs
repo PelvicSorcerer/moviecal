@@ -120,13 +120,13 @@ export function prepareCodexContainment({ invocation, cwd, logDir, repositoryPat
       const brokerPolicy = path.join(logDir, "openrouter-transport.mjs");
       fs.copyFileSync(fileURLToPath(new URL("./openrouter-transport.mjs", import.meta.url)), brokerPolicy);
       fs.chmodSync(brokerPolicy, 0o600);
-      for (const name of ["openrouter-response.mjs", "routed-request.mjs"]) {
+      for (const name of ["openrouter-response.mjs", "routed-request.mjs", "jev-cohort.mjs", "jev-trial.mjs", "state-store.mjs", "openrouter-account.mjs"]) {
         const target = path.join(logDir, name);
         fs.copyFileSync(fileURLToPath(new URL(`./${name}`, import.meta.url)), target);
         fs.chmodSync(target, 0o600);
       }
       fs.writeFileSync(brokerConfig, JSON.stringify({ ...openRouter, fixture: openRouterFixture, accounting,
-        maxRequests: providerRequestLimit, modelAliases: openRouterModelAliases, proofDebug: openRouterProofDebug === true }), { mode: 0o600 });
+        maxRequests: providerRequestLimit, modelAliases: openRouter.modelAliases || openRouterModelAliases, proofDebug: openRouterProofDebug === true }), { mode: 0o600 });
     }
     const environment = Object.fromEntries(Object.entries(sanitizedWorkerEnvironment(sourceEnvironment, { worker: "codex" }))
       .filter(([key]) => ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TERM", "CI",
