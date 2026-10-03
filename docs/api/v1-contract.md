@@ -130,6 +130,24 @@ Bearer-only, actor-scoped to the shared-domain operations the web routes use (`l
 - An accepted editor attempting an owner-only action gets `403` and no member emails. Outsiders and pending invitees get the same `404` `Watchlist not found.` as an unknown list, and nothing changes. Invalid bearer returns `401` before repository construction.
 - Access and calendar contribution end on the next request after removal or leave. Emails are returned only by the owner-only listing.
 
+### Shared invite link management
+
+Bearer-only, owner-only (MOV-344). Calls the same shared-domain operations as the cookie-session `/api/watchlist/shared/[watchlistId]/invite` route — `createSharedWatchlistInviteLink` and `revokeSharedWatchlistInviteLink` — which in turn call the transaction-safe `rotate_watchlist_invite_link` RPC (MOV-331). At most one live seven-day link exists per shared list at any time; a failed rotation rolls back and leaves the previous link exactly as it was, never stranded half-revoked.
+
+- `POST /api/v1/watchlists/{id}/invite` (owner only) generates a new invite link, atomically replacing any link already live for that list. Response `201`:
+
+  ```json
+  {
+    "inviteUrl": "https://moviecal.example/watchlist/invite/AbC123...",
+    "watchlist": { "id": "...", "kind": "shared", "name": "...", "ownerUserId": "...", "canEdit": true }
+  }
+  ```
+
+  The raw token is embedded in `inviteUrl` and returned **only in this response** — it is hashed before it is persisted, is never logged, and cannot be re-read from `v1` afterward. Calling this again (an explicit "rotate") immediately invalidates the previous `inviteUrl`; that old token stops resolving.
+- `DELETE /api/v1/watchlists/{id}/invite` (owner only) revokes the live link, leaving no replacement. Response `200`: `{ "revoked": true }`. Idempotent: calling it again when there is nothing live still returns `200` `{ "revoked": true }`.
+- An accepted editor attempting either operation gets `403` and nothing changes. Outsiders and pending invitees get the same `404` `Watchlist not found.` as an unknown list. Invalid bearer returns `401` before repository construction, for both endpoints.
+- There is no bearer accept endpoint in `v1` yet; a recipient accepts the link through the existing cookie-session `/api/watchlist/invite/accept` flow regardless of which transport generated the URL.
+
 ### Calendar
 
 ### `GET /api/v1/calendar-token`
