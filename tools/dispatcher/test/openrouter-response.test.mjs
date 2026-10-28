@@ -170,6 +170,23 @@ describe("OpenRouter Responses evidence", () => {
     expect(result).toMatchObject({ resolvedEffort: null, error: "missing-provider-attribution", routerStageKeys: ["resolved_models", "private_payload"] });
     expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
   });
+  it("retains bounded endpoint evidence when a display-name endpoint fails the served-model guard", () => {
+    const event = completed(); const endpoint = event.response.openrouter_metadata.endpoints.available[0];
+    endpoint.model = "Vendor: Fixture Pro\u0007"; endpoint.provider = "Vendor AI"; endpoint.tag = "vendor/fast";
+    event.response.openrouter_metadata.pipeline[0].data.private_payload = "PRIVATE_SENTINEL";
+    const result = observe([event]);
+    expect(result).toMatchObject({ error: "conflicting-served-model", provider: null,
+      endpointModel: "Vendor: Fixture Pro", endpointProvider: "Vendor AI", endpointTag: "vendor/fast" });
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
+    endpoint.model = "m".repeat(300);
+    expect(observe([event]).endpointModel).toHaveLength(200);
+  });
+  it("retains slug endpoint evidence on success and nulls it without a selected endpoint", () => {
+    const event = completed(); const endpoint = event.response.openrouter_metadata.endpoints.available[0];
+    expect(observe([event])).toMatchObject({ error: null, endpointModel: endpoint.model, endpointProvider: endpoint.provider });
+    endpoint.selected = false;
+    expect(observe([event])).toMatchObject({ endpointModel: null, endpointProvider: null, endpointTag: null });
+  });
   it("does not infer served model or effort from the requested model", () => {
     const event = completed(); event.response.model = "typesafe/jev-router";
     delete event.response.openrouter_metadata.endpoints.available[0].model;
