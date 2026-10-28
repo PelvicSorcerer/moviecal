@@ -4,7 +4,7 @@ Key pages and API routes in the current web app. The shared-list operations belo
 
 ## Frontend pages
 
-- `/` — landing page and app overview.
+- `/` — product overview with sign-in and movie search links for signed-out visitors; a welcome with direct Search, Watchlists, and Calendar settings links for signed-in visitors.
 - `/sign-in` — sign-in page or Supabase-powered auth entry point.
 - `/search` — movie search UI.
 - `/watchlist` — authenticated watchlist overview showing the signed-in user's personal watchlist plus shared watchlists they belong to. Personal item management stays on this page for now.

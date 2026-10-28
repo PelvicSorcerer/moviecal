@@ -6,7 +6,7 @@ import SiteNavigation from './site-navigation';
 
 export const metadata = {
   title: 'moviecal',
-  description: 'Movie watchlist and iCalendar feed (scaffold)'
+  description: 'Keep private and shared movie watchlists, and follow release dates with a personal iCalendar feed.'
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
