@@ -9,7 +9,7 @@ on:
 jobs:
   lane-browser:
     name: lane-browser
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       CI: true
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -36,7 +36,7 @@ jobs:
 
   lane-browser-quarantine:
     name: lane-browser-quarantine
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     continue-on-error: true
     env:
       CI: true
