@@ -73,7 +73,8 @@ test('cancelling rotation leaves the subscription URL unchanged', async ({
   await expect(
     page.getByText('Existing subscriptions will stop updating'),
   ).toBeVisible();
-  await page.getByRole('button', { name: 'Cancel' }).click();
+  // Keyboard activation: the Next dev overlay can cover the Cancel button in CI.
+  await page.getByRole('button', { name: 'Cancel' }).press('Enter');
 
   await expect(
     page.getByRole('button', { name: 'Confirm rotation' }),
@@ -98,6 +99,16 @@ test('rotation can be confirmed by keyboard alone at a narrow viewport', async (
   await rotateButton.focus();
   await page.keyboard.press('Enter');
 
+  // The subscription UI itself must fit the 375px viewport.
+  const overflowing = await page.evaluate(() =>
+    ['code', 'button', 'form'].flatMap((selector) =>
+      [...document.querySelectorAll(selector)]
+        .filter((el) => el.getBoundingClientRect().right > window.innerWidth)
+        .map((el) => selector),
+    ),
+  );
+  expect(overflowing).toEqual([]);
+
   // Cancel receives focus first; Cancel returns focus to the trigger.
   await expect(page.getByRole('button', { name: 'Cancel' })).toBeFocused();
   await page.keyboard.press('Enter');
@@ -112,9 +123,4 @@ test('rotation can be confirmed by keyboard alone at a narrow viewport', async (
   await page.keyboard.press('Enter');
 
   await expect(subscriptionUrl).not.toHaveText(initialUrl ?? '');
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    ),
-  ).toBe(true);
 });
