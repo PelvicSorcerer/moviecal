@@ -183,6 +183,32 @@ describe("OpenRouter Responses evidence", () => {
     expect(result).toMatchObject({ resolvedEffort: null, error: "missing-provider-attribution", routerStageKeys: ["resolved_models", "private_payload"] });
     expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
   });
+  it("retains the chosen candidate's effort evidence, redacted and bounded, without changing the guard", () => {
+    const event = completed(), data = event.response.openrouter_metadata.pipeline[0].data;
+    expect(observe([event]).routerCandidate).toEqual({ matched: 1, selectedByJev: true, candidateEffort: "low", rawEffort: "low",
+      entries: [{ model: "google/fixture", effort: "low" }] });
+    // No effort field: guard still stops, and the record says why.
+    data.candidates = [{ model: "google/fixture", reasoning: { effort: "high", note: "PRIVATE_SENTINEL" },
+      evaluation: "free text PRIVATE_SENTINEL", score: 0.5, tags: ["a", "b"] }];
+    let result = observe([event]);
+    expect(result).toMatchObject({ error: "missing-provider-attribution", resolvedEffort: null });
+    expect(result.routerCandidate).toEqual({ matched: 1, selectedByJev: true, candidateEffort: null, rawEffort: null,
+      entries: [{ model: "google/fixture", reasoning: { keys: ["effort", "note"] }, evaluation: "[redacted]", score: 0.5, tags: { length: 2 } }] });
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
+    // Non-enum effort is kept as a bounded string, and a mismatch still fails.
+    data.candidates = [{ model: "google/fixture", effort: "Very high!" + "x".repeat(300) }];
+    result = observe([event]);
+    expect(result.error).toBe("missing-provider-attribution");
+    expect(result.routerCandidate.rawEffort).toHaveLength(200);
+    data.candidates = [{ model: "google/fixture", effort: "high" }];
+    expect(observe([event]).error).toBe("conflicting-served-effort");
+    // Bounded entries; no candidate.
+    data.candidates = Array.from({ length: 10 }, () => ({ model: "google/fixture", effort: "low" }));
+    expect(observe([event]).routerCandidate).toMatchObject({ matched: 10, candidateEffort: null });
+    expect(observe([event]).routerCandidate.entries).toHaveLength(4);
+    data.candidates = [{ model: "other/model", effort: "low" }];
+    expect(observe([event]).routerCandidate).toMatchObject({ matched: 0, entries: [] });
+  });
   it("retains bounded endpoint evidence when a display-name endpoint fails the served-model guard", () => {
     const event = completed(); const endpoint = event.response.openrouter_metadata.endpoints.available[0];
     endpoint.model = "Vendor: Fixture Pro\u0007"; endpoint.provider = "Vendor AI"; endpoint.tag = "vendor/fast";
