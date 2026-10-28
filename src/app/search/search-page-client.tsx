@@ -11,6 +11,7 @@ import {
 import { formatReleaseDate } from '../../lib/format-release-date';
 import type { WatchlistSummary } from '../../lib/watchlist';
 import type { NormalizedMovieSummary } from '../../lib/tmdb/client';
+import { MoviePoster } from '../movie-poster';
 
 type SearchStatus = 'idle' | 'loading' | 'success' | 'error';
 export type WatchlistStatus = 'idle' | 'saving' | 'saved' | 'error';
@@ -406,21 +407,24 @@ export function SearchPageClient({
                     className="rounded-2xl border border-slate-200 bg-slate-50 p-5"
                   >
                     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                      <div className="space-y-3">
-                        <div>
+                      <div className="min-w-0 space-y-3">
+                        <div className="flex items-start gap-3">
+                          <MoviePoster posterPath={movie.posterPath} title={movie.title} />
+                          <div className="min-w-0 break-words">
                           <h4 className="text-xl font-semibold text-slate-950">
                             {movie.title}
                           </h4>
                           <p className="mt-1 text-sm font-medium text-sky-700">
                             {formatReleaseDate(movie.releaseDate)}
                           </p>
+                          </div>
                         </div>
                         <p className="max-w-2xl text-sm leading-6 text-slate-600">
                           {movie.overview ?? 'No overview is available for this title yet.'}
                         </p>
                       </div>
 
-                      <div className="sm:w-48">
+                      <div className="shrink-0 sm:w-48">
                         {isAuthenticated && editableWatchlists.length === 0 ? (
                           <div className="rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-600">
                             {watchlistLoadFailed
