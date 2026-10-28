@@ -119,6 +119,7 @@ jobs:
 
   lane-full-stack-runtime:
     name: lane-full-stack-runtime
+    # Pinned: Playwright has no chromium build for the ubuntu-latest image.
     runs-on: ubuntu-24.04
     env:
       CI: true
