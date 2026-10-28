@@ -96,6 +96,7 @@ const server = http.createServer(async (request, response) => {
       toolCalls: observed.toolCalls, toolOutputs });
     fs.appendFileSync(path.join(path.dirname(process.argv[2]), "openrouter-attribution.jsonl"),
       `${JSON.stringify({ requestId, invoiceId: observed.invoiceId, canonicalModel: observed.canonicalModel,
+        endpointModel: observed.endpointModel, endpointProvider: observed.endpointProvider, endpointTag: observed.endpointTag,
         routerStageKeys: observed.routerStageKeys, routerEffortHints: observed.routerEffortHints,
         responseEffort: observed.responseEffort,
         resolvedEffortSource: observed.resolvedEffortSource,

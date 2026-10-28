@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { prepareCodexContainment, resolveCodexExecutable } from "../src/codex-containment.mjs";
+import { prepareCodexContainment, resolveCodexExecutable, executorTempEnvironment } from "../src/codex-containment.mjs";
 import { workerInvocation } from "../src/worker-routing.mjs";
 
 let root;
@@ -43,6 +43,18 @@ describe("Codex containment policy", () => {
     expect(containment.evidence.executorProfileSha256).toMatch(/^[a-f0-9]{64}$/);
     const runtime = containment.runtime;
     containment.cleanup(); expect(fs.existsSync(runtime)).toBe(false);
+  });
+  it("points zsh heredoc temp files at the executor scratch without widening the sandbox (MOV-452)", () => {
+    const opts = options(); containment = prepareCodexContainment(opts);
+    const launch = JSON.parse(fs.readFileSync(containment.invocation.args[1], "utf8"));
+    expect(executorTempEnvironment(launch.executorScratch)).toEqual({ TMPDIR: launch.executorScratch, TMP: launch.executorScratch,
+      TEMP: launch.executorScratch, TMPPREFIX: `${launch.executorScratch}/zsh` });
+    expect(fs.readFileSync(path.join(path.dirname(containment.invocation.args[1]), "codex-supervisor.mjs"), "utf8"))
+      .toContain("TMPPREFIX: `${config.executorScratch}/zsh`");
+    for (const key of ["TMPPREFIX", "TMP", "TEMP"]) expect(containment.environment).not.toHaveProperty(key);
+    const executor = fs.readFileSync(launch.executorProfile, "utf8");
+    expect(executor).not.toMatch(/\(allow file-write\*[^\n]*"\/(private\/)?tmp"/);
+    expect(executor).toContain(`(subpath "${launch.executorScratch}")`);
   });
   it("rejects a broader routing invocation rather than accepting an external bypass", () => {
     const opts = options(); opts.invocation.args[1] = "danger-full-access";

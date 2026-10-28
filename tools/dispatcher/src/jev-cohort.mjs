@@ -20,6 +20,11 @@ const iso = (s) => typeof s === "string" && UTC.test(s) && Number.isFinite(Date.
 // Round liabilities up and remaining capacity down; never under-reserve a bill.
 const liability = (n) => Math.ceil(n * 1e6) / 1e6;
 const floor = (n) => Math.floor(Math.max(0, n) * 1e6) / 1e6;
+// A /key read can pair fresh usage with a stale (higher) remaining balance. Only ever tighten the stored
+// remaining balance, and keep it consistent with the usage already observed, so a lagging read cannot
+// push usage + remaining past the key limit and invalidate the ledger.
+const mergeKeyRemaining = (data, account) => floor(Math.min(data.keyRemainingUsd ?? Infinity,
+  account.keyRemainingUsd, 69 - data.observedKeyUsageUsd));
 
 export function policyDigest(policy) {
   return createHash("sha256").update(`moviecal-jev-cohort-policy-v1\n${JSON.stringify(policy)}`).digest("hex");
@@ -344,7 +349,7 @@ export class JevCohortStore {
       if (data.requests[requestId]) throw new Error("duplicate paid request identity");
       data.requests[requestId] = { requestId, issue, status: "pending", reservedUsd: reserveUsd, startedAt: now.toISOString() };
       data.observedKeyUsageUsd = Math.max(data.observedKeyUsageUsd || 0, account.keyUsageUsd);
-      data.keyRemainingUsd = account.keyRemainingUsd;
+      data.keyRemainingUsd = mergeKeyRemaining(data, account);
     });
   }
 
@@ -365,7 +370,7 @@ export class JevCohortStore {
         if (Object.values(data.requests).some((r) => r.invoiceId === invoiceId)) throw new Error("duplicate provider invoice");
         Object.assign(row, { status: "complete", invoiceId, amountUsd, model, provider, effort, completedAt: now.toISOString() });
         data.observedKeyUsageUsd = Math.max(data.observedKeyUsageUsd || 0, account.keyUsageUsd);
-        data.keyRemainingUsd = account.keyRemainingUsd;
+        data.keyRemainingUsd = mergeKeyRemaining(data, account);
       });
     } catch (error) {
       this.stop("invoice-reconciliation-failed", now);

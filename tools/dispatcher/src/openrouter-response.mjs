@@ -3,6 +3,9 @@
 import { StringDecoder } from "node:string_decoder";
 
 const id = (v) => typeof v === "string" && /^[A-Za-z0-9_.:/-]{1,200}$/.test(v) ? v : null;
+// Diagnostic only, never used for a decision: a bounded copy of a provider
+// string so a failed identity check can be explained from the run log.
+const shown = (v) => typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 200) || null : null;
 const count = (v) => Number.isSafeInteger(v) && v >= 0 ? v : null;
 const usd = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
 const effort = (v) => ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(v) ? v : null;
@@ -29,6 +32,17 @@ function effortHints(data) {
 
 export function createResponseObserver({ modelAliases = {}, proofDebug = false, deferCompletion = false, control = null, rejectFallback = false } = {}) {
   const canonical = (model) => id(modelAliases[model]) || id(model);
+  // A pinned alias must match exactly. Otherwise the endpoint may report the
+  // resolved ID plus one strict `-YYYYMMDD` snapshot suffix, nothing else.
+  function servedModelMatches(resolved, served) {
+    if (canonical(served) === canonical(resolved)) return true;
+    if (id(modelAliases[resolved])) return false;
+    const base = id(resolved), got = id(served);
+    const match = base && got && got.startsWith(`${base}-`) ? /^(\d{4})(\d{2})(\d{2})$/.exec(got.slice(base.length + 1)) : null;
+    if (!match) return false;
+    const [y, m, d] = match.slice(1).map(Number), date = new Date(Date.UTC(y, m - 1, d));
+    return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+  }
   const decoder = new StringDecoder("utf8");
   let pending = "", completed = false, reason = null, snapshot = {}, toolCalls = 0;
   let ended = false, debugCount = 0, debug = null;
@@ -156,6 +170,7 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
       const record = {
         resolvedModel, provider: id(endpoint?.provider),
         canonicalModel: canonical(resolvedModel),
+        endpointModel: shown(endpoint?.model), endpointProvider: shown(endpoint?.provider), endpointTag: shown(endpoint?.tag),
         // Bounded field names identify an upstream schema gap without saving
         // arbitrary plugin data, prompt text or reasoning content.
         routerStageKeys: Object.keys(jev || {}).filter((key) => id(key)).slice(0, 32),
@@ -174,7 +189,7 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
         billedUsd: usd(usage.cost), invoiceId: id(snapshot.invoiceId), toolCalls,
         fallback: typeof snapshot.metadata?.attempt === "number" ? snapshot.metadata.attempt > 1 : null,
       };
-      if (resolvedModel && endpoint?.model && canonical(endpoint.model) !== canonical(resolvedModel)) fail("conflicting-served-model");
+      if (resolvedModel && endpoint?.model && !servedModelMatches(resolvedModel, endpoint.model)) fail("conflicting-served-model");
       if (control && (canonical(resolvedModel) !== canonical(control.model)
         || canonical(endpoint?.model) !== canonical(control.model)
         || endpoint?.provider !== control.provider || responseEffort !== control.effort

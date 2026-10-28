@@ -158,9 +158,22 @@ describe("OpenRouter Responses evidence", () => {
     event.response.openrouter_metadata.endpoints.available[0].model = "google/fixture-20260929";
     const options = { modelAliases: { "google/fixture": "google/fixture-20260929" } };
     expect(observe([event], options)).toMatchObject({ resolvedModel: "google/fixture", canonicalModel: "google/fixture-20260929", error: null });
-    expect(observe([event]).error).toBe("conflicting-served-model");
     event.response.openrouter_metadata.endpoints.available[0].model = "google/fixture-20260928";
     expect(observe([event], options).error).toBe("conflicting-served-model");
+  });
+  it("accepts an unaliased dated snapshot of the same model ID and nothing looser", () => {
+    const event = completed(), endpoint = event.response.openrouter_metadata.endpoints.available[0];
+    endpoint.model = "google/fixture-20261023";
+    expect(observe([event])).toMatchObject({ resolvedModel: "google/fixture", endpointModel: "google/fixture-20261023", error: null });
+    for (const served of ["google/fixture-2026102", "google/fixture-202610234", "google/fixture-20261323", "google/fixture-20260231",
+      "google/fixture-preview", "google/fixture-pro-20261023", "google/fixture-v2", "google/fixture20261023",
+      "other/fixture-20261023", "google/fixture-20261023-x", "google/fixture-"]) {
+      endpoint.model = served;
+      expect(observe([event]).error, served).toBe("conflicting-served-model");
+    }
+    // A policy alias pins the snapshot, so a different date does not slip through.
+    endpoint.model = "google/fixture-20261023";
+    expect(observe([event], { modelAliases: { "google/fixture": "google/fixture-20260929" } }).error).toBe("conflicting-served-model");
   });
   it("reports a missing effort after alias normalization and saves only router field names", () => {
     const event = completed();
@@ -169,6 +182,23 @@ describe("OpenRouter Responses evidence", () => {
     const result = observe([event], { modelAliases: { "google/fixture": "google/fixture-20260929" } });
     expect(result).toMatchObject({ resolvedEffort: null, error: "missing-provider-attribution", routerStageKeys: ["resolved_models", "private_payload"] });
     expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
+  });
+  it("retains bounded endpoint evidence when a display-name endpoint fails the served-model guard", () => {
+    const event = completed(); const endpoint = event.response.openrouter_metadata.endpoints.available[0];
+    endpoint.model = "Vendor: Fixture Pro\u0007"; endpoint.provider = "Vendor AI"; endpoint.tag = "vendor/fast";
+    event.response.openrouter_metadata.pipeline[0].data.private_payload = "PRIVATE_SENTINEL";
+    const result = observe([event]);
+    expect(result).toMatchObject({ error: "conflicting-served-model", provider: null,
+      endpointModel: "Vendor: Fixture Pro", endpointProvider: "Vendor AI", endpointTag: "vendor/fast" });
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
+    endpoint.model = "m".repeat(300);
+    expect(observe([event]).endpointModel).toHaveLength(200);
+  });
+  it("retains slug endpoint evidence on success and nulls it without a selected endpoint", () => {
+    const event = completed(); const endpoint = event.response.openrouter_metadata.endpoints.available[0];
+    expect(observe([event])).toMatchObject({ error: null, endpointModel: endpoint.model, endpointProvider: endpoint.provider });
+    endpoint.selected = false;
+    expect(observe([event])).toMatchObject({ endpointModel: null, endpointProvider: null, endpointTag: null });
   });
   it("does not infer served model or effort from the requested model", () => {
     const event = completed(); event.response.model = "typesafe/jev-router";

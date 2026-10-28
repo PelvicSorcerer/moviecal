@@ -199,6 +199,20 @@ describe("reviewed production Jev cohort", () => {
     expect(store.export()).toMatchObject({ stoppedReason: "new-fee-requires-owner-reconciliation" });
   });
 
+  it("keeps the ledger valid when a /key read pairs fresh usage with a stale remaining balance", () => {
+    store.activate(NOW);
+    store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+    store.reserve("request-1", "MOV-10", account, NOW);
+    const stale = { ...account, keyUsageUsd: 1.2, keyRemainingUsd: 68 };
+    store.finish("request-1", { invoiceId: "invoice-1", amountUsd: 0.2, model: "openai/fixture",
+      provider: "OpenAI", effort: "medium", account: stale }, NOW);
+    expect(store.export().keyRemainingUsd).toBeLessThanOrEqual(67.8);
+    expect(store.state(NOW)).toMatchObject({ status: "active", keyRemainingUsd: 67.8 });
+    // A later higher read never raises the stored balance.
+    store.reserve("request-2", "MOV-10", { ...account, keyUsageUsd: 1.2, keyRemainingUsd: 67.8 }, NOW);
+    expect(store.export().keyRemainingUsd).toBe(67.8);
+  });
+
   it("uses existing credit with a delayed balance without losing the hard in-flight bound", () => {
     const reviewed = { ...approval(p), availableCreditUsd: 0.5, totalCreditsUsd: 10.5, totalUsageUsd: 10 };
     save("jev-cohort-approval.json", reviewed);
