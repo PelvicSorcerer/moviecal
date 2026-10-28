@@ -89,7 +89,9 @@ for (const width of [375, 1280]) {
           document.documentElement.scrollWidth <= document.documentElement.clientWidth
         ))).toBe(true);
 
-        for (const control of await page.locator('a, button').all()) {
+        // The Next.js dev-tools button only exists under `next dev` and is not part of the page.
+        const controls = page.locator('a, button:not([data-nextjs-dev-tools-button])');
+        for (const control of await controls.all()) {
           await page.keyboard.press('Tab');
           await expect(control).toBeFocused();
           await expect(control).toBeVisible();
