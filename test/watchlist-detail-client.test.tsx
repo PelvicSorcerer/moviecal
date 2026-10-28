@@ -19,6 +19,49 @@ describe('WatchlistDetailClient', () => {
     vi.clearAllMocks();
   });
 
+  it.each(['personal', 'shared'] as const)('links an empty %s watchlist to Search', (kind) => {
+    render(
+      <WatchlistDetailClient
+        initialItems={[]}
+        watchlist={buildWatchlistSummary({ kind, name: 'Movie night' })}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'This watchlist is empty' })).toBeTruthy();
+    expect(screen.getByText('Save movies from search and target Movie night to manage them here.')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Search movies' }).getAttribute('href')).toBe('/search');
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('guides read-only members toward a watchlist they can edit', () => {
+    render(
+      <WatchlistDetailClient
+        initialItems={[]}
+        watchlist={buildWatchlistSummary({ kind: 'shared', canEdit: false })}
+      />,
+    );
+
+    expect(screen.getByText('Read-only access')).toBeTruthy();
+    expect(screen.getByText('Search for movies to save to a watchlist you can edit.')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Search movies' }).getAttribute('href')).toBe('/search');
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+  });
+
+  it('renders populated lists without the empty-state action', () => {
+    render(
+      <WatchlistDetailClient
+        initialItems={[buildWatchlistItem()]}
+        watchlist={buildWatchlistSummary()}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'The Matrix' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeTruthy();
+    expect(screen.queryByText('This watchlist is empty')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Search movies' })).toBeNull();
+  });
+
   it('removes an item from the targeted watchlist detail page', async () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: true,
@@ -54,6 +97,7 @@ describe('WatchlistDetailClient', () => {
     expect(
       screen.getByText('Removed The Matrix from Friday movie night.'),
     ).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Search movies' })).toBeTruthy();
   });
 
   it('keeps the movie visible when the targeted delete fails', async () => {

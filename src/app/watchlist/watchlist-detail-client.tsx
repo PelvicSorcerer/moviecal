@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState } from 'react';
 import { MoviePoster } from '../movie-poster';
 
@@ -107,8 +108,16 @@ export function WatchlistDetailClient({
           <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-sm text-slate-600">
             <h4 className="text-lg font-semibold text-slate-950">This watchlist is empty</h4>
             <p className="mt-2 max-w-2xl leading-6">
-              Save movies from search and target {watchlist.name} to manage them here.
+              {watchlist.canEdit
+                ? `Save movies from search and target ${watchlist.name} to manage them here.`
+                : 'Search for movies to save to a watchlist you can edit.'}
             </p>
+            <Link
+              href="/search"
+              className="mt-4 inline-flex rounded-full bg-sky-700 px-4 py-2 font-medium text-white transition hover:bg-sky-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700"
+            >
+              Search movies
+            </Link>
           </div>
         ) : (
           <ul className="grid gap-4">
