@@ -9,6 +9,7 @@ on:
 jobs:
   lane-browser:
     name: lane-browser
+    # Pinned: Playwright does not support chromium on ubuntu 26.04 (ubuntu-latest).
     runs-on: ubuntu-24.04
     env:
       CI: true
