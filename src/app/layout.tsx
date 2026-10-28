@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { getOptionalUser } from '../lib/auth/session';
 import SiteNavigation from './site-navigation';
 
+// Page titles come from each route's metadata and are suffixed by this template.
 export const metadata = {
   title: {
     default: 'moviecal',
