@@ -13,7 +13,7 @@ import {
   createServerSupabaseClient,
   createServerSupabaseServiceRoleClient,
 } from '../../../lib/supabase/server';
-import { rotateCalendarTokenAction } from './actions';
+import CalendarSubscription from './subscription';
 
 export default async function CalendarSettings() {
   const session = await requireAuthenticatedPageSession('/settings/calendar');
@@ -32,10 +32,10 @@ export default async function CalendarSettings() {
   );
 
   return (
-    <section className="space-y-4">
+    <section className="min-w-0 space-y-4">
       <div>
         <p className="text-sm font-medium uppercase tracking-[0.2em] text-sky-700">
-          Protected area
+          Calendar subscription
         </p>
         <h2 className="mt-2 text-3xl font-semibold text-slate-950">Calendar settings</h2>
       </div>
@@ -47,24 +47,7 @@ export default async function CalendarSettings() {
           </span>
           .
         </p>
-        <div className="space-y-2">
-          <p className="font-medium text-slate-950">Private subscription URL</p>
-          <p>
-            Treat this URL like a password. Anyone with the full link can read
-            your calendar feed until you rotate the token.
-          </p>
-          <code className="block overflow-x-auto rounded-xl bg-slate-950 px-4 py-3 text-xs text-slate-100">
-            {subscriptionUrl}
-          </code>
-        </div>
-        <form action={rotateCalendarTokenAction}>
-          <button
-            type="submit"
-            className="rounded-full bg-sky-700 px-4 py-2 font-medium text-white transition hover:bg-sky-800"
-          >
-            Rotate subscription URL
-          </button>
-        </form>
+        <CalendarSubscription key={subscriptionUrl} subscriptionUrl={subscriptionUrl} />
       </div>
     </section>
   );
