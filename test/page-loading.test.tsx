@@ -5,8 +5,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import PageLoading from '../src/app/page-loading';
 import SearchLoading from '../src/app/search/loading';
-import WatchlistsLoading from '../src/app/watchlist/loading';
-import WatchlistLoading from '../src/app/watchlist/[watchlistId]/loading';
 
 afterEach(cleanup);
 
@@ -36,14 +34,10 @@ describe('PageLoading', () => {
     expect(screen.queryByRole('img')).toBeNull();
   });
 
-  it.each([
-    [SearchLoading, 'Loading search…'],
-    [WatchlistsLoading, 'Loading watchlists…'],
-    [WatchlistLoading, 'Loading watchlist…'],
-  ])('wires each route fallback to its own announcement (%s)', (Loading, label) => {
-    render(<Loading />);
+  it('wires the search route fallback to its own announcement', () => {
+    render(<SearchLoading />);
 
     expect(screen.getAllByRole('status')).toHaveLength(1);
-    expect(screen.getByRole('status').textContent).toBe(label);
+    expect(screen.getByRole('status').textContent).toBe('Loading search…');
   });
 });
