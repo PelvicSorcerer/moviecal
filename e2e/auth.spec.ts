@@ -46,7 +46,7 @@ test.describe('auth and session smoke', () => {
     await page.goto('/watchlist');
     await expect(page.getByText('Signed in as')).toContainText('e2e@example.com');
 
-    await page.getByRole('link', { name: 'Search' }).click();
+    await page.getByRole('link', { name: 'Search', exact: true }).click();
     await expect(page).toHaveURL('/search');
     await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
 

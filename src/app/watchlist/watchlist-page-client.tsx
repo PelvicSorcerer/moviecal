@@ -167,6 +167,20 @@ export function WatchlistPageClient({
           </div>
 
           <div className="mt-6 grid gap-4 md:grid-cols-2">
+            {!overviewErrorMessage && watchlists.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-sm text-slate-600 md:col-span-2">
+                <h4 className="text-lg font-semibold text-slate-950">No watchlists yet</h4>
+                <p className="mt-2 leading-6">
+                  Use the form to create your first shared watchlist and plan a movie night.
+                </p>
+                <a
+                  href="#watchlist-name"
+                  className="mt-4 inline-flex rounded-full bg-sky-700 px-4 py-2 font-medium text-white transition hover:bg-sky-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700"
+                >
+                  Create your first watchlist
+                </a>
+              </div>
+            ) : null}
             {watchlists.map((watchlist) => {
               const isPersonal = watchlist.kind === 'personal';
 
@@ -236,6 +250,7 @@ export function WatchlistPageClient({
             <label className="block space-y-2">
               <span className="text-sm font-medium text-slate-700">Watchlist name</span>
               <input
+                id="watchlist-name"
                 type="text"
                 name="name"
                 value={createName}
@@ -251,7 +266,7 @@ export function WatchlistPageClient({
             <button
               type="submit"
               disabled={isCreatingWatchlist}
-              className="w-full rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+              className="w-full rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700 disabled:cursor-not-allowed disabled:bg-slate-400"
             >
               {isCreatingWatchlist ? 'Creating…' : 'Create shared watchlist'}
             </button>
@@ -310,6 +325,12 @@ export function WatchlistPageClient({
             <p className="mt-2 max-w-2xl leading-6">
               Save movies from the search page to track upcoming release dates here.
             </p>
+            <Link
+              href="/search"
+              className="mt-4 inline-flex rounded-full bg-sky-700 px-4 py-2 font-medium text-white transition hover:bg-sky-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700"
+            >
+              Search movies
+            </Link>
           </div>
         ) : (
           <ul className="grid gap-4">

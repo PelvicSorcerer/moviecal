@@ -32,6 +32,27 @@ describe('WatchlistPageClient', () => {
 
     expect(screen.getByText('Your watchlist is empty')).toBeTruthy();
     expect(screen.getByText('Watchlists you can access')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Search movies' }).getAttribute('href')).toBe('/search');
+    expect(screen.queryByText('No watchlists yet')).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps populated watchlists without empty-state actions', () => {
+    render(
+      <WatchlistPageClient
+        initialItems={[buildWatchlistItem()]}
+        initialWatchlists={[buildWatchlistSummary()]}
+        overviewErrorMessage={null}
+        personalItemsErrorMessage={null}
+        personalWatchlistId="personal-watchlist-1"
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'The Matrix' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeTruthy();
+    expect(screen.queryByText('Your watchlist is empty')).toBeNull();
+    expect(screen.queryByText('No watchlists yet')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Search movies' })).toBeNull();
   });
 
   it('removes an item from the UI after a successful delete request', async () => {
@@ -98,7 +119,7 @@ describe('WatchlistPageClient', () => {
     expect(screen.getByText('Watchlist item not found.')).toBeTruthy();
   });
 
-  it('creates a shared watchlist and appends it to the overview', async () => {
+  it('creates a first watchlist using the existing form and replaces the empty overview', async () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -113,12 +134,17 @@ describe('WatchlistPageClient', () => {
     render(
       <WatchlistPageClient
         initialItems={[]}
-        initialWatchlists={[buildWatchlistSummary()]}
+        initialWatchlists={[]}
         overviewErrorMessage={null}
         personalItemsErrorMessage={null}
-        personalWatchlistId="personal-watchlist-1"
+        personalWatchlistId={null}
       />,
     );
+
+    expect(screen.getByRole('heading', { name: 'No watchlists yet' })).toBeTruthy();
+    expect(screen.getByText('Use the form to create your first shared watchlist and plan a movie night.')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Create your first watchlist' }).getAttribute('href')).toBe('#watchlist-name');
+    expect(screen.getByLabelText('Watchlist name').id).toBe('watchlist-name');
 
     fireEvent.change(screen.getByLabelText('Watchlist name'), {
       target: { value: 'Friday movie night' },
@@ -141,6 +167,8 @@ describe('WatchlistPageClient', () => {
     expect(
       screen.getByText('Created shared watchlist Friday movie night.'),
     ).toBeTruthy();
+    expect(screen.queryByText('No watchlists yet')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Create your first watchlist' })).toBeNull();
   });
 
   it('links accessible watchlists to their detail pages', () => {
@@ -181,6 +209,7 @@ describe('WatchlistPageClient', () => {
     );
 
     expect(screen.getByText('Watchlist overview unavailable')).toBeTruthy();
+    expect(screen.queryByText('No watchlists yet')).toBeNull();
     expect(screen.getByText('Could not load your watchlists right now.')).toBeTruthy();
     expect(screen.getByText('Personal watchlist')).toBeTruthy();
     expect(screen.getByText('The Matrix')).toBeTruthy();
