@@ -29,6 +29,8 @@ describe("reviewed production Jev cohort", () => {
   let home, dir, store, p;
   const save = (filename, value) => fs.writeFileSync(path.join(dir, filename), JSON.stringify(value), { mode: 0o600 });
   beforeEach(() => {
+    // Calls that omit `now` read the wall clock; pin it inside the fixture window.
+    vi.useFakeTimers({ toFake: ["Date"], now: NOW });
     home = fs.mkdtempSync(path.join(os.tmpdir(), "mov437-"));
     dir = path.join(home, ".config", "moviecal"); fs.mkdirSync(dir, { recursive: true });
     p = policy();
@@ -38,7 +40,7 @@ describe("reviewed production Jev cohort", () => {
     store = new JevCohortStore({ home, configPath: path.join(dir, "jev-cohort.json"),
       approvalPath: path.join(dir, "jev-cohort-approval.json"), ledgerPath: path.join(dir, "jev-cohort-ledger.json") });
   });
-  afterEach(() => { vi.restoreAllMocks(); fs.rmSync(home, { recursive: true, force: true }); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); fs.rmSync(home, { recursive: true, force: true }); });
   const issue = (id, labels = ["worker:codex", "router:jev"]) => ({ identifier: id, labels });
   const account = { keyUsageUsd: 1, keyRemainingUsd: 68, availableCreditUsd: 69,
     totalCreditsUsd: 69, totalUsageUsd: 0 };
