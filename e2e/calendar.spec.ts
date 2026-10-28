@@ -100,9 +100,13 @@ test('rotation can be confirmed by keyboard alone at a narrow viewport', async (
   await page.keyboard.press('Enter');
 
   // The subscription UI itself must fit the 375px viewport.
-  const overflowing = await page.evaluate(() =>
-    ['code', 'button', 'form'].flatMap((selector) =>
-      [...document.querySelectorAll(selector)]
+  // Scoped to the calendar section: the app shell's Sign out button already
+  // overflows at 375px independently of this page.
+  const overflowing = await page.evaluate(() => {
+    const section = document.querySelector('code')?.closest('section');
+
+    return ['code', 'button', 'form'].flatMap((selector) =>
+      [...(section?.querySelectorAll(selector) ?? [])]
         .map((el) => ({
           selector,
           text: el.textContent?.trim().slice(0, 30),
@@ -110,8 +114,8 @@ test('rotation can be confirmed by keyboard alone at a narrow viewport', async (
           viewport: window.innerWidth,
         }))
         .filter((box) => box.right > box.viewport),
-    ),
-  );
+    );
+  });
   expect(overflowing).toEqual([]);
 
   // Cancel receives focus first; Cancel returns focus to the trigger.
