@@ -103,8 +103,13 @@ test('rotation can be confirmed by keyboard alone at a narrow viewport', async (
   const overflowing = await page.evaluate(() =>
     ['code', 'button', 'form'].flatMap((selector) =>
       [...document.querySelectorAll(selector)]
-        .filter((el) => el.getBoundingClientRect().right > window.innerWidth)
-        .map((el) => selector),
+        .map((el) => ({
+          selector,
+          text: el.textContent?.trim().slice(0, 30),
+          right: Math.round(el.getBoundingClientRect().right),
+          viewport: window.innerWidth,
+        }))
+        .filter((box) => box.right > box.viewport),
     ),
   );
   expect(overflowing).toEqual([]);
