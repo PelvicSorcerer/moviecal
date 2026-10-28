@@ -37,10 +37,11 @@ describe('SearchPageClient', () => {
     );
 
     expect(
-      screen.getByRole('heading', { name: 'Search the TMDb-backed catalog' }),
+      screen.getByRole('heading', { name: 'Find a movie' }),
     ).toBeTruthy();
     expect(screen.getByPlaceholderText('Search by title')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy();
+    expect(screen.getByText(/Enter a movie title above/)).toBeTruthy();
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -113,6 +114,7 @@ describe('SearchPageClient', () => {
 
     expect(screen.getByText(/No movies matched/)).toBeTruthy();
     expect(screen.getByText('unknown-title')).toBeTruthy();
+    expect(screen.getByText(/Check the spelling/)).toBeTruthy();
   });
 
   it('surfaces search endpoint failures without crashing', async () => {
@@ -140,6 +142,51 @@ describe('SearchPageClient', () => {
     ).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Search results' })).toBeNull();
   });
+
+  it.each(['network', 'invalid-json'])(
+    'retries the submitted query after a %s failure, without submitting an edited title',
+    async (failure) => {
+      const failedResponse = failure === 'network'
+        ? Promise.reject(new TypeError('Failed to fetch'))
+        : Promise.resolve({
+          ok: false,
+          json: async () => { throw new SyntaxError('Invalid JSON'); },
+        } as Response);
+      vi.mocked(fetch)
+        .mockReturnValueOnce(failedResponse)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => buildTmdbSearchResponse([TEST_TMDB_IDS.MATRIX]),
+        } as Response);
+
+      const { container } = render(
+        <SearchPageClient
+          availableWatchlists={[]}
+          initialQuery="matrix"
+          isAuthenticated={false}
+        />,
+      );
+      const liveRegion = container.querySelector('[aria-live="polite"]');
+
+      await waitFor(() => {
+        expect(liveRegion?.textContent).toContain('Search unavailable');
+      });
+      fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'another title' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { name: 'The Matrix' })).toBeTruthy();
+      });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(fetch).toHaveBeenLastCalledWith('/api/movies/search?q=matrix', {
+        method: 'GET',
+        cache: 'no-store',
+      });
+      expect(container.querySelector('[aria-live="polite"]')).toBe(liveRegion);
+      expect(liveRegion?.textContent).toContain('Search complete: 1 match for matrix.');
+      expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    },
+  );
 
   it('prompts anonymous visitors to sign in before adding movies', async () => {
     vi.mocked(fetch).mockResolvedValue({

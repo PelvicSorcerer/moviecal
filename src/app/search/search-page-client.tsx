@@ -269,7 +269,7 @@ export function SearchPageClient({
             });
           }}
         >
-          <label className="flex-1">
+          <label className="min-w-0 flex-1">
             <span className="sr-only">Search for a movie</span>
             <input
               value={query}
@@ -292,48 +292,70 @@ export function SearchPageClient({
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        {status === 'idle' ? (
-          <div className="space-y-2">
-            <h3 className="text-lg font-semibold text-slate-950">
-              Search the TMDb-backed catalog
-            </h3>
-            <p className="text-sm leading-6 text-slate-600">
-              Enter a title to see release dates, result summaries, and watchlist
-              actions from the app&apos;s server-side movie search endpoint.
-            </p>
-          </div>
-        ) : null}
+        <div aria-live="polite" aria-atomic="true" className="[overflow-wrap:anywhere]">
+          {status === 'idle' ? (
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold text-slate-950">
+                Find a movie
+              </h3>
+              <p className="text-sm leading-6 text-slate-600">
+                Enter a movie title above and select Search to find release dates
+                and movies to add to your watchlist.
+              </p>
+            </div>
+          ) : null}
 
-        {status === 'loading' ? (
-          <div className="space-y-2">
-            <h3 className="text-lg font-semibold text-slate-950">Searching…</h3>
-            <p className="text-sm leading-6 text-slate-600">
-              Looking up matches for{' '}
-              <span className="font-medium text-slate-950">
-                {submittedQuery}
-              </span>
-              .
-            </p>
-          </div>
-        ) : null}
+          {status === 'loading' ? (
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold text-slate-950">Searching…</h3>
+              <p className="text-sm leading-6 text-slate-600">
+                Looking up matches for{' '}
+                <span className="font-medium text-slate-950">
+                  {submittedQuery}
+                </span>
+                .
+              </p>
+            </div>
+          ) : null}
 
-        {status === 'error' ? (
-          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">
-            <p className="font-semibold text-rose-900">Search unavailable</p>
-            <p className="mt-2 leading-6">{errorMessage}</p>
-          </div>
-        ) : null}
+          {status === 'error' ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">
+              <p className="font-semibold text-rose-900">Search unavailable</p>
+              <p className="mt-2 leading-6">{errorMessage}</p>
+              <p className="mt-2 leading-6">
+                Try again, or search for another title.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setStatus('loading');
+                  setErrorMessage(null);
+                  setSearchNonce((current) => current + 1);
+                }}
+                className="mt-4 rounded-2xl bg-sky-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-300"
+              >
+                Try again
+              </button>
+            </div>
+          ) : null}
 
-        {status === 'success' && hasSearched && results.length === 0 ? (
-          <div className="space-y-2">
-            <h3 className="text-lg font-semibold text-slate-950">No matches yet</h3>
-            <p className="text-sm leading-6 text-slate-600">
-              No movies matched{' '}
-              <span className="font-medium text-slate-950">{submittedQuery}</span>.
-              Try another title or a broader search.
+          {status === 'success' && hasSearched && results.length === 0 ? (
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold text-slate-950">No matches yet</h3>
+              <p className="text-sm leading-6 text-slate-600">
+                No movies matched{' '}
+                <span className="font-medium text-slate-950">{submittedQuery}</span>.
+                Check the spelling or try another title or a broader search.
+              </p>
+            </div>
+          ) : null}
+
+          {status === 'success' && results.length > 0 ? (
+            <p className="sr-only">
+              Search complete: {resultCountLabel} for {submittedQuery}.
             </p>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
 
         {status === 'success' && results.length > 0 ? (
           <div className="space-y-5">

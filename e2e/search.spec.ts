@@ -109,6 +109,80 @@ test('anonymous search visitors see deterministic results and a sign-in CTA', as
   ).toBeVisible();
 });
 
+test('search explains how to start and announces an empty result at mobile width', async ({
+  page,
+  stubMovieSearchWithScenario,
+}) => {
+  const query = 'unmatched'.repeat(20);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await stubMovieSearchWithScenario({ query, results: [] });
+  await page.goto('/search');
+
+  const status = page.locator('[aria-live="polite"]');
+  await expect(status).toHaveAttribute('aria-atomic', 'true');
+  await expect(status.getByRole('heading', { name: 'Find a movie' })).toBeVisible();
+  await expect(status).toContainText('Enter a movie title above and select Search');
+  await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0);
+
+  await page.getByRole('searchbox', { name: 'Search for a movie' }).fill(query);
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+
+  await expect(status.getByRole('heading', { name: 'No matches yet' })).toBeVisible();
+  await expect(status).toContainText(query);
+  await expect(status).toContainText('Check the spelling or try another title');
+  await expect(status).not.toContainText('Search unavailable');
+  expect(await page.evaluate(() => (
+    document.documentElement.scrollWidth <= window.innerWidth
+  ))).toBe(true);
+});
+
+for (const failure of ['server', 'network'] as const) {
+  test(`search announces ${failure} failure and retries the original query at mobile width`, async ({
+    page,
+    stubMovieSearch,
+  }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await stubMovieSearch();
+    const requests: string[] = [];
+    const pageErrors: string[] = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await page.route('**/api/movies/search**', async (route) => {
+      requests.push(new URL(route.request().url()).searchParams.get('q') ?? '');
+      if (requests.length > 1) {
+        await route.fallback();
+      } else if (failure === 'network') {
+        await route.abort('failed');
+      } else {
+        await route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'Movie search is unavailable right now.' }),
+        });
+      }
+    });
+    await page.goto('/search?q=matrix');
+
+    const status = page.locator('[aria-live="polite"]');
+    await expect(status).toContainText('Search unavailable');
+    await expect(status).toContainText('Try again, or search for another title.');
+    await expect(status.getByRole('button', { name: 'Try again' })).toBeVisible();
+    await expect(status).not.toContainText('No movies matched');
+    expect(await page.evaluate(() => (
+      document.documentElement.scrollWidth <= window.innerWidth
+    ))).toBe(true);
+
+    await page.getByRole('searchbox', { name: 'Search for a movie' }).fill('another title');
+    await page.getByRole('button', { name: 'Try again' }).click();
+
+    await expect(page.getByRole('heading', { name: 'The Matrix' })).toBeVisible();
+    await expect(status).toContainText('Search complete: 1 match for matrix.');
+    await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0);
+    await expect(page).toHaveURL(/\/search\?q=matrix$/);
+    expect(requests).toEqual(['matrix', 'matrix']);
+    expect(pageErrors).toEqual([]);
+  });
+}
+
 test('authenticated visitors can add and remove a deterministic fixture movie through the watchlist flow', async ({
   page,
   seedAuthenticatedSession,
@@ -159,6 +233,7 @@ test('authenticated search shows the loading state while the app endpoint is pen
   await page.getByRole('button', { name: 'Search' }).click();
 
   await expect(page.getByRole('heading', { name: 'Searching…' })).toBeVisible();
+  await expect(page.locator('[aria-live="polite"]')).toContainText('Searching…');
   await expect(page.getByText('Looking up matches for')).toContainText('matrix');
   await expect(page).toHaveURL(/\/search\?q=matrix$/);
   await expect(page.getByRole('heading', { name: 'Search results' })).toBeVisible();
