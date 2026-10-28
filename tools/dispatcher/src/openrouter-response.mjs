@@ -3,6 +3,9 @@
 import { StringDecoder } from "node:string_decoder";
 
 const id = (v) => typeof v === "string" && /^[A-Za-z0-9_.:/-]{1,200}$/.test(v) ? v : null;
+// Diagnostic only, never used for a decision: a bounded copy of a provider
+// string so a failed identity check can be explained from the run log.
+const shown = (v) => typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 200) || null : null;
 const count = (v) => Number.isSafeInteger(v) && v >= 0 ? v : null;
 const usd = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
 const effort = (v) => ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(v) ? v : null;
@@ -156,6 +159,7 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
       const record = {
         resolvedModel, provider: id(endpoint?.provider),
         canonicalModel: canonical(resolvedModel),
+        endpointModel: shown(endpoint?.model), endpointProvider: shown(endpoint?.provider), endpointTag: shown(endpoint?.tag),
         // Bounded field names identify an upstream schema gap without saving
         // arbitrary plugin data, prompt text or reasoning content.
         routerStageKeys: Object.keys(jev || {}).filter((key) => id(key)).slice(0, 32),
