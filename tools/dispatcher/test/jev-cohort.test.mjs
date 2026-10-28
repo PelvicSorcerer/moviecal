@@ -219,6 +219,20 @@ describe("reviewed production Jev cohort", () => {
     expect(() => restarted.reserve("request-3", "MOV-10", funded, NOW)).toThrow();
   });
 
+  it("does not trip the exposure check on a key balance finer than one micro-dollar", () => {
+    const fp = { ...p, baselineKeyUsageUsd: 0.5432368 };
+    save("jev-cohort.json", { enabled: false, policy: fp });
+    save("jev-cohort-approval.json", { ...approval(fp), keyRemainingUsd: 68.4567632,
+      availableCreditUsd: 67.58223488, totalCreditsUsd: 69, totalUsageUsd: 1.41776512 });
+    store.activate(NOW);
+    store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+    const fine = { ...account, keyUsageUsd: 0.5432368, keyRemainingUsd: 68.4567632,
+      availableCreditUsd: 67.58223488, totalCreditsUsd: 69, totalUsageUsd: 1.41776512 };
+    store.reserve("request-1", "MOV-10", fine, NOW);
+    expect(store.export().requests[0].reservedUsd).toBe(68.456764);
+    expect(store.state(NOW).status).toBe("pending-invoice");
+  });
+
   it("refuses fresh payment when delayed invoices consume the last existing credit", () => {
     const reviewed = { ...approval(p), availableCreditUsd: 0.2, totalCreditsUsd: 10.2, totalUsageUsd: 10 };
     save("jev-cohort-approval.json", reviewed);
