@@ -12,7 +12,7 @@ import { listUserWatchlists, type WatchlistSummary } from '../../lib/watchlist';
 import { SearchPageClient } from './search-page-client';
 
 export const metadata: Metadata = {
-  title: 'Search | moviecal',
+  title: 'Search',
   description: 'Search TMDb-backed movie results through the server-side moviecal API.',
 };
 

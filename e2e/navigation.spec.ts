@@ -3,10 +3,10 @@ import type { Page } from '@playwright/test';
 import { expect, test } from './test-fixtures';
 
 const routes = [
-  { path: '/', label: 'Home' },
-  { path: '/search', label: 'Search' },
-  { path: '/watchlist', label: 'Watchlists' },
-  { path: '/settings/calendar', label: 'Calendar' },
+  { path: '/', label: 'Home', title: 'moviecal' },
+  { path: '/search', label: 'Search', title: 'Search | moviecal' },
+  { path: '/watchlist', label: 'Watchlists', title: 'Watchlists | moviecal' },
+  { path: '/settings/calendar', label: 'Calendar', title: 'Calendar settings | moviecal' },
 ];
 
 async function expectHeaderFits(page: Page, signedIn: boolean) {
@@ -42,7 +42,9 @@ for (const width of [375, 1280]) {
         await page.goto('/');
         const navigation = page.getByRole('navigation', { name: 'Main navigation' });
 
-        for (const { path, label } of routes) {
+        await expect(page).toHaveTitle('moviecal');
+
+        for (const { path, label, title } of routes) {
           await navigation.getByRole('link', { name: label, exact: true }).click();
 
           if (!signedIn && (path === '/watchlist' || path === '/settings/calendar')) {
@@ -50,8 +52,10 @@ for (const width of [375, 1280]) {
               new RegExp(`/sign-in\\?next=${encodeURIComponent(path)}$`),
             );
             await expect(navigation.locator('[aria-current]')).toHaveCount(0);
+            await expect(page).toHaveTitle('Sign in | moviecal');
           } else {
             await expect(page).toHaveURL(path);
+            await expect(page).toHaveTitle(title);
             const currentLink = navigation.getByRole('link', { name: label, exact: true });
             await expect(currentLink).toHaveAttribute('aria-current', 'page');
             await expect(navigation.locator('[aria-current]')).toHaveCount(1);
@@ -106,3 +110,69 @@ for (const width of [375, 1280]) {
     }
   });
 }
+
+test.describe('browser page titles', () => {
+  test('direct visits use descriptive titles and preserve the default description', async ({
+    page,
+    seedAuthenticatedSession,
+  }) => {
+    await seedAuthenticatedSession({
+      sharedWatchlists: [{ id: 'e2e-title-watchlist', name: 'Friday movie night' }],
+    });
+
+    for (const { path, title } of routes) {
+      await page.goto(path);
+      await expect(page).toHaveURL(path);
+      await expect(page).toHaveTitle(title);
+      await expect(page.locator('head title')).toHaveCount(1);
+
+      if (path === '/' || path === '/settings/calendar') {
+        await expect(page.locator('meta[name="description"]')).toHaveAttribute(
+          'content',
+          'Keep private and shared movie watchlists, and follow release dates with a personal iCalendar feed.',
+        );
+      }
+    }
+
+    await page.goto('/watchlist/e2e-title-watchlist');
+    await expect(page.getByRole('heading', { level: 1, name: 'Friday movie night' })).toBeVisible();
+    await expect(page).toHaveTitle('Watchlist | moviecal');
+
+    await page.goto('/watchlist/invite/invalid-invite');
+    await expect(page).toHaveURL('/watchlist/invite/invalid-invite');
+    await expect(page).toHaveTitle('Watchlist invite | moviecal');
+  });
+
+  test('signed-out pages and protected-page redirects use the sign-in title', async ({ page }) => {
+    for (const path of [
+      '/sign-in',
+      '/watchlist',
+      '/settings/calendar',
+      '/watchlist/e2e-title-watchlist',
+      '/watchlist/invite/invalid-invite',
+    ]) {
+      await page.goto(path);
+      await expect(page).toHaveURL(path === '/sign-in'
+        ? '/sign-in'
+        : new RegExp(`/sign-in\\?next=${encodeURIComponent(path)}$`));
+      await expect(page).toHaveTitle('Sign in | moviecal');
+      await expect(page.getByRole('heading', { name: 'Sign in to moviecal' })).toBeVisible();
+    }
+  });
+
+  test('signed-in sign-in redirects use the destination title', async ({
+    page,
+    seedAuthenticatedSession,
+  }) => {
+    await seedAuthenticatedSession();
+
+    for (const path of ['/sign-in', '/sign-in?next=%2Fsettings%2Fcalendar']) {
+      await page.goto(path);
+      const calendarRedirect = path.includes('next=');
+      await expect(page).toHaveURL(calendarRedirect ? '/settings/calendar' : '/watchlist');
+      await expect(page).toHaveTitle(calendarRedirect
+        ? 'Calendar settings | moviecal'
+        : 'Watchlists | moviecal');
+    }
+  });
+});
