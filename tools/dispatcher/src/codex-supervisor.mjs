@@ -25,7 +25,8 @@ const fail = (message) => {
 };
 const executorEnv = Object.fromEntries(config.executorEnvironmentKeys.filter((key) => process.env[key] != null)
   .map((key) => [key, process.env[key]]));
-Object.assign(executorEnv, { HOME: config.executorHome, CODEX_HOME: config.executorHome, TMPDIR: config.executorScratch });
+Object.assign(executorEnv, { HOME: config.executorHome, CODEX_HOME: config.executorHome, TMPDIR: config.executorScratch,
+  TMP: config.executorScratch, TEMP: config.executorScratch, TMPPREFIX: `${config.executorScratch}/zsh` });
 const reservePort = async () => {
   const reservation = net.createServer();
   await new Promise((resolve, reject) => { reservation.once("error", reject); reservation.listen(0, "127.0.0.1", resolve); });
