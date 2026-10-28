@@ -210,6 +210,20 @@ describe("OpenRouter Responses evidence", () => {
     data.candidates = [{ model: "other/model", effort: "low" }];
     expect(observe([event]).routerCandidate).toMatchObject({ matched: 0, entries: [] });
   });
+  it("logs Jev's reconsidered step, redacted and bounded, without changing the guard", () => {
+    const event = completed(), metadata = event.response.openrouter_metadata, data = metadata.pipeline[0].data;
+    expect(observe([event]).routerReconsidered).toEqual({ stageNames: ["jev-router"], found: [] });
+    data.reconsidered = { final_model: "google/fixture", final_effort: "high", overrode_candidate: true, rationale: "PRIVATE_SENTINEL free text" };
+    metadata.pipeline.push({ name: "reconsidered", data: { effort: "medium", note: "free text PRIVATE_SENTINEL" } });
+    const result = observe([event]);
+    expect(result.routerReconsidered).toEqual({ stageNames: ["jev-router", "reconsidered"], found: [
+      { source: "stage", name: "reconsidered", data: { effort: "medium", note: "[redacted]" } },
+      { source: "jev-field", name: "reconsidered", data: { final_model: "google/fixture", final_effort: "high", overrode_candidate: true, rationale: "[redacted]" } }] });
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
+    expect(result.error).toBeNull();
+    metadata.pipeline = Array.from({ length: 70 }, () => ({ name: "reconsidered" }));
+    expect(observe([event]).routerReconsidered).toEqual({ stageNames: [], found: [] });
+  });
   it("matches Jev's dated candidate and resolved names to the resolved model, and nothing looser", () => {
     const event = completed(), data = event.response.openrouter_metadata.pipeline[0].data;
     event.response.openrouter_metadata.endpoints.available[0].model = "google/fixture-20261023";

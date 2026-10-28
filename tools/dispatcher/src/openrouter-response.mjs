@@ -48,6 +48,18 @@ function redactedEntry(row) {
   return out;
 }
 
+// Diagnostic only, never used for a decision: Jev's "reconsidered" step,
+// whether it is a pipeline stage or a field of the jev-router stage.
+function reconsideredEvidence(pipeline, jev) {
+  const named = (key) => typeof key === "string" && /reconsider/i.test(key);
+  const stages = Array.isArray(pipeline) && pipeline.length <= 64 ? pipeline : [];
+  const found = [
+    ...stages.filter((stage) => named(stage?.name)).slice(0, 4).map((stage) => ({ source: "stage", name: shown(stage.name), data: redactedEntry(stage.data) })),
+    ...Object.keys(jev || {}).filter((key) => id(key) && named(key)).slice(0, 4).map((key) => ({ source: "jev-field", name: key, data: redactedEntry(jev[key]) })),
+  ];
+  return { stageNames: stages.slice(0, 16).map((stage) => shown(stage?.name)), found };
+}
+
 export function createResponseObserver({ modelAliases = {}, proofDebug = false, deferCompletion = false, control = null, rejectFallback = false } = {}) {
   const canonical = (model) => id(modelAliases[model]) || id(model);
   // A pinned alias must match exactly. Otherwise the endpoint may report the
@@ -204,6 +216,7 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
         // arbitrary plugin data, prompt text or reasoning content.
         routerStageKeys: Object.keys(jev || {}).filter((key) => id(key)).slice(0, 32),
         routerCandidate,
+        routerReconsidered: reconsideredEvidence(snapshot.metadata?.pipeline, jev),
         routerEffortHints: proofDebug ? effortHints(jev) : [],
         responseEffort,
         // Responses reasoning can echo the request; it is not proof of Jev's
