@@ -18,6 +18,11 @@ UID strategy
   - UID = SHA256(CONCAT(user_id, ":", tmdb_id)) + "@moviecal"
 - Do not derive UID from token value because token rotation should not force event identity churn.
 
+Subscription settings
+- `/settings/calendar` shows the authenticated owner's private URL with a Copy link button and live success/failure feedback. If clipboard access is unavailable, it selects the URL for manual copying.
+- Brief Apple Calendar, Google Calendar, and Outlook instructions explain subscription rather than one-time file import. Apple Calendar can open the same URL with the `webcal:` scheme.
+- Rotation requires inline confirmation that existing subscriptions stop updating. Cancel does not submit the rotation action. After confirming, subscribe again with the new URL; the old URL returns HTTP 404.
+
 Event content
 - SUMMARY: movie title (include year optional)
 - DESCRIPTION: optional TMDb URL and overview snippet
