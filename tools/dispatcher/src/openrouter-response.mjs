@@ -30,6 +30,24 @@ function effortHints(data) {
   return hints;
 }
 
+// Diagnostic only, never used for a decision: scalars that are numbers,
+// booleans or identifier-shaped strings survive; free text is replaced and
+// nested values are reduced to bounded key names or a length.
+const rawEffort = (v) => v == null ? null : typeof v === "string" ? shown(v) : `[${typeof v}]`;
+
+function redactedEntry(row) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+  const out = {};
+  for (const [key, child] of Object.entries(row).slice(0, 32)) {
+    if (!id(key) || key.length > 64) continue;
+    if (typeof child === "number" || typeof child === "boolean" || child === null) out[key] = child;
+    else if (typeof child === "string") out[key] = id(child) ? child : "[redacted]";
+    else if (Array.isArray(child)) out[key] = { length: child.length };
+    else if (typeof child === "object") out[key] = { keys: Object.keys(child).filter((k) => id(k) && k.length <= 64).slice(0, 16) };
+  }
+  return out;
+}
+
 export function createResponseObserver({ modelAliases = {}, proofDebug = false, deferCompletion = false, control = null, rejectFallback = false } = {}) {
   const canonical = (model) => id(modelAliases[model]) || id(model);
   // A pinned alias must match exactly. Otherwise the endpoint may report the
@@ -151,6 +169,11 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
       const selectedByJev = Array.isArray(jev?.resolved_models) && jev.resolved_models.length <= 128
         && jev.resolved_models.some((model) => id(model) && canonical(model) === canonical(resolvedModel));
       const candidateEffort = candidates.length === 1 ? effort(candidates[0].effort) : null;
+      const routerCandidate = {
+        matched: candidates.length, selectedByJev,
+        candidateEffort, rawEffort: candidates.length === 1 ? rawEffort(candidates[0].effort) : null,
+        entries: candidates.slice(0, 4).map(redactedEntry),
+      };
       // Live contrast: caller low, completed response/candidate/upstream high.
       // Responses effort alone, evaluations and incumbent defaults are not proof.
       const responseEffort = snapshot.responseEffort || null;
@@ -174,6 +197,7 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
         // Bounded field names identify an upstream schema gap without saving
         // arbitrary plugin data, prompt text or reasoning content.
         routerStageKeys: Object.keys(jev || {}).filter((key) => id(key)).slice(0, 32),
+        routerCandidate,
         routerEffortHints: proofDebug ? effortHints(jev) : [],
         responseEffort,
         // Responses reasoning can echo the request; it is not proof of Jev's
