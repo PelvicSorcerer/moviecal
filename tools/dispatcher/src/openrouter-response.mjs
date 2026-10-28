@@ -164,15 +164,21 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
       const jev = stages.length === 1 ? stages[0].data : null;
       const model = id(snapshot.model);
       const resolvedModel = model === "typesafe/jev-router" ? null : model;
+      // Jev may list the dated snapshot of the model it resolved; the same
+      // strict matcher as the endpoint check applies, and nothing looser.
+      const listedMatches = (name) => id(name) && id(resolvedModel) && servedModelMatches(resolvedModel, name);
       const candidates = Array.isArray(jev?.candidates) && jev.candidates.length <= 128
-        ? jev.candidates.filter((row) => id(row?.model) && canonical(row.model) === canonical(resolvedModel)) : [];
+        ? jev.candidates.filter((row) => listedMatches(row?.model)) : [];
       const selectedByJev = Array.isArray(jev?.resolved_models) && jev.resolved_models.length <= 128
-        && jev.resolved_models.some((model) => id(model) && canonical(model) === canonical(resolvedModel));
+        && jev.resolved_models.some(listedMatches);
+      const listedNames = (list) => Array.isArray(list) ? list.slice(0, 8).map((item) => shown(typeof item === "string" ? item : item?.model)) : null;
       const candidateEffort = candidates.length === 1 ? effort(candidates[0].effort) : null;
       const routerCandidate = {
         matched: candidates.length, selectedByJev,
         candidateEffort, rawEffort: candidates.length === 1 ? rawEffort(candidates[0].effort) : null,
         entries: candidates.slice(0, 4).map(redactedEntry),
+        // Diagnostic only: the names Jev listed, to explain a failed match.
+        listedCandidates: listedNames(jev?.candidates), listedResolved: listedNames(jev?.resolved_models),
       };
       // Live contrast: caller low, completed response/candidate/upstream high.
       // Responses effort alone, evaluations and incumbent defaults are not proof.
