@@ -186,14 +186,15 @@ describe("OpenRouter Responses evidence", () => {
   it("retains the chosen candidate's effort evidence, redacted and bounded, without changing the guard", () => {
     const event = completed(), data = event.response.openrouter_metadata.pipeline[0].data;
     expect(observe([event]).routerCandidate).toEqual({ matched: 1, selectedByJev: true, candidateEffort: "low", rawEffort: "low",
-      entries: [{ model: "google/fixture", effort: "low" }] });
+      entries: [{ model: "google/fixture", effort: "low" }], listedCandidates: ["google/fixture"], listedResolved: ["google/fixture"] });
     // No effort field: guard still stops, and the record says why.
     data.candidates = [{ model: "google/fixture", reasoning: { effort: "high", note: "PRIVATE_SENTINEL" },
       evaluation: "free text PRIVATE_SENTINEL", score: 0.5, tags: ["a", "b"] }];
     let result = observe([event]);
     expect(result).toMatchObject({ error: "missing-provider-attribution", resolvedEffort: null });
     expect(result.routerCandidate).toEqual({ matched: 1, selectedByJev: true, candidateEffort: null, rawEffort: null,
-      entries: [{ model: "google/fixture", reasoning: { keys: ["effort", "note"] }, evaluation: "[redacted]", score: 0.5, tags: { length: 2 } }] });
+      entries: [{ model: "google/fixture", reasoning: { keys: ["effort", "note"] }, evaluation: "[redacted]", score: 0.5, tags: { length: 2 } }],
+      listedCandidates: ["google/fixture"], listedResolved: ["google/fixture"] });
     expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
     // Non-enum effort is kept as a bounded string, and a mismatch still fails.
     data.candidates = [{ model: "google/fixture", effort: "Very high!" + "x".repeat(300) }];
@@ -208,6 +209,32 @@ describe("OpenRouter Responses evidence", () => {
     expect(observe([event]).routerCandidate.entries).toHaveLength(4);
     data.candidates = [{ model: "other/model", effort: "low" }];
     expect(observe([event]).routerCandidate).toMatchObject({ matched: 0, entries: [] });
+  });
+  it("matches Jev's dated candidate and resolved names to the resolved model, and nothing looser", () => {
+    const event = completed(), data = event.response.openrouter_metadata.pipeline[0].data;
+    event.response.openrouter_metadata.endpoints.available[0].model = "google/fixture-20261023";
+    data.resolved_models = ["google/fixture-20261023"];
+    data.candidates = [{ model: "google/fixture-20261023", effort: "low" }];
+    expect(observe([event])).toMatchObject({ resolvedEffort: "low", error: null,
+      routerCandidate: { matched: 1, selectedByJev: true, candidateEffort: "low" } });
+    // The proof is not relaxed: the candidate's effort must still match.
+    data.candidates = [{ model: "google/fixture-20261023", effort: "high" }];
+    expect(observe([event]).error).toBe("conflicting-served-effort");
+    for (const listed of ["google/fixture-preview", "google/fixture-20261323", "other/fixture-20261023", "google/fixture-20261023-x"]) {
+      data.resolved_models = [listed]; data.candidates = [{ model: listed, effort: "low" }];
+      expect(observe([event]).routerCandidate, listed).toMatchObject({ matched: 0, selectedByJev: false, candidateEffort: null });
+    }
+    // A policy alias pins the snapshot for Jev's lists too.
+    data.resolved_models = ["google/fixture-20261023"]; data.candidates = [{ model: "google/fixture-20261023", effort: "low" }];
+    expect(observe([event], { modelAliases: { "google/fixture": "google/fixture-20260929" } }).routerCandidate).toMatchObject({ matched: 0, selectedByJev: false });
+  });
+  it("logs the model names Jev listed, bounded", () => {
+    const event = completed(), data = event.response.openrouter_metadata.pipeline[0].data;
+    data.candidates = Array.from({ length: 20 }, (_, i) => ({ model: `m/${i}`, effort: "low" }));
+    data.resolved_models = ["x/" + "y".repeat(300)];
+    const { routerCandidate } = observe([event]);
+    expect(routerCandidate.listedCandidates).toHaveLength(8);
+    expect(routerCandidate.listedResolved[0]).toHaveLength(200);
   });
   it("retains bounded endpoint evidence when a display-name endpoint fails the served-model guard", () => {
     const event = completed(); const endpoint = event.response.openrouter_metadata.endpoints.available[0];
