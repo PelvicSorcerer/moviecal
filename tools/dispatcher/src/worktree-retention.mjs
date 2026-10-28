@@ -135,6 +135,7 @@ export function evaluateTerminalState(snapshot, { expectedId, now = Date.now(), 
 // ---- Git helpers ----------------------------------------------------------
 
 const READ_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0" };
+const GIT_MAX_BUFFER = 256 * 1024 * 1024;
 
 function parseWorktreePorcelain(text) {
   const entries = [];
@@ -223,7 +224,8 @@ export class WorktreeRetention {
   }
 
   _git(cwd, args, { env, input } = {}) {
-    return String(this.runner("git", args, { cwd, env: env ? { ...process.env, ...env } : READ_ENV, ...(input ? { input } : {}) }));
+    // `status --ignored --untracked-files=all` lists every file under node_modules; the 1 MiB execFileSync default overflows (ENOBUFS).
+    return String(this.runner("git", args, { cwd, env: env ? { ...process.env, ...env } : READ_ENV, maxBuffer: GIT_MAX_BUFFER, ...(input ? { input } : {}) }));
   }
 
   /** Every Git-registered worktree of this repository, primary first. */
