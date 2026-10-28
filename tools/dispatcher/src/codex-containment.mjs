@@ -20,6 +20,14 @@ export function verifyCodexVersion(binary) {
   return version;
 }
 
+// MOV-452: zsh writes here-document temp files under $TMPPREFIX (default
+// /tmp/zsh), not $TMPDIR, so `apply_patch <<EOF` failed in the executor
+// sandbox. Point every temp convention at the per-run scratch, which is the
+// only writable temp location; the sandbox profile is not widened.
+export function executorTempEnvironment(scratch) {
+  return { TMPDIR: scratch, TMP: scratch, TEMP: scratch, TMPPREFIX: path.join(scratch, "zsh") };
+}
+
 export function resolveCodexExecutable(command = "codex", env = process.env) {
   const found = path.isAbsolute(command) ? command : String(env.PATH || "").split(path.delimiter)
     .map((dir) => path.join(dir, command)).find((file) => fs.existsSync(file));
@@ -134,7 +142,7 @@ export function prepareCodexContainment({ invocation, cwd, logDir, repositoryPat
         "MOVIECAL_WORKER_SANDBOX", "MOVIECAL_IOS_SIM_LEASE_ID"].includes(key)));
     const executorEnvironment = Object.fromEntries(Object.entries(environment).filter(([key]) =>
       ["PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "TERM", "CI", "MOVIECAL_WORKER_SANDBOX", "MOVIECAL_IOS_SIM_LEASE_ID"].includes(key)));
-    Object.assign(executorEnvironment, { HOME: executorHome, CODEX_HOME: executorHome, TMPDIR: executorScratch });
+    Object.assign(executorEnvironment, { HOME: executorHome, CODEX_HOME: executorHome, ...executorTempEnvironment(executorScratch) });
     Object.assign(environment, { CODEX_HOME: harnessHome, TMPDIR: harnessScratch });
     // User config, hooks, plugins and a local fallback environment cannot
     // reintroduce execution in the network-capable client. The native client
