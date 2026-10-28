@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { MoviePoster } from '../movie-poster';
 
 import { formatReleaseDate } from '../../lib/format-release-date';
 import type { WatchlistItem, WatchlistSummary } from '../../lib/watchlist';
@@ -120,14 +121,17 @@ export function WatchlistDetailClient({
                   className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
                 >
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="space-y-3">
-                      <div>
+                    <div className="min-w-0 space-y-3">
+                      <div className="flex items-start gap-3">
+                        <MoviePoster posterPath={item.movie.posterPath} title={item.movie.title} />
+                        <div className="min-w-0 break-words">
                         <h4 className="text-2xl font-semibold text-slate-950">
                           {item.movie.title}
                         </h4>
                         <p className="mt-1 text-sm font-medium text-sky-700">
                           {formatReleaseDate(item.movie.releaseDate)}
                         </p>
+                        </div>
                       </div>
                       <p className="max-w-2xl text-sm leading-6 text-slate-600">
                         {item.movie.overview
@@ -136,7 +140,7 @@ export function WatchlistDetailClient({
                     </div>
 
                     {watchlist.canEdit ? (
-                      <div className="sm:w-40">
+                    <div className="shrink-0 sm:w-40">
                         <button
                           type="button"
                           onClick={() => {
