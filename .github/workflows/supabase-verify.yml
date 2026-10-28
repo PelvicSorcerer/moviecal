@@ -119,7 +119,7 @@ jobs:
 
   lane-full-stack-runtime:
     name: lane-full-stack-runtime
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       CI: true
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
