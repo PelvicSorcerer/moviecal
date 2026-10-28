@@ -1,0 +1,111 @@
+.home {
+  max-width: 56rem;
+  margin: 0 auto;
+  padding: 1rem 0;
+  overflow-wrap: anywhere;
+}
+
+.hero {
+  padding: clamp(1.5rem, 5vw, 3rem);
+  border-radius: 1.5rem;
+  background: #020617;
+  color: #ffffff;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #bae6fd;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  line-height: 1.6;
+  text-transform: uppercase;
+}
+
+.heading {
+  max-width: 20ch;
+  margin: 1rem 0;
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 600;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.intro {
+  max-width: 40rem;
+  margin: 0;
+  color: #e2e8f0;
+  line-height: 1.75;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.actions a {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  max-width: 100%;
+  padding: 0.75rem 1.25rem;
+  border: 1px solid transparent;
+  border-radius: 2rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.5;
+  text-align: center;
+  text-decoration: none;
+}
+
+.actions a:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.25rem;
+}
+
+.actions a:focus-visible {
+  outline: 3px solid #ffffff;
+  outline-offset: 4px;
+}
+
+.actions .primaryLink {
+  background: #38bdf8;
+  color: #020617;
+}
+
+.actions .secondaryLink {
+  border-color: #64748b;
+  color: #ffffff;
+}
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.feature {
+  padding: 1.5rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 1rem;
+  background: #ffffff;
+}
+
+.feature h3 {
+  margin: 0;
+  color: #020617;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.feature p {
+  margin: 0.75rem 0 0;
+  color: #475569;
+  font-size: 0.875rem;
+  line-height: 1.75;
+}
