@@ -32,6 +32,17 @@ function effortHints(data) {
 
 export function createResponseObserver({ modelAliases = {}, proofDebug = false, deferCompletion = false, control = null, rejectFallback = false } = {}) {
   const canonical = (model) => id(modelAliases[model]) || id(model);
+  // A pinned alias must match exactly. Otherwise the endpoint may report the
+  // resolved ID plus one strict `-YYYYMMDD` snapshot suffix, nothing else.
+  function servedModelMatches(resolved, served) {
+    if (canonical(served) === canonical(resolved)) return true;
+    if (id(modelAliases[resolved])) return false;
+    const base = id(resolved), got = id(served);
+    const match = base && got && got.startsWith(`${base}-`) ? /^(\d{4})(\d{2})(\d{2})$/.exec(got.slice(base.length + 1)) : null;
+    if (!match) return false;
+    const [y, m, d] = match.slice(1).map(Number), date = new Date(Date.UTC(y, m - 1, d));
+    return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+  }
   const decoder = new StringDecoder("utf8");
   let pending = "", completed = false, reason = null, snapshot = {}, toolCalls = 0;
   let ended = false, debugCount = 0, debug = null;
@@ -178,7 +189,7 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
         billedUsd: usd(usage.cost), invoiceId: id(snapshot.invoiceId), toolCalls,
         fallback: typeof snapshot.metadata?.attempt === "number" ? snapshot.metadata.attempt > 1 : null,
       };
-      if (resolvedModel && endpoint?.model && canonical(endpoint.model) !== canonical(resolvedModel)) fail("conflicting-served-model");
+      if (resolvedModel && endpoint?.model && !servedModelMatches(resolvedModel, endpoint.model)) fail("conflicting-served-model");
       if (control && (canonical(resolvedModel) !== canonical(control.model)
         || canonical(endpoint?.model) !== canonical(control.model)
         || endpoint?.provider !== control.provider || responseEffort !== control.effort
