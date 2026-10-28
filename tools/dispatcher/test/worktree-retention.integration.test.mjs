@@ -148,6 +148,23 @@ describe.skipIf(insideWorkerSandbox)("WorktreeRetention against real Git worktre
     expect(git(repo, "ls-remote", "origin", "refs/moviecal/*")).toBe("");
   });
 
+  it("inspects a checkout whose ignored-file listing exceeds execFileSync's default buffer (MOV-447)", async () => {
+    fs.writeFileSync(path.join(repo, ".gitignore"), "node_modules\n");
+    git(repo, "add", ".gitignore");
+    git(repo, "commit", "-q", "-m", "ignore node_modules");
+    const wt = addWorktree(dispatcherRoot, "MOV-6-big", "agent/MOV-6-big");
+    const nm = path.join(wt, "node_modules");
+    fs.mkdirSync(nm);
+    // ~1.5 MiB of `git status --ignored --untracked-files=all` output.
+    for (let i = 0; i < 6000; i += 1) fs.writeFileSync(path.join(nm, `${String(i).padStart(5, "0")}-${"x".repeat(240)}`), "");
+    linear = { "MOV-6": snapshot("MOV-6", "Done") };
+
+    const results = await build().run();
+
+    expect(byId(results, "MOV-6")).toMatchObject({ outcome: "removed" });
+    expect(fs.existsSync(wt)).toBe(false);
+  });
+
   it("is idempotent: a second run reports nothing left to remove and adds no refs", async () => {
     const wt = addWorktree(dispatcherRoot, "MOV-6-x", "agent/MOV-6-x");
     fs.writeFileSync(path.join(wt, "u.txt"), "u\n");

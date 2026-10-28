@@ -839,14 +839,24 @@ function parseGcArgs(args) {
 async function cmdGc(args = []) {
   let parsed;
   try { parsed = parseGcArgs(args); } catch (error) { console.error(error.message); return 1; }
-  const auth = resolveLinearAuth();
-  const linear = auth.mode === "app" ? new LinearClient({ appAuth: auth.appAuth })
-    : auth.mode === "apiKey" ? new LinearClient({ apiKey: auth.apiKey }) : null;
   const lock = parsed.dryRun ? null : new DispatcherLock(dispatcherLockPath());
   if (lock) {
     try { lock.acquire(); } catch (error) { console.error(error.message); return 2; }
     process.once("exit", () => lock.release());
   }
+  return runGcPass(parsed);
+}
+
+/**
+ * The gc work itself. The caller must already hold the dispatcher lock for a
+ * live pass: `cmdGc` takes it, and `cmdRun` holds it for its whole life and
+ * calls this between polls (MOV-447) -- a separate launchd `gc` job could
+ * never acquire the daemon's lock.
+ */
+async function runGcPass(parsed) {
+  const auth = resolveLinearAuth();
+  const linear = auth.mode === "app" ? new LinearClient({ appAuth: auth.appAuth })
+    : auth.mode === "apiKey" ? new LinearClient({ apiKey: auth.apiKey }) : null;
   const manager = new WorktreeManager({ repoRoot: REPO_ROOT, worktreeRoot: worktreeRoot(), statePath: worktreesStatePath() });
   const usageLimits = new UsageLimitStore(usageLimitStatePath());
   const retention = new WorktreeRetention({
@@ -1530,6 +1540,8 @@ function buildAgentStreamClient() {
   return new AgentStreamClient(streamConfig);
 }
 
+const GC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
 async function cmdRun({ once, intervalMs }) {
   const lock = new DispatcherLock(dispatcherLockPath());
   try { lock.acquire(); } catch (err) { console.error(err.message); return 2; }
@@ -1575,7 +1587,19 @@ async function cmdRun({ once, intervalMs }) {
   console.log(`Starting poll loop (interval: ${intervalMs}ms). Press Ctrl+C to stop.`);
   // eslint-disable-next-line no-constant-condition
   let firstPoll = true;
+  let lastGcAt = 0;
   while (true) {
+    // MOV-447: nothing else schedules gc. Run it in-process, between polls
+    // (the single dispatch slot is idle here), at most once per GC_INTERVAL_MS.
+    if (!firstPoll && Date.now() - lastGcAt >= GC_INTERVAL_MS) {
+      lastGcAt = Date.now();
+      try {
+        const code = await runGcPass(parseGcArgs([]));
+        if (code !== 0) console.error(`Scheduled worktree gc finished with exit code ${code}`);
+      } catch (err) {
+        console.error("Scheduled worktree gc failed (continuing to dispatch):", err.message);
+      }
+    }
     try {
       const result = await cmdRunOnce({ repairLockHeld: lock.owned });
       if (firstPoll) {
