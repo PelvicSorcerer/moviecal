@@ -22,6 +22,7 @@ test('authenticated users can view and rotate a deterministic calendar subscript
   expect(initialStatus).toBe(200);
 
   await page.getByRole('button', { name: 'Rotate subscription URL' }).click();
+  await page.getByRole('button', { name: 'Confirm rotation' }).click();
   await expect(page).toHaveURL('/settings/calendar');
   await expect(subscriptionUrl).not.toHaveText(initialUrl ?? '');
 
@@ -37,4 +38,83 @@ test('authenticated users can view and rotate a deterministic calendar subscript
 
   expect(oldStatus).toBe(404);
   expect(newStatus).toBe(200);
+});
+
+test('copy link copies the exact subscription URL and announces success', async ({
+  context,
+  page,
+  seedAuthenticatedSession,
+}) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await seedAuthenticatedSession();
+  await page.goto('/settings/calendar');
+
+  const subscriptionUrl = (await page.locator('code').textContent())?.trim();
+
+  await page.getByRole('button', { name: 'Copy link' }).click();
+
+  await expect(page.getByRole('status')).toContainText('Link copied');
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    subscriptionUrl,
+  );
+});
+
+test('cancelling rotation leaves the subscription URL unchanged', async ({
+  page,
+  seedAuthenticatedSession,
+}) => {
+  await seedAuthenticatedSession();
+  await page.goto('/settings/calendar');
+
+  const subscriptionUrl = page.locator('code');
+  const initialUrl = (await subscriptionUrl.textContent())?.trim();
+
+  await page.getByRole('button', { name: 'Rotate subscription URL' }).click();
+  await expect(
+    page.getByText('Existing subscriptions will stop updating'),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel' }).click();
+
+  await expect(
+    page.getByRole('button', { name: 'Confirm rotation' }),
+  ).toHaveCount(0);
+  await expect(subscriptionUrl).toHaveText(initialUrl ?? '');
+});
+
+test('rotation can be confirmed by keyboard alone at a narrow viewport', async ({
+  page,
+  seedAuthenticatedSession,
+}) => {
+  await page.setViewportSize({ width: 375, height: 667 });
+  await seedAuthenticatedSession();
+  await page.goto('/settings/calendar');
+
+  const subscriptionUrl = page.locator('code');
+  const initialUrl = (await subscriptionUrl.textContent())?.trim();
+
+  const rotateButton = page.getByRole('button', {
+    name: 'Rotate subscription URL',
+  });
+  await rotateButton.focus();
+  await page.keyboard.press('Enter');
+
+  // Cancel receives focus first; Cancel returns focus to the trigger.
+  await expect(page.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(rotateButton).toBeFocused();
+  await expect(subscriptionUrl).toHaveText(initialUrl ?? '');
+
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Tab');
+  await expect(
+    page.getByRole('button', { name: 'Confirm rotation' }),
+  ).toBeFocused();
+  await page.keyboard.press('Enter');
+
+  await expect(subscriptionUrl).not.toHaveText(initialUrl ?? '');
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
 });
