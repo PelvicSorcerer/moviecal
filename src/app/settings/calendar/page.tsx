@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { cookies, headers } from 'next/headers';
 
 import { requireAuthenticatedPageSession } from '../../../lib/auth/session';
@@ -14,6 +15,10 @@ import {
   createServerSupabaseServiceRoleClient,
 } from '../../../lib/supabase/server';
 import CalendarSubscription from './subscription';
+
+export const metadata: Metadata = {
+  title: 'Calendar settings',
+};
 
 export default async function CalendarSettings() {
   const session = await requireAuthenticatedPageSession('/settings/calendar');

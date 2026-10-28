@@ -5,7 +5,10 @@ import { getOptionalUser } from '../lib/auth/session';
 import SiteNavigation from './site-navigation';
 
 export const metadata = {
-  title: 'moviecal',
+  title: {
+    default: 'moviecal',
+    template: '%s | moviecal',
+  },
   description: 'Keep private and shared movie watchlists, and follow release dates with a personal iCalendar feed.'
 };
 
