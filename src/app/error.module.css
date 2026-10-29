@@ -1,0 +1,80 @@
+.errorPage {
+  max-width: 56rem;
+  margin: 0 auto;
+  padding: clamp(1.5rem, 5vw, 3rem);
+  border-radius: 1.5rem;
+  background: #020617;
+  color: #ffffff;
+  overflow-wrap: anywhere;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #bae6fd;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  line-height: 1.6;
+  text-transform: uppercase;
+}
+
+.heading {
+  margin: 1rem 0;
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 600;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.help {
+  max-width: 40rem;
+  margin: 0;
+  color: #e2e8f0;
+  line-height: 1.75;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.actions a,
+.actions button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  max-width: 100%;
+  padding: 0.75rem 1.25rem;
+  border: 1px solid #64748b;
+  border-radius: 2rem;
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.5;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.actions a:hover,
+.actions button:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.25rem;
+}
+
+.actions a:focus-visible,
+.actions button:focus-visible {
+  outline: 3px solid #ffffff;
+  outline-offset: 4px;
+}
+
+.actions .retry {
+  border-color: transparent;
+  background: #38bdf8;
+  color: #020617;
+}
