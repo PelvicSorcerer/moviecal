@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { MoviePoster } from '../movie-poster';
 
@@ -11,6 +12,11 @@ interface DeleteWatchlistResponse {
   error?: string;
 }
 
+interface RenameWatchlistResponse {
+  error?: string;
+  watchlist?: WatchlistSummary;
+}
+
 export function WatchlistDetailClient({
   initialItems,
   watchlist,
@@ -18,12 +24,19 @@ export function WatchlistDetailClient({
   initialItems: WatchlistItem[];
   watchlist: WatchlistSummary;
 }) {
+  const router = useRouter();
   const [items, setItems] = useState(initialItems);
+  const [name, setName] = useState(watchlist.name);
+  const [renameInput, setRenameInput] = useState(watchlist.name);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [removingItemIds, setRemovingItemIds] = useState<Record<string, boolean>>(
     {},
   );
+
+  const canRename = watchlist.kind === 'shared' && watchlist.canEdit;
 
   async function removeItem(item: WatchlistItem) {
     setErrorMessage(null);
@@ -47,7 +60,7 @@ export function WatchlistDetailClient({
       }
 
       setItems((current) => current.filter((entry) => entry.id !== item.id));
-      setStatusMessage(`Removed ${item.movie.title} from ${watchlist.name}.`);
+      setStatusMessage(`Removed ${item.movie.title} from ${name}.`);
     } catch (error) {
       setErrorMessage(
         error instanceof Error
@@ -59,6 +72,42 @@ export function WatchlistDetailClient({
         ...current,
         [item.id]: false,
       }));
+    }
+  }
+
+  async function renameWatchlist(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setErrorMessage(null);
+    setStatusMessage(null);
+    setIsRenaming(true);
+
+    try {
+      const response = await fetch(`/api/watchlist/shared/${watchlist.id}`, {
+        method: 'PATCH',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ name: renameInput }),
+      });
+      const payload = (await response.json()) as RenameWatchlistResponse;
+
+      if (!response.ok || !payload.watchlist) {
+        throw new Error(payload.error ?? 'Could not rename this watchlist right now.');
+      }
+
+      setName(payload.watchlist.name);
+      setRenameInput(payload.watchlist.name);
+      setIsEditingName(false);
+      setStatusMessage(`Renamed watchlist to ${payload.watchlist.name}.`);
+      router.refresh();
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : 'Could not rename this watchlist right now.',
+      );
+    } finally {
+      setIsRenaming(false);
     }
   }
 
@@ -86,7 +135,7 @@ export function WatchlistDetailClient({
               {watchlist.kind === 'personal' ? 'Personal watchlist' : 'Shared watchlist'}
             </p>
             <h3 className="mt-2 text-2xl font-semibold text-slate-950">
-              {watchlist.name}
+              {name}
             </h3>
           </div>
           <p className="rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-600">
@@ -94,11 +143,67 @@ export function WatchlistDetailClient({
           </p>
         </div>
 
+        {canRename ? (
+          <div>
+            {isEditingName ? (
+              <form
+                className="flex flex-col gap-3 sm:flex-row sm:items-end"
+                onSubmit={(event) => {
+                  void renameWatchlist(event);
+                }}
+              >
+                <label className="block space-y-2">
+                  <span className="text-sm font-medium text-slate-700">Watchlist name</span>
+                  <input
+                    type="text"
+                    value={renameInput}
+                    onChange={(event) => {
+                      setRenameInput(event.target.value);
+                    }}
+                    maxLength={80}
+                    className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 sm:w-72"
+                  />
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    type="submit"
+                    disabled={isRenaming}
+                    className="rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+                  >
+                    {isRenaming ? 'Saving…' : 'Save name'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRenameInput(name);
+                      setIsEditingName(false);
+                    }}
+                    disabled={isRenaming}
+                    className="rounded-xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 disabled:cursor-not-allowed disabled:text-slate-400"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditingName(true);
+                }}
+                className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-sky-300 hover:text-sky-700"
+              >
+                Rename
+              </button>
+            )}
+          </div>
+        ) : null}
+
         {!watchlist.canEdit ? (
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">
             <p className="font-semibold text-slate-900">Read-only access</p>
             <p className="mt-2 leading-6">
-              You can review the movies saved to {watchlist.name}, but your membership does not
+              You can review the movies saved to {name}, but your membership does not
               allow edits for this watchlist.
             </p>
           </div>
@@ -109,7 +214,7 @@ export function WatchlistDetailClient({
             <h4 className="text-lg font-semibold text-slate-950">This watchlist is empty</h4>
             <p className="mt-2 max-w-2xl leading-6">
               {watchlist.canEdit
-                ? `Save movies from search and target ${watchlist.name} to manage them here.`
+                ? `Save movies from search and target ${name} to manage them here.`
                 : 'Search for movies to save to a watchlist you can edit.'}
             </p>
             <Link

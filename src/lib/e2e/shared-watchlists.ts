@@ -295,6 +295,34 @@ export function deleteE2EWatchlist(args: {
   return 'deleted';
 }
 
+export function renameE2ESharedWatchlist(args: {
+  actorUserId: string;
+  name: string;
+  reader: CookieValueReader;
+  response: CookieWriter;
+  watchlistId: string;
+}): WatchlistSummary | null {
+  const access = getE2EWatchlistAccess(args.reader, args.actorUserId, args.watchlistId);
+
+  if (!access || !access.watchlist.canEdit) {
+    return null;
+  }
+
+  const nextWatchlist: WatchlistSummary = {
+    ...access.watchlist,
+    name: args.name,
+  };
+
+  setE2EWatchlistsCookie(
+    args.response,
+    readStoredE2EWatchlists(args.reader).map((watchlist) =>
+      watchlist.id === args.watchlistId ? nextWatchlist : watchlist,
+    ),
+  );
+
+  return nextWatchlist;
+}
+
 export function removeE2EWatchlistMember(args: {
   actorUserId: string;
   membershipId: string;
