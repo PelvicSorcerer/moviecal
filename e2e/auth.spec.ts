@@ -46,11 +46,11 @@ test.describe('auth and session smoke', () => {
     await page.goto('/watchlist');
     await expect(page.getByText('Signed in as')).toContainText('e2e@example.com');
 
-    await page.getByRole('link', { name: 'Search', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link', { name: 'Search', exact: true }).click();
     await expect(page).toHaveURL('/search');
     await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
 
-    await page.getByRole('link', { name: 'Calendar' }).click();
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link', { name: 'Calendar', exact: true }).click();
     await expect(page).toHaveURL('/settings/calendar');
     await expect(
       page.getByRole('heading', { name: 'Calendar settings' }),

@@ -3,6 +3,7 @@ import Link from 'next/link';
 
 import { getOptionalUser } from '../lib/auth/session';
 import SiteNavigation from './site-navigation';
+import SiteFooter from './site-footer';
 
 // Page titles come from each route's metadata and are suffixed by this template.
 export const metadata = {
@@ -46,6 +47,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           </div>
         </header>
         <main id="main-content" tabIndex={-1} className="mx-auto max-w-4xl px-4 py-8">{children}</main>
+        <SiteFooter />
       </body>
     </html>
   );
