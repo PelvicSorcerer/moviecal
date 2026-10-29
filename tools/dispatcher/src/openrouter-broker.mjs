@@ -53,6 +53,7 @@ function providerFailure(status, body) {
   } catch { /* HTTP status remains the bounded diagnostic. */ }
   return `provider-http-${Number.isInteger(status) && status >= 400 && status <= 599 ? status : 502}${code ? `-${code}` : ""}`;
 }
+const provenModels = new Set();
 const server = http.createServer(async (request, response) => {
   if (!authorized(request.headers.authorization) || request.method !== "POST" || request.url !== "/v1/responses") {
     response.writeHead(403); response.end(); return;
@@ -62,7 +63,7 @@ const server = http.createServer(async (request, response) => {
   }
   const requestId = randomUUID(), started = Date.now();
   const observer = createResponseObserver({ modelAliases: config.modelAliases, proofDebug: config.proofDebug === true,
-    deferCompletion: true, rejectFallback: Boolean(cohort), control: config.policy.side === "control" ? { model: config.policy.model,
+    deferCompletion: true, rejectFallback: Boolean(cohort), provenModels, control: config.policy.side === "control" ? { model: config.policy.model,
       provider: config.policy.provider, effort: config.policy.effort } : null });
   let recorded = false, toolOutputs = 0, requestedEffort = null, account = null, reserved = false;
   const record = (error = null) => {
@@ -118,6 +119,7 @@ const server = http.createServer(async (request, response) => {
     if (config.proofDebug === true) parsed.debug = { echo_upstream_body: true };
     toolOutputs = Array.isArray(parsed.input) ? parsed.input.filter((item) => ["function_call_output", "custom_tool_call_output"].includes(item.type)).length : 0;
     requestedEffort = parsed.reasoning?.effort;
+    observer.setRequestedEffort(requestedEffort);
     if (cohort) {
       try {
         assertCohortBinding(cohort, config);

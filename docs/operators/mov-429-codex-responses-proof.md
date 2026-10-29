@@ -78,6 +78,10 @@ match the unique Jev candidate for the served canonical model, which must also
 appear in `resolved_models`. Missing, duplicate or conflicting entries stop.
 Collections exceeding 128 entries fail closed. Source is `response-and-jev-selection`,
 validated by a live caller-low/response-candidate-upstream-high contrast.
+MOV-469: on a later turn of the same run Jev may list only the model it already
+chose and echo the caller's requested effort as that candidate's effort. If that
+model matched a multi-candidate turn earlier in the run, terminal effort is
+trusted (source `response-and-proven-continuation`); any other mismatch stops.
 
 Omit `--normal-metadata` only for a separately authorized diagnostic using the [Responses debug echo](https://openrouter.ai/docs/api_reference/errors-and-debugging)
 through trusted configuration only. Caller debug is rejected; production keeps
