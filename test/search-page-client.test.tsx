@@ -6,6 +6,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SearchPageClient } from '../src/app/search/search-page-client';
 import { TEST_TMDB_IDS } from '../src/lib/test-data/catalog';
 import {
+  buildNormalizedMovieSummary,
   buildTmdbSearchResponse,
   buildWatchlistSummary,
 } from './support';
@@ -92,6 +93,31 @@ describe('SearchPageClient', () => {
     expect(screen.getByRole('heading', { name: 'The Matrix' })).toBeTruthy();
     expect(screen.getByText('Mar 31, 1999')).toBeTruthy();
     expect(screen.getByText('A hacker discovers the truth.')).toBeTruthy();
+  });
+
+  it.each([
+    ['2027-03-05', 'Mar 5, 2027'],
+    [null, 'Release date TBA'],
+    ['', 'Release date TBA'],
+    ['not-a-date', 'Release date TBA'],
+  ])('renders a search release date of %s as %s', async (releaseDate, expected) => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        results: [buildNormalizedMovieSummary(undefined, { releaseDate })],
+      }),
+    } as Response);
+
+    render(
+      <SearchPageClient
+        availableWatchlists={[]}
+        initialQuery="matrix"
+        isAuthenticated={false}
+      />,
+    );
+
+    expect(await screen.findByText(expected)).toBeTruthy();
+    expect(screen.queryByText('Invalid Date')).toBeNull();
   });
 
   it('renders the empty state when no movies match the query', async () => {

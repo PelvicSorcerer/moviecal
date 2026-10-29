@@ -6,6 +6,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { WatchlistDetailClient } from '../src/app/watchlist/watchlist-detail-client';
 import {
   buildWatchlistItem,
+  buildWatchlistMovie,
   buildWatchlistSummary,
 } from './support';
 
@@ -60,6 +61,30 @@ describe('WatchlistDetailClient', () => {
     expect(screen.getByRole('button', { name: 'Remove' })).toBeTruthy();
     expect(screen.queryByText('This watchlist is empty')).toBeNull();
     expect(screen.queryByRole('link', { name: 'Search movies' })).toBeNull();
+  });
+
+  describe.each(['personal', 'shared'] as const)('%s watchlist release dates', (kind) => {
+    it.each([
+      ['2027-03-05', 'Mar 5, 2027'],
+      ['2027-01-01', 'Jan 1, 2027'],
+      [null, 'Release date TBA'],
+      ['', 'Release date TBA'],
+      ['2027-02-29', 'Release date TBA'],
+    ])('renders %s as %s', (releaseDate, expected) => {
+      render(
+        <WatchlistDetailClient
+          initialItems={[buildWatchlistItem({
+            movie: buildWatchlistMovie(undefined, { releaseDate }),
+          })]}
+          watchlist={buildWatchlistSummary({ kind })}
+        />,
+      );
+
+      expect(screen.getByText(expected)).toBeTruthy();
+      expect(screen.queryByText('Invalid Date')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Remove' })).toBeTruthy();
+      expect(fetch).not.toHaveBeenCalled();
+    });
   });
 
   it('removes an item from the targeted watchlist detail page', async () => {
