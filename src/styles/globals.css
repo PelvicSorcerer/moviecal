@@ -6,8 +6,66 @@ html, body, #__next {
   height: 100%;
 }
 body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
   background: #ffffff;
   color: #0f172a;
+}
+
+body > header,
+body > main,
+body > footer {
+  flex-shrink: 0;
+}
+
+#main-content {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.site-footer {
+  margin-top: auto;
+  border-top: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #475569;
+  font-size: 0.875rem;
+}
+
+.site-footer-inner {
+  box-sizing: border-box;
+  max-width: 56rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+
+.site-footer-brand {
+  margin: 0;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.site-footer-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0.5rem 0;
+}
+
+.site-footer-navigation a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: #075985;
+  text-decoration: underline;
+  text-underline-offset: 0.25rem;
+  border-radius: 0.25rem;
+}
+
+.site-footer-attribution {
+  margin: 0;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .site-header-inner {
@@ -68,6 +126,7 @@ body {
 }
 
 .site-header a:focus-visible,
+.site-footer a:focus-visible,
 .site-header button:focus-visible,
 .skip-link:focus-visible,
 #main-content:focus-visible {

@@ -28,6 +28,79 @@ async function expectHeaderFits(page: Page, signedIn: boolean) {
 }
 
 for (const width of [375, 1280]) {
+  test.describe(`site footer at ${width}px`, () => {
+    test.use({ viewport: { width, height: 900 } });
+
+    for (const signedIn of [false, true]) {
+      test(`footer is consistent when signed ${signedIn ? 'in' : 'out'}`, async ({
+        page,
+        seedAuthenticatedSession,
+      }) => {
+        if (signedIn) await seedAuthenticatedSession();
+
+        for (const path of [...routes.map((route) => route.path), '/missing-footer-page']) {
+          await page.goto(path);
+          const footer = page.getByRole('contentinfo');
+          await expect(footer).toHaveCount(1);
+          await expect(footer.getByText('moviecal', { exact: true })).toBeVisible();
+          await expect(footer.getByText(
+            'This product uses the TMDb API but is not endorsed or certified by TMDb.',
+            { exact: true },
+          )).toBeVisible();
+          await expect(footer.getByRole('link')).toHaveCount(3);
+          for (const [label, href] of [
+            ['Search', '/search'],
+            ['Watchlists', '/watchlist'],
+            ['Calendar settings', '/settings/calendar'],
+          ]) {
+            const link = footer.getByRole('link', { name: label, exact: true });
+            await expect(link).toBeVisible();
+            await expect(link).toHaveAttribute('href', href);
+          }
+          expect(await page.evaluate(() => (
+            document.documentElement.scrollWidth <= document.documentElement.clientWidth
+          ))).toBe(true);
+          const mainBounds = await page.getByRole('main').boundingBox();
+          const footerBounds = await footer.boundingBox();
+          expect(mainBounds).not.toBeNull();
+          expect(footerBounds).not.toBeNull();
+          expect(footerBounds!.y).toBeGreaterThanOrEqual(mainBounds!.y + mainBounds!.height);
+        }
+      });
+    }
+
+    test('footer stays at the bottom of short pages and supports keyboard navigation', async ({
+      page,
+      seedAuthenticatedSession,
+    }) => {
+      await seedAuthenticatedSession();
+      await page.goto('/search');
+      const footer = page.getByRole('contentinfo');
+      const bounds = await footer.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.y + bounds!.height).toBeCloseTo(900, 0);
+
+      await page.getByRole('main').focus();
+      const searchLink = footer.getByRole('link', { name: 'Search', exact: true });
+      for (let presses = 0; presses < 30; presses += 1) {
+        await page.keyboard.press('Tab');
+        if (await searchLink.evaluate((link) => link === document.activeElement)) break;
+      }
+      for (const link of await footer.getByRole('link').all()) {
+        await expect(link).toBeFocused();
+        await expect(link).toHaveCSS('outline-style', 'solid');
+        await expect(link).toHaveCSS('outline-width', '3px');
+        await expect(link).toBeInViewport({ ratio: 1 });
+        await page.keyboard.press('Tab');
+      }
+      for (const path of ['/search', '/watchlist', '/settings/calendar']) {
+        await footer.locator(`a[href="${path}"]`).focus();
+        await page.keyboard.press('Enter');
+        await expect(page).toHaveURL(path);
+      }
+    });
+  });
+
   test.describe(`site navigation at ${width}px`, () => {
     test.use({ viewport: { width, height: 900 } });
 
@@ -102,7 +175,7 @@ for (const width of [375, 1280]) {
           await page.keyboard.press('Shift+Tab');
           await page.keyboard.press('Shift+Tab');
           await page.keyboard.press('Shift+Tab');
-          await expect(page.getByRole('navigation').getByRole('link', { name: 'Search' })).toBeFocused();
+          await expect(page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link', { name: 'Search' })).toBeFocused();
           await page.keyboard.press('Enter');
           await expect(page).toHaveURL('/search');
         }
