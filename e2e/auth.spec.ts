@@ -50,7 +50,7 @@ test.describe('auth and session smoke', () => {
     await expect(page).toHaveURL('/search');
     await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
 
-    await page.getByRole('link', { name: 'Calendar' }).click();
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link', { name: 'Calendar', exact: true }).click();
     await expect(page).toHaveURL('/settings/calendar');
     await expect(
       page.getByRole('heading', { name: 'Calendar settings' }),

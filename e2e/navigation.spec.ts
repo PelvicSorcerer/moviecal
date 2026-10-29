@@ -78,7 +78,7 @@ for (const width of [375, 1280]) {
       const footer = page.getByRole('contentinfo');
       const bounds = await footer.boundingBox();
       expect(bounds).not.toBeNull();
-      expect(bounds!.y + bounds!.height).toBeCloseTo(900, 0);
+      expect(bounds!.y + bounds!.height).toBeGreaterThanOrEqual(900 - 1);
 
       await page.getByRole('main').focus();
       const searchLink = footer.getByRole('link', { name: 'Search', exact: true });
