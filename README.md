@@ -75,6 +75,7 @@ Local verification commands:
 The repository now ships the core MVP surfaces needed for deployment validation:
 
 - public home page and sign-in flow
+- branded HTTP 404 page for unknown web paths, with Home, Search, and Watchlists recovery links
 - authenticated search and watchlist pages
 - calendar settings with token rotation and a tokenized `.ics` feed route
 - protected release-refresh cron endpoint backed by `vercel.json`
