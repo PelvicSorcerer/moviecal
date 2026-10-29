@@ -15,8 +15,8 @@ describe('search page helpers', () => {
   });
 
   it('falls back when a release date is missing or invalid', () => {
-    expect(formatReleaseDate(null)).toBe('Release date TBD');
-    expect(formatReleaseDate('not-a-date')).toBe('Release date TBD');
+    expect(formatReleaseDate(null)).toBe('Release date TBA');
+    expect(formatReleaseDate('not-a-date')).toBe('Release date TBA');
   });
 
   it('builds a clean search href from trimmed user input', () => {

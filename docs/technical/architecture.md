@@ -11,6 +11,10 @@ Watchlists
 - Every user owns exactly one personal watchlist and may also own or be a member of shared watchlists; both kinds live in the same `watchlists` table. Full schema: `docs/technical/data-model.md`.
 - Access to a shared watchlist requires an accepted `watchlist_memberships` row (owner or editor role). Invite links are hashed bearer credentials that grant membership; they are not a friend or contact graph. Endpoint surface: `docs/technical/api-design.md`.
 
+Web release-date presentation
+- Search results and personal/shared watchlist movie cards use `src/lib/format-release-date.ts` to display canonical TMDb dates as English `Mon D, YYYY` (for example, `Mar 5, 2027`).
+- Missing, empty, malformed, and impossible dates display `Release date TBA`. Formatting validates and renders in UTC so the given calendar date never shifts with the viewer's timezone; stored dates and API responses are unchanged.
+
 Calendar feed
 - A calendar token still maps to exactly one user. The feed aggregates movies from every watchlist that user can currently access — their personal watchlist plus any shared watchlist they own or have accepted membership on — and deduplicates repeated movie identity (`tmdb_id`) into a single event when it appears in more than one contributing watchlist. Full aggregation, ordering, and UID rules: `docs/technical/calendar-feed-design.md`.
 
