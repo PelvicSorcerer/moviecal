@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   startTransition,
   useEffect,
+  useRef,
   useState,
 } from 'react';
 
@@ -23,6 +24,8 @@ interface WatchlistMutationState {
 
 interface SearchResponse {
   results?: NormalizedMovieSummary[];
+  page?: number;
+  totalPages?: number;
   error?: string;
 }
 
@@ -101,6 +104,11 @@ export function SearchPageClient({
   const [status, setStatus] = useState<SearchStatus>(initialQuery ? 'loading' : 'idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [results, setResults] = useState<NormalizedMovieSummary[]>([]);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [pagingError, setPagingError] = useState<string | null>(null);
+  const pagingRequest = useRef<AbortController | null>(null);
   const editableWatchlists = availableWatchlists.filter((watchlist) => watchlist.canEdit);
   const readOnlyWatchlists = availableWatchlists.filter((watchlist) => !watchlist.canEdit);
   const [watchlistStatusByMovie, setWatchlistStatusByMovie] = useState<
@@ -137,6 +145,12 @@ export function SearchPageClient({
 
   useEffect(() => {
     let isCancelled = false;
+    const controller = new AbortController();
+    pagingRequest.current = controller;
+    setPage(1);
+    setTotalPages(1);
+    setIsLoadingMore(false);
+    setPagingError(null);
 
     async function runSearch(nextQuery: string) {
       if (!nextQuery) {
@@ -171,6 +185,8 @@ export function SearchPageClient({
 
         if (!isCancelled) {
           setResults(Array.isArray(payload.results) ? payload.results : []);
+          setPage(payload.page ?? 1);
+          setTotalPages(Math.min(payload.totalPages ?? 1, 500));
           setStatus('success');
         }
       } catch (error) {
@@ -190,8 +206,54 @@ export function SearchPageClient({
 
     return () => {
       isCancelled = true;
+      controller.abort();
+      pagingRequest.current?.abort();
     };
   }, [searchNonce, submittedQuery]);
+
+  async function loadMore() {
+    if (isLoadingMore || page >= totalPages || status !== 'success') {
+      return;
+    }
+
+    const controller = new AbortController();
+    pagingRequest.current?.abort();
+    pagingRequest.current = controller;
+    setIsLoadingMore(true);
+    setPagingError(null);
+
+    try {
+      const response = await fetch(
+        `/api/movies/search?q=${encodeURIComponent(submittedQuery)}&page=${page + 1}`,
+        { method: 'GET', cache: 'no-store', signal: controller.signal },
+      );
+      const payload = (await response.json()) as SearchResponse;
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? 'Could not load more movies.');
+      }
+
+      if (!controller.signal.aborted) {
+        setResults((current) => {
+          const seen = new Set(current.map((movie) => movie.tmdbId));
+          const additional = (payload.results ?? []).filter((movie) => {
+            if (seen.has(movie.tmdbId)) return false;
+            seen.add(movie.tmdbId);
+            return true;
+          });
+          return [...current, ...additional];
+        });
+        setPage(payload.page ?? page + 1);
+        setTotalPages(Math.min(payload.totalPages ?? page + 1, 500));
+      }
+    } catch {
+      if (!controller.signal.aborted) {
+        setPagingError('Could not load more movies. Select Load more to try again.');
+      }
+    } finally {
+      if (!controller.signal.aborted) setIsLoadingMore(false);
+    }
+  }
 
   async function addToWatchlist(tmdbId: number) {
     setWatchlistStatusByMovie((current) => ({
@@ -487,6 +549,17 @@ export function SearchPageClient({
                 );
               })}
             </ul>
+            {pagingError ? <p role="alert" className="text-sm text-amber-700">{pagingError}</p> : null}
+            {page < totalPages ? (
+              <button
+                type="button"
+                onClick={() => { void loadMore(); }}
+                disabled={isLoadingMore}
+                className="rounded-xl bg-sky-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-sky-400"
+              >
+                {isLoadingMore ? 'Loading more…' : 'Load more'}
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>

@@ -4,6 +4,7 @@ import { GET as searchRoute } from '../src/app/api/movies/search/route';
 import {
   getMovieDetails,
   searchMovies,
+  searchMoviesPage,
   TMDbRequestError,
 } from '../src/lib/tmdb/client';
 import { getServerTMDbEnv, TMDbEnvironmentError } from '../src/lib/tmdb/env';
@@ -37,6 +38,39 @@ describe('TMDb environment validation', () => {
 });
 
 describe('TMDb wrapper', () => {
+  it('threads the requested page through TMDb and normalizes paging metadata', async () => {
+    setValidTMDbEnv();
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      results: [{ id: 603, title: 'The Matrix' }], page: 2, total_pages: 8,
+    }));
+
+    await expect(searchMoviesPage(' matrix ', 2, fetchMock)).resolves.toMatchObject({
+      results: [{ tmdbId: 603, title: 'The Matrix' }], page: 2, totalPages: 8,
+    });
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(url.searchParams.get('page')).toBe('2');
+    expect(url.searchParams.get('query')).toBe('matrix');
+  });
+
+  it.each([
+    [{}, 1, 1],
+    [{ page: 1, total_pages: 0 }, 1, 0],
+    [{ page: 1, total_pages: 900 }, 1, 500],
+    [{ page: -1, total_pages: 'invalid' }, 1, 1],
+  ])('handles missing, empty and bounded paging metadata: %j', async (metadata, page, totalPages) => {
+    setValidTMDbEnv();
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ results: [], ...metadata }));
+    await expect(searchMoviesPage('matrix', 1, fetchMock)).resolves.toEqual({
+      results: [], page, totalPages,
+    });
+  });
+
+  it.each([0, 501, 1.5, NaN])('rejects an invalid provider page %s before fetching', async (page) => {
+    const fetchMock = vi.fn();
+    await expect(searchMoviesPage('matrix', page, fetchMock)).rejects.toMatchObject({ status: 400 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('normalizes search results from TMDb', async () => {
     setValidTMDbEnv();
 
@@ -204,6 +238,18 @@ describe('TMDb wrapper', () => {
 });
 
 describe('movie search route', () => {
+  it.each(['', '0', '-1', '501', '1.5', 'abc', '1e2', 'Infinity', ' 2 ', '2.0']) (
+    'returns the existing error shape for invalid page %j', async (page) => {
+      const response = await searchRoute(new Request(
+        `https://moviecal.test/api/movies/search?q=matrix&page=${encodeURIComponent(page)}`,
+      ));
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: 'Page must be an integer between 1 and 500.',
+      });
+    },
+  );
+
   it('returns 400 when q is missing', async () => {
     const response = await searchRoute(
       new Request('https://moviecal.test/api/movies/search'),
@@ -243,6 +289,8 @@ describe('movie search route', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
+      page: 1,
+      totalPages: 1,
       results: [
         {
           tmdbId: 550,
