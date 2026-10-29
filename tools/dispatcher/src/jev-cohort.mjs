@@ -20,6 +20,11 @@ const iso = (s) => typeof s === "string" && UTC.test(s) && Number.isFinite(Date.
 // Round liabilities up and remaining capacity down; never under-reserve a bill.
 const liability = (n) => Math.ceil(n * 1e6) / 1e6;
 const floor = (n) => Math.floor(Math.max(0, n) * 1e6) / 1e6;
+// A /key read can pair fresh usage with a stale (higher) remaining balance. Only ever tighten the stored
+// remaining balance, and keep it consistent with the usage already observed, so a lagging read cannot
+// push usage + remaining past the key limit and invalidate the ledger.
+const mergeKeyRemaining = (data, account) => floor(Math.min(data.keyRemainingUsd ?? Infinity,
+  account.keyRemainingUsd, 69 - data.observedKeyUsageUsd));
 
 export function policyDigest(policy) {
   return createHash("sha256").update(`moviecal-jev-cohort-policy-v1\n${JSON.stringify(policy)}`).digest("hex");
@@ -312,8 +317,12 @@ export class JevCohortStore {
       - this.policy(now).baselineKeyUsageUsd);
     const creditLag = Math.max(0, invoiced - (account.totalUsageUsd - approval.totalUsageUsd));
     const effectiveCredit = account.availableCreditUsd - creditLag;
-    const reserveUsd = liability(Math.min(account.keyRemainingUsd,
-      69 - Math.max(account.keyUsageUsd, this.policy(now).baselineKeyUsageUsd + invoiced)));
+    const exposureUsd = Math.min(account.keyRemainingUsd,
+      69 - Math.max(account.keyUsageUsd, this.policy(now).baselineKeyUsageUsd + invoiced));
+    // The reservation rounds up (conservative), but state() balances round down, so
+    // compare against them at the same rounding: a sub-micro-dollar tail is not exposure.
+    const reserveUsd = liability(exposureUsd);
+    const comparableUsd = floor(exposureUsd);
     if (!MONEY(account.keyUsageUsd) || !MONEY(account.keyRemainingUsd) || !BALANCE(account.availableCreditUsd)
       || !BALANCE(account.totalCreditsUsd) || !BALANCE(account.totalUsageUsd)
       || Math.abs(account.totalCreditsUsd - account.totalUsageUsd - account.availableCreditUsd) > 1e-6
@@ -324,9 +333,9 @@ export class JevCohortStore {
       || account.keyUsageUsd < this.policy(now).baselineKeyUsageUsd
       || account.keyUsageUsd > this.policy(now).baselineKeyUsageUsd + invoiced + 1e-6
       || account.keyRemainingUsd > approval.keyRemainingUsd
-      || reserveUsd > state.keyRemainingUsd
+      || comparableUsd > state.keyRemainingUsd
       || account.keyRemainingUsd > 69 - account.keyUsageUsd
-      || reserveUsd > state.remainingUsd) {
+      || comparableUsd > state.remainingUsd) {
       this.stop("unknown-or-excess-account-exposure", now);
       throw new Error("unknown or excessive account exposure");
     }
@@ -334,13 +343,13 @@ export class JevCohortStore {
       if (data.stoppedReason || Object.values(data.requests || {}).some((r) => r.status === "pending"))
         throw new Error("cohort stopped or another request is unresolved");
       const fresh = this.state(now);
-      if (fresh.status !== "active" || reserveUsd > fresh.remainingUsd)
+      if (fresh.status !== "active" || comparableUsd > fresh.remainingUsd)
         throw new Error("cohort budget changed during request reservation");
       data.requests ||= {};
       if (data.requests[requestId]) throw new Error("duplicate paid request identity");
       data.requests[requestId] = { requestId, issue, status: "pending", reservedUsd: reserveUsd, startedAt: now.toISOString() };
       data.observedKeyUsageUsd = Math.max(data.observedKeyUsageUsd || 0, account.keyUsageUsd);
-      data.keyRemainingUsd = account.keyRemainingUsd;
+      data.keyRemainingUsd = mergeKeyRemaining(data, account);
     });
   }
 
@@ -361,7 +370,7 @@ export class JevCohortStore {
         if (Object.values(data.requests).some((r) => r.invoiceId === invoiceId)) throw new Error("duplicate provider invoice");
         Object.assign(row, { status: "complete", invoiceId, amountUsd, model, provider, effort, completedAt: now.toISOString() });
         data.observedKeyUsageUsd = Math.max(data.observedKeyUsageUsd || 0, account.keyUsageUsd);
-        data.keyRemainingUsd = account.keyRemainingUsd;
+        data.keyRemainingUsd = mergeKeyRemaining(data, account);
       });
     } catch (error) {
       this.stop("invoice-reconciliation-failed", now);

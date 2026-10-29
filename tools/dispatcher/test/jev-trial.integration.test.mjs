@@ -86,6 +86,8 @@ describe("bounded Jev router arm admission through the run loop (MOV-427)", () =
   }
 
   beforeEach(() => {
+    // Calls that omit `now` read the wall clock; pin it inside the fixture window.
+    vi.useFakeTimers({ toFake: ["Date"], now: T0 });
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "mov427-loop-"));
     clock = T0;
     jevStore = fresh();
@@ -93,7 +95,7 @@ describe("bounded Jev router arm admission through the run loop (MOV-427)", () =
     spawned = [];
     usageStore = new WorkerUsageStore(path.join(dir, "usage.json"));
   });
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => { vi.useRealTimers(); fs.rmSync(dir, { recursive: true, force: true }); });
 
   const activate = (overrides = {}) => jevStore.activate({
     trialId: "jev-1", armId: "jev-hosted", policyHash: APPROVED_HASH,

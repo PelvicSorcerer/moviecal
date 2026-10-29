@@ -1,14 +1,14 @@
 const CANONICAL_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-export function formatReleaseDate(releaseDate: string | null): string {
+export function formatReleaseDate(releaseDate: string | null | undefined): string {
   if (!releaseDate) {
-    return 'Release date TBD';
+    return 'Release date TBA';
   }
 
   const match = CANONICAL_DATE_PATTERN.exec(releaseDate);
 
   if (!match) {
-    return 'Release date TBD';
+    return 'Release date TBA';
   }
 
   const [, yearText, monthText, dayText] = match;
@@ -24,7 +24,7 @@ export function formatReleaseDate(releaseDate: string | null): string {
     parsedDate.getUTCDate() === day;
 
   if (!isCalendarMatch) {
-    return 'Release date TBD';
+    return 'Release date TBA';
   }
 
   return new Intl.DateTimeFormat('en-US', {

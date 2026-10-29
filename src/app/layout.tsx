@@ -2,10 +2,15 @@ import '../styles/globals.css';
 import Link from 'next/link';
 
 import { getOptionalUser } from '../lib/auth/session';
+import SiteNavigation from './site-navigation';
 
+// Page titles come from each route's metadata and are suffixed by this template.
 export const metadata = {
-  title: 'moviecal',
-  description: 'Movie watchlist and iCalendar feed (scaffold)'
+  title: {
+    default: 'moviecal',
+    template: '%s | moviecal',
+  },
+  description: 'Keep private and shared movie watchlists, and follow release dates with a personal iCalendar feed.'
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
@@ -14,20 +19,18 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html lang="en">
       <body className="min-h-screen bg-slate-50 text-slate-900">
-        <header className="border-b bg-white shadow-sm">
-          <div className="mx-auto flex max-w-4xl items-center justify-between gap-6 px-4 py-4">
-            <div>
+        <a href="#main-content" className="skip-link">Skip to main content</a>
+        <header className="site-header border-b bg-white shadow-sm">
+          <div className="site-header-inner">
+            <div className="site-brand">
               <h1 className="text-lg font-semibold">moviecal</h1>
               <p className="text-xs text-slate-500">Shared watchlists and calendar feeds</p>
             </div>
-            <nav className="flex items-center gap-4">
-              <Link href="/" className="text-sm text-slate-600">Home</Link>
-              <Link href="/search" className="text-sm text-slate-600">Search</Link>
-              <Link href="/watchlist" className="text-sm text-slate-600">Watchlists</Link>
-              <Link href="/settings/calendar" className="text-sm text-slate-600">Calendar</Link>
+            <SiteNavigation />
+            <div className="site-session">
               {user ? (
                 <>
-                  <span className="hidden text-sm text-slate-500 sm:inline">{user.email}</span>
+                  <span className="site-user-email text-sm text-slate-500">{user.email}</span>
                   <form action="/auth/sign-out" method="post">
                     <button type="submit" className="text-sm font-medium text-sky-700">
                       Sign out
@@ -39,10 +42,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                   Sign in
                 </Link>
               )}
-            </nav>
+            </div>
           </div>
         </header>
-        <main className="mx-auto max-w-4xl px-4 py-8">{children}</main>
+        <main id="main-content" tabIndex={-1} className="mx-auto max-w-4xl px-4 py-8">{children}</main>
       </body>
     </html>
   );

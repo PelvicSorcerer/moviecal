@@ -3,6 +3,9 @@
 import { StringDecoder } from "node:string_decoder";
 
 const id = (v) => typeof v === "string" && /^[A-Za-z0-9_.:/-]{1,200}$/.test(v) ? v : null;
+// Diagnostic only, never used for a decision: a bounded copy of a provider
+// string so a failed identity check can be explained from the run log.
+const shown = (v) => typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 200) || null : null;
 const count = (v) => Number.isSafeInteger(v) && v >= 0 ? v : null;
 const usd = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
 const effort = (v) => ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(v) ? v : null;
@@ -27,8 +30,49 @@ function effortHints(data) {
   return hints;
 }
 
+// Diagnostic only, never used for a decision: scalars that are numbers,
+// booleans or identifier-shaped strings survive; free text is replaced and
+// nested values are reduced to bounded key names or a length.
+const rawEffort = (v) => v == null ? null : typeof v === "string" ? shown(v) : `[${typeof v}]`;
+
+function redactedEntry(row) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+  const out = {};
+  for (const [key, child] of Object.entries(row).slice(0, 32)) {
+    if (!id(key) || key.length > 64) continue;
+    if (typeof child === "number" || typeof child === "boolean" || child === null) out[key] = child;
+    else if (typeof child === "string") out[key] = id(child) ? child : "[redacted]";
+    else if (Array.isArray(child)) out[key] = { length: child.length };
+    else if (typeof child === "object") out[key] = { keys: Object.keys(child).filter((k) => id(k) && k.length <= 64).slice(0, 16) };
+  }
+  return out;
+}
+
+// Diagnostic only, never used for a decision: Jev's "reconsidered" step,
+// whether it is a pipeline stage or a field of the jev-router stage.
+function reconsideredEvidence(pipeline, jev) {
+  const named = (key) => typeof key === "string" && /reconsider/i.test(key);
+  const stages = Array.isArray(pipeline) && pipeline.length <= 64 ? pipeline : [];
+  const found = [
+    ...stages.filter((stage) => named(stage?.name)).slice(0, 4).map((stage) => ({ source: "stage", name: shown(stage.name), data: redactedEntry(stage.data) })),
+    ...Object.keys(jev || {}).filter((key) => id(key) && named(key)).slice(0, 4).map((key) => ({ source: "jev-field", name: key, data: redactedEntry(jev[key]) })),
+  ];
+  return { stageNames: stages.slice(0, 16).map((stage) => shown(stage?.name)), found };
+}
+
 export function createResponseObserver({ modelAliases = {}, proofDebug = false, deferCompletion = false, control = null, rejectFallback = false, provenModels = null } = {}) {
   const canonical = (model) => id(modelAliases[model]) || id(model);
+  // A pinned alias must match exactly. Otherwise the endpoint may report the
+  // resolved ID plus one strict `-YYYYMMDD` snapshot suffix, nothing else.
+  function servedModelMatches(resolved, served) {
+    if (canonical(served) === canonical(resolved)) return true;
+    if (id(modelAliases[resolved])) return false;
+    const base = id(resolved), got = id(served);
+    const match = base && got && got.startsWith(`${base}-`) ? /^(\d{4})(\d{2})(\d{2})$/.exec(got.slice(base.length + 1)) : null;
+    if (!match) return false;
+    const [y, m, d] = match.slice(1).map(Number), date = new Date(Date.UTC(y, m - 1, d));
+    return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+  }
   const decoder = new StringDecoder("utf8");
   let pending = "", completed = false, reason = null, snapshot = {}, toolCalls = 0;
   let ended = false, debugCount = 0, debug = null;
@@ -133,11 +177,22 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
       const jev = stages.length === 1 ? stages[0].data : null;
       const model = id(snapshot.model);
       const resolvedModel = model === "typesafe/jev-router" ? null : model;
+      // Jev may list the dated snapshot of the model it resolved; the same
+      // strict matcher as the endpoint check applies, and nothing looser.
+      const listedMatches = (name) => id(name) && id(resolvedModel) && servedModelMatches(resolvedModel, name);
       const candidates = Array.isArray(jev?.candidates) && jev.candidates.length <= 128
-        ? jev.candidates.filter((row) => id(row?.model) && canonical(row.model) === canonical(resolvedModel)) : [];
+        ? jev.candidates.filter((row) => listedMatches(row?.model)) : [];
       const selectedByJev = Array.isArray(jev?.resolved_models) && jev.resolved_models.length <= 128
-        && jev.resolved_models.some((model) => id(model) && canonical(model) === canonical(resolvedModel));
+        && jev.resolved_models.some(listedMatches);
+      const listedNames = (list) => Array.isArray(list) ? list.slice(0, 8).map((item) => shown(typeof item === "string" ? item : item?.model)) : null;
       const candidateEffort = candidates.length === 1 ? effort(candidates[0].effort) : null;
+      const routerCandidate = {
+        matched: candidates.length, selectedByJev,
+        candidateEffort, rawEffort: candidates.length === 1 ? rawEffort(candidates[0].effort) : null,
+        entries: candidates.slice(0, 4).map(redactedEntry),
+        // Diagnostic only: the names Jev listed, to explain a failed match.
+        listedCandidates: listedNames(jev?.candidates), listedResolved: listedNames(jev?.resolved_models),
+      };
       // Live contrast: caller low, completed response/candidate/upstream high.
       // Responses effort alone, evaluations and incumbent defaults are not proof.
       const responseEffort = snapshot.responseEffort || null;
@@ -165,9 +220,12 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
       const record = {
         resolvedModel, provider: id(endpoint?.provider),
         canonicalModel: canonical(resolvedModel),
+        endpointModel: shown(endpoint?.model), endpointProvider: shown(endpoint?.provider), endpointTag: shown(endpoint?.tag),
         // Bounded field names identify an upstream schema gap without saving
         // arbitrary plugin data, prompt text or reasoning content.
         routerStageKeys: Object.keys(jev || {}).filter((key) => id(key)).slice(0, 32),
+        routerCandidate,
+        routerReconsidered: reconsideredEvidence(snapshot.metadata?.pipeline, jev),
         routerEffortHints: proofDebug ? effortHints(jev) : [],
         responseEffort,
         // Responses reasoning can echo the request; it is not proof of Jev's
@@ -183,7 +241,7 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
         billedUsd: usd(usage.cost), invoiceId: id(snapshot.invoiceId), toolCalls,
         fallback: typeof snapshot.metadata?.attempt === "number" ? snapshot.metadata.attempt > 1 : null,
       };
-      if (resolvedModel && endpoint?.model && canonical(endpoint.model) !== canonical(resolvedModel)) fail("conflicting-served-model");
+      if (resolvedModel && endpoint?.model && !servedModelMatches(resolvedModel, endpoint.model)) fail("conflicting-served-model");
       if (control && (canonical(resolvedModel) !== canonical(control.model)
         || canonical(endpoint?.model) !== canonical(control.model)
         || endpoint?.provider !== control.provider || responseEffort !== control.effort

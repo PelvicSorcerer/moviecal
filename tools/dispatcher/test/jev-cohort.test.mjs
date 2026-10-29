@@ -29,6 +29,8 @@ describe("reviewed production Jev cohort", () => {
   let home, dir, store, p;
   const save = (filename, value) => fs.writeFileSync(path.join(dir, filename), JSON.stringify(value), { mode: 0o600 });
   beforeEach(() => {
+    // Calls that omit `now` read the wall clock; pin it inside the fixture window.
+    vi.useFakeTimers({ toFake: ["Date"], now: NOW });
     home = fs.mkdtempSync(path.join(os.tmpdir(), "mov437-"));
     dir = path.join(home, ".config", "moviecal"); fs.mkdirSync(dir, { recursive: true });
     p = policy();
@@ -38,7 +40,7 @@ describe("reviewed production Jev cohort", () => {
     store = new JevCohortStore({ home, configPath: path.join(dir, "jev-cohort.json"),
       approvalPath: path.join(dir, "jev-cohort-approval.json"), ledgerPath: path.join(dir, "jev-cohort-ledger.json") });
   });
-  afterEach(() => { vi.restoreAllMocks(); fs.rmSync(home, { recursive: true, force: true }); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); fs.rmSync(home, { recursive: true, force: true }); });
   const issue = (id, labels = ["worker:codex", "router:jev"]) => ({ identifier: id, labels });
   const account = { keyUsageUsd: 1, keyRemainingUsd: 68, availableCreditUsd: 69,
     totalCreditsUsd: 69, totalUsageUsd: 0 };
@@ -197,6 +199,20 @@ describe("reviewed production Jev cohort", () => {
     expect(store.export()).toMatchObject({ stoppedReason: "new-fee-requires-owner-reconciliation" });
   });
 
+  it("keeps the ledger valid when a /key read pairs fresh usage with a stale remaining balance", () => {
+    store.activate(NOW);
+    store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+    store.reserve("request-1", "MOV-10", account, NOW);
+    const stale = { ...account, keyUsageUsd: 1.2, keyRemainingUsd: 68 };
+    store.finish("request-1", { invoiceId: "invoice-1", amountUsd: 0.2, model: "openai/fixture",
+      provider: "OpenAI", effort: "medium", account: stale }, NOW);
+    expect(store.export().keyRemainingUsd).toBeLessThanOrEqual(67.8);
+    expect(store.state(NOW)).toMatchObject({ status: "active", keyRemainingUsd: 67.8 });
+    // A later higher read never raises the stored balance.
+    store.reserve("request-2", "MOV-10", { ...account, keyUsageUsd: 1.2, keyRemainingUsd: 67.8 }, NOW);
+    expect(store.export().keyRemainingUsd).toBe(67.8);
+  });
+
   it("uses existing credit with a delayed balance without losing the hard in-flight bound", () => {
     const reviewed = { ...approval(p), availableCreditUsd: 0.5, totalCreditsUsd: 10.5, totalUsageUsd: 10 };
     save("jev-cohort-approval.json", reviewed);
@@ -215,6 +231,20 @@ describe("reviewed production Jev cohort", () => {
       approvalPath: store.approvalPath, ledgerPath: store.ledger.statePath });
     expect(restarted.state(NOW).status).toBe("pending-invoice");
     expect(() => restarted.reserve("request-3", "MOV-10", funded, NOW)).toThrow();
+  });
+
+  it("does not trip the exposure check on a key balance finer than one micro-dollar", () => {
+    const fp = { ...p, baselineKeyUsageUsd: 0.5432368 };
+    save("jev-cohort.json", { enabled: false, policy: fp });
+    save("jev-cohort-approval.json", { ...approval(fp), keyRemainingUsd: 68.4567632,
+      availableCreditUsd: 67.58223488, totalCreditsUsd: 69, totalUsageUsd: 1.41776512 });
+    store.activate(NOW);
+    store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+    const fine = { ...account, keyUsageUsd: 0.5432368, keyRemainingUsd: 68.4567632,
+      availableCreditUsd: 67.58223488, totalCreditsUsd: 69, totalUsageUsd: 1.41776512 };
+    store.reserve("request-1", "MOV-10", fine, NOW);
+    expect(store.export().requests[0].reservedUsd).toBe(68.456764);
+    expect(store.state(NOW).status).toBe("pending-invoice");
   });
 
   it("refuses fresh payment when delayed invoices consume the last existing credit", () => {

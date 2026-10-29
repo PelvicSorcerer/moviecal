@@ -21,7 +21,7 @@ import {
 import { WatchlistPageClient } from './watchlist-page-client';
 
 export const metadata: Metadata = {
-  title: 'Watchlists | moviecal',
+  title: 'Watchlists',
   description: 'Create shared watchlists and manage the movies saved to your personal moviecal watchlist.',
 };
 

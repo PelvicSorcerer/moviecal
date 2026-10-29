@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation';
 import { getSignedInRedirect } from '../../lib/auth/session';
 
 export const metadata: Metadata = {
-  title: 'Sign in | moviecal',
+  title: 'Sign in',
   description: 'Sign in to access your private movie watchlist and calendar settings.',
 };
 

@@ -35,7 +35,7 @@ import { WatchlistDetailClient } from '../watchlist-detail-client';
 import { SharedWatchlistPageClient } from './shared-watchlist-page-client';
 
 export const metadata: Metadata = {
-  title: 'Watchlist detail | moviecal',
+  title: 'Watchlist',
   description:
     'Review watchlist movies and, for shared watchlists, inspect access and invite management.',
 };
