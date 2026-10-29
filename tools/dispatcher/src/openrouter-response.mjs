@@ -60,7 +60,7 @@ function reconsideredEvidence(pipeline, jev) {
   return { stageNames: stages.slice(0, 16).map((stage) => shown(stage?.name)), found };
 }
 
-export function createResponseObserver({ modelAliases = {}, proofDebug = false, deferCompletion = false, control = null, rejectFallback = false } = {}) {
+export function createResponseObserver({ modelAliases = {}, proofDebug = false, deferCompletion = false, control = null, rejectFallback = false, provenModels = null } = {}) {
   const canonical = (model) => id(modelAliases[model]) || id(model);
   // A pinned alias must match exactly. Otherwise the endpoint may report the
   // resolved ID plus one strict `-YYYYMMDD` snapshot suffix, nothing else.
@@ -76,7 +76,7 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
   const decoder = new StringDecoder("utf8");
   let pending = "", completed = false, reason = null, snapshot = {}, toolCalls = 0;
   let ended = false, debugCount = 0, debug = null;
-  let offeredTools = null;
+  let offeredTools = null, requestedEffort = null;
   let terminal = "";
   const fail = (code) => { reason ??= code; };
   function forward(raw) {
@@ -151,6 +151,7 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
     return result;
   }
   return {
+    setRequestedEffort(value) { requestedEffort = effort(value); },
     setTools(tools) {
       offeredTools = new Map((Array.isArray(tools) ? tools : []).filter((tool) => id(tool?.name)
         && ["function", "custom"].includes(tool.type)).map((tool) => [tool.name, tool.type]));
@@ -195,8 +196,16 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
       // Live contrast: caller low, completed response/candidate/upstream high.
       // Responses effort alone, evaluations and incumbent defaults are not proof.
       const responseEffort = snapshot.responseEffort || null;
-      const routerEffort = selectedByJev && candidateEffort && responseEffort === candidateEffort ? responseEffort : null;
-      if (selectedByJev && candidateEffort && responseEffort && responseEffort !== candidateEffort) fail("conflicting-served-effort");
+      // Continuation turns: Jev may list only the model it already chose and
+      // echo the caller's requested effort as that candidate's effort. That
+      // echo is not a selection, so trust the response only when this run
+      // already proved the same model on an earlier turn with a full match.
+      const listed = Array.isArray(jev?.candidates) ? jev.candidates : [];
+      const continuation = selectedByJev && candidateEffort && responseEffort && responseEffort !== candidateEffort
+        && listed.length === 1 && candidates.length === 1 && candidateEffort === requestedEffort
+        && provenModels?.has(canonical(resolvedModel));
+      const routerEffort = selectedByJev && candidateEffort && (responseEffort === candidateEffort || continuation) ? responseEffort : null;
+      if (selectedByJev && candidateEffort && responseEffort && responseEffort !== candidateEffort && !continuation) fail("conflicting-served-effort");
       // The last debug event is the last attempted upstream request. Require
       // the documented attempt count and a matching final selected model.
       // Native OpenAI IDs have the provider prefix removed; never guess other
@@ -224,7 +233,7 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
         // the correlated upstream request with an explicit source marker.
         resolvedEffort: control ? responseEffort : routerEffort || forwardedEffort,
         resolvedEffortSource: control ? (responseEffort ? "completed-fixed-response" : null)
-          : routerEffort ? "response-and-jev-selection" : forwardedEffort ? "upstream-request" : null,
+          : routerEffort ? (continuation ? "response-and-proven-continuation" : "response-and-jev-selection") : forwardedEffort ? "upstream-request" : null,
         debugCount, upstreamModel: debug?.model || null, upstreamEffort: debug?.effort || null, upstreamKeys: debug?.keys || [],
         inputTokens: count(usage.input_tokens), outputTokens: count(usage.output_tokens),
         cacheReadTokens: count(usage.input_tokens_details?.cached_tokens),
@@ -239,6 +248,8 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
         || snapshot.metadata?.attempt !== 1)) fail("fixed-control-identity-mismatch");
       if (rejectFallback && snapshot.metadata?.attempt !== 1) fail("unapproved-provider-fallback");
       if (!reason && ["resolvedModel", "provider", "resolvedEffort", "inputTokens", "outputTokens", "cacheReadTokens", "billedUsd", "invoiceId"].some((field) => record[field] === null)) fail("missing-provider-attribution");
+      // Only a full, unambiguous match on a multi-candidate turn proves a model.
+      if (!reason && provenModels && routerEffort && !continuation && listed.length > 1) provenModels.add(canonical(resolvedModel));
       return { ...record, error: reason };
     },
   };

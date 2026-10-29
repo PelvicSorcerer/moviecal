@@ -129,6 +129,36 @@ describe("OpenRouter Responses evidence", () => {
     const event = completed(); event.response.reasoning.effort = "high";
     expect(observe([event]).error).toBe("conflicting-served-effort");
   });
+  describe("continuation turns that list only the proven model", () => {
+    const pool = () => { const e = completed(), d = e.response.openrouter_metadata.pipeline[0].data;
+      d.candidates = [d.candidates[0], { model: "other/model", effort: "medium" }]; e.response.reasoning.effort = "low"; return e; };
+    const continuation = (candidateEffort = "medium") => { const e = completed(); e.response.reasoning.effort = "high";
+      e.response.openrouter_metadata.pipeline[0].data.candidates[0].effort = candidateEffort; return e; };
+    function run(turns, proven = new Set()) {
+      return turns.map(([event, requested]) => { const o = createResponseObserver({ provenModels: proven }); o.setRequestedEffort(requested);
+        o.push(`data: ${JSON.stringify(event)}\n\n`); return o.finish(); });
+    }
+    it("trusts the response effort after the model was proven on a full-pool turn", () => {
+      const [first, second] = run([[pool(), "medium"], [continuation(), "medium"]]);
+      expect(first).toMatchObject({ error: null, resolvedEffortSource: "response-and-jev-selection" });
+      expect(second).toMatchObject({ error: null, resolvedEffort: "high", resolvedEffortSource: "response-and-proven-continuation" });
+    });
+    it("still fails closed when the model was never proven, the effort is not an echo or several candidates are listed", () => {
+      expect(run([[continuation(), "medium"]])[0].error).toBe("conflicting-served-effort");
+      expect(run([[pool(), "medium"], [continuation(), "low"]])[1].error).toBe("conflicting-served-effort");
+      expect(run([[pool(), "medium"], [continuation("low"), undefined]])[1].error).toBe("conflicting-served-effort");
+      const many = continuation(); many.response.openrouter_metadata.pipeline[0].data.candidates.push({ model: "other/model", effort: "medium" });
+      expect(run([[pool(), "medium"], [many, "medium"]])[1].error).toBe("conflicting-served-effort");
+      const other = continuation(); other.response.model = "other/model";
+      other.response.openrouter_metadata.pipeline[0].data = { resolved_models: ["other/model"], candidates: [{ model: "other/model", effort: "medium" }] };
+      other.response.openrouter_metadata.endpoints.available[0].model = "other/model";
+      expect(run([[pool(), "medium"], [other, "medium"]])[1].error).toBe("conflicting-served-effort");
+    });
+    it("does not prove a model from a failed turn", () => {
+      const bad = pool(); bad.response.reasoning.effort = "high";
+      expect(run([[bad, "medium"], [continuation(), "medium"]])[1].error).toBe("conflicting-served-effort");
+    });
+  });
   it.each(["missing-selection", "other-candidate", "duplicate-candidate", "unknown-effort", "missing-response", "oversized-candidates", "duplicate-stage"])("rejects ordinary attribution for %s", (failure) => {
     const event = completed(), data = event.response.openrouter_metadata.pipeline[0].data;
     if (failure === "duplicate-stage") event.response.openrouter_metadata.pipeline.push({ name: "jev-router", data });
