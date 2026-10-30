@@ -126,6 +126,8 @@ import { WorkerCooldownStore, WORKERS as WORKER_POOLS } from "../src/worker-cool
 import { WorkerTrialStore, describeTrialState } from "../src/worker-trial.mjs";
 import { JevArmStore, describeJevState, isEligibleForJevArm, ELIGIBLE_LABEL as JEV_ELIGIBLE_LABEL } from "../src/jev-trial.mjs";
 import { JevCohortStore } from "../src/jev-cohort.mjs";
+import { readOpenRouterAccount } from "../src/openrouter-account.mjs";
+import { OPENROUTER_UPSTREAM } from "../src/openrouter-transport.mjs";
 import { inferExecutionRoute, resolveExecutionRoute } from "../src/execution-routing.mjs";
 import {
   describeDelegate,
@@ -596,6 +598,23 @@ function cmdJev(args) {
   return 1;
 }
 
+// Settle paid requests a dead broker left pending. Dry run unless --apply.
+async function cmdJevCohortReconcile(store, flags) {
+  const apply = flags.includes("--apply");
+  const ageFlag = flags.indexOf("--min-age-sec");
+  const minAgeMs = ageFlag < 0 ? undefined : Number(flags[ageFlag + 1]) * 1000;
+  try {
+    if (minAgeMs !== undefined && !(minAgeMs >= 0)) throw new Error("--min-age-sec must be a non-negative number");
+    const credential = path.join(store.storeRoot, "openrouter-jev.env");
+    const match = /^OPENROUTER_API_KEY=([A-Za-z0-9_-]{8,256})$/.exec(fs.readFileSync(credential, "utf8").trim());
+    if (!match) throw new Error("provider credential invalid");
+    const account = await readOpenRouterAccount(OPENROUTER_UPSTREAM, match[1]);
+    const result = store.reconcileOrphans(account, { apply, ...(minAgeMs === undefined ? {} : { minAgeMs }) });
+    console.log(JSON.stringify({ ...result, state: store.state() }, null, 2));
+    return result.outcome === "stop" ? 1 : 0;
+  } catch (error) { console.error(`jev-cohort reconcile failed: ${error.message}`); return 1; }
+}
+
 function cmdJevCohort(args) {
   const store = buildJevCohortStore();
   const [action, ...flags] = args;
@@ -612,13 +631,17 @@ function cmdJevCohort(args) {
     if (action === "activate") { console.log(JSON.stringify(store.activate(), null, 2)); return 0; }
     if (action === "stop") { console.log(JSON.stringify(store.stop(), null, 2)); return 0; }
     if (action === "export") { console.log(JSON.stringify(store.export(), null, 2)); return 0; }
+    if (action === "reconcile") {
+      // Async: handled by the caller so the account read can be awaited.
+      return cmdJevCohortReconcile(store, flags);
+    }
     if (action === "fee") {
       console.log(JSON.stringify(store.recordFee({ id: flag("--id"), amountUsd: Number(flag("--usd")),
         description: flag("--description") || "fee" }), null, 2));
       return 0;
     }
   } catch (error) { console.error(`jev-cohort ${action} failed: ${error.message}`); return 1; }
-  console.error("Usage: dispatcher jev-cohort status|preview [--issue MOV-N]|activate|stop|export|fee --id ID --usd N [--description ID]");
+  console.error("Usage: dispatcher jev-cohort status|preview [--issue MOV-N]|activate|stop|export|reconcile [--apply] [--min-age-sec N]|fee --id ID --usd N [--description ID]");
   return 1;
 }
 
@@ -1737,7 +1760,7 @@ async function main() {
       process.exitCode = cmdJev(rest);
       break;
     case "jev-cohort":
-      process.exitCode = cmdJevCohort(rest);
+      process.exitCode = await cmdJevCohort(rest);
       break;
     case "doctor":
       process.exitCode = await cmdDoctor();

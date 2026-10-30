@@ -333,4 +333,70 @@ describe("reviewed production Jev cohort", () => {
     expect(store.state(NOW).status).toBe("disabled");
     expect(store.export().stoppedReason).toBe("unknown-or-excess-account-exposure");
   });
+
+  describe("orphaned request reconciliation (MOV-484)", () => {
+    const LATER = new Date(NOW.getTime() + 10 * 60000);
+    const reserveOne = (id = "req-1", who = "MOV-10") => {
+      store.admit(issue(who), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+      store.reserve(id, who, account, NOW);
+    };
+    beforeEach(() => store.activate(NOW));
+
+    it("reports but does not change anything without --apply", () => {
+      reserveOne();
+      const result = store.reconcileOrphans({ ...account, keyUsageUsd: 1.05 }, { now: LATER });
+      expect(result).toMatchObject({ applied: false, outcome: "settle", requests: ["req-1"] });
+      expect(result.amountUsd).toBeCloseTo(0.05, 6);
+      expect(store.state(LATER).pending).toBe(1);
+    });
+
+    it("settles a single orphan with the observed key usage and unblocks the cohort", () => {
+      reserveOne();
+      const result = store.reconcileOrphans({ ...account, keyUsageUsd: 1.05, keyRemainingUsd: 67.95 }, { apply: true, now: LATER });
+      expect(result).toMatchObject({ applied: true, outcome: "settle" });
+      expect(store.export().requests[0]).toMatchObject({ status: "failed", reason: "orphaned-request-reconciled" });
+      expect(store.state(LATER)).toMatchObject({ status: "active", pending: 0, stoppedReason: null });
+      expect(store.state(LATER).spentUsd).toBeCloseTo(5.55, 6);
+    });
+
+    it("settles at zero when key usage did not move", () => {
+      reserveOne();
+      expect(store.reconcileOrphans(account, { apply: true, now: LATER })).toMatchObject({ outcome: "settle", amountUsd: 0 });
+      expect(store.state(LATER)).toMatchObject({ status: "active", pending: 0 });
+    });
+
+    it("leaves a recent request alone because it may still be in flight", () => {
+      reserveOne();
+      expect(store.reconcileOrphans(account, { apply: true, now: new Date(NOW.getTime() + 30000) }))
+        .toMatchObject({ applied: false, outcome: "too-recent" });
+      expect(store.state(NOW).pending).toBe(1);
+    });
+
+    it("does nothing when nothing is pending", () => {
+      expect(store.reconcileOrphans(account, { apply: true, now: LATER })).toMatchObject({ applied: false, outcome: "none" });
+    });
+
+    it.each([
+      ["usage went down", { keyUsageUsd: 0.5 }, "key-usage-decreased"],
+      ["usage exceeds the reservation", { keyUsageUsd: 69.5 }, "usage-exceeds-reservation"],
+      ["account evidence is malformed", { keyUsageUsd: Number.NaN }, "account-evidence-invalid"],
+    ])("stops the cohort when %s", (_name, patch, reason) => {
+      reserveOne();
+      const result = store.reconcileOrphans({ ...account, ...patch }, { apply: true, now: LATER });
+      expect(result).toMatchObject({ applied: true, outcome: "stop", reason });
+      expect(store.export().stoppedReason).toBe(`orphan-reconciliation-${reason}`);
+      expect(store.export().requests[0].status).toBe("pending");
+    });
+
+    it("stops rather than guess when usage cannot be attributed to one of several orphans", () => {
+      reserveOne();
+      const ledgerPath = path.join(dir, "jev-cohort-ledger.json");
+      const ledger = JSON.parse(fs.readFileSync(ledgerPath, "utf8"));
+      ledger.requests["req-2"] = { ...ledger.requests["req-1"], requestId: "req-2" };
+      fs.writeFileSync(ledgerPath, JSON.stringify(ledger), { mode: 0o600 });
+      const result = store.reconcileOrphans({ ...account, keyUsageUsd: 1.1 }, { apply: true, now: LATER });
+      expect(result).toMatchObject({ outcome: "stop", reason: "usage-not-attributable" });
+      expect(store.export().stoppedReason).toBe("orphan-reconciliation-usage-not-attributable");
+    });
+  });
 });

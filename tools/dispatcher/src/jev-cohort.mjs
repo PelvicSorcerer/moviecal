@@ -379,6 +379,57 @@ export class JevCohortStore {
     if (this.state(now).spentUsd > 75) this.stop("all-in-ceiling", now);
   }
 
+  // Operator recovery for reservations a dead broker never settled (SIGKILL,
+  // crash). Fail-closed: a row is settled only when the key's usage since the
+  // last observation is attributable to exactly one request, or is zero.
+  // Anything else stops the cohort for owner reconciliation. A request younger
+  // than minAgeMs may still be in flight and is left alone.
+  reconcileOrphans(account, { apply = false, minAgeMs = 300000, now = new Date() } = {}) {
+    const plan = (ledger) => {
+      const pending = Object.values(ledger.requests || {}).filter((r) => r.status === "pending");
+      if (!pending.length) return { outcome: "none", pending };
+      if (pending.some((r) => now.getTime() - Date.parse(r.startedAt) < minAgeMs)) return { outcome: "too-recent", pending };
+      if (!MONEY(account?.keyUsageUsd) || !MONEY(account?.keyRemainingUsd)) return { outcome: "stop", reason: "account-evidence-invalid", pending };
+      const observed = ledger.observedKeyUsageUsd ?? this.policy(now).baselineKeyUsageUsd;
+      const delta = account.keyUsageUsd - observed;
+      if (delta < -1e-9) return { outcome: "stop", reason: "key-usage-decreased", pending };
+      const amountUsd = Math.max(0, liability(delta - 1e-9));
+      if (amountUsd > 0 && pending.length > 1) return { outcome: "stop", reason: "usage-not-attributable", pending, amountUsd };
+      if (amountUsd > pending.reduce((n, r) => n + r.reservedUsd, 0)) return { outcome: "stop", reason: "usage-exceeds-reservation", pending, amountUsd };
+      return { outcome: "settle", pending, amountUsd };
+    };
+    const preview = plan(this.ledger.load());
+    const summary = (p) => ({ outcome: p.outcome, reason: p.reason || null, amountUsd: p.amountUsd ?? 0,
+      requests: p.pending.map((r) => r.requestId) });
+    if (!apply || !["settle", "stop"].includes(preview.outcome)) return { applied: false, ...summary(preview) };
+    if (preview.outcome === "stop") {
+      this.stop(`orphan-reconciliation-${preview.reason}`, now);
+      return { applied: true, ...summary(preview) };
+    }
+    let final;
+    try {
+      this.updateLedger((data) => {
+        final = plan(data);
+        if (final.outcome !== "settle") return;
+        for (const row of final.pending) {
+          Object.assign(row, { status: "failed", amountUsd: row === final.pending[0] ? final.amountUsd : 0,
+            reason: "orphaned-request-reconciled", completedAt: now.toISOString() });
+        }
+        data.observedKeyUsageUsd = Math.max(data.observedKeyUsageUsd || 0, account.keyUsageUsd);
+        data.keyRemainingUsd = mergeKeyRemaining(data, account);
+      });
+    } catch (error) {
+      this.stop("orphan-reconciliation-failed", now);
+      throw error;
+    }
+    if (final.outcome !== "settle") {
+      if (final.outcome === "stop") this.stop(`orphan-reconciliation-${final.reason}`, now);
+      return { applied: final.outcome === "stop", ...summary(final) };
+    }
+    if (this.state(now).spentUsd > 75) this.stop("all-in-ceiling", now);
+    return { applied: true, ...summary(final) };
+  }
+
   finish(requestId, { invoiceId, amountUsd, model, provider, effort, account }, now = new Date()) {
     if (!ID.test(invoiceId || "") || !MONEY(amountUsd) || !ID.test(model || "") || !ID.test(provider || "")
       || !["low", "medium", "high", "xhigh", "max"].includes(effort)

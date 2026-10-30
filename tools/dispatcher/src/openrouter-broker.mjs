@@ -79,6 +79,23 @@ function providerFailure(status, body) {
   return { error: `provider-http-${code}${detail ? `-${detail}` : ""}`.slice(0, 80), diagnostic };
 }
 const provenModels = new Set();
+// Bounded, secret-free settlement outcomes beside the other run evidence.
+const logSettlement = (entry) => {
+  try {
+    fs.appendFileSync(path.join(path.dirname(process.argv[2]), "openrouter-settlement.jsonl"),
+      `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`, { mode: 0o600 });
+  } catch { /* evidence is best effort; the ledger is authoritative */ }
+};
+const inflight = new Set(), inflightSettlements = new Set();
+// On a termination signal, settle any open reservation before exiting. A hard
+// kill cannot run this; `jev-cohort reconcile` covers that case.
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.on(signal, async () => {
+    for (const close of [...inflight]) close();
+    await Promise.race([Promise.allSettled([...inflightSettlements]), new Promise((resolve) => setTimeout(resolve, 8000))]);
+    process.exit(0);
+  });
+}
 const server = http.createServer(async (request, response) => {
   if (!authorized(request.headers.authorization) || request.method !== "POST" || request.url !== "/v1/responses") {
     response.writeHead(403); response.end(); return;
@@ -91,14 +108,41 @@ const server = http.createServer(async (request, response) => {
     deferCompletion: true, rewriteEvent: config.policy.side === "control" ? null : createJevPatchTranslator(config.cwd),
     rejectFallback: Boolean(cohort), provenModels, control: config.policy.side === "control" ? { model: config.policy.model,
       provider: config.policy.provider, effort: config.policy.effort } : null });
-  let recorded = false, toolOutputs = 0, requestedEffort = null, account = null, reserved = false, providerDiagnostic = null;
+  let recorded = false, toolOutputs = 0, requestedEffort = null, account = null, reserved = false, providerDiagnostic = null, finished = false;
+  const onTerminate = () => { if (reserved && !finished) record("broker-terminated", { scoped: true }); };
+  inflight.add(onTerminate);
+  // Settle an open reservation exactly once, whichever failure path gets here
+  // first. If the account read or ledger write fails the cohort stops, and the
+  // row stays pending for `jev-cohort reconcile`. The outcome is always logged.
+  let settlement = null;
+  const settleReservation = (reason) => {
+    if (!cohort || !reserved || finished) return Promise.resolve(true);
+    settlement ||= (async () => {
+      try {
+        const after = await readOpenRouterAccount(config.upstream, key, { fixture: config.fixture === true });
+        cohort.failRequest(requestId, { reason, preUsageUsd: account.keyUsageUsd, account: after });
+        logSettlement({ requestId, issue: config.cohort.issue, outcome: "settled", reason,
+          amountUsd: cohort.export().requests.find((r) => r.requestId === requestId)?.amountUsd ?? null });
+        return true;
+      } catch {
+        cohort.stop("account-postflight-or-budget-failed");
+        logSettlement({ requestId, issue: config.cohort.issue, outcome: "unsettled", reason, failure: "account-postflight-or-budget-failed" });
+        return false;
+      }
+    })();
+    inflightSettlements.add(settlement);
+    return settlement;
+  };
   // scoped: the failure ends this attempt's route but leaves the cohort running.
   const record = (error = null, { scoped = false } = {}) => {
     if (recorded) return;
     recorded = true;
+    inflight.delete(onTerminate);
     const observed = observer.finish();
     let failure = error || observed.error;
     if (failure) { stopped = true; if (!scoped) cohort?.stop(failure); }
+    // finish() failures keep the row pending for owner reconciliation.
+    if (failure && failure !== "invoice-reconciliation-failed") void settleReservation(failure);
     if (cohort && reserved && !failure) {
       try { cohort.finish(requestId, { invoiceId: observed.invoiceId, amountUsd: observed.billedUsd,
         model: observed.resolvedModel, provider: observed.provider, effort: observed.resolvedEffort, account });
@@ -178,10 +222,7 @@ const server = http.createServer(async (request, response) => {
           if (scoped && cohort && reserved) {
             // Settle the reservation before the route reports failure, counting
             // any usage the rejected request still incurred.
-            try {
-              const after = await readOpenRouterAccount(config.upstream, key, { fixture: config.fixture === true });
-              cohort.failRequest(requestId, { reason: error, preUsageUsd: account.keyUsageUsd, account: after });
-            } catch { error = "account-postflight-or-budget-failed"; scoped = false; }
+            if (!await settleReservation(error)) { error = "account-postflight-or-budget-failed"; scoped = false; }
           }
           record(error, { scoped });
           response.writeHead(502, { "content-type": "application/json" });
