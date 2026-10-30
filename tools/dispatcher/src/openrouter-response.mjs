@@ -3,6 +3,15 @@
 import { StringDecoder } from "node:string_decoder";
 
 const id = (v) => typeof v === "string" && /^[A-Za-z0-9_.:/-]{1,200}$/.test(v) ? v : null;
+// Endpoint providers can be display names ("Amazon Bedrock"). Valid IDs pass
+// through unchanged; anything else becomes a bounded slug, or null when no
+// alphanumerics remain. The raw string is only ever logged via `shown`.
+const providerId = (v) => {
+  if (id(v)) return v;
+  if (typeof v !== "string") return null;
+  const slug = v.normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 200).replace(/-+$/, "");
+  return slug || null;
+};
 // Diagnostic only, never used for a decision: a bounded copy of a provider
 // string so a failed identity check can be explained from the run log.
 const shown = (v) => typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 200) || null : null;
@@ -227,7 +236,7 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
       if (proofDebug && debugCount && debugCount !== snapshot.metadata?.attempt) fail("ambiguous-upstream-debug");
       if (routerEffort && forwardedEffort && routerEffort !== forwardedEffort) fail("conflicting-served-effort");
       const record = {
-        resolvedModel, provider: id(endpoint?.provider),
+        resolvedModel, provider: providerId(endpoint?.provider),
         canonicalModel: canonical(resolvedModel),
         endpointModel: shown(endpoint?.model), endpointProvider: shown(endpoint?.provider), endpointTag: shown(endpoint?.tag),
         // Bounded field names identify an upstream schema gap without saving

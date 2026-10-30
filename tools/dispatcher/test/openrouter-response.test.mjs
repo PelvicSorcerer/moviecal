@@ -296,11 +296,27 @@ describe("OpenRouter Responses evidence", () => {
     endpoint.model = "Vendor: Fixture Pro\u0007"; endpoint.provider = "Vendor AI"; endpoint.tag = "vendor/fast";
     event.response.openrouter_metadata.pipeline[0].data.private_payload = "PRIVATE_SENTINEL";
     const result = observe([event]);
-    expect(result).toMatchObject({ error: "conflicting-served-model", provider: null,
+    expect(result).toMatchObject({ error: "conflicting-served-model", provider: "vendor-ai",
       endpointModel: "Vendor: Fixture Pro", endpointProvider: "Vendor AI", endpointTag: "vendor/fast" });
     expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
     endpoint.model = "m".repeat(300);
     expect(observe([event]).endpointModel).toHaveLength(200);
+  });
+  it.each([["Amazon Bedrock", "amazon-bedrock"], ["Moonshot AI", "moonshot-ai"], [" Fireworks  AI\u0007 ", "fireworks-ai"]])("normalizes display-name provider %j to a slug", (name, slug) => {
+    const event = completed(); event.response.openrouter_metadata.endpoints.available[0].provider = name;
+    const result = observe([event]);
+    expect(result).toMatchObject({ error: null, provider: slug });
+    expect(result.endpointProvider).toBe(name.replace(/\u0007/g, ""));
+  });
+  it.each([["!!!"], [""], [null], [42], ["\u0000\u0001"]])("keeps a garbage or missing provider %j fail-closed", (name) => {
+    const event = completed(); event.response.openrouter_metadata.endpoints.available[0].provider = name;
+    expect(observe([event])).toMatchObject({ provider: null, error: "missing-provider-attribution" });
+  });
+  it("bounds a long display-name provider slug", () => {
+    const event = completed(); event.response.openrouter_metadata.endpoints.available[0].provider = "a b ".repeat(200);
+    const { provider } = observe([event]);
+    expect(provider.length).toBeLessThanOrEqual(200);
+    expect(provider).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
   });
   it("retains slug endpoint evidence on success and nulls it without a selected endpoint", () => {
     const event = completed(); const endpoint = event.response.openrouter_metadata.endpoints.available[0];
