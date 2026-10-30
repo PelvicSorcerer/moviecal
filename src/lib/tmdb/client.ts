@@ -1,7 +1,20 @@
 import type { Json } from '../supabase/database';
+import { createTMDbCacheKey, TMDbResponseCache } from './cache';
 import { getServerTMDbEnv, TMDbEnvironmentError } from './env';
 
 const TMDB_API_BASE_URL = 'https://api.themoviedb.org/3';
+export const TMDB_SEARCH_CACHE_TTL_MS = 60_000;
+export const TMDB_DETAILS_CACHE_TTL_MS = 10 * 60_000;
+
+const defaultTMDbResponseCache = new TMDbResponseCache();
+
+export interface TMDbRequestOptions {
+  cache?: TMDbResponseCache | null;
+}
+
+export function clearTMDbResponseCache(): void {
+  defaultTMDbResponseCache.clear();
+}
 
 export interface NormalizedMovieSummary {
   overview: string | null;
@@ -127,6 +140,26 @@ async function fetchTMDbJson(
   path: string,
   searchParams: Record<string, string | number>,
   fetchImpl: TMDbFetch,
+  ttlMs: number,
+  options: TMDbRequestOptions,
+): Promise<unknown> {
+  const cache = options.cache === undefined ? defaultTMDbResponseCache : options.cache;
+
+  if (!cache) {
+    return fetchTMDbJsonUncached(path, searchParams, fetchImpl);
+  }
+
+  return cache.getOrLoad(
+    createTMDbCacheKey(path, searchParams),
+    ttlMs,
+    () => fetchTMDbJsonUncached(path, searchParams, fetchImpl),
+  );
+}
+
+async function fetchTMDbJsonUncached(
+  path: string,
+  searchParams: Record<string, string | number>,
+  fetchImpl: TMDbFetch,
 ): Promise<unknown> {
   const url = createTMDbUrl(path, searchParams);
 
@@ -189,14 +222,16 @@ function normalizeDetailResponse(payload: unknown): NormalizedMovieDetail {
 export async function searchMovies(
   query: string,
   fetchImpl: TMDbFetch = fetch,
+  options: TMDbRequestOptions = {},
 ): Promise<NormalizedMovieSummary[]> {
-  return (await searchMoviesPage(query, 1, fetchImpl)).results;
+  return (await searchMoviesPage(query, 1, fetchImpl, options)).results;
 }
 
 export async function searchMoviesPage(
   query: string,
   page = 1,
   fetchImpl: TMDbFetch = fetch,
+  options: TMDbRequestOptions = {},
 ): Promise<MovieSearchPage> {
   const trimmedQuery = query.trim();
 
@@ -216,6 +251,8 @@ export async function searchMoviesPage(
       page,
     },
     fetchImpl,
+    TMDB_SEARCH_CACHE_TTL_MS,
+    options,
   );
 
   const results = normalizeSearchResponse(payload);
@@ -235,14 +272,28 @@ export async function searchMoviesPage(
 export async function getMovieDetails(
   tmdbId: number,
   fetchImpl: TMDbFetch = fetch,
+  options: TMDbRequestOptions = {},
 ): Promise<NormalizedMovieDetail> {
   if (!Number.isInteger(tmdbId) || tmdbId <= 0) {
     throw new TMDbRequestError('A valid TMDb movie id is required.', 400);
   }
 
-  const payload = await fetchTMDbJson(`/movie/${tmdbId}`, {}, fetchImpl);
+  const payload = await fetchTMDbJson(
+    `/movie/${tmdbId}`,
+    {},
+    fetchImpl,
+    TMDB_DETAILS_CACHE_TTL_MS,
+    options,
+  );
 
   return normalizeDetailResponse(payload);
+}
+
+export async function getFreshMovieDetails(
+  tmdbId: number,
+  fetchImpl: TMDbFetch = fetch,
+): Promise<NormalizedMovieDetail> {
+  return getMovieDetails(tmdbId, fetchImpl, { cache: null });
 }
 
 export { TMDbEnvironmentError };

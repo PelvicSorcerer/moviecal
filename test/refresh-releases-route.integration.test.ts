@@ -23,7 +23,7 @@ vi.mock('../src/lib/tmdb/client', async () => {
 
   return {
     ...actual,
-    getMovieDetails: mocks.getMovieDetails,
+    getFreshMovieDetails: mocks.getMovieDetails,
   };
 });
 

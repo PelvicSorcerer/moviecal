@@ -8,7 +8,7 @@ import {
   createServerSupabaseServiceRoleClient,
 } from '../../../../lib/supabase/server';
 import { createSupabaseWatchlistRepository } from '../../../../lib/supabase/watchlist';
-import { getMovieDetails } from '../../../../lib/tmdb/client';
+import { getFreshMovieDetails } from '../../../../lib/tmdb/client';
 import { TMDbEnvironmentError } from '../../../../lib/tmdb/env';
 import { apiError, handleDomainError } from '../../../../lib/api/response';
 
@@ -59,7 +59,7 @@ async function handleRefreshRequest(request: NextRequest) {
     }
 
     const result = await runRefreshPipeline({
-      getMovieDetails,
+      getMovieDetails: (tmdbId) => getFreshMovieDetails(tmdbId),
       repository: createRefreshRepository(),
     });
 
