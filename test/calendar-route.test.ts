@@ -65,6 +65,8 @@ describe('calendar feed route', () => {
     );
 
     expect(response.status).toBe(404);
+    expect(response.headers.has('etag')).toBe(false);
+    await expect(response.text()).resolves.toBe('Not Found');
     expect(mocks.createSupabaseWatchlistRepository).not.toHaveBeenCalled();
     expect(mocks.listCalendarWatchlistItems).not.toHaveBeenCalled();
     expect(mocks.buildCalendarFeed).not.toHaveBeenCalled();

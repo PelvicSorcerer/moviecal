@@ -51,6 +51,18 @@ describe('calendar feed helpers', () => {
 });
 
 describe('buildCalendarFeed', () => {
+  it('defaults DTSTAMP to each item added-at time without changing event identity', () => {
+    const item = buildWatchlistItem({ addedAt: '2026-06-19T10:20:30.000Z' });
+    const feed = buildCalendarFeed({ items: [item], userId: TEST_USER_IDS.OWNER });
+
+    expect(feed).toContain('DTSTAMP:20260619T102030Z');
+    expect(feed).toContain(`DTSTART;VALUE=DATE:${formatCalendarDate(item.movie.releaseDate)}`);
+    expect(feed).toContain(foldCalendarLine(
+      `UID:${buildCalendarEventUid(TEST_USER_IDS.OWNER, item.movie.tmdbId)}`,
+    ).join('\r\n'));
+    expect(buildCalendarFeed({ items: [item], userId: TEST_USER_IDS.OWNER })).toBe(feed);
+  });
+
   it('generates deterministic ics output for dated watchlist items', () => {
     const generatedAt = new Date('2026-06-20T14:05:06.789Z');
     const feed = buildCalendarFeed({

@@ -138,8 +138,65 @@ function createWatchlistRepositoryForRoute() {
 
 describe('calendar feed route integration seam', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.resetModules();
     vi.clearAllMocks();
+  });
+
+  it('keeps validators stable across requests and changes them with watchlist content', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-20T12:00:00Z'));
+    mocks.createSupabaseCalendarTokenRepository.mockReturnValue(
+      createCalendarTokenRepositoryForRoute(),
+    );
+    mocks.createSupabaseWatchlistRepository.mockReturnValue(
+      createWatchlistRepositoryForRoute(),
+    );
+    mocks.isE2ETestModeEnabled.mockReturnValue(false);
+
+    const { GET } = await import('../src/app/api/calendar/[token]/route');
+    const getFeed = (validator?: string) => GET(
+      new Request('https://moviecal.test/api/calendar/valid-token', {
+        headers: validator ? { 'If-None-Match': validator } : {},
+      }),
+      { params: Promise.resolve({ token: 'valid-token' }) },
+    );
+    const initial = await getFeed();
+    const body = await initial.text();
+    const etag = initial.headers.get('etag')!;
+    expect(initial.status).toBe(200);
+    expect(etag).toMatch(/^"[a-f0-9]{64}"$/);
+    expect(initial.headers.get('cache-control')).toBe('private, max-age=0, must-revalidate');
+
+    vi.setSystemTime(new Date('2026-06-21T12:00:00Z'));
+    const repeated = await getFeed();
+    expect(repeated.headers.get('etag')).toBe(etag);
+    expect(await repeated.text()).toBe(body);
+
+    for (const validator of [etag, `W/${etag}`, `"other", W/${etag}`, '*']) {
+      const response = await getFeed(validator);
+      expect(response.status).toBe(304);
+      expect(response.body).toBeNull();
+      expect(await response.text()).toBe('');
+      expect(response.headers.get('etag')).toBe(etag);
+      expect(response.headers.get('cache-control')).toBe('private, max-age=0, must-revalidate');
+    }
+
+    const nonmatching = await getFeed('"other"');
+    expect(nonmatching.status).toBe(200);
+    expect(await nonmatching.text()).toBe(body);
+
+    mocks.createSupabaseWatchlistRepository.mockReturnValue(
+      createWatchlistRepository({
+        async listItemsForWatchlist() {
+          return [];
+        },
+      }),
+    );
+    const changed = await getFeed(etag);
+    expect(changed.status).toBe(200);
+    expect(changed.headers.get('etag')).not.toBe(etag);
+    expect(await changed.text()).not.toContain('BEGIN:VEVENT');
   });
 
   it('returns the real owner-scoped calendar feed for a valid token', async () => {
@@ -199,13 +256,16 @@ describe('calendar feed route integration seam', () => {
 
     const { GET } = await import('../src/app/api/calendar/[token]/route');
     const response = await GET(
-      new Request('https://moviecal.test/api/calendar/missing-token'),
+      new Request('https://moviecal.test/api/calendar/missing-token', {
+        headers: { 'If-None-Match': '*' },
+      }),
       {
         params: Promise.resolve({ token: 'missing-token' }),
       },
     );
 
     expect(response.status).toBe(404);
+    expect(response.headers.has('etag')).toBe(false);
     await expect(response.text()).resolves.toBe('Not Found');
   });
 
