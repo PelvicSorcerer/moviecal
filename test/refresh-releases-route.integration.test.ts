@@ -212,6 +212,50 @@ describe('refresh releases route', () => {
     });
   });
 
+  it('uses five concurrent slots and reports partial failures after out-of-order work', async () => {
+    const movies = Array.from({ length: 7 }, (_, index) => buildMovieRow({ tmdb_id: index + 1 }));
+    const completions = movies.map(() => {
+      let complete!: () => void;
+      const promise = new Promise<void>((resolve) => { complete = resolve; });
+      return { promise, complete };
+    });
+    const upsertMovie = vi.fn(async () => ({ id: 42 }));
+    mocks.createSupabaseWatchlistRepository.mockReturnValue({
+      listTrackedMovies: async () => movies,
+      findMovieByTmdbId: async (tmdbId: number) => movies[tmdbId - 1],
+      upsertMovie,
+    });
+    mocks.getMovieDetails.mockImplementation(async (tmdbId: number) => {
+      await completions[tmdbId - 1].promise;
+      if (tmdbId === 2) throw new Error('fetch failed');
+      return {
+        tmdbId, title: 'The Matrix', releaseDate: '2027-01-01',
+        posterPath: null, overview: null, rawJson: { id: tmdbId },
+      };
+    });
+    const { GET } = await import('../src/app/api/cron/refresh-releases/route');
+    const run = GET(new Request('https://moviecal.test/api/cron/refresh-releases', {
+      headers: { authorization: 'Bearer cron-secret-for-tests' },
+    }));
+    await vi.waitFor(() => expect(mocks.getMovieDetails).toHaveBeenCalledTimes(5));
+    completions[4].complete();
+    await vi.waitFor(() => expect(mocks.getMovieDetails).toHaveBeenCalledTimes(6));
+    completions[5].complete();
+    await vi.waitFor(() => expect(mocks.getMovieDetails).toHaveBeenCalledTimes(7));
+    completions.forEach(({ complete }) => complete());
+    const response = await run;
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: 'One or more movie refreshes failed.',
+      trackedMovies: 7, refreshedMovies: 6, failedMovies: 1,
+      changedMovies: 6, unchangedMovies: 0,
+      releaseDateChanges: [1, 3, 4, 5, 6, 7].map((tmdbId) => ({
+        tmdbId, from: '1999-03-31', to: '2027-01-01',
+      })),
+    });
+    expect(upsertMovie).toHaveBeenCalledTimes(6);
+  });
+
   it('returns 503 when the cron secret is not configured', async () => {
     delete process.env.CRON_SECRET;
 

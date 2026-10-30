@@ -50,6 +50,8 @@ Former members lose access as a consequence of the cascade, and private calendar
 
 Both refresh entrypoints skip database writes when title, release date, poster path, and overview match the stored movie. Their responses retain `trackedMovies`, `refreshedMovies` (all successfully processed movies, including unchanged ones), and `failedMovies`, and add `changedMovies`, `unchangedMovies`, and `releaseDateChanges`. Changed counts include newly inserted movies; the date-change list contains only successfully saved changes to existing rows, as `{ tmdbId, from, to }` with nullable dates, capped at 100 entries. Counts still cover the entire run when the list is capped. Per-movie failures return the same summary with HTTP 502; authentication and environment-error behavior are unchanged.
 
+The refresh pipeline processes up to five movies concurrently, with each slot covering both TMDb fetching and database persistence. Internal callers can override this with a positive integer `concurrency` argument to `runRefreshPipeline`; no environment variable is needed. Failure ids and the capped date-change report retain tracked-id order regardless of completion order. A TMDb environment error stops scheduling new movies, waits for already-started work to settle, and then propagates.
+
 ## TMDb proxy endpoints
 
 - `GET /api/movies/search?q=` — server-side TMDb search proxy.
