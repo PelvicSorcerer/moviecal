@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Transform } from "node:stream";
 import { randomUUID } from "node:crypto";
+import { logKill } from "./kill-log.mjs";
 import { isCodexWorkItemEvent } from "./budget-unit.mjs";
 import { prepareCodexContainment } from "./codex-containment.mjs";
 import { renderDependencyInstallBlocker, writeDependencyInstallRecord } from "./dependency-install.mjs";
@@ -164,11 +165,13 @@ function killProcessGroup(pid, signal) {
  * first, then SIGKILL after a grace period, both idempotent against an
  * already-empty group.
  */
-function reapProcessGroup(pid, { graceMs, killImpl }) {
+function reapProcessGroup(pid, { graceMs, killImpl, record = () => {} }) {
   if (!pid) return Promise.resolve();
+  record(pid, "SIGTERM");
   killImpl(pid, "SIGTERM");
   return new Promise((resolve) => {
     setTimeout(() => {
+      record(pid, "SIGKILL");
       killImpl(pid, "SIGKILL");
       resolve();
     }, graceMs);
@@ -252,6 +255,10 @@ export function spawnWorker({
   const promise = new Promise((resolve, reject) => {
     const startedAt = new Date().toISOString();
     const attemptId = randomUUID();
+    const recordKill = (pid, killSignal, caller) => logKill(path.join(logDir, "dispatcher-kills.jsonl"), {
+      caller: `worker-spawn.${caller}`, target: { pgid: pid }, signal: killSignal, reason: caller === "abort-signal" ? "dispatcher aborted this attempt" : "reap leftover group after worker close",
+      entry: { attemptId, issue: issueIdentifier ?? null },
+    });
     let effectiveInvocation = invocation;
     let workerEnv = process.env;
     if (!securityContext && spawnImpl === spawn) {
@@ -377,7 +384,7 @@ export function spawnWorker({
     }
 
     if (signal) {
-      const killOnAbort = () => reapProcessGroup(child.pid, { graceMs: killGraceMs, killImpl });
+      const killOnAbort = () => reapProcessGroup(child.pid, { graceMs: killGraceMs, killImpl, record: (pid, sig) => recordKill(pid, sig, "abort-signal") });
       if (signal.aborted) killOnAbort();
       else signal.addEventListener("abort", killOnAbort, { once: true });
     }
@@ -473,7 +480,7 @@ export function spawnWorker({
       childClosed = true;
       while (turnWaiters.length) turnWaiters.shift()({ ended: true });
       pending.delete("child");
-      reapProcessGroup(child.pid, { graceMs: killGraceMs, killImpl }).then(() => {
+      reapProcessGroup(child.pid, { graceMs: killGraceMs, killImpl, record: (pid, sig) => recordKill(pid, sig, "worker-closed-reap") }).then(() => {
         pending.delete("reap");
         maybeFinish();
       });
