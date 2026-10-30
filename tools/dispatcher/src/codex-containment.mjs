@@ -11,6 +11,10 @@ import { execFileSync } from "node:child_process";
 import { buildWorkerSandboxProfile, sanitizedWorkerEnvironment } from "./worker-guard.mjs";
 import { validateOpenRouterTransport } from "./openrouter-transport.mjs";
 
+// Modules copied beside the broker into each run dir; the broker runs from that
+// copy, so every relative import it (transitively) reaches must be listed.
+export const BROKER_SUPPORT_MODULES = ["openrouter-response.mjs", "jev-patch.mjs", "routed-request.mjs", "jev-cohort.mjs", "jev-trial.mjs", "state-store.mjs", "openrouter-account.mjs", "worker-tool-format-error.mjs"];
+
 export function verifyCodexVersion(binary) {
   const version = execFileSync(binary, ["--version"], { encoding: "utf8", timeout: 5000,
     env: { PATH: process.env.PATH } }).trim();
@@ -129,7 +133,7 @@ export function prepareCodexContainment({ invocation, cwd, logDir, repositoryPat
       const brokerPolicy = path.join(logDir, "openrouter-transport.mjs");
       fs.copyFileSync(fileURLToPath(new URL("./openrouter-transport.mjs", import.meta.url)), brokerPolicy);
       fs.chmodSync(brokerPolicy, 0o600);
-      for (const name of ["openrouter-response.mjs", "jev-patch.mjs", "routed-request.mjs", "jev-cohort.mjs", "jev-trial.mjs", "state-store.mjs", "openrouter-account.mjs"]) {
+      for (const name of BROKER_SUPPORT_MODULES) {
         const target = path.join(logDir, name);
         fs.copyFileSync(fileURLToPath(new URL(`./${name}`, import.meta.url)), target);
         fs.chmodSync(target, 0o600);
