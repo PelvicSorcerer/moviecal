@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { getMovieDetails, searchMovies, searchMoviesPage, TMDbRequestError } from '../src/lib/tmdb/client';
+import { clearTMDbResponseCache, getMovieDetails, searchMovies, searchMoviesPage, TMDbRequestError } from '../src/lib/tmdb/client';
 
 beforeEach(() => {
   vi.stubEnv('TMDB_API_KEY', 'tmdb-key-for-tests');
 });
 
 afterEach(() => {
+  clearTMDbResponseCache();
   vi.unstubAllEnvs();
   vi.useRealTimers();
 });

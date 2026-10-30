@@ -1,4 +1,5 @@
 import type { Json } from '../supabase/database';
+import { createTMDbCacheKey, TMDbResponseCache } from './cache';
 import { getServerTMDbEnv, TMDbEnvironmentError } from './env';
 
 const TMDB_API_BASE_URL = 'https://api.themoviedb.org/3';
@@ -6,6 +7,23 @@ const MAX_ATTEMPTS = 3;
 const REQUEST_BUDGET_MS = 10_000;
 const RETRY_AFTER_CAP_MS = 2_000;
 const BACKOFF_BASE_MS = 250;
+export const TMDB_SEARCH_CACHE_TTL_MS = 60_000;
+export const TMDB_DETAILS_CACHE_TTL_MS = 10 * 60_000;
+
+const defaultTMDbResponseCache = new TMDbResponseCache();
+
+export interface TMDbRetryOptions {
+  sleep?: (delayMs: number) => Promise<void>;
+  random?: () => number;
+}
+
+export interface TMDbRequestOptions extends TMDbRetryOptions {
+  cache?: TMDbResponseCache | null;
+}
+
+export function clearTMDbResponseCache(): void {
+  defaultTMDbResponseCache.clear();
+}
 
 export interface NormalizedMovieSummary {
   overview: string | null;
@@ -37,11 +55,6 @@ export class TMDbRequestError extends Error {
 }
 
 type TMDbFetch = typeof fetch;
-
-export interface TMDbRetryOptions {
-  sleep?: (delayMs: number) => Promise<void>;
-  random?: () => number;
-}
 
 function retryDelay(response: Response | undefined, attempt: number, random: () => number): number {
   const retryAfter = response?.status === 429 ? response.headers.get('retry-after')?.trim() : null;
@@ -144,6 +157,26 @@ function createTMDbUrl(
 }
 
 async function fetchTMDbJson(
+  path: string,
+  searchParams: Record<string, string | number>,
+  fetchImpl: TMDbFetch,
+  ttlMs: number,
+  options: TMDbRequestOptions,
+): Promise<unknown> {
+  const cache = options.cache === undefined ? defaultTMDbResponseCache : options.cache;
+
+  if (!cache) {
+    return fetchTMDbJsonUncached(path, searchParams, fetchImpl, options);
+  }
+
+  return cache.getOrLoad(
+    createTMDbCacheKey(path, searchParams),
+    ttlMs,
+    () => fetchTMDbJsonUncached(path, searchParams, fetchImpl, options),
+  );
+}
+
+async function fetchTMDbJsonUncached(
   path: string,
   searchParams: Record<string, string | number>,
   fetchImpl: TMDbFetch,
@@ -260,16 +293,16 @@ function normalizeDetailResponse(payload: unknown): NormalizedMovieDetail {
 export async function searchMovies(
   query: string,
   fetchImpl: TMDbFetch = fetch,
-  retryOptions: TMDbRetryOptions = {},
+  options: TMDbRequestOptions = {},
 ): Promise<NormalizedMovieSummary[]> {
-  return (await searchMoviesPage(query, 1, fetchImpl, retryOptions)).results;
+  return (await searchMoviesPage(query, 1, fetchImpl, options)).results;
 }
 
 export async function searchMoviesPage(
   query: string,
   page = 1,
   fetchImpl: TMDbFetch = fetch,
-  retryOptions: TMDbRetryOptions = {},
+  options: TMDbRequestOptions = {},
 ): Promise<MovieSearchPage> {
   const trimmedQuery = query.trim();
 
@@ -289,7 +322,8 @@ export async function searchMoviesPage(
       page,
     },
     fetchImpl,
-    retryOptions,
+    TMDB_SEARCH_CACHE_TTL_MS,
+    options,
   );
 
   const results = normalizeSearchResponse(payload);
@@ -309,15 +343,28 @@ export async function searchMoviesPage(
 export async function getMovieDetails(
   tmdbId: number,
   fetchImpl: TMDbFetch = fetch,
-  retryOptions: TMDbRetryOptions = {},
+  options: TMDbRequestOptions = {},
 ): Promise<NormalizedMovieDetail> {
   if (!Number.isInteger(tmdbId) || tmdbId <= 0) {
     throw new TMDbRequestError('A valid TMDb movie id is required.', 400);
   }
 
-  const payload = await fetchTMDbJson(`/movie/${tmdbId}`, {}, fetchImpl, retryOptions);
+  const payload = await fetchTMDbJson(
+    `/movie/${tmdbId}`,
+    {},
+    fetchImpl,
+    TMDB_DETAILS_CACHE_TTL_MS,
+    options,
+  );
 
   return normalizeDetailResponse(payload);
+}
+
+export async function getFreshMovieDetails(
+  tmdbId: number,
+  fetchImpl: TMDbFetch = fetch,
+): Promise<NormalizedMovieDetail> {
+  return getMovieDetails(tmdbId, fetchImpl, { cache: null });
 }
 
 export { TMDbEnvironmentError };
