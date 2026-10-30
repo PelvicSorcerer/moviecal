@@ -143,6 +143,22 @@ describe("OpenRouter Responses evidence", () => {
       expect(first).toMatchObject({ error: null, resolvedEffortSource: "response-and-jev-selection" });
       expect(second).toMatchObject({ error: null, resolvedEffort: "high", resolvedEffortSource: "response-and-proven-continuation" });
     });
+    it("accepts a response that echoes the requested effort while the single candidate still lists Jev's pick, and flags it", () => {
+      const served = () => { const e = continuation("high"); e.response.reasoning.effort = "medium"; return e; };
+      const [, second] = run([[pool(), "medium"], [served(), "medium"]]);
+      expect(second).toMatchObject({ error: null, resolvedEffort: "medium", resolvedEffortSource: "response-and-proven-continuation",
+        continuationEffort: { candidateEffort: "high", responseEffort: "medium", requestedEffort: "medium", echoed: "response" } });
+      const [, reverse] = run([[pool(), "medium"], [continuation(), "medium"]]);
+      expect(reverse.continuationEffort).toMatchObject({ candidateEffort: "medium", responseEffort: "high", echoed: "candidate" });
+      expect(run([[pool(), "medium"], [completed(), "low"]])[1].continuationEffort).toBeNull();
+    });
+    it("keeps the response-echo direction fail-closed when unproven, unrelated to the request, or multi-candidate", () => {
+      const served = (candidate, response) => { const e = continuation(candidate); e.response.reasoning.effort = response; return e; };
+      expect(run([[served("high", "medium"), "medium"]])[0].error).toBe("conflicting-served-effort");
+      expect(run([[pool(), "medium"], [served("high", "low"), "medium"]])[1].error).toBe("conflicting-served-effort");
+      const many = served("high", "medium"); many.response.openrouter_metadata.pipeline[0].data.candidates.push({ model: "other/model", effort: "medium" });
+      expect(run([[pool(), "medium"], [many, "medium"]])[1].error).toBe("conflicting-served-effort");
+    });
     it("still fails closed when the model was never proven, the effort is not an echo or several candidates are listed", () => {
       expect(run([[continuation(), "medium"]])[0].error).toBe("conflicting-served-effort");
       expect(run([[pool(), "medium"], [continuation(), "low"]])[1].error).toBe("conflicting-served-effort");
