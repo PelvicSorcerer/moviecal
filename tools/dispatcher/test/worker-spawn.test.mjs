@@ -427,6 +427,19 @@ describe("spawnWorker", () => {
     expect(killImpl).not.toHaveBeenCalled();
   });
 
+  it("logs each signal the dispatcher sends when reaping a worker's group", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
+    const logDir = path.join(tmpDir, "run");
+    const killImpl = vi.fn();
+    await spawnWorker({
+      invocation: { command: "sh", args: ["-c", "exit 0"] }, cwd: tmpDir, brief: "", logDir,
+      spawnImpl: (...args) => spawn(...args), killImpl, killGraceMs: 10, issueIdentifier: "MOV-9",
+    });
+    const rows = fs.readFileSync(path.join(logDir, "dispatcher-kills.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+    expect(rows.map((row) => row.signal)).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(rows[0]).toMatchObject({ caller: "worker-spawn.worker-closed-reap", entry: { issue: "MOV-9" } });
+  });
+
   it("records the terminating signal in the result and manifest", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
     const logDir = path.join(tmpDir, "run");

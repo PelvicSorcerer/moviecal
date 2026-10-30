@@ -581,8 +581,18 @@ describe("WorktreeManager", () => {
       terminateWorkerProcessGroup,
     });
 
-    expect(terminateWorkerProcessGroup).toHaveBeenCalledWith(4321);
+    expect(terminateWorkerProcessGroup).toHaveBeenCalledWith(4321, expect.objectContaining({ workerPid: 4321 }), "MOV-1");
     expect(changes[0]).toMatchObject({ id: "MOV-1", dirty: false });
+  });
+
+  it("records every startup-recovery SIGKILL with its caller, target and registry entry", () => {
+    manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix", linearIssueId: "linear-1" });
+    manager.setWorkerPid("MOV-1", 2147483000); // no such group: delivery fails, the attempt is still logged
+    manager.reconcileStartup({ isPidAlive: () => true });
+    const rows = fs.readFileSync(path.join(path.dirname(manager.statePath), "dispatcher-kills.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ caller: "worktree-manager.reconcileStartup", signal: "SIGKILL", target: { pgid: 2147483000 },
+      delivered: false, entry: { id: "MOV-1", status: "active", workerPid: 2147483000, dispatcherPid: process.pid } });
   });
 
   it("preserves a worktree for human review when a live worker group cannot be terminated (MOV-254)", () => {

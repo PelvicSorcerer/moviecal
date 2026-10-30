@@ -6,6 +6,7 @@
 // child_process.execFileSync) so the orchestration logic here can be
 // unit-tested against a fake runner without touching a real git repo.
 
+import { logKill } from "./kill-log.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -699,13 +700,21 @@ export class WorktreeManager {
     // PID and its process-group ID. Once this dispatcher has acquired the
     // singleton lock, a still-live group belongs to a prior crashed
     // dispatcher and cannot safely retain write access to this worktree.
-    terminateWorkerProcessGroup = (workerPid) => {
+    terminateWorkerProcessGroup = (workerPid, entry = null, id = null) => {
+      let delivered = true;
       try {
         process.kill(-workerPid, "SIGKILL");
-        return true;
       } catch {
-        return false;
+        delivered = false;
       }
+      // Every dispatcher SIGKILL is on record: who sent it, to which group, for which registry entry.
+      logKill(path.join(path.dirname(this.statePath), "dispatcher-kills.jsonl"), {
+        caller: "worktree-manager.reconcileStartup", target: { pgid: workerPid }, signal: "SIGKILL", delivered,
+        reason: "recorded active worker group was still live at poll start",
+        entry: entry ? { id, status: entry.status, workerPid: entry.workerPid, dispatcherPid: entry.pid,
+          startedAt: entry.startedAt, branch: entry.branch } : null,
+      });
+      return delivered;
     },
   } = {}) {
     const state = this.loadState();
@@ -730,7 +739,7 @@ export class WorktreeManager {
           // group from a dispatcher that has already died, not a cooperative
           // cancellation path. If the host will not kill it, preserve the
           // worktree and route the issue to human review instead of requeueing.
-          if (!terminateWorkerProcessGroup(entry.workerPid)) {
+          if (!terminateWorkerProcessGroup(entry.workerPid, entry, id)) {
             changes.push(this._abandonForStartupRecovery(
               state,
               id,
