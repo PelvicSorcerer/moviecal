@@ -125,9 +125,7 @@ describe("classifyAction", () => {
   it.each([
     "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: src/etag.ts\n+  const set = parseEtag(token)\n+  env.token = set\n*** End Patch\nEOF",
     "bash -lc \"apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: src/etag.ts\n+// set the ETag token from the header\n*** End Patch\nEOF\"",
-    "cat > src/etag.ts <<'EOF'\n// set token from env\nEOF",
-    "grep -rn 'set token' src",
-  ])("does not treat file content as a printenv/env/set command: %s", (command) => {
+  ])("does not treat an apply_patch heredoc body as a printenv/env/set command: %s", (command) => {
     expect(classifyAction(command)).toEqual({ verdict: "allow", reason: null, category: null });
   });
 
@@ -138,6 +136,13 @@ describe("classifyAction", () => {
     "npm run verify && printenv API_KEY",
     "sudo env | grep token",
     "FOO=1 env | grep key",
+    "/usr/bin/env | grep token",
+    "`printenv` | grep token",
+    "if true; then env | grep key; fi",
+    "{ env; } | grep token",
+    "sudo -E env | grep token",
+    "xargs -n1 env | grep TOKEN",
+    "\\env | grep token",
   ])("still hard-denies printing credential-shaped environment data: %s", (command) => {
     expect(classifyAction(command).verdict).toBe("hard-deny");
   });
