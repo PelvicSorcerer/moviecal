@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
-import { prepareCodexContainment, resolveCodexExecutable, executorTempEnvironment } from "../src/codex-containment.mjs";
+import { BROKER_SUPPORT_MODULES, prepareCodexContainment, resolveCodexExecutable, executorTempEnvironment } from "../src/codex-containment.mjs";
 import { workerInvocation } from "../src/worker-routing.mjs";
 
 let root;
@@ -74,5 +75,21 @@ describe("Codex containment policy", () => {
     expect(() => resolveCodexExecutable("codex", { PATH: opts.home })).toThrow(/unavailable/);
     const file = path.join(opts.home, "codex"); fs.writeFileSync(file, "#!/bin/sh\n", { mode: 0o700 });
     expect(() => resolveCodexExecutable(file)).toThrow(/Mach-O/);
+  });
+});
+
+describe("broker run-dir copy list", () => {
+  it("covers every relative import reachable from openrouter-broker.mjs", () => {
+    const src = path.dirname(fileURLToPath(new URL("../src/codex-containment.mjs", import.meta.url)));
+    const copied = new Set(["openrouter-broker.mjs", "openrouter-transport.mjs", ...BROKER_SUPPORT_MODULES]);
+    const seen = new Set(); const queue = ["openrouter-broker.mjs"];
+    while (queue.length) {
+      const file = queue.pop();
+      if (seen.has(file)) continue;
+      seen.add(file);
+      const text = fs.readFileSync(path.join(src, file), "utf8");
+      for (const match of text.matchAll(/(?:from\s+|import\s*\()\s*["']\.\/([^"']+)["']/g)) queue.push(match[1]);
+    }
+    expect([...seen].filter((name) => !copied.has(name))).toEqual([]);
   });
 });
