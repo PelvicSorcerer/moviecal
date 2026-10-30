@@ -66,12 +66,12 @@ for (const failure of ['server', 'network'] as const) {
     });
     await page.goto('/search?q=matrix');
     await page.getByRole('button', { name: 'Load more', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('Select Load more to try again');
+    await expect(page.locator('p[role="alert"]')).toContainText('Select Load more to try again');
     await expect(page.getByRole('heading', { name: 'The Matrix', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Load more', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Load more', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Inception', exact: true })).toBeVisible();
-    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(page.locator('p[role="alert"]')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Load more', exact: true })).toHaveCount(0);
     expect(requestedPages).toEqual([1, 2, 2]);
   });
@@ -106,7 +106,7 @@ test('a new query resets paging and ignores an older in-flight page', async ({ p
   await pageFinished;
   await expect(page.getByRole('heading', { name: 'The Matrix', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Load more', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.locator('p[role="alert"]')).toHaveCount(0);
   expect(requests).toEqual(['matrix:1', 'matrix:2', 'inception:1']);
 });
 
@@ -129,11 +129,11 @@ test('a new query clears a paging error and starts again from page one', async (
   });
   await page.goto('/search?q=matrix');
   await page.getByRole('button', { name: 'Load more', exact: true }).click();
-  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(page.locator('p[role="alert"]')).toBeVisible();
   await page.getByRole('searchbox').fill('inception');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Inception', exact: true })).toBeVisible();
-  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.locator('p[role="alert"]')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Load more', exact: true })).toBeEnabled();
   expect(requests).toEqual(['matrix:1', 'matrix:2', 'inception:1']);
 });
