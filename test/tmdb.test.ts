@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GET as searchRoute } from '../src/app/api/movies/search/route';
 import {
+  clearTMDbResponseCache,
   getMovieDetails,
   searchMovies,
   searchMoviesPage,
@@ -12,6 +13,7 @@ import { getServerTMDbEnv, TMDbEnvironmentError } from '../src/lib/tmdb/env';
 const originalEnv = { ...process.env };
 
 afterEach(() => {
+  clearTMDbResponseCache();
   process.env = { ...originalEnv };
   vi.restoreAllMocks();
 });
