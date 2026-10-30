@@ -1,8 +1,13 @@
 import { TMDbEnvironmentError } from './tmdb/env';
 import type { NormalizedMovieDetail } from './tmdb/client';
-import type { WatchlistRepository } from './watchlist';
+import type { WatchlistMovieRow, WatchlistRepository } from './watchlist';
+
+export const MAX_RELEASE_DATE_CHANGES = 100;
 
 export interface ReleaseRefreshResult {
+  changedMovies: number;
+  unchangedMovies: number;
+  releaseDateChanges: { tmdbId: number; from: string | null; to: string | null }[];
   failedMovieIds: number[];
   failedMovies: number;
   refreshedMovies: number;
@@ -47,6 +52,20 @@ export async function persistMovieUpdate(
   await repository.upsertMovie(detail);
 }
 
+function isMovieUnchanged(stored: WatchlistMovieRow, detail: NormalizedMovieDetail): boolean {
+  const metadata =
+    typeof stored.raw_json === 'object' && stored.raw_json !== null && !Array.isArray(stored.raw_json)
+      ? stored.raw_json
+      : {};
+  const normalizeString = (value: unknown): string | null =>
+    typeof value === 'string' ? value.trim() || null : null;
+
+  return stored.title === detail.title
+    && stored.release_date === detail.releaseDate
+    && normalizeString(metadata.poster_path) === detail.posterPath
+    && normalizeString(metadata.overview) === detail.overview;
+}
+
 export async function runRefreshPipeline(args: {
   repository: WatchlistRepository;
   getMovieDetails: (id: number) => Promise<NormalizedMovieDetail>;
@@ -54,6 +73,9 @@ export async function runRefreshPipeline(args: {
   const trackedTmdbIds = await selectTrackedMovieIds(args.repository);
 
   let refreshedMovies = 0;
+  let changedMovies = 0;
+  let unchangedMovies = 0;
+  const releaseDateChanges: ReleaseRefreshResult['releaseDateChanges'] = [];
   const failedMovieIds: number[] = [];
 
   for (const tmdbId of trackedTmdbIds) {
@@ -65,16 +87,30 @@ export async function runRefreshPipeline(args: {
     }
 
     try {
-      await persistMovieUpdate(fetchResult.detail, args.repository);
+      const detail = fetchResult.detail;
+      const stored = await args.repository.findMovieByTmdbId(tmdbId);
+
+      if (stored && isMovieUnchanged(stored, detail)) {
+        unchangedMovies += 1;
+      } else {
+        await persistMovieUpdate(detail, args.repository);
+        changedMovies += 1;
+
+        if (stored && stored.release_date !== detail.releaseDate
+          && releaseDateChanges.length < MAX_RELEASE_DATE_CHANGES) {
+          releaseDateChanges.push({ tmdbId, from: stored.release_date, to: detail.releaseDate });
+        }
+      }
       refreshedMovies += 1;
     } catch {
-      // Persist errors are always treated as per-movie failures (not pipeline aborts);
-      // upsertMovie does not throw TMDbEnvironmentError.
       failedMovieIds.push(tmdbId);
     }
   }
 
   return {
+    changedMovies,
+    unchangedMovies,
+    releaseDateChanges,
     failedMovieIds,
     failedMovies: failedMovieIds.length,
     refreshedMovies,

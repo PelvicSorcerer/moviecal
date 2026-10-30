@@ -160,6 +160,20 @@ export function createItemsAggregate(args: {
       return assertWatchlistRows(data);
     },
 
+    async findMovieByTmdbId(tmdbId: number): Promise<WatchlistMovieRow | null> {
+      const { data, error } = await args.adminClient
+        .from('movies')
+        .select('id, tmdb_id, title, release_date, raw_json, updated_at')
+        .eq('tmdb_id', tmdbId)
+        .maybeSingle();
+
+      if (error) {
+        throwSupabaseError(error);
+      }
+
+      return data === null ? null : assertWatchlistMovieRow(data);
+    },
+
     async listTrackedMovies(): Promise<WatchlistMovieRow[]> {
       const { data, error } = await args.adminClient
         .from('watchlist_items')

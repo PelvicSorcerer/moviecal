@@ -119,6 +119,9 @@ export function createWatchlistRepository(
     async listMembersForWatchlist() {
       return [];
     },
+    async findMovieByTmdbId() {
+      return null;
+    },
     async listTrackedMovies() {
       return [];
     },

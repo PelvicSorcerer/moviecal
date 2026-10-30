@@ -106,6 +106,7 @@ export interface DeletedSharedWatchlistResult {
 }
 
 export interface WatchlistRepository {
+  findMovieByTmdbId(tmdbId: number): Promise<WatchlistMovieRow | null>;
   createWatchlist(args: {
     kind: WatchlistKind;
     name: string;
