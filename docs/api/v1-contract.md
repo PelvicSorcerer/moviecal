@@ -38,6 +38,9 @@ Base path: `/api/v1/watchlist`. The singular path remains the authenticated user
 Returns the authenticated user's personal watchlist items.
 
 - Request body: none.
+- Successful reads include a strong `ETag` (quoted SHA-256 of the exact JSON body) and `Cache-Control: private, no-cache`. Identical bodies produce the same validator; any item or response metadata change changes it. This singular endpoint remains unpaginated; the validator covers the entire response.
+- Send `If-None-Match` to revalidate a stored response. A matching tag (including a weak `W/` tag or any matching tag in a comma-separated list), or `*`, returns `304 Not Modified` with the same `ETag` and cache header and no body. A non-match returns the full `200` JSON body.
+- Bearer authentication and the personal-list read run before conditional evaluation. Missing/invalid tokens still return `401` even with `If-None-Match: *`; errors (`400`, `401`, `5xx`, etc.) never include an ETag. These headers apply only to this successful personal `GET`, not mutations or plural watchlist routes.
 - Response `200`:
 
   ```json

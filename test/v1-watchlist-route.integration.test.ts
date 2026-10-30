@@ -134,9 +134,13 @@ function setupAuthenticatedRouteMocks(
 }
 
 function bearerRequest(
-  init: { body?: unknown; method?: string; token?: string | null } = {},
+  init: { body?: unknown; method?: string; token?: string | null; ifNoneMatch?: string } = {},
 ): Request {
   const headers = new Headers();
+
+  if (init.ifNoneMatch) {
+    headers.set('if-none-match', init.ifNoneMatch);
+  }
 
   if (init.token !== null) {
     headers.set('authorization', `Bearer ${init.token ?? 'valid-token'}`);
@@ -196,6 +200,90 @@ describe('v1 watchlist route (mobile Bearer surface)', () => {
   });
 
   describe('GET /api/v1/watchlist', () => {
+    it('returns stable validators and changes them when list data changes', async () => {
+      const repository = createInMemoryWatchlistRepository([buildWatchlistRow()]);
+      setupAuthenticatedRouteMocks(repository);
+      const { GET } = await import('../src/app/api/v1/watchlist/route');
+      const first = await GET(bearerRequest());
+      const etag = first.headers.get('etag');
+
+      expect(first.status).toBe(200);
+      expect(etag).toMatch(/^"[a-f0-9]{64}"$/);
+      expect(first.headers.get('cache-control')).toBe('private, no-cache');
+      expect((await GET(bearerRequest())).headers.get('etag')).toBe(etag);
+
+      await repository.deleteItemByIdForWatchlist(TEST_WATCHLIST_IDS.PERSONAL, 'watchlist-item-1');
+      const changed = await GET(bearerRequest({ ifNoneMatch: etag! }));
+
+      expect(changed.status).toBe(200);
+      expect(changed.headers.get('etag')).not.toBe(etag);
+      expect(await changed.json()).toEqual({ items: [] });
+    });
+
+    it.each(['strong', 'weak', 'list', 'wildcard', 'non-match'])(
+      'evaluates a %s conditional request after authentication',
+      async (kind) => {
+        setupAuthenticatedRouteMocks();
+        const { GET } = await import('../src/app/api/v1/watchlist/route');
+        const etag = (await GET(bearerRequest())).headers.get('etag')!;
+        const validators: Record<string, string> = {
+          strong: etag,
+          weak: `W/${etag}`,
+          list: `"other", W/${etag}, "last"`,
+          wildcard: '*',
+          'non-match': '"other"',
+        };
+        const response = await GET(bearerRequest({ ifNoneMatch: validators[kind] }));
+
+        expect(response.status).toBe(kind === 'non-match' ? 200 : 304);
+        expect(response.headers.get('etag')).toBe(etag);
+        expect(response.headers.get('cache-control')).toBe('private, no-cache');
+        if (kind !== 'non-match') {
+          expect(response.body).toBeNull();
+          expect(await response.text()).toBe('');
+        } else {
+          expect(await response.json()).toEqual({ items: [] });
+        }
+        expect(mocks.resolveAuthTokensWithClient).toHaveBeenCalledTimes(2);
+      },
+    );
+
+    it.each([null, 'invalid-token'])(
+      'returns 401 without a validator for token %s even with a matching condition',
+      async (token) => {
+        setupAuthenticatedRouteMocks();
+        const { GET } = await import('../src/app/api/v1/watchlist/route');
+        const etag = (await GET(bearerRequest())).headers.get('etag')!;
+        authenticateAs(null);
+        mocks.createSupabaseWatchlistRepository.mockClear();
+
+        for (const ifNoneMatch of [etag, '*']) {
+          const response = await GET(bearerRequest({ token, ifNoneMatch }));
+
+          expect(response.status).toBe(401);
+          expect(response.headers.has('etag')).toBe(false);
+          expect(await response.json()).toEqual({ error: 'Unauthorized.' });
+        }
+        expect(mocks.createSupabaseWatchlistRepository).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([400, 500])('does not attach validators to %s read errors', async (status) => {
+      const { WatchlistInputError } = await import('../src/lib/watchlist');
+      const error = status === 400
+        ? new WatchlistInputError('Invalid input.')
+        : new Error('Database unavailable.');
+      const repository = createInMemoryWatchlistRepository();
+      vi.spyOn(repository, 'listItemsForWatchlist').mockRejectedValue(error);
+      setupAuthenticatedRouteMocks(repository);
+      const { GET } = await import('../src/app/api/v1/watchlist/route');
+      const response = await GET(bearerRequest({ ifNoneMatch: '*' }));
+
+      expect(response.status).toBe(status);
+      expect(response.headers.has('etag')).toBe(false);
+      expect(await response.json()).toHaveProperty('error');
+    });
+
     it('returns the authenticated user watchlist as { items }', async () => {
       setupAuthenticatedRouteMocks(
         createInMemoryWatchlistRepository([buildWatchlistRow()]),

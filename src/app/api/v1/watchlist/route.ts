@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { createConditionalJsonResponse } from '../../../../lib/api/conditional-get';
 import { apiError, handleDomainError } from '../../../../lib/api/response';
 import { resolveBearerIdentity } from '../../../../lib/auth/bearer-identity';
 import { createServerSupabaseServiceRoleClient } from '../../../../lib/supabase/server';
@@ -107,7 +108,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       userId: resolved.userId,
     });
 
-    return NextResponse.json({ items });
+    return createConditionalJsonResponse(request, { items });
   } catch (error) {
     return handleDomainError(error);
   }
