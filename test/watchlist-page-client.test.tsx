@@ -12,6 +12,65 @@ import {
 describe('WatchlistPageClient', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());
+    window.history.replaceState(null, '', '/watchlist');
+  });
+
+  it('loads URL state, clears an empty filter, and preserves the sort and unrelated URL state', () => {
+    window.history.replaceState(null, '', '/watchlist?sort=title&filter=upcoming&other=keep#movies');
+    render(
+      <WatchlistPageClient
+        initialItems={[buildWatchlistItem()]}
+        initialWatchlists={[buildWatchlistSummary()]}
+        overviewErrorMessage={null}
+        personalItemsErrorMessage={null}
+        personalWatchlistId="personal-watchlist-1"
+      />,
+    );
+
+    expect((screen.getByLabelText('Sort movies') as HTMLSelectElement).value).toBe('title');
+    expect(screen.getByText('No movies match this filter')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filter' }));
+    expect(screen.getByRole('heading', { name: 'The Matrix' })).toBeTruthy();
+    expect(window.location.search).toBe('?sort=title&other=keep');
+    expect(window.location.hash).toBe('#movies');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps URL state after removing the last matching movie', async () => {
+    window.history.replaceState(null, '', '/watchlist?sort=title&filter=released');
+    vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => ({ deleted: true }) } as Response);
+    render(
+      <WatchlistPageClient
+        initialItems={[buildWatchlistItem()]}
+        initialWatchlists={[buildWatchlistSummary()]}
+        overviewErrorMessage={null}
+        personalItemsErrorMessage={null}
+        personalWatchlistId="personal-watchlist-1"
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(screen.getByText('Your watchlist is empty')).toBeTruthy());
+    expect(window.location.search).toBe('?sort=title&filter=released');
+    expect((screen.getByLabelText('Filter movies') as HTMLSelectElement).value).toBe('released');
+  });
+
+  it('updates controls when browser history changes', () => {
+    render(
+      <WatchlistPageClient
+        initialItems={[buildWatchlistItem()]}
+        initialWatchlists={[buildWatchlistSummary()]}
+        overviewErrorMessage={null}
+        personalItemsErrorMessage={null}
+        personalWatchlistId="personal-watchlist-1"
+      />,
+    );
+    window.history.replaceState(null, '', '/watchlist?sort=title&filter=upcoming');
+    fireEvent(window, new PopStateEvent('popstate'));
+    expect(screen.getByText('No movies match this filter')).toBeTruthy();
+    window.history.replaceState(null, '', '/watchlist?sort=invalid&filter=invalid');
+    fireEvent(window, new PopStateEvent('popstate'));
+    expect((screen.getByLabelText('Sort movies') as HTMLSelectElement).value).toBe('added-newest');
+    expect(screen.getByRole('heading', { name: 'The Matrix' })).toBeTruthy();
   });
 
   afterEach(() => {
