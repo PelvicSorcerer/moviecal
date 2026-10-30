@@ -48,7 +48,11 @@ export function patchCommand(argumentsText, cwd) {
   // A quoted here-document prevents interpolation. The delimiter cannot be
   // forged by patch content because it is chosen after inspecting that text.
   let marker = "MOVIECAL_JEV_PATCH";
-  while (args.patch.split("\n").includes(marker)) marker += "_X";
+  const lines = args.patch.split("\n");
+  while (lines.includes(marker)) marker += "_X";
+  // The shell ends a quoted here-document at the first line equal to the
+  // marker. The loop guarantees none exists; refuse rather than run if not.
+  if (lines.includes(marker) || args.patch.includes("\r")) return patchError("patch text is not safe to pass to the shell");
   return { cmd: `apply_patch <<'${marker}'\n${args.patch}\n${marker}`, workdir: root, login: false };
 }
 
