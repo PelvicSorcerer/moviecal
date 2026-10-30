@@ -152,27 +152,35 @@ describe("OpenRouter Responses evidence", () => {
       expect(reverse.continuationEffort).toMatchObject({ candidateEffort: "medium", responseEffort: "high", echoed: "candidate" });
       expect(run([[pool(), "medium"], [completed(), "low"]])[1].continuationEffort).toBeNull();
     });
-    it("keeps the response-echo direction fail-closed when unproven, unrelated to the request, or multi-candidate", () => {
+    it("still fails closed when the response effort matches neither the candidate nor the request", () => {
       const served = (candidate, response) => { const e = continuation(candidate); e.response.reasoning.effort = response; return e; };
-      expect(run([[served("high", "medium"), "medium"]])[0].error).toBe("conflicting-served-effort");
+      expect(run([[served("high", "low"), "medium"]])[0].error).toBe("conflicting-served-effort");
       expect(run([[pool(), "medium"], [served("high", "low"), "medium"]])[1].error).toBe("conflicting-served-effort");
-      const many = served("high", "medium"); many.response.openrouter_metadata.pipeline[0].data.candidates.push({ model: "other/model", effort: "medium" });
-      expect(run([[pool(), "medium"], [many, "medium"]])[1].error).toBe("conflicting-served-effort");
-    });
-    it("still fails closed when the model was never proven, the effort is not an echo or several candidates are listed", () => {
-      expect(run([[continuation(), "medium"]])[0].error).toBe("conflicting-served-effort");
       expect(run([[pool(), "medium"], [continuation(), "low"]])[1].error).toBe("conflicting-served-effort");
       expect(run([[pool(), "medium"], [continuation("low"), undefined]])[1].error).toBe("conflicting-served-effort");
-      const many = continuation(); many.response.openrouter_metadata.pipeline[0].data.candidates.push({ model: "other/model", effort: "medium" });
-      expect(run([[pool(), "medium"], [many, "medium"]])[1].error).toBe("conflicting-served-effort");
       const other = continuation(); other.response.model = "other/model";
       other.response.openrouter_metadata.pipeline[0].data = { resolved_models: ["other/model"], candidates: [{ model: "other/model", effort: "medium" }] };
       other.response.openrouter_metadata.endpoints.available[0].model = "other/model";
-      expect(run([[pool(), "medium"], [other, "medium"]])[1].error).toBe("conflicting-served-effort");
+      expect(run([[pool(), "medium"], [other, "low"]])[1].error).toBe("conflicting-served-effort");
     });
-    it("does not prove a model from a failed turn", () => {
-      const bad = pool(); bad.response.reasoning.effort = "high";
-      expect(run([[bad, "medium"], [continuation(), "medium"]])[1].error).toBe("conflicting-served-effort");
+    it("flags a fresh turn whose response echoes the requested effort, in either direction, without proving the model", () => {
+      const fresh = (candidate, response) => { const e = continuation(candidate); e.response.reasoning.effort = response; return e; };
+      const [response] = run([[fresh("high", "medium"), "medium"]]);
+      expect(response).toMatchObject({ error: null, resolvedEffort: "medium", resolvedEffortSource: "response-mismatch-flagged", continuationEffort: null,
+        effortMismatch: { candidateEffort: "high", responseEffort: "medium", requestedEffort: "medium", echoed: "response" } });
+      const [candidate] = run([[continuation(), "medium"]]);
+      expect(candidate).toMatchObject({ error: null, resolvedEffort: "high", resolvedEffortSource: "response-mismatch-flagged",
+        effortMismatch: { candidateEffort: "medium", responseEffort: "high", echoed: "candidate" } });
+      const proven = new Set();
+      run([[fresh("high", "medium"), "medium"]], proven);
+      expect(proven.size).toBe(0);
+      const many = fresh("high", "medium"); many.response.openrouter_metadata.pipeline[0].data.candidates.push({ model: "other/model", effort: "medium" });
+      expect(run([[many, "medium"]])[0]).toMatchObject({ error: null, resolvedEffortSource: "response-mismatch-flagged" });
+      expect(run([[completed(), "low"]])[0].effortMismatch).toBeNull();
+    });
+    it("does not accept a fresh mismatch when several candidates match the served model", () => {
+      const e = continuation(); e.response.openrouter_metadata.pipeline[0].data.candidates.push({ model: e.response.model, effort: "low" });
+      expect(run([[e, "medium"]])[0].error).not.toBeNull();
     });
   });
   it.each(["missing-selection", "other-candidate", "duplicate-candidate", "unknown-effort", "missing-response", "oversized-candidates", "duplicate-stage"])("rejects ordinary attribution for %s", (failure) => {

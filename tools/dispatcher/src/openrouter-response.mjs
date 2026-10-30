@@ -227,8 +227,14 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
         && listed.length === 1 && candidates.length === 1
         && (candidateEffort === requestedEffort || responseEffort === requestedEffort)
         && provenModels?.has(canonical(resolvedModel));
-      const routerEffort = selectedByJev && candidateEffort && (responseEffort === candidateEffort || continuation) ? responseEffort : null;
-      if (selectedByJev && candidateEffort && responseEffort && responseEffort !== candidateEffort && !continuation) fail("conflicting-served-effort");
+      // Any other turn (fresh full pool or unproven model) may show the same
+      // one-sided echo of the requested effort against a single matched
+      // candidate. Accept it as flagged evidence; an effort that equals
+      // neither the candidate's nor the request's stays fail-closed.
+      const mismatchFlagged = !continuation && selectedByJev && candidateEffort && responseEffort && responseEffort !== candidateEffort
+        && candidates.length === 1 && (candidateEffort === requestedEffort || responseEffort === requestedEffort);
+      const routerEffort = selectedByJev && candidateEffort && (responseEffort === candidateEffort || continuation || mismatchFlagged) ? responseEffort : null;
+      if (selectedByJev && candidateEffort && responseEffort && responseEffort !== candidateEffort && !continuation && !mismatchFlagged) fail("conflicting-served-effort");
       // The last debug event is the last attempted upstream request. Require
       // the documented attempt count and a matching final selected model.
       // Native OpenAI IDs have the provider prefix removed; never guess other
@@ -255,12 +261,15 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
         // differs from the single listed candidate's. Null on ordinary turns.
         continuationEffort: continuation
           ? { candidateEffort, responseEffort, requestedEffort, echoed: candidateEffort === requestedEffort ? "candidate" : "response" } : null,
+        // Same evidence for a non-continuation turn accepted despite the mismatch.
+        effortMismatch: mismatchFlagged
+          ? { candidateEffort, responseEffort, requestedEffort, echoed: candidateEffort === requestedEffort ? "candidate" : "response" } : null,
         // Responses reasoning can echo the request; it is not proof of Jev's
         // effective selection. A disposable diagnostic can instead report
         // the correlated upstream request with an explicit source marker.
         resolvedEffort: control ? responseEffort : routerEffort || forwardedEffort,
         resolvedEffortSource: control ? (responseEffort ? "completed-fixed-response" : null)
-          : routerEffort ? (continuation ? "response-and-proven-continuation" : "response-and-jev-selection") : forwardedEffort ? "upstream-request" : null,
+          : routerEffort ? (continuation ? "response-and-proven-continuation" : mismatchFlagged ? "response-mismatch-flagged" : "response-and-jev-selection") : forwardedEffort ? "upstream-request" : null,
         debugCount, upstreamModel: debug?.model || null, upstreamEffort: debug?.effort || null, upstreamKeys: debug?.keys || [],
         inputTokens: count(usage.input_tokens), outputTokens: count(usage.output_tokens),
         cacheReadTokens: count(usage.input_tokens_details?.cached_tokens),
@@ -276,7 +285,7 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
       if (rejectFallback && snapshot.metadata?.attempt !== 1) fail("unapproved-provider-fallback");
       if (!reason && ["resolvedModel", "provider", "resolvedEffort", "inputTokens", "outputTokens", "cacheReadTokens", "billedUsd", "invoiceId"].some((field) => record[field] === null)) fail("missing-provider-attribution");
       // Only a full, unambiguous match on a multi-candidate turn proves a model.
-      if (!reason && provenModels && routerEffort && !continuation && listed.length > 1) provenModels.add(canonical(resolvedModel));
+      if (!reason && provenModels && routerEffort && !continuation && !mismatchFlagged && listed.length > 1) provenModels.add(canonical(resolvedModel));
       return { ...record, error: reason };
     },
   };

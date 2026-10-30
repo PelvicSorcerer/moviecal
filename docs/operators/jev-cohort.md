@@ -240,8 +240,16 @@ On a continuation turn that lists only an already-proven model, the broker
 accepts a served effort that equals the requested effort even when the listed
 candidate shows a different one (and the reverse). The candidate, response and
 requested efforts are written as `continuationEffort` in
-`openrouter-attribution.jsonl`. All other effort mismatches still stop the
-cohort.
+`openrouter-attribution.jsonl`.
+
+The same relaxation applies to every other Jev turn (for example a fresh
+full-pool turn), but only when exactly one candidate matches the served model
+and the response effort equals the requested effort or the candidate's. Those
+turns record `effortMismatch` (candidate, response, requested, and which side
+echoed the request) with `resolvedEffortSource` `response-mismatch-flagged`,
+and they do not prove the model for later continuations. A response effort
+that matches neither the candidate nor the request still stops the cohort, as
+does any other effort mismatch.
 
 A tool output carrying Codex's `failed to parse function arguments: invalid
 type:` error is appended to `attempt-failures.jsonl` as `worker-tool-format-error`
