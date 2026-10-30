@@ -5,6 +5,138 @@ import {
   E2E_SEARCH_UNAVAILABLE_QUERY,
 } from '../src/lib/e2e/fixtures';
 import { TEST_TMDB_IDS } from '../src/lib/test-data/catalog';
+import { buildNormalizedMovieSummaries } from '../test/support/factories/movies';
+
+test('load more appends unique movies, disables while loading, and preserves watchlist actions', async ({
+  page,
+  seedAuthenticatedSession,
+}) => {
+  await seedAuthenticatedSession();
+  await page.setViewportSize({ width: 375, height: 812 });
+  let releasePage: () => void = () => {};
+  const pageGate = new Promise<void>((resolve) => { releasePage = resolve; });
+  const requestedPages: number[] = [];
+  await page.route('**/api/movies/search**', async (route) => {
+    const currentPage = Number(new URL(route.request().url()).searchParams.get('page') ?? 1);
+    requestedPages.push(currentPage);
+    if (currentPage === 2) await pageGate;
+    const ids = currentPage === 1 ? [TEST_TMDB_IDS.MATRIX] : [
+      TEST_TMDB_IDS.MATRIX, TEST_TMDB_IDS.INCEPTION, TEST_TMDB_IDS.INCEPTION,
+    ];
+    await route.fulfill({ json: {
+      results: buildNormalizedMovieSummaries(ids), page: currentPage, totalPages: 3,
+    } });
+  });
+  await page.goto('/search?q=matrix');
+  await page.getByRole('button', { name: 'Load more', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Loading more…' })).toBeDisabled();
+  await expect(page.getByRole('heading', { name: 'The Matrix', exact: true })).toBeVisible();
+  releasePage();
+  await expect(page.getByRole('heading', { name: 'Inception', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'The Matrix', exact: true })).toHaveCount(1);
+  await expect(page.getByRole('heading', { name: 'Inception', exact: true })).toHaveCount(1);
+  await page.getByRole('button', { name: 'Load more', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Load more', exact: true })).toHaveCount(0);
+  expect(requestedPages).toEqual([1, 2, 3]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  const inception = page.getByRole('listitem').filter({ has: page.getByRole('heading', { name: 'Inception' }) });
+  await inception.getByRole('button', { name: 'Add to watchlist' }).click();
+  await expect(inception.getByRole('button', { name: 'Added', exact: true })).toBeVisible();
+});
+
+for (const failure of ['server', 'network'] as const) {
+  test(`load more preserves results after ${failure} failure and retries the same page`, async ({ page }) => {
+    let failed = false;
+    const requestedPages: number[] = [];
+    await page.route('**/api/movies/search**', async (route) => {
+      const currentPage = Number(new URL(route.request().url()).searchParams.get('page') ?? 1);
+      requestedPages.push(currentPage);
+      if (currentPage === 2 && !failed) {
+        failed = true;
+        if (failure === 'network') await route.abort('failed');
+        else await route.fulfill({ status: 503, json: { error: 'Temporarily unavailable.' } });
+        return;
+      }
+      await route.fulfill({ json: {
+        results: buildNormalizedMovieSummaries([
+          currentPage === 1 ? TEST_TMDB_IDS.MATRIX : TEST_TMDB_IDS.INCEPTION,
+        ]), page: currentPage, totalPages: 2,
+      } });
+    });
+    await page.goto('/search?q=matrix');
+    await page.getByRole('button', { name: 'Load more', exact: true }).click();
+    await expect(page.locator('p[role="alert"]')).toContainText('Select Load more to try again');
+    await expect(page.getByRole('heading', { name: 'The Matrix', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Load more', exact: true })).toBeEnabled();
+    await page.getByRole('button', { name: 'Load more', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Inception', exact: true })).toBeVisible();
+    await expect(page.locator('p[role="alert"]')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Load more', exact: true })).toHaveCount(0);
+    expect(requestedPages).toEqual([1, 2, 2]);
+  });
+}
+
+test('a new query resets paging and ignores an older in-flight page', async ({ page }) => {
+  let releasePage: () => void = () => {};
+  let finishPage: () => void = () => {};
+  const pageGate = new Promise<void>((resolve) => { releasePage = resolve; });
+  const pageFinished = new Promise<void>((resolve) => { finishPage = resolve; });
+  const requests: string[] = [];
+  await page.route('**/api/movies/search**', async (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    const query = params.get('q');
+    const currentPage = Number(params.get('page') ?? 1);
+    requests.push(`${query}:${currentPage}`);
+    if (query === 'matrix' && currentPage === 2) await pageGate;
+    await route.fulfill({ json: {
+      results: buildNormalizedMovieSummaries([
+        query === 'inception' ? TEST_TMDB_IDS.INCEPTION : TEST_TMDB_IDS.MATRIX,
+      ]), page: currentPage, totalPages: query === 'inception' ? 1 : 3,
+    } });
+    if (query === 'matrix' && currentPage === 2) finishPage();
+  });
+  await page.goto('/search?q=matrix');
+  await page.getByRole('button', { name: 'Load more', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Loading more…' })).toBeDisabled();
+  await page.getByRole('searchbox').fill('inception');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Inception', exact: true })).toBeVisible();
+  releasePage();
+  await pageFinished;
+  await expect(page.getByRole('heading', { name: 'The Matrix', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Load more', exact: true })).toHaveCount(0);
+  await expect(page.locator('p[role="alert"]')).toHaveCount(0);
+  expect(requests).toEqual(['matrix:1', 'matrix:2', 'inception:1']);
+});
+
+test('a new query clears a paging error and starts again from page one', async ({ page }) => {
+  const requests: string[] = [];
+  await page.route('**/api/movies/search**', async (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    const query = params.get('q');
+    const currentPage = Number(params.get('page') ?? 1);
+    requests.push(`${query}:${currentPage}`);
+    if (currentPage > 1) {
+      await route.fulfill({ status: 503, json: { error: 'Temporarily unavailable.' } });
+      return;
+    }
+    await route.fulfill({ json: {
+      results: buildNormalizedMovieSummaries([
+        query === 'matrix' ? TEST_TMDB_IDS.MATRIX : TEST_TMDB_IDS.INCEPTION,
+      ]), page: 1, totalPages: 2,
+    } });
+  });
+  await page.goto('/search?q=matrix');
+  await page.getByRole('button', { name: 'Load more', exact: true }).click();
+  await expect(page.locator('p[role="alert"]')).toBeVisible();
+  await page.getByRole('searchbox').fill('inception');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Inception', exact: true })).toBeVisible();
+  await expect(page.locator('p[role="alert"]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Load more', exact: true })).toBeEnabled();
+  expect(requests).toEqual(['matrix:1', 'matrix:2', 'inception:1']);
+});
 
 test.describe('full-stack search through the app backend path', () => {
   test('anonymous visitors receive catalog results from the real search endpoint', async ({
@@ -103,6 +235,7 @@ test('anonymous search visitors see deterministic results and a sign-in CTA', as
 
   await expect(page.getByRole('heading', { name: 'Search results' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'The Matrix' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Load more', exact: true })).toHaveCount(0);
   await expect(page.getByText('Mar 31, 1999')).toBeVisible();
   await expect(
     page.getByRole('link', { name: 'Sign in to add movies to your watchlist' }),

@@ -15,6 +15,12 @@ export interface NormalizedMovieDetail extends NormalizedMovieSummary {
   rawJson: Json;
 }
 
+export interface MovieSearchPage {
+  results: NormalizedMovieSummary[];
+  page: number;
+  totalPages: number;
+}
+
 export class TMDbRequestError extends Error {
   readonly status: number;
 
@@ -183,10 +189,22 @@ export async function searchMovies(
   query: string,
   fetchImpl: TMDbFetch = fetch,
 ): Promise<NormalizedMovieSummary[]> {
+  return (await searchMoviesPage(query, 1, fetchImpl)).results;
+}
+
+export async function searchMoviesPage(
+  query: string,
+  page = 1,
+  fetchImpl: TMDbFetch = fetch,
+): Promise<MovieSearchPage> {
   const trimmedQuery = query.trim();
 
   if (!trimmedQuery) {
     throw new TMDbRequestError('Search query is required.', 400);
+  }
+
+  if (!Number.isInteger(page) || page < 1 || page > 500) {
+    throw new TMDbRequestError('Page must be an integer between 1 and 500.', 400);
   }
 
   const payload = await fetchTMDbJson(
@@ -194,11 +212,20 @@ export async function searchMovies(
     {
       include_adult: 'false',
       query: trimmedQuery,
+      page,
     },
     fetchImpl,
   );
 
-  return normalizeSearchResponse(payload);
+  const results = normalizeSearchResponse(payload);
+  const record = payload as Record<string, unknown>;
+  const responsePage = typeof record.page === 'number' && Number.isInteger(record.page)
+    && record.page >= 1 && record.page <= 500 ? record.page : page;
+  const totalPages = typeof record.total_pages === 'number'
+    && Number.isInteger(record.total_pages) && record.total_pages >= 0
+    ? Math.min(record.total_pages, 500) : responsePage;
+
+  return { results, page: responsePage, totalPages };
 }
 
 export async function getMovieDetails(

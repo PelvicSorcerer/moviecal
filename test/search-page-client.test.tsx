@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { SearchPageClient } from '../src/app/search/search-page-client';
 import { TEST_TMDB_IDS } from '../src/lib/test-data/catalog';
@@ -44,6 +44,83 @@ describe('SearchPageClient', () => {
     expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy();
     expect(screen.getByText(/Enter a movie title above/)).toBeTruthy();
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('appends unique results and disables loading more until the page completes', async () => {
+    const matrix = buildNormalizedMovieSummary(TEST_TMDB_IDS.MATRIX);
+    const inception = buildNormalizedMovieSummary(TEST_TMDB_IDS.INCEPTION);
+    let resolvePage: (response: Response) => void = () => {};
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(Response.json({ results: [matrix], page: 1, totalPages: 2 }))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolvePage = resolve; }));
+    render(<SearchPageClient availableWatchlists={[]} initialQuery="matrix" isAuthenticated={false} />);
+    const loadMore = await screen.findByRole('button', { name: 'Load more', exact: true });
+    fireEvent.click(loadMore);
+    expect((screen.getByRole('button', { name: 'Loading more…' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole('heading', { name: 'The Matrix', exact: true })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Loading more…' }));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      resolvePage(Response.json({ results: [matrix, inception, inception], page: 2, totalPages: 2 }));
+    });
+
+    expect(screen.getAllByRole('heading', { name: 'Inception', exact: true })).toHaveLength(1);
+    expect(screen.getAllByRole('heading', { name: 'The Matrix', exact: true })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Load more', exact: true })).toBeNull();
+    expect(fetch).toHaveBeenLastCalledWith('/api/movies/search?q=matrix&page=2', {
+      method: 'GET', cache: 'no-store', signal: expect.any(AbortSignal),
+    });
+  });
+
+  it('retains loaded movies on failure and retries the failed page', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(Response.json({
+        results: buildTmdbSearchResponse([TEST_TMDB_IDS.MATRIX]).results, page: 1, totalPages: 2,
+      }))
+      .mockRejectedValueOnce(new Error('Offline'))
+      .mockResolvedValueOnce(Response.json({
+        results: buildTmdbSearchResponse([TEST_TMDB_IDS.INCEPTION]).results, page: 2, totalPages: 2,
+      }));
+    render(<SearchPageClient availableWatchlists={[]} initialQuery="matrix" isAuthenticated={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more', exact: true }));
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'The Matrix', exact: true })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more', exact: true }));
+    await screen.findByRole('heading', { name: 'Inception', exact: true });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual([
+      '/api/movies/search?q=matrix', '/api/movies/search?q=matrix&page=2',
+      '/api/movies/search?q=matrix&page=2',
+    ]);
+  });
+
+  it('resets paging for a new query and ignores a stale page response', async () => {
+    let resolvePage: (response: Response) => void = () => {};
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(Response.json({
+        results: buildTmdbSearchResponse([TEST_TMDB_IDS.MATRIX]).results, page: 1, totalPages: 3,
+      }))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolvePage = resolve; }))
+      .mockResolvedValueOnce(Response.json({
+        results: buildTmdbSearchResponse([TEST_TMDB_IDS.INCEPTION]).results, page: 1, totalPages: 1,
+      }));
+    const { rerender } = render(
+      <SearchPageClient availableWatchlists={[]} initialQuery="matrix" isAuthenticated={false} />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more', exact: true }));
+    rerender(<SearchPageClient availableWatchlists={[]} initialQuery="inception" isAuthenticated={false} />);
+    await screen.findByRole('heading', { name: 'Inception', exact: true });
+    await act(async () => {
+      resolvePage(Response.json({
+        results: buildTmdbSearchResponse([TEST_TMDB_IDS.MATRIX]).results, page: 2, totalPages: 3,
+      }));
+    });
+    expect(screen.queryByRole('heading', { name: 'The Matrix', exact: true })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Load(ing)? more/ })).toBeNull();
+    expect(vi.mocked(fetch).mock.calls[1]?.[1]?.signal?.aborted).toBe(true);
+    expect(fetch).toHaveBeenLastCalledWith('/api/movies/search?q=inception', {
+      method: 'GET', cache: 'no-store',
+    });
   });
 
   it('shows a loading state while the initial query is in flight', () => {
