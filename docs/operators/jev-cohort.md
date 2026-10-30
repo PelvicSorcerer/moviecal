@@ -110,6 +110,7 @@ node tools/dispatcher/bin/dispatcher.mjs jev-cohort preview --issue MOV-N
 node tools/dispatcher/bin/dispatcher.mjs jev-cohort activate
 node tools/dispatcher/bin/dispatcher.mjs jev-cohort stop
 node tools/dispatcher/bin/dispatcher.mjs jev-cohort export
+node tools/dispatcher/bin/dispatcher.mjs jev-cohort reconcile [--apply] [--min-age-sec N]
 node tools/dispatcher/bin/dispatcher.mjs jev-cohort fee --id PURCHASE_FEE_ID --usd 0.00 --description purchase-fee
 ```
 
@@ -171,6 +172,34 @@ reservation is settled as `failed`, and any key usage the request incurred is
 counted as spend. The cohort stays active for the other issues. 5xx responses,
 timeouts, 401/402/403 and every spend, identity or attribution failure still
 stop the whole cohort.
+
+### Orphaned paid requests (MOV-484)
+Every broker failure path (provider 4xx/5xx, timeout, worker disconnect,
+SIGTERM/SIGINT) settles the open reservation as `failed`, counting key usage
+since the reservation, and appends a bounded record (`requestId`, issue,
+`outcome` of `settled` or `unsettled`, reason, amount) to
+`openrouter-settlement.jsonl` in the run log directory. A termination signal
+or worker death fails only that attempt; the cohort stays active. If the
+account read or ledger write fails the cohort stops and the row stays pending.
+
+A hard kill (SIGKILL, crash, power loss) cannot settle, and a pending row puts
+the cohort in `pending-invoice`, blocking all paid traffic. Recover without an
+archive and re-activation:
+
+1. `jev-cohort reconcile` is a dry run: it reads current OpenRouter key usage
+   and prints what it would do.
+2. `jev-cohort reconcile --apply` settles. It acts only on requests older than
+   `--min-age-sec` (default 300, so a live request is never touched) and only
+   when usage is unambiguous: usage unchanged (settled at $0), or the increase
+   since the last observation fits within one pending request's reservation.
+3. Anything else (usage fell, evidence malformed, usage exceeds the
+   reservation, or an increase with more than one pending request) stops the
+   cohort with `orphan-reconciliation-<reason>` and exits non-zero. Reconcile
+   those against the OpenRouter activity page by hand.
+
+Run it after the worker and broker processes are gone. A key-usage read can lag
+a just-finished request; if later usage appears, the next reservation stops
+the cohort as unknown exposure rather than under-counting silently.
 
 Fixed controls pin model, provider and effort and send `provider.only`,
 `allow_fallbacks: false` and `require_parameters: true`. The broker removes

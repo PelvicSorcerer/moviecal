@@ -70,9 +70,11 @@ async function harness(respond) {
       const status = r.status; await r.text(); return status; };
     const evidence = () => fs.readFileSync(path.join(logDir, "openrouter-attribution.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
     const routing = () => fs.readFileSync(path.join(logDir, "routing-decisions.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
-    return { request, evidence, routing, stop: () => child.kill("SIGTERM") };
+    const settlements = () => fs.readFileSync(path.join(logDir, "openrouter-settlement.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    return { request, evidence, routing, settlements, exited, port, stop: () => child.kill("SIGTERM") };
   };
-  return { store, account, attempt, cleanup: async () => { await close(provider); fs.rmSync(home, { recursive: true, force: true }); } };
+  return { store, account, attempt, cleanup: async () => { provider.closeAllConnections?.(); await close(provider); fs.rmSync(home, { recursive: true, force: true }); } };
 }
 
 const ok = (res) => { res.writeHead(200, { "content-type": "text/event-stream" });
@@ -99,6 +101,8 @@ describe.skipIf(isInsideWorkerSandboxEnv())("provider non-2xx policy", () => {
       expect(h.store.state().spentUsd).toBeCloseTo(5.05, 6);
       expect(h.store.export().requests[0]).toMatchObject({ status: "failed", reason: "provider-http-400-400" });
       expect(first.routing()[0].error).toBe("provider-http-400-400");
+      expect(first.settlements()).toEqual([expect.objectContaining({ outcome: "settled", reason: "provider-http-400-400", issue: "MOV-11" })]);
+      expect(first.settlements()[0].amountUsd).toBeCloseTo(0.05, 6);
       expect(JSON.stringify([first.evidence(), first.routing()])).not.toMatch(/private-/);
       expect(first.evidence()[0].providerDiagnostic).toEqual({ status: 400, code: "400", type: "invalid_request_error",
         provider: "amazon-bedrock", category: "tool-or-parameter" });
@@ -120,6 +124,42 @@ describe.skipIf(isInsideWorkerSandboxEnv())("provider non-2xx policy", () => {
       expect(await attempt.request()).toBe(502);
       expect(h.store.state().status).not.toBe("active");
       expect(h.store.export().stoppedReason).toMatch(new RegExp(`^provider-http-${status}`));
+    } finally { attempt.stop(); await h.cleanup(); }
+  }, 20000);
+
+  // MOV-484: a request whose broker or client dies before the provider answers
+  // must not leave the reservation pending.
+  const hang = (res, account) => { account.usage += 0.03; account.totalUsage += 0.03; res.writeHead(200, { "content-type": "text/event-stream" }); res.write(":\n\n"); };
+
+  it("settles the reservation when the worker disconnects mid-request", async () => {
+    const h = await harness(hang);
+    const attempt = await h.attempt("MOV-11");
+    try {
+      const controller = new AbortController();
+      const pending = fetch(`http://127.0.0.1:${attempt.port}/v1/responses`, { method: "POST", signal: controller.signal,
+        headers: { authorization: "Bearer fixture-broker-token", "content-type": "application/json" },
+        body: JSON.stringify({ model: "openai/fixture", reasoning: { effort: "medium" }, input: "fake only", stream: true }) }).catch(() => null);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      controller.abort(); await pending;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      expect(h.store.export().requests[0]).toMatchObject({ status: "failed", reason: "client-disconnected" });
+      expect(h.store.export().requests[0].amountUsd).toBeCloseTo(0.03, 6);
+      expect(attempt.settlements()[0]).toMatchObject({ outcome: "settled", reason: "client-disconnected" });
+    } finally { attempt.stop(); await h.cleanup(); }
+  }, 20000);
+
+  it("settles on SIGTERM and keeps the cohort running for other issues", async () => {
+    const h = await harness(hang);
+    const attempt = await h.attempt("MOV-11");
+    try {
+      const pending = fetch(`http://127.0.0.1:${attempt.port}/v1/responses`, { method: "POST",
+        headers: { authorization: "Bearer fixture-broker-token", "content-type": "application/json" },
+        body: JSON.stringify({ model: "openai/fixture", reasoning: { effort: "medium" }, input: "fake only", stream: true }) }).then((r) => r.text()).catch(() => null);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      attempt.stop(); await attempt.exited; await pending;
+      expect(h.store.export().requests[0]).toMatchObject({ status: "failed", reason: "broker-terminated" });
+      expect(h.store.state()).toMatchObject({ status: "active", pending: 0, stoppedReason: null });
+      expect(attempt.settlements()[0]).toMatchObject({ outcome: "settled", reason: "broker-terminated" });
     } finally { attempt.stop(); await h.cleanup(); }
   }, 20000);
 });
