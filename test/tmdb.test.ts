@@ -41,11 +41,11 @@ describe('TMDb wrapper', () => {
   it('threads the requested page through TMDb and normalizes paging metadata', async () => {
     setValidTMDbEnv();
     const fetchMock = vi.fn().mockResolvedValue(Response.json({
-      results: [{ id: 603, title: 'The Matrix' }], page: 2, total_pages: 8,
+      results: [{ id: 603, title: 'The Matrix' }], page: 2, total_pages: 8, total_results: 153,
     }));
 
     await expect(searchMoviesPage(' matrix ', 2, fetchMock)).resolves.toMatchObject({
-      results: [{ tmdbId: 603, title: 'The Matrix' }], page: 2, totalPages: 8,
+      results: [{ tmdbId: 603, title: 'The Matrix' }], page: 2, totalPages: 8, totalResults: 153,
     });
     const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
     expect(url.searchParams.get('page')).toBe('2');
@@ -61,7 +61,23 @@ describe('TMDb wrapper', () => {
     setValidTMDbEnv();
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ results: [], ...metadata }));
     await expect(searchMoviesPage('matrix', 1, fetchMock)).resolves.toEqual({
-      results: [], page, totalPages,
+      results: [], page, totalPages, totalResults: 0,
+    });
+  });
+
+  it.each([
+    [undefined, 1],
+    [-1, 1],
+    ['many', 1],
+    [1.5, 1],
+    [0, 0],
+  ])('normalizes total_results %s to %i', async (totalResults, expected) => {
+    setValidTMDbEnv();
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      results: [{ id: 603, title: 'The Matrix' }], total_results: totalResults,
+    }));
+    await expect(searchMoviesPage('matrix', 1, fetchMock)).resolves.toMatchObject({
+      totalResults: expected,
     });
   });
 
@@ -291,6 +307,7 @@ describe('movie search route', () => {
     await expect(response.json()).resolves.toEqual({
       page: 1,
       totalPages: 1,
+      totalResults: 1,
       results: [
         {
           tmdbId: 550,

@@ -19,6 +19,7 @@ export interface MovieSearchPage {
   results: NormalizedMovieSummary[];
   page: number;
   totalPages: number;
+  totalResults: number;
 }
 
 export class TMDbRequestError extends Error {
@@ -224,8 +225,11 @@ export async function searchMoviesPage(
   const totalPages = typeof record.total_pages === 'number'
     && Number.isInteger(record.total_pages) && record.total_pages >= 0
     ? Math.min(record.total_pages, 500) : responsePage;
+  const totalResults = typeof record.total_results === 'number'
+    && Number.isInteger(record.total_results) && record.total_results >= 0
+    ? record.total_results : results.length;
 
-  return { results, page: responsePage, totalPages };
+  return { results, page: responsePage, totalPages, totalResults };
 }
 
 export async function getMovieDetails(

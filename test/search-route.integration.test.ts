@@ -50,6 +50,7 @@ describe('movie search route integration seam', () => {
       results: buildNormalizedMovieSummaries([TEST_TMDB_IDS.MATRIX, TEST_TMDB_IDS.INCEPTION]),
       page: 1,
       totalPages: 3,
+      totalResults: 153,
     });
 
     const { GET } = await import('../src/app/api/movies/search/route');
@@ -61,6 +62,7 @@ describe('movie search route integration seam', () => {
     await expect(response.json()).resolves.toEqual({
       page: 1,
       totalPages: 3,
+      totalResults: 153,
       results: [
         {
           tmdbId: TEST_TMDB_IDS.MATRIX,
@@ -82,7 +84,7 @@ describe('movie search route integration seam', () => {
   });
 
   it('returns an empty result set when no movies match the query', async () => {
-    mocks.searchMovies.mockResolvedValue({ results: [], page: 1, totalPages: 0 });
+    mocks.searchMovies.mockResolvedValue({ results: [], page: 1, totalPages: 0, totalResults: 0 });
 
     const { GET } = await import('../src/app/api/movies/search/route');
     const response = await GET(
@@ -90,11 +92,11 @@ describe('movie search route integration seam', () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ results: [], page: 1, totalPages: 0 });
+    await expect(response.json()).resolves.toEqual({ results: [], page: 1, totalPages: 0, totalResults: 0 });
   });
 
   it.each([1, 2, 500])('passes validated page %s to the provider', async (page) => {
-    const payload = { results: [], page, totalPages: 500 };
+    const payload = { results: [], page, totalPages: 500, totalResults: 5000 };
     mocks.searchMovies.mockResolvedValue(payload);
     const { GET } = await import('../src/app/api/movies/search/route');
     const response = await GET(new NextRequest(
@@ -150,6 +152,7 @@ describe('movie search route integration seam', () => {
     await expect(response.json()).resolves.toEqual({
       page: 1,
       totalPages: 1,
+      totalResults: 1,
       results: [
         {
           tmdbId: TEST_TMDB_IDS.MATRIX,
@@ -174,7 +177,7 @@ describe('movie search route integration seam', () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ results: [], page: 1, totalPages: 1 });
+    await expect(response.json()).resolves.toEqual({ results: [], page: 1, totalPages: 1, totalResults: 0 });
     expect(mocks.searchMovies).not.toHaveBeenCalled();
 
     vi.unstubAllEnvs();

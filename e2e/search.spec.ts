@@ -45,6 +45,49 @@ test('load more appends unique movies, disables while loading, and preserves wat
   await expect(inception.getByRole('button', { name: 'Added', exact: true })).toBeVisible();
 });
 
+test('search announces the full total from page one and keeps it after loading more', async ({ page }) => {
+  await page.route('**/api/movies/search**', async (route) => {
+    const currentPage = Number(new URL(route.request().url()).searchParams.get('page') ?? 1);
+    await route.fulfill({ json: {
+      results: buildNormalizedMovieSummaries([
+        currentPage === 1 ? TEST_TMDB_IDS.MATRIX : TEST_TMDB_IDS.INCEPTION,
+      ]),
+      page: currentPage,
+      totalPages: 2,
+      totalResults: 1234,
+    } });
+  });
+
+  await page.goto('/search?q=matrix');
+  await expect(page.getByText(`${(1234).toLocaleString()} matches for matrix`, { exact: true })).toBeVisible();
+  await expect(page.locator('[aria-live="polite"]')).toContainText(
+    `Search complete: ${(1234).toLocaleString()} matches for matrix.`,
+  );
+  await page.getByRole('button', { name: 'Load more', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Inception', exact: true })).toBeVisible();
+  await expect(page.getByText(`${(1234).toLocaleString()} matches for matrix`, { exact: true })).toBeVisible();
+});
+
+test('search falls back to the loaded count when the total is absent or too small', async ({ page }) => {
+  await page.route('**/api/movies/search**', async (route) => {
+    const currentPage = Number(new URL(route.request().url()).searchParams.get('page') ?? 1);
+    await route.fulfill({ json: {
+      results: buildNormalizedMovieSummaries([
+        currentPage === 1 ? TEST_TMDB_IDS.MATRIX : TEST_TMDB_IDS.INCEPTION,
+      ]),
+      page: currentPage,
+      totalPages: 2,
+      ...(currentPage === 2 ? { totalResults: 1 } : {}),
+    } });
+  });
+
+  await page.goto('/search?q=matrix');
+  await expect(page.getByText('1 match for matrix', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Load more', exact: true }).click();
+  await expect(page.getByText('2 matches for matrix', { exact: true })).toBeVisible();
+  await expect(page.locator('[aria-live="polite"]')).toContainText('Search complete: 2 matches for matrix.');
+});
+
 for (const failure of ['server', 'network'] as const) {
   test(`load more preserves results after ${failure} failure and retries the same page`, async ({ page }) => {
     let failed = false;
@@ -93,15 +136,18 @@ test('a new query resets paging and ignores an older in-flight page', async ({ p
       results: buildNormalizedMovieSummaries([
         query === 'inception' ? TEST_TMDB_IDS.INCEPTION : TEST_TMDB_IDS.MATRIX,
       ]), page: currentPage, totalPages: query === 'inception' ? 1 : 3,
+      totalResults: query === 'inception' ? 1 : 300,
     } });
     if (query === 'matrix' && currentPage === 2) finishPage();
   });
   await page.goto('/search?q=matrix');
+  await expect(page.getByText('300 matches for matrix', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Load more', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Loading more…' })).toBeDisabled();
   await page.getByRole('searchbox').fill('inception');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Inception', exact: true })).toBeVisible();
+  await expect(page.getByText('1 match for inception', { exact: true })).toBeVisible();
   releasePage();
   await pageFinished;
   await expect(page.getByRole('heading', { name: 'The Matrix', exact: true })).toHaveCount(0);
