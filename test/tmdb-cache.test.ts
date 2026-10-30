@@ -93,7 +93,7 @@ describe('TMDb response cache', () => {
       getMovieDetails(603, fetchMock, { cache }),
       getMovieDetails(603, fetchMock, { cache }),
     ]);
-    response.reject(new Error('network down'));
+    response.resolve(new Response(null, { status: 404 }));
 
     const settled = await results;
     expect(settled.map((result) => result.status)).toEqual(['rejected', 'rejected']);
