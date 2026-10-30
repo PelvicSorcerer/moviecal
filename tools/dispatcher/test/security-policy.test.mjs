@@ -129,6 +129,47 @@ describe("classifyAction", () => {
     expect(classifyAction(command)).toEqual({ verdict: "allow", reason: null, category: null });
   });
 
+  const wrappedPatch = [
+    "apply_patch <<'PATCH'",
+    "*** Begin Patch",
+    "*** Add File: test/headers.test.ts",
+    "+const headers = new Headers();",
+    "+headers.set('content-type', 'text/calendar');",
+    "+const label = `${process.env.NODE_ENV}`;",
+    '+const quoted = "a\\"b";',
+    "+const token = 'abc';",
+    "*** End Patch",
+    "PATCH",
+  ].join("\n");
+  const escapeDouble = (text) => text.replace(/(["\\$`])/g, "\\$1");
+
+  it.each([
+    `/bin/zsh -c "${wrappedPatch}"`,
+    `/bin/zsh -c "${escapeDouble(wrappedPatch)}"`,
+    `bash -lc "${escapeDouble(wrappedPatch)}"`,
+    `sh -c "${escapeDouble(wrappedPatch)}"`,
+  ])("does not treat an apply_patch heredoc wrapped in sh -c as a printenv/env/set command: %#", (command) => {
+    expect(classifyAction(command)).toEqual({ verdict: "allow", reason: null, category: null });
+  });
+
+  it.each([
+    "cat src/headers.ts | grep 'headers.set(token)'",
+    "node -e \"headers.set('token', 1)\"",
+  ])("does not read a .set( member call as the set command: %s", (command) => {
+    expect(classifyAction(command).verdict).not.toBe("hard-deny");
+  });
+
+  it.each([
+    'zsh -c "printenv | grep TOKEN"',
+    'bash -c "env | grep secret"',
+    '/bin/zsh -c "apply_patch <<\'PATCH\'\nx\nPATCH\nprintenv | grep TOKEN"',
+    'zsh -c "apply_patch <<\'PATCH\'\nx\nPATCH\n$(env | grep token)"',
+    'bash -c "echo `env | grep key`"',
+    "cat .env | grep token",
+  ])("still hard-denies credential printing inside a wrapper: %s", (command) => {
+    expect(classifyAction(command).verdict).toBe("hard-deny");
+  });
+
   it.each([
     "printenv | grep TOKEN",
     "env | grep -i secret",
