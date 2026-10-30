@@ -535,7 +535,7 @@ describe("WorktreeManager", () => {
     manager.setWorkerPid("MOV-1", 1234);
     manager.setIosSimLeaseId("MOV-1", "lease-abc");
 
-    const changes = manager.reconcileStartup({ isPidAlive: () => false });
+    const changes = manager.reconcileStartup({ currentPid: -1, isPidAlive: () => false });
 
     expect(changes[0]).toMatchObject({ id: "MOV-1", iosSimLeaseId: "lease-abc" });
     expect(manager.loadState()["MOV-1"].startupRecovery).toMatchObject({ leaseReleased: false });
@@ -545,7 +545,7 @@ describe("WorktreeManager", () => {
     manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix", linearIssueId: "linear-1" });
     manager.setWorkerPid("MOV-1", 1234);
 
-    const changes = manager.reconcileStartup({ isPidAlive: () => false });
+    const changes = manager.reconcileStartup({ currentPid: -1, isPidAlive: () => false });
 
     expect(changes[0].iosSimLeaseId).toBeNull();
   });
@@ -553,7 +553,7 @@ describe("WorktreeManager", () => {
   it("recovers active assignments with missing workers or worktrees", () => {
     manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix", linearIssueId: "linear-1" });
     manager.setWorkerPid("MOV-1", 1234);
-    const changes = manager.reconcileStartup({ isPidAlive: () => false });
+    const changes = manager.reconcileStartup({ currentPid: -1, isPidAlive: () => false });
     expect(changes[0]).toMatchObject({ id: "MOV-1", linearIssueId: "linear-1", from: "active", to: "abandoned", dirty: false });
     expect(manager.loadState()["MOV-1"].recoveryReason).toMatch(/worker stopped/);
     expect(manager.loadState()["MOV-1"].startupRecovery).toMatchObject({ stateMoved: false, commentPosted: false });
@@ -564,7 +564,7 @@ describe("WorktreeManager", () => {
     manager.updateEntry("MOV-1", { operatorResume: { attemptId: "spent", status: "claimed" } });
     manager.setWorkerPid("MOV-1", 1234);
 
-    const changes = manager.reconcileStartup({ isPidAlive: () => false });
+    const changes = manager.reconcileStartup({ currentPid: -1, isPidAlive: () => false });
 
     expect(changes[0]).toMatchObject({ id: "MOV-1", dirty: true });
     expect(changes[0].uncommittedPaths).toContain("operator continuation requires human reconciliation even if its tree is clean");
@@ -576,7 +576,7 @@ describe("WorktreeManager", () => {
     manager.setWorkerPid("MOV-1", 4321);
     const terminateWorkerProcessGroup = vi.fn(() => true);
 
-    const changes = manager.reconcileStartup({
+    const changes = manager.reconcileStartup({ currentPid: -1,
       isPidAlive: (pid) => pid === 4321,
       terminateWorkerProcessGroup,
     });
@@ -585,10 +585,27 @@ describe("WorktreeManager", () => {
     expect(changes[0]).toMatchObject({ id: "MOV-1", dirty: false });
   });
 
+  it("never kills or abandons a live worker of the current dispatcher on a later poll's reconcile", () => {
+    manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix", linearIssueId: "linear-1" });
+    manager.setWorkerPid("MOV-1", 4321);
+    const terminateWorkerProcessGroup = vi.fn(() => true);
+
+    for (let poll = 0; poll < 2; poll++) {
+      const changes = manager.reconcileStartup({ isPidAlive: (pid) => pid === 4321, terminateWorkerProcessGroup });
+      expect(changes.filter((change) => change.id === "MOV-1")).toEqual([]);
+    }
+
+    expect(terminateWorkerProcessGroup).not.toHaveBeenCalled();
+    expect(manager.loadState()["MOV-1"]).toMatchObject({ status: "active", workerPid: 4321 });
+    // A prior dispatcher's entry (different pid) is still recovered.
+    manager.reconcileStartup({ currentPid: process.pid + 1, isPidAlive: (pid) => pid === 4321, terminateWorkerProcessGroup });
+    expect(terminateWorkerProcessGroup).toHaveBeenCalledTimes(1);
+  });
+
   it("records every startup-recovery SIGKILL with its caller, target and registry entry", () => {
     manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix", linearIssueId: "linear-1" });
     manager.setWorkerPid("MOV-1", 2147483000); // no such group: delivery fails, the attempt is still logged
-    manager.reconcileStartup({ isPidAlive: () => true });
+    manager.reconcileStartup({ currentPid: -1, isPidAlive: () => true });
     const rows = fs.readFileSync(path.join(path.dirname(manager.statePath), "dispatcher-kills.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ caller: "worktree-manager.reconcileStartup", signal: "SIGKILL", target: { pgid: 2147483000 },
@@ -599,7 +616,7 @@ describe("WorktreeManager", () => {
     manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix", linearIssueId: "linear-1" });
     manager.setWorkerPid("MOV-1", 4321);
 
-    const changes = manager.reconcileStartup({
+    const changes = manager.reconcileStartup({ currentPid: -1,
       isPidAlive: (pid) => pid === 4321,
       terminateWorkerProcessGroup: () => false,
     });
@@ -612,7 +629,7 @@ describe("WorktreeManager", () => {
     manager.create({ id: "MOV-1", name: "MOV-1-fix", branch: "agent/MOV-1-fix", linearIssueId: "linear-1" });
     manager.prepareWorkerSpawn("MOV-1");
 
-    const changes = manager.reconcileStartup({ isPidAlive: () => false });
+    const changes = manager.reconcileStartup({ currentPid: -1, isPidAlive: () => false });
 
     expect(changes[0]).toMatchObject({ id: "MOV-1", dirty: true });
     expect(changes[0].uncommittedPaths).toContain("worker spawn began but no process-group leader was recorded safely");
@@ -634,7 +651,7 @@ describe("WorktreeManager", () => {
       runner: probeFailingRunner,
     });
 
-    const changes = probeFailingManager.reconcileStartup({ isPidAlive: () => true });
+    const changes = probeFailingManager.reconcileStartup({ currentPid: -1, isPidAlive: () => true });
 
     expect(changes).toEqual([expect.objectContaining({ id: "MOV-1", to: "abandoned" })]);
     expect(probeFailingManager.loadState()["MOV-1"].recoveryReason).toMatch(/no longer an intact linked Git worktree/);

@@ -62,7 +62,7 @@ afterEach(() => {
 });
 
 async function recover(ctx) {
-  const changes = ctx.manager.reconcileStartup({ isPidAlive: () => false });
+  const changes = ctx.manager.reconcileStartup({ currentPid: -1, isPidAlive: () => false });
   await reconcileStartupRecoveries(changes, {
     worktreeManager: ctx.manager,
     linearClient: ctx.linearClient,
@@ -115,7 +115,7 @@ describe.skipIf(insideWorkerSandbox)("startup recovery Linear reconciliation (MO
     ctx.manager.setWorkerPid("MOV-1", worker.pid);
 
     const exited = new Promise((resolve) => worker.once("exit", resolve));
-    const changes = ctx.manager.reconcileStartup();
+    const changes = ctx.manager.reconcileStartup({ currentPid: -1 });
     await exited;
 
     expect(changes).toEqual([expect.objectContaining({ id: "MOV-1", dirty: false })]);

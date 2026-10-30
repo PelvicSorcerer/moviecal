@@ -695,6 +695,10 @@ export class WorktreeManager {
   }
 
   reconcileStartup({
+    // Registry entries are stamped with the creating dispatcher's pid. An
+    // active entry stamped with this process is a live attempt of this very
+    // dispatcher, never an orphan of a prior one.
+    currentPid = process.pid,
     isPidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } },
     // Workers are spawned detached, making workerPid both the direct child
     // PID and its process-group ID. Once this dispatcher has acquired the
@@ -725,6 +729,14 @@ export class WorktreeManager {
         continue;
       }
       if (!["active", "review"].includes(entry.status)) continue;
+      if (entry.status === "active" && entry.pid === currentPid) {
+        logKill(path.join(path.dirname(this.statePath), "dispatcher-kills.jsonl"), {
+          caller: "worktree-manager.reconcileStartup", target: entry.workerPid ? { pgid: entry.workerPid } : null, signal: null, delivered: false,
+          reason: "skipped: active entry belongs to this dispatcher process",
+          entry: { id, status: entry.status, workerPid: entry.workerPid, dispatcherPid: entry.pid, startedAt: entry.startedAt, branch: entry.branch },
+        });
+        continue;
+      }
       if (!fs.existsSync(entry.path) || !this.isIntactLinkedWorktree(entry.path)) {
         const reason = fs.existsSync(entry.path)
           ? "recorded worktree is no longer an intact linked Git worktree after dispatcher restart"

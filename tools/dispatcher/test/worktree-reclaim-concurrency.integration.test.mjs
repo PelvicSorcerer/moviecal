@@ -164,7 +164,7 @@ describe.skipIf(insideWorkerSandbox)("worktree reclaim under real concurrent acc
       fs.mkdirSync(worktreePath, { recursive: true });
 
       const manager = new WorktreeManager({ repoRoot: mainDir, worktreeRoot, statePath, runner: defaultRunner });
-      const changes = manager.reconcileStartup({ isPidAlive: () => true });
+      const changes = manager.reconcileStartup({ currentPid: -1, isPidAlive: () => true });
 
       // Reconcile must notice the mismatch between the registry and reality
       // instead of treating a surviving empty directory plus live PID as an
