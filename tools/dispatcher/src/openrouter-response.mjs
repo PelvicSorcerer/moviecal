@@ -218,9 +218,14 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
       // echo the caller's requested effort as that candidate's effort. That
       // echo is not a selection, so trust the response only when this run
       // already proved the same model on an earlier turn with a full match.
+      // The echo runs either way: the candidate may repeat the requested
+      // effort, or the response may (the served effort then equals the request
+      // while Jev still lists its earlier pick). Both are recorded as flagged
+      // evidence below; every other mismatch stays fail-closed.
       const listed = Array.isArray(jev?.candidates) ? jev.candidates : [];
       const continuation = selectedByJev && candidateEffort && responseEffort && responseEffort !== candidateEffort
-        && listed.length === 1 && candidates.length === 1 && candidateEffort === requestedEffort
+        && listed.length === 1 && candidates.length === 1
+        && (candidateEffort === requestedEffort || responseEffort === requestedEffort)
         && provenModels?.has(canonical(resolvedModel));
       const routerEffort = selectedByJev && candidateEffort && (responseEffort === candidateEffort || continuation) ? responseEffort : null;
       if (selectedByJev && candidateEffort && responseEffort && responseEffort !== candidateEffort && !continuation) fail("conflicting-served-effort");
@@ -246,6 +251,10 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
         routerReconsidered: reconsideredEvidence(snapshot.metadata?.pipeline, jev),
         routerEffortHints: proofDebug ? effortHints(jev) : [],
         responseEffort,
+        // Flagged evidence for a trusted continuation whose served effort
+        // differs from the single listed candidate's. Null on ordinary turns.
+        continuationEffort: continuation
+          ? { candidateEffort, responseEffort, requestedEffort, echoed: candidateEffort === requestedEffort ? "candidate" : "response" } : null,
         // Responses reasoning can echo the request; it is not proof of Jev's
         // effective selection. A disposable diagnostic can instead report
         // the correlated upstream request with an explicit source marker.

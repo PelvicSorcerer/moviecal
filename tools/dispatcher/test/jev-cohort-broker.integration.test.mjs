@@ -51,7 +51,7 @@ describe.skipIf(isInsideWorkerSandboxEnv())("shared fixed Responses broker bound
       expect(body.provider).toEqual({ only: ["openai"], allow_fallbacks: false, require_parameters: true });
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.end(`data: ${JSON.stringify({ type: "response.completed", response: {
-        id: "invoice-1", model: "openai/fixture", reasoning: { effort: "medium" }, status: "completed",
+        id: `invoice-${seen}`, model: "openai/fixture", reasoning: { effort: "medium" }, status: "completed",
         usage: { input_tokens: 10, output_tokens: 2, input_tokens_details: { cached_tokens: 0 }, cost: 0.2 },
         openrouter_metadata: { attempt: 1, pipeline: [], endpoints: { available: [{ selected: true, provider: "OpenAI", model: "openai/fixture" }] } },
       } })}\n\n`);
@@ -74,18 +74,26 @@ describe.skipIf(isInsideWorkerSandboxEnv())("shared fixed Responses broker bound
         child.once("exit", () => reject(new Error("broker exited before readiness")));
         setTimeout(() => reject(new Error("broker readiness timeout")), 5000);
       });
-      const request = () => fetch(`http://127.0.0.1:${brokerPort}/v1/responses`, { method: "POST",
+      const request = (input = "fake only") => fetch(`http://127.0.0.1:${brokerPort}/v1/responses`, { method: "POST",
         headers: { authorization: "Bearer fixture-broker-token", "content-type": "application/json" },
         body: JSON.stringify({ model: "openai/fixture", reasoning: { effort: "medium" },
-          parallel_tool_calls: true, input: "fake only", stream: true }) });
+          parallel_tool_calls: true, input, stream: true }) });
       const first = await request(); expect(first.status).toBe(200); await first.text();
       expect(store.state()).toMatchObject({ status: "active", control: 1, spentUsd: 5.2, pending: 0 });
       expect(seen).toBe(1);
+      // A tool call Codex's router rejected is recorded as a failed attempt; the cohort keeps running.
+      const badTool = await request([{ type: "function_call_output", call_id: "c1",
+        output: 'failed to parse function arguments: invalid type: string "false", expected a boolean' }]);
+      expect(badTool.status).toBe(200); await badTool.text();
+      expect(store.state().status).toBe("active");
+      const failures = fs.readFileSync(path.join(logDir, "attempt-failures.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+      expect(failures).toEqual([{ kind: "attempt-failure", reason: "worker-tool-format-error", requestId: expect.any(String),
+        issue: "MOV-11", routerArm: "fixed-control", count: 1 }]);
       store.stop("operator-stop");
       const second = await request(); expect(second.status).toBe(409); await second.text();
-      expect(seen).toBe(1);
+      expect(seen).toBe(2);
       const rows = fs.readFileSync(path.join(logDir, "routing-decisions.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
-      expect(rows).toHaveLength(1);
+      expect(rows).toHaveLength(2);
       expect(rows[0]).toMatchObject({ routerArm: "fixed-control", billedUsd: 0.2, provider: "OpenAI", error: null });
     } finally {
       child.kill("SIGTERM"); await close(provider); fs.rmSync(home, { recursive: true, force: true });

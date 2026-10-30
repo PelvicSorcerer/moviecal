@@ -225,3 +225,17 @@ the worker sandbox is not Mac containment evidence. After the cohort ends,
 export evidence, reconcile provider invoices and any purchases/fees, stop the
 cohort, then revoke the dedicated key in an owner-authorized handoff. Do not
 change the shared Default key or account policy during this handoff.
+
+## Continuation effort echo and bad tool calls (MOV-486)
+
+On a continuation turn that lists only an already-proven model, the broker
+accepts a served effort that equals the requested effort even when the listed
+candidate shows a different one (and the reverse). The candidate, response and
+requested efforts are written as `continuationEffort` in
+`openrouter-attribution.jsonl`. All other effort mismatches still stop the
+cohort.
+
+A tool output carrying Codex's `failed to parse function arguments: invalid
+type:` error is appended to `attempt-failures.jsonl` as `worker-tool-format-error`
+with the router arm. It is evidence of a failed attempt for that arm, never a
+cohort stop, and arguments are not coerced.

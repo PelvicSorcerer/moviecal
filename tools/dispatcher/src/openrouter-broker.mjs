@@ -10,6 +10,7 @@ import { createResponseObserver } from "./openrouter-response.mjs";
 import { parseRoutedRequests, writeRoutedRequestEvidence } from "./routed-request.mjs";
 import { JevCohortStore, assertCohortBinding } from "./jev-cohort.mjs";
 import { readOpenRouterAccount } from "./openrouter-account.mjs";
+import { countToolFormatErrors } from "./worker-tool-format-error.mjs";
 import { offerJevPatch, createJevPatchTranslator } from "./jev-patch.mjs";
 
 const config = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
@@ -171,7 +172,7 @@ const server = http.createServer(async (request, response) => {
         endpointModel: observed.endpointModel, endpointProvider: observed.endpointProvider, endpointTag: observed.endpointTag,
         routerStageKeys: observed.routerStageKeys, routerCandidate: observed.routerCandidate, routerReconsidered: observed.routerReconsidered,
         requestedEffort, routerEffortHints: observed.routerEffortHints,
-        responseEffort: observed.responseEffort,
+        responseEffort: observed.responseEffort, continuationEffort: observed.continuationEffort,
         resolvedEffortSource: observed.resolvedEffortSource,
         debugCount: observed.debugCount, upstreamModel: observed.upstreamModel,
         upstreamEffort: observed.upstreamEffort, upstreamKeys: observed.upstreamKeys, providerDiagnostic })}\n`, { mode: 0o600 });
@@ -191,6 +192,12 @@ const server = http.createServer(async (request, response) => {
     observer.setTools(parsed.tools);
     if (config.proofDebug === true) parsed.debug = { echo_upstream_body: true };
     toolOutputs = Array.isArray(parsed.input) ? parsed.input.filter((item) => ["function_call_output", "custom_tool_call_output"].includes(item.type)).length : 0;
+    const toolFormatErrors = countToolFormatErrors(parsed.input);
+    // A bad tool call is a failed attempt for the arm that made it; it is
+    // evidence only and leaves the cohort running.
+    if (toolFormatErrors) fs.appendFileSync(path.join(path.dirname(process.argv[2]), "attempt-failures.jsonl"),
+      `${JSON.stringify({ kind: "attempt-failure", reason: "worker-tool-format-error", requestId, issue: config.cohort?.issue ?? null,
+        routerArm: config.policy.side === "control" ? "fixed-control" : "jev-hosted", count: toolFormatErrors })}\n`, { mode: 0o600 });
     requestedEffort = parsed.reasoning?.effort;
     observer.setRequestedEffort(requestedEffort);
     if (cohort) {
