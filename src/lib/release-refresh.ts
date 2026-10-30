@@ -69,48 +69,72 @@ function isMovieUnchanged(stored: WatchlistMovieRow, detail: NormalizedMovieDeta
 export async function runRefreshPipeline(args: {
   repository: WatchlistRepository;
   getMovieDetails: (id: number) => Promise<NormalizedMovieDetail>;
+  concurrency?: number;
 }): Promise<ReleaseRefreshResult> {
+  const concurrency = args.concurrency ?? 5;
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new RangeError('Refresh concurrency must be a positive integer.');
+  }
   const trackedTmdbIds = await selectTrackedMovieIds(args.repository);
 
   let refreshedMovies = 0;
   let changedMovies = 0;
   let unchangedMovies = 0;
-  const releaseDateChanges: ReleaseRefreshResult['releaseDateChanges'] = [];
-  const failedMovieIds: number[] = [];
+  const dateChangesByIndex: (ReleaseRefreshResult['releaseDateChanges'][number] | undefined)[] = [];
+  const failedIds = new Set<number>();
+  let nextIndex = 0;
+  let environmentError: TMDbEnvironmentError | undefined;
 
-  for (const tmdbId of trackedTmdbIds) {
-    const fetchResult = await fetchMovieDetail(tmdbId, args.getMovieDetails);
+  async function refreshMovies(): Promise<void> {
+    while (!environmentError && nextIndex < trackedTmdbIds.length) {
+      const index = nextIndex++;
+      const tmdbId = trackedTmdbIds[index];
 
-    if (!fetchResult.success) {
-      failedMovieIds.push(tmdbId);
-      continue;
-    }
+      try {
+        const fetchResult = await fetchMovieDetail(tmdbId, args.getMovieDetails);
+        if (!fetchResult.success) {
+          failedIds.add(tmdbId);
+          continue;
+        }
 
-    try {
-      const detail = fetchResult.detail;
-      const stored = await args.repository.findMovieByTmdbId(tmdbId);
+        const detail = fetchResult.detail;
+        const stored = await args.repository.findMovieByTmdbId(tmdbId);
 
-      if (stored && isMovieUnchanged(stored, detail)) {
-        unchangedMovies += 1;
-      } else {
-        await persistMovieUpdate(detail, args.repository);
-        changedMovies += 1;
+        if (stored && isMovieUnchanged(stored, detail)) {
+          unchangedMovies += 1;
+        } else {
+          await persistMovieUpdate(detail, args.repository);
+          changedMovies += 1;
 
-        if (stored && stored.release_date !== detail.releaseDate
-          && releaseDateChanges.length < MAX_RELEASE_DATE_CHANGES) {
-          releaseDateChanges.push({ tmdbId, from: stored.release_date, to: detail.releaseDate });
+          if (stored && stored.release_date !== detail.releaseDate) {
+            dateChangesByIndex[index] = { tmdbId, from: stored.release_date, to: detail.releaseDate };
+          }
+        }
+        refreshedMovies += 1;
+      } catch (error) {
+        if (error instanceof TMDbEnvironmentError) {
+          environmentError ??= error;
+        } else {
+          failedIds.add(tmdbId);
         }
       }
-      refreshedMovies += 1;
-    } catch {
-      failedMovieIds.push(tmdbId);
     }
   }
 
+  await Promise.all(Array.from(
+    { length: Math.min(concurrency, trackedTmdbIds.length) },
+    () => refreshMovies(),
+  ));
+  if (environmentError) {
+    throw environmentError;
+  }
+
+  const failedMovieIds = trackedTmdbIds.filter((tmdbId) => failedIds.has(tmdbId));
   return {
     changedMovies,
     unchangedMovies,
-    releaseDateChanges,
+    releaseDateChanges: dateChangesByIndex.filter((change) => change !== undefined)
+      .slice(0, MAX_RELEASE_DATE_CHANGES),
     failedMovieIds,
     failedMovies: failedMovieIds.length,
     refreshedMovies,

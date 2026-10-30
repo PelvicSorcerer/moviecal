@@ -42,6 +42,20 @@ function buildMovieDetail(
   };
 }
 
+function deferred<Value>() {
+  let resolve!: (value: Value) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<Value>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function settleWork() {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 describe('selectTrackedMovieIds', () => {
   it('returns deduplicated valid tmdb_ids', async () => {
     const repository = createWatchlistRepository({
@@ -145,6 +159,134 @@ describe('persistMovieUpdate', () => {
 });
 
 describe('runRefreshPipeline', () => {
+  it.each([1, 2, undefined, 20])('bounds fetch and persistence together with concurrency %s', async (concurrency) => {
+    const movies = Array.from({ length: 7 }, (_, index) => buildMovieRow({ tmdb_id: index + 1 }));
+    const fetches = movies.map(() => deferred<NormalizedMovieDetail>());
+    const writes = movies.map(() => deferred<{ id: number }>());
+    let active = 0;
+    let maximumActive = 0;
+    const getMovieDetails = vi.fn((tmdbId: number) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      return fetches[tmdbId - 1].promise;
+    });
+    const upsertMovie = vi.fn(async (detail: NormalizedMovieDetail) => {
+      const result = await writes[detail.tmdbId - 1].promise;
+      active -= 1;
+      return result;
+    });
+    const run = runRefreshPipeline({
+      concurrency,
+      getMovieDetails,
+      repository: createWatchlistRepository({ listTrackedMovies: async () => movies, upsertMovie }),
+    });
+    const limit = Math.min(concurrency ?? 5, movies.length);
+    await settleWork();
+    expect(getMovieDetails).toHaveBeenCalledTimes(limit);
+
+    for (const [index, movie] of movies.entries()) {
+      const started = Math.min(limit + index, movies.length);
+      expect(getMovieDetails).toHaveBeenCalledTimes(started);
+      fetches[index].resolve(buildMovieDetail({ tmdbId: movie.tmdb_id }));
+      await settleWork();
+      expect(upsertMovie).toHaveBeenCalledTimes(index + 1);
+      expect(getMovieDetails).toHaveBeenCalledTimes(started);
+      writes[index].resolve({ id: movie.tmdb_id });
+      await settleWork();
+    }
+
+    expect(await run).toMatchObject({ trackedMovies: 7, refreshedMovies: 7, changedMovies: 7, failedMovies: 0 });
+    expect(getMovieDetails.mock.calls.map(([tmdbId]) => tmdbId)).toEqual(movies.map((movie) => movie.tmdb_id));
+    expect(maximumActive).toBe(limit);
+    expect(active).toBe(0);
+  });
+
+  it('matches sequential results for mixed outcomes completed in reverse order', async () => {
+    const movies = Array.from({ length: 7 }, (_, index) => buildMovieRow({ tmdb_id: index + 1 }));
+    const fetches = movies.map(() => deferred<NormalizedMovieDetail>());
+    const repository = createWatchlistRepository({
+      listTrackedMovies: async () => movies,
+      findMovieByTmdbId: async (tmdbId) => {
+        if (tmdbId === 3) throw new Error('read failed');
+        return movies[tmdbId - 1];
+      },
+      upsertMovie: async (detail) => {
+        if (detail.tmdbId === 5) throw new Error('write failed');
+        return { id: detail.tmdbId };
+      },
+    });
+    const detailFor = (tmdbId: number) => buildMovieDetail({
+      tmdbId, releaseDate: tmdbId === 6 ? '1999-03-31' : '2027-01-01',
+      posterPath: '/matrix.jpg', overview: 'A hacker discovers the truth.',
+    });
+    const run = runRefreshPipeline({
+      concurrency: 10, repository, getMovieDetails: (tmdbId) => fetches[tmdbId - 1].promise,
+    });
+    await settleWork();
+    for (const movie of [...movies].reverse()) {
+      if ([2, 4].includes(movie.tmdb_id)) {
+        fetches[movie.tmdb_id - 1].reject(new TMDbRequestError('fetch failed', 502));
+      } else {
+        fetches[movie.tmdb_id - 1].resolve(detailFor(movie.tmdb_id));
+      }
+      await settleWork();
+    }
+    const sequential = await runRefreshPipeline({
+      concurrency: 1, repository,
+      getMovieDetails: async (tmdbId) => {
+        if ([2, 4].includes(tmdbId)) throw new TMDbRequestError('fetch failed', 502);
+        return detailFor(tmdbId);
+      },
+    });
+    expect(await run).toEqual(sequential);
+    expect(await run).toEqual({
+      trackedMovies: 7, refreshedMovies: 3, failedMovies: 4, failedMovieIds: [2, 3, 4, 5],
+      changedMovies: 2, unchangedMovies: 1,
+      releaseDateChanges: [1, 7].map((tmdbId) => ({ tmdbId, from: '1999-03-31', to: '2027-01-01' })),
+    });
+  });
+
+  it('stops scheduling on an environment error and waits for in-flight fetches and writes', async () => {
+    const fetches = Array.from({ length: 3 }, () => deferred<NormalizedMovieDetail>());
+    const write = deferred<{ id: number }>();
+    const environmentError = new TMDbEnvironmentError('TMDb is not configured.');
+    const getMovieDetails = vi.fn((tmdbId: number) => fetches[tmdbId - 1].promise);
+    const upsertMovie = vi.fn(() => write.promise);
+    const run = runRefreshPipeline({
+      concurrency: 3, getMovieDetails,
+      repository: createWatchlistRepository({
+        listTrackedMovies: async () => Array.from({ length: 6 }, (_, index) => buildMovieRow({ tmdb_id: index + 1 })),
+        upsertMovie,
+      }),
+    });
+    const settled = vi.fn();
+    const outcome = run.then(settled, (error) => { settled(); return error; });
+    await settleWork();
+    fetches[1].reject(environmentError);
+    await settleWork();
+    expect(getMovieDetails).toHaveBeenCalledTimes(3);
+    expect(settled).not.toHaveBeenCalled();
+
+    fetches[0].reject(new Error('ordinary fetch failure'));
+    fetches[2].resolve(buildMovieDetail({ tmdbId: 3 }));
+    await settleWork();
+    expect(upsertMovie).toHaveBeenCalledOnce();
+    expect(getMovieDetails).toHaveBeenCalledTimes(3);
+    expect(settled).not.toHaveBeenCalled();
+    write.resolve({ id: 3 });
+    expect(await outcome).toBe(environmentError);
+    expect(getMovieDetails.mock.calls.map(([tmdbId]) => tmdbId)).toEqual([1, 2, 3]);
+  });
+
+  it.each([0, -1, 1.5, NaN, Infinity])('rejects invalid concurrency %s before accessing the repository', async (concurrency) => {
+    const listTrackedMovies = vi.fn();
+    await expect(runRefreshPipeline({
+      concurrency, getMovieDetails: vi.fn(),
+      repository: createWatchlistRepository({ listTrackedMovies }),
+    })).rejects.toThrow(RangeError);
+    expect(listTrackedMovies).not.toHaveBeenCalled();
+  });
+
   it('refreshes all tracked movies and returns correct result on happy path', async () => {
     const getMovieDetails = vi.fn(async (tmdbId: number) => ({
       tmdbId,
@@ -390,6 +532,29 @@ describe('runRefreshPipeline', () => {
     expect(result.releaseDateChanges).toHaveLength(MAX_RELEASE_DATE_CHANGES);
     expect(result.releaseDateChanges.at(-1)?.tmdbId).toBe(MAX_RELEASE_DATE_CHANGES);
     expect(upsertMovie).toHaveBeenCalledTimes(movies.length);
+  });
+
+  it('caps the date change report in tracked order rather than completion order', async () => {
+    const movies = Array.from({ length: MAX_RELEASE_DATE_CHANGES + 5 }, (_, index) =>
+      buildMovieRow({ tmdb_id: index + 1 }));
+    const fetches = movies.map(() => deferred<NormalizedMovieDetail>());
+    const run = runRefreshPipeline({
+      concurrency: movies.length,
+      getMovieDetails: (tmdbId) => fetches[tmdbId - 1].promise,
+      repository: createWatchlistRepository({
+        listTrackedMovies: async () => movies,
+        findMovieByTmdbId: async (tmdbId) => movies[tmdbId - 1],
+      }),
+    });
+    await settleWork();
+    for (const movie of [...movies].reverse()) {
+      fetches[movie.tmdb_id - 1].resolve(buildMovieDetail({ tmdbId: movie.tmdb_id, releaseDate: '2027-01-01' }));
+      await settleWork();
+    }
+    const result = await run;
+    expect(result.changedMovies).toBe(movies.length);
+    expect(result.releaseDateChanges.map((change) => change.tmdbId))
+      .toEqual(movies.slice(0, MAX_RELEASE_DATE_CHANGES).map((movie) => movie.tmdb_id));
   });
 
   it('returns zero counts and an empty report when nothing is tracked', async () => {
