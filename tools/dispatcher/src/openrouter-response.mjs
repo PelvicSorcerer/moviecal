@@ -41,7 +41,13 @@ function redactedEntry(row) {
   for (const [key, child] of Object.entries(row).slice(0, 32)) {
     if (!id(key) || key.length > 64) continue;
     if (typeof child === "number" || typeof child === "boolean" || child === null) out[key] = child;
-    else if (typeof child === "string") out[key] = id(child) ? child : "[redacted]";
+    else if (typeof child === "string") {
+      // Identifier-shaped prompt text is still private. Only known routing
+      // fields may retain their validated scalar values in durable evidence.
+      out[key] = ["model", "final_model"].includes(key) ? id(child) || "[redacted]"
+        : ["effort", "final_effort", "reasoning_effort"].includes(key) ? effort(child) || "[redacted]"
+          : "[redacted]";
+    }
     else if (Array.isArray(child)) out[key] = { length: child.length };
     else if (typeof child === "object") out[key] = { keys: Object.keys(child).filter((k) => id(k) && k.length <= 64).slice(0, 16) };
   }
