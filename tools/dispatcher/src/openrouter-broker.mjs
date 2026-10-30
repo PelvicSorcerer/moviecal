@@ -45,14 +45,38 @@ const authorized = (header) => {
   const actual = Buffer.from(String(header || ""));
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 };
+// Message text is never stored: it is only mapped onto this fixed vocabulary.
+const MESSAGE_CATEGORIES = [
+  ["context-length", /context|too long|too many|token limit|maximum length/],
+  ["tool-or-parameter", /tool|function|schema|parameter|argument/],
+  ["content-policy", /content|policy|safety|moderat|refus/],
+  ["rate-limit", /rate|quota|throttl/],
+  ["billing", /credit|billing|payment/],
+  ["auth", /auth|api key|permission/],
+  ["invalid-request", /invalid|malformed|format|valid/],
+];
+const FIELD = /^[a-z0-9][a-z0-9_.-]{0,47}$/i;
+// 401/402/403 are key, spend or identity problems and 5xx/timeouts are outages;
+// those stop the whole cohort. Any other 4xx belongs to one request.
+const attemptScoped = (status) => Number.isInteger(status) && status >= 400 && status <= 499 && ![401, 402, 403].includes(status);
 function providerFailure(status, body) {
-  let code = null;
+  const code = Number.isInteger(status) && status >= 400 && status <= 599 ? status : 502;
+  const diagnostic = { status: code, code: null, type: null, provider: null, category: "no-message" };
   try {
-    const value = JSON.parse(body);
-    const candidate = value?.error?.code;
-    if (typeof candidate === "string" && /^[a-z0-9_-]{1,48}$/i.test(candidate)) code = candidate.toLowerCase();
+    const error = JSON.parse(body)?.error;
+    const field = (value) => (typeof value === "string" && FIELD.test(value) ? value.toLowerCase()
+      : Number.isInteger(value) && value >= 0 && value <= 99999 ? String(value) : null);
+    diagnostic.code = field(error?.code);
+    diagnostic.type = typeof error?.type === "string" && FIELD.test(error.type) ? error.type.toLowerCase() : null;
+    diagnostic.provider = typeof error?.metadata?.provider_name === "string" && FIELD.test(error.metadata.provider_name.replace(/ /g, "-"))
+      ? error.metadata.provider_name.replace(/ /g, "-").toLowerCase() : null;
+    if (typeof error?.message === "string" && error.message) {
+      const message = error.message.slice(0, 2048).toLowerCase();
+      diagnostic.category = MESSAGE_CATEGORIES.find(([, pattern]) => pattern.test(message))?.[0] || "unclassified";
+    }
   } catch { /* HTTP status remains the bounded diagnostic. */ }
-  return `provider-http-${Number.isInteger(status) && status >= 400 && status <= 599 ? status : 502}${code ? `-${code}` : ""}`;
+  const detail = diagnostic.code || diagnostic.type;
+  return { error: `provider-http-${code}${detail ? `-${detail}` : ""}`.slice(0, 80), diagnostic };
 }
 const provenModels = new Set();
 const server = http.createServer(async (request, response) => {
@@ -67,13 +91,14 @@ const server = http.createServer(async (request, response) => {
     deferCompletion: true, rewriteEvent: config.policy.side === "control" ? null : createJevPatchTranslator(config.cwd),
     rejectFallback: Boolean(cohort), provenModels, control: config.policy.side === "control" ? { model: config.policy.model,
       provider: config.policy.provider, effort: config.policy.effort } : null });
-  let recorded = false, toolOutputs = 0, requestedEffort = null, account = null, reserved = false;
-  const record = (error = null) => {
+  let recorded = false, toolOutputs = 0, requestedEffort = null, account = null, reserved = false, providerDiagnostic = null;
+  // scoped: the failure ends this attempt's route but leaves the cohort running.
+  const record = (error = null, { scoped = false } = {}) => {
     if (recorded) return;
     recorded = true;
     const observed = observer.finish();
     let failure = error || observed.error;
-    if (failure) { stopped = true; cohort?.stop(failure); }
+    if (failure) { stopped = true; if (!scoped) cohort?.stop(failure); }
     if (cohort && reserved && !failure) {
       try { cohort.finish(requestId, { invoiceId: observed.invoiceId, amountUsd: observed.billedUsd,
         model: observed.resolvedModel, provider: observed.provider, effort: observed.resolvedEffort, account });
@@ -105,7 +130,7 @@ const server = http.createServer(async (request, response) => {
         responseEffort: observed.responseEffort,
         resolvedEffortSource: observed.resolvedEffortSource,
         debugCount: observed.debugCount, upstreamModel: observed.upstreamModel,
-        upstreamEffort: observed.upstreamEffort, upstreamKeys: observed.upstreamKeys })}\n`, { mode: 0o600 });
+        upstreamEffort: observed.upstreamEffort, upstreamKeys: observed.upstreamKeys, providerDiagnostic })}\n`, { mode: 0o600 });
     return failure;
   };
   if (config.maxRequests && admitted >= config.maxRequests) {
@@ -146,8 +171,19 @@ const server = http.createServer(async (request, response) => {
         let diagnostic = "";
         upstreamResponse.setEncoding("utf8");
         upstreamResponse.on("data", (chunk) => { if (diagnostic.length <= 4096) diagnostic += chunk.slice(0, 4097 - diagnostic.length); });
-        upstreamResponse.on("end", () => {
-          record(providerFailure(upstreamResponse.statusCode, diagnostic));
+        upstreamResponse.on("end", async () => {
+          const failure = providerFailure(upstreamResponse.statusCode, diagnostic);
+          providerDiagnostic = failure.diagnostic;
+          let error = failure.error, scoped = attemptScoped(failure.diagnostic.status);
+          if (scoped && cohort && reserved) {
+            // Settle the reservation before the route reports failure, counting
+            // any usage the rejected request still incurred.
+            try {
+              const after = await readOpenRouterAccount(config.upstream, key, { fixture: config.fixture === true });
+              cohort.failRequest(requestId, { reason: error, preUsageUsd: account.keyUsageUsd, account: after });
+            } catch { error = "account-postflight-or-budget-failed"; scoped = false; }
+          }
+          record(error, { scoped });
           response.writeHead(502, { "content-type": "application/json" });
           response.end('{"error":{"code":"provider-request-failed"}}');
         });

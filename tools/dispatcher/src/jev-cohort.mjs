@@ -197,14 +197,15 @@ export class JevCohortStore {
       return { status: "invalid", error: "cohort assignment evidence invalid" };
     if (rows.some((r) => !r || !ID.test(r.requestId || "") || !ISSUE.test(r.issue || "")
       || !ledger.assignments?.[r.issue]
-      || !["pending", "complete"].includes(r.status) || !MONEY(r.reservedUsd)
+      || !["pending", "complete", "failed"].includes(r.status) || !MONEY(r.reservedUsd)
+      || (r.status === "failed" && !MONEY(r.amountUsd))
       || (r.status === "complete" && (!MONEY(r.amountUsd) || !ID.test(r.invoiceId || "")
         || !ID.test(r.model || "") || !ID.test(r.provider || "") || !["low", "medium", "high", "xhigh", "max"].includes(r.effort))))
       || fees.some((f) => !ID.test(f?.id || "") || !MONEY(f?.amountUsd) || !ID.test(f?.description || ""))
       || new Set(rows.filter((r) => r.status === "complete").map((r) => r.invoiceId)).size !== rows.filter((r) => r.status === "complete").length
       || new Set(fees.map((f) => f.id)).size !== fees.length)
       return { status: "invalid", error: "cohort invoice or fee evidence invalid" };
-    const invoiced = rows.filter((r) => r.status === "complete").reduce((n, r) => n + r.amountUsd, 0);
+    const invoiced = rows.filter((r) => r.status !== "pending").reduce((n, r) => n + r.amountUsd, 0);
     const observed = Math.max(0, (ledger.observedKeyUsageUsd ?? policy.baselineKeyUsageUsd) - policy.baselineKeyUsageUsd);
     const spent = liability(policy.priorOutlayUsd + policy.purchaseFeesUsd + fees.reduce((n, f) => n + f.amountUsd, 0) + Math.max(invoiced, observed));
     const routed = Object.values(ledger.assignments || {}).filter((r) => r.side === "routed").length;
@@ -311,7 +312,7 @@ export class JevCohortStore {
     if (state.status !== "active" || !this.get(issue)) throw new Error(`cohort request stopped: ${state.status}`);
     const approval = readProtected(this.approvalPath, "cohort approval");
     const ledger = this.ledger.load();
-    const invoiced = Object.values(ledger.requests || {}).filter((r) => r.status === "complete")
+    const invoiced = Object.values(ledger.requests || {}).filter((r) => r.status !== "pending")
       .reduce((n, r) => n + r.amountUsd, 0);
     const observed = Math.max(0, (ledger.observedKeyUsageUsd ?? this.policy(now).baselineKeyUsageUsd)
       - this.policy(now).baselineKeyUsageUsd);
@@ -351,6 +352,31 @@ export class JevCohortStore {
       data.observedKeyUsageUsd = Math.max(data.observedKeyUsageUsd || 0, account.keyUsageUsd);
       data.keyRemainingUsd = mergeKeyRemaining(data, account);
     });
+  }
+
+  // A provider 4xx fails one issue's attempt, not the cohort. The reservation
+  // is settled so it cannot strand the ledger as pending; any key usage the
+  // request incurred is counted as spend even though no invoice came back.
+  failRequest(requestId, { reason, preUsageUsd, account }, now = new Date()) {
+    if (!ID.test(reason || "") || !MONEY(preUsageUsd) || !MONEY(account?.keyUsageUsd) || !MONEY(account?.keyRemainingUsd)) {
+      this.stop("failed-request-reconciliation-failed", now);
+      throw new Error("failed request evidence invalid");
+    }
+    const amountUsd = Math.max(0, liability(account.keyUsageUsd - preUsageUsd - 1e-9));
+    try {
+      this.updateLedger((data) => {
+        const row = data.requests?.[requestId];
+        if (!row || row.status !== "pending") throw new Error("request reservation missing");
+        if (amountUsd > row.reservedUsd) throw new Error("failed request exceeds reserved key allowance");
+        Object.assign(row, { status: "failed", amountUsd, reason, completedAt: now.toISOString() });
+        data.observedKeyUsageUsd = Math.max(data.observedKeyUsageUsd || 0, account.keyUsageUsd);
+        data.keyRemainingUsd = mergeKeyRemaining(data, account);
+      });
+    } catch (error) {
+      this.stop("failed-request-reconciliation-failed", now);
+      throw error;
+    }
+    if (this.state(now).spentUsd > 75) this.stop("all-in-ceiling", now);
   }
 
   finish(requestId, { invoiceId, amountUsd, model, provider, effort, account }, now = new Date()) {
