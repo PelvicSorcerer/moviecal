@@ -16,12 +16,19 @@ let deadline;
 // broker that dies mid-request leaves more than "exit 1" behind.
 const logDir = path.dirname(config.transportPath);
 const exits = {};
+// O_NOFOLLOW: never write through a symlink planted at an evidence path.
+const writeEvidence = (file, data, append) => {
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW
+    | (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC);
+  const fd = fs.openSync(file, flags, 0o600);
+  try { fs.writeSync(fd, data); } finally { fs.closeSync(fd); }
+};
 const noteExit = (role, code, signal) => {
   exits[role] = { code: code ?? null, signal: signal || null, at: new Date().toISOString() };
   try {
-    fs.writeFileSync(path.join(logDir, "process-exit.json"), JSON.stringify(exits, null, 2), { mode: 0o600 });
-    if (config.broker) fs.appendFileSync(path.join(logDir, "openrouter-attribution.jsonl"),
-      `${JSON.stringify({ kind: "process-exit", role, ...exits[role] })}\n`, { mode: 0o600 });
+    writeEvidence(path.join(logDir, "process-exit.json"), JSON.stringify(exits, null, 2), false);
+    if (config.broker) writeEvidence(path.join(logDir, "openrouter-attribution.jsonl"),
+      `${JSON.stringify({ kind: "process-exit", role, ...exits[role] })}\n`, true);
   } catch { /* evidence is best effort */ }
 };
 const fail = (message) => {
