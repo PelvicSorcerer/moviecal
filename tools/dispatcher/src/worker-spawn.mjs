@@ -412,6 +412,7 @@ export function spawnWorker({
     // the resolved result (e.g. reading the log tail, or a test's cleanup
     // removing the log directory) can race an in-flight disk write.
     let exitCode = null;
+    let exitSignal = null;
     let settled = false;
     const pending = new Set(["child", "stdout", "stderr", "reap"]);
 
@@ -430,6 +431,8 @@ export function spawnWorker({
             attemptId,
             endedAt,
             exitCode,
+            // The terminating signal, when the OS ended the worker rather than it exiting.
+            signal: exitSignal,
             // MOV-383: worker-trial attribution; null outside a trial.
             trial,
             // MOV-427: Jev router-arm admission attribution; null outside the arm.
@@ -444,7 +447,7 @@ export function spawnWorker({
           2,
         ) + "\n",
       );
-      resolve({ exitCode: exitCode ?? 1, logDir, pid: child.pid || null });
+      resolve({ exitCode: exitCode ?? 1, signal: exitSignal, logDir, pid: child.pid || null });
     };
 
     stdoutStream.on("finish", () => {
@@ -464,8 +467,9 @@ export function spawnWorker({
       stderrStream.destroy();
       reject(err);
     });
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       exitCode = code;
+      exitSignal = signal || null;
       childClosed = true;
       while (turnWaiters.length) turnWaiters.shift()({ ended: true });
       pending.delete("child");

@@ -135,13 +135,16 @@ describe("bounded Jev router arm admission through the run loop (MOV-427)", () =
       availableCreditUsd: 69, totalCreditsUsd: 69, totalUsageUsd: 0, keyRemainingUsd: 68 }), { mode: 0o600 });
     const cohort = new JevCohortStore({ home, configPath, approvalPath, ledgerPath: path.join(storeDir, "jev-cohort-ledger.json") });
     cohort.activate(T0);
-    const context = ctx({ jevCohortStore: cohort,
+    const settleExited = vi.fn(async () => ({ outcome: "settle" }));
+    const context = ctx({ jevCohortStore: cohort, settleExitedCohortRequestsFn: settleExited,
       resolveCohortTransportFn: (record, options = {}) => resolveCohortTransport(cohort, record, { ...options, home }),
       validateJevTransportFn: vi.fn() });
     await runOnce([issue(1, ["router:jev", "worker:codex"]), issue(2, ["worker:codex"])], context);
     expect(created.map((item) => item.jev?.side)).toEqual(["routed", "control"]);
     expect(spawned.map((item) => item.providerTransport?.policy.model)).toEqual(["typesafe/jev-router", "openai/fixture"]);
     expect(cohort.state(T0)).toMatchObject({ routed: 1, control: 1 });
+    // Once each worker has exited, its pending requests are settled before the next admission.
+    expect(settleExited.mock.calls.map(([store, issueId]) => [store, issueId])).toEqual([[cohort, "MOV-1"], [cohort, "MOV-2"]]);
     cohort.stop("operator-stop", T0);
     const result = await runOnce([issue(2, ["worker:codex"])], context);
     expect(result[0].outcome).toBe("needs-human");

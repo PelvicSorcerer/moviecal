@@ -379,14 +379,18 @@ export class JevCohortStore {
     if (this.state(now).spentUsd > 75) this.stop("all-in-ceiling", now);
   }
 
+  pendingFor(issue) {
+    return Object.values(this.ledger.load().requests || {}).filter((r) => r.status === "pending" && r.issue === issue);
+  }
+
   // Operator recovery for reservations a dead broker never settled (SIGKILL,
   // crash). Fail-closed: a row is settled only when the key's usage since the
   // last observation is attributable to exactly one request, or is zero.
   // Anything else stops the cohort for owner reconciliation. A request younger
   // than minAgeMs may still be in flight and is left alone.
-  reconcileOrphans(account, { apply = false, minAgeMs = 300000, now = new Date() } = {}) {
+  reconcileOrphans(account, { apply = false, minAgeMs = 300000, now = new Date(), issue = null, reason = "orphaned-request-reconciled" } = {}) {
     const plan = (ledger) => {
-      const pending = Object.values(ledger.requests || {}).filter((r) => r.status === "pending");
+      const pending = Object.values(ledger.requests || {}).filter((r) => r.status === "pending" && (!issue || r.issue === issue));
       if (!pending.length) return { outcome: "none", pending };
       if (pending.some((r) => now.getTime() - Date.parse(r.startedAt) < minAgeMs)) return { outcome: "too-recent", pending };
       if (!MONEY(account?.keyUsageUsd) || !MONEY(account?.keyRemainingUsd)) return { outcome: "stop", reason: "account-evidence-invalid", pending };
@@ -413,7 +417,7 @@ export class JevCohortStore {
         if (final.outcome !== "settle") return;
         for (const row of final.pending) {
           Object.assign(row, { status: "failed", amountUsd: row === final.pending[0] ? final.amountUsd : 0,
-            reason: "orphaned-request-reconciled", completedAt: now.toISOString() });
+            reason, completedAt: now.toISOString() });
         }
         data.observedKeyUsageUsd = Math.max(data.observedKeyUsageUsd || 0, account.keyUsageUsd);
         data.keyRemainingUsd = mergeKeyRemaining(data, account);

@@ -372,6 +372,30 @@ describe("reviewed production Jev cohort", () => {
       expect(store.state(NOW).pending).toBe(1);
     });
 
+    it("settles a just-started request of one issue when its worker has exited (minAge 0, issue-scoped)", () => {
+      reserveOne();
+      const result = store.reconcileOrphans({ ...account, keyUsageUsd: 1.05, keyRemainingUsd: 67.95 },
+        { apply: true, minAgeMs: 0, now: NOW, issue: "MOV-10", reason: "worker-exited-request-settled" });
+      expect(result).toMatchObject({ applied: true, outcome: "settle" });
+      expect(store.export().requests[0]).toMatchObject({ status: "failed", reason: "worker-exited-request-settled" });
+      expect(store.state(NOW)).toMatchObject({ pending: 0, stoppedReason: null });
+    });
+
+    it("ignores pending requests of other issues when scoped to an issue", () => {
+      reserveOne();
+      expect(store.reconcileOrphans(account, { apply: true, minAgeMs: 0, now: NOW, issue: "MOV-99" }))
+        .toMatchObject({ applied: false, outcome: "none" });
+      expect(store.pendingFor("MOV-10")).toHaveLength(1);
+      expect(store.pendingFor("MOV-99")).toHaveLength(0);
+    });
+
+    it("still stops rather than undercount when a worker-exit settlement sees usage above the reservation", () => {
+      reserveOne();
+      const result = store.reconcileOrphans({ ...account, keyUsageUsd: 69.5 }, { apply: true, minAgeMs: 0, now: NOW, issue: "MOV-10" });
+      expect(result).toMatchObject({ outcome: "stop", reason: "usage-exceeds-reservation" });
+      expect(store.export().requests[0].status).toBe("pending");
+    });
+
     it("does nothing when nothing is pending", () => {
       expect(store.reconcileOrphans(account, { apply: true, now: LATER })).toMatchObject({ applied: false, outcome: "none" });
     });
