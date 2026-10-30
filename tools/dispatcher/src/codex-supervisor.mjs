@@ -27,8 +27,6 @@ const noteExit = (role, code, signal) => {
   exits[role] = { code: code ?? null, signal: signal || null, at: new Date().toISOString() };
   try {
     writeEvidence(path.join(logDir, "process-exit.json"), JSON.stringify(exits, null, 2), false);
-    if (config.broker) writeEvidence(path.join(logDir, "openrouter-attribution.jsonl"),
-      `${JSON.stringify({ kind: "process-exit", role, ...exits[role] })}\n`, true);
   } catch { /* evidence is best effort */ }
 };
 const fail = (message) => {

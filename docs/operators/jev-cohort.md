@@ -202,9 +202,8 @@ soon as a cohort worker exits (MOV-487): the supervisor reaps the broker with
 the worker, so no request can still be in flight, and the minimum age is
 waived. Same fail-closed rules apply; a worker that is timed out or stopped
 still needs the manual command. Each run dir also records the worker, broker
-and executor exit code and signal in `process-exit.json`, as `process-exit`
-rows in `openrouter-attribution.jsonl`, and the worker's signal in
-`manifest.json`.
+and executor exit code and signal in `process-exit.json`, and the worker's
+signal in `manifest.json`.
 
 Run it after the worker and broker processes are gone. A key-usage read can lag
 a just-finished request; if later usage appears, the next reservation stops
