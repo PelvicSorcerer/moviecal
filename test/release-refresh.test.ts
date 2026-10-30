@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  MAX_RELEASE_DATE_CHANGES,
   fetchMovieDetail,
   persistMovieUpdate,
   runRefreshPipeline,
@@ -170,6 +171,9 @@ describe('runRefreshPipeline', () => {
         }),
       }),
     ).resolves.toEqual({
+      changedMovies: 2,
+      unchangedMovies: 0,
+      releaseDateChanges: [],
       failedMovieIds: [],
       failedMovies: 0,
       refreshedMovies: 2,
@@ -222,6 +226,9 @@ describe('runRefreshPipeline', () => {
         }),
       }),
     ).resolves.toEqual({
+      changedMovies: 1,
+      unchangedMovies: 0,
+      releaseDateChanges: [],
       failedMovieIds: [603, 27205],
       failedMovies: 2,
       refreshedMovies: 1,
@@ -242,5 +249,158 @@ describe('runRefreshPipeline', () => {
         }),
       }),
     ).rejects.toBeInstanceOf(TMDbEnvironmentError);
+  });
+
+  it('skips identical movies even when unrelated raw metadata differs', async () => {
+    const upsertMovie = vi.fn();
+    const result = await runRefreshPipeline({
+      getMovieDetails: async () => buildMovieDetail({
+        posterPath: '/matrix.jpg',
+        overview: 'A hacker discovers the truth.',
+        rawJson: { vote_count: 100 },
+      }),
+      repository: createWatchlistRepository({
+        listTrackedMovies: async () => [buildMovieRow()],
+        findMovieByTmdbId: async () => buildMovieRow(),
+        upsertMovie,
+      }),
+    });
+
+    expect(upsertMovie).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      trackedMovies: 1, refreshedMovies: 1, failedMovies: 0, failedMovieIds: [],
+      changedMovies: 0, unchangedMovies: 1, releaseDateChanges: [],
+    });
+  });
+
+  it.each([
+    { title: 'The Matrix (updated)' },
+    { posterPath: '/new-poster.jpg' },
+    { overview: 'Updated overview' },
+  ])('persists a metadata-only change: %j', async (change) => {
+    const detail = buildMovieDetail(change);
+    const upsertMovie = vi.fn(async () => ({ id: 42 }));
+    const result = await runRefreshPipeline({
+      getMovieDetails: async () => detail,
+      repository: createWatchlistRepository({
+        listTrackedMovies: async () => [buildMovieRow()],
+        findMovieByTmdbId: async () => buildMovieRow({ raw_json: {} }),
+        upsertMovie,
+      }),
+    });
+
+    expect(upsertMovie).toHaveBeenCalledExactlyOnceWith(detail);
+    expect(result).toMatchObject({
+      changedMovies: 1, unchangedMovies: 0, refreshedMovies: 1, releaseDateChanges: [],
+    });
+  });
+
+  it.each([null, {}, { poster_path: ' ', overview: 123 }])(
+    'normalizes missing or invalid stored metadata: %j', async (rawJson) => {
+      const upsertMovie = vi.fn();
+      const result = await runRefreshPipeline({
+        getMovieDetails: async () => buildMovieDetail(),
+        repository: createWatchlistRepository({
+          listTrackedMovies: async () => [buildMovieRow()],
+          findMovieByTmdbId: async () => buildMovieRow({ raw_json: rawJson }),
+          upsertMovie,
+        }),
+      });
+
+      expect(result.unchangedMovies).toBe(1);
+      expect(upsertMovie).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['1999-03-31', '2027-01-01'],
+    [null, '2027-01-01'],
+    ['1999-03-31', null],
+  ])('reports a saved release date change from %s to %s', async (from, to) => {
+    const result = await runRefreshPipeline({
+      getMovieDetails: async () => buildMovieDetail({ releaseDate: to }),
+      repository: createWatchlistRepository({
+        listTrackedMovies: async () => [buildMovieRow()],
+        findMovieByTmdbId: async () => buildMovieRow({ release_date: from }),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      changedMovies: 1, unchangedMovies: 0, refreshedMovies: 1,
+      releaseDateChanges: [{ tmdbId: 603, from, to }],
+    });
+  });
+
+  it('treats a missing stored row as changed without reporting a date change', async () => {
+    const upsertMovie = vi.fn(async () => ({ id: 42 }));
+    const result = await runRefreshPipeline({
+      getMovieDetails: async () => buildMovieDetail(),
+      repository: createWatchlistRepository({
+        listTrackedMovies: async () => [buildMovieRow()],
+        findMovieByTmdbId: async () => null,
+        upsertMovie,
+      }),
+    });
+
+    expect(upsertMovie).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      changedMovies: 1, unchangedMovies: 0, releaseDateChanges: [],
+    });
+  });
+
+  it.each(['read', 'write'])('counts a %s failure without reporting an unsaved change', async (operation) => {
+    const result = await runRefreshPipeline({
+      getMovieDetails: async (tmdbId) => buildMovieDetail({ tmdbId, releaseDate: '2027-01-01' }),
+      repository: createWatchlistRepository({
+        listTrackedMovies: async () => [buildMovieRow(), buildMovieRow({ tmdb_id: 550 })],
+        findMovieByTmdbId: vi.fn()
+          .mockImplementationOnce(async () => {
+            if (operation === 'read') throw new Error('read failed');
+            return buildMovieRow();
+          })
+          .mockResolvedValueOnce(null),
+        upsertMovie: operation === 'write'
+          ? vi.fn().mockRejectedValueOnce(new Error('write failed')).mockResolvedValueOnce({ id: 42 })
+          : vi.fn().mockResolvedValue({ id: 42 }),
+      }),
+    });
+
+    expect(result).toEqual({
+      trackedMovies: 2, refreshedMovies: 1, failedMovies: 1, failedMovieIds: [603],
+      changedMovies: 1, unchangedMovies: 0, releaseDateChanges: [],
+    });
+  });
+
+  it('bounds the date change report without limiting processing or counts', async () => {
+    const movies = Array.from({ length: MAX_RELEASE_DATE_CHANGES + 5 }, (_, index) =>
+      buildMovieRow({ tmdb_id: index + 1 }));
+    const upsertMovie = vi.fn(async () => ({ id: 42 }));
+    const result = await runRefreshPipeline({
+      getMovieDetails: async (tmdbId) => buildMovieDetail({ tmdbId, releaseDate: '2027-01-01' }),
+      repository: createWatchlistRepository({
+        listTrackedMovies: async () => movies,
+        findMovieByTmdbId: async (tmdbId) => movies[tmdbId - 1],
+        upsertMovie,
+      }),
+    });
+
+    expect(result.changedMovies).toBe(movies.length);
+    expect(result.refreshedMovies).toBe(movies.length);
+    expect(result.failedMovies).toBe(0);
+    expect(result.releaseDateChanges).toHaveLength(MAX_RELEASE_DATE_CHANGES);
+    expect(result.releaseDateChanges.at(-1)?.tmdbId).toBe(MAX_RELEASE_DATE_CHANGES);
+    expect(upsertMovie).toHaveBeenCalledTimes(movies.length);
+  });
+
+  it('returns zero counts and an empty report when nothing is tracked', async () => {
+    const getMovieDetails = vi.fn();
+    expect(await runRefreshPipeline({
+      getMovieDetails,
+      repository: createWatchlistRepository(),
+    })).toEqual({
+      trackedMovies: 0, refreshedMovies: 0, failedMovies: 0, failedMovieIds: [],
+      changedMovies: 0, unchangedMovies: 0, releaseDateChanges: [],
+    });
+    expect(getMovieDetails).not.toHaveBeenCalled();
   });
 });

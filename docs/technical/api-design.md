@@ -48,6 +48,8 @@ Former members lose access as a consequence of the cascade, and private calendar
 - `GET /api/cron/refresh-releases` — protected Vercel Cron entrypoint for scheduled release-date refresh. It must be callable only by the configured scheduler or trusted server-side process.
 - `POST /api/cron/refresh-releases` — protected fallback entrypoint for trusted server-side callers that need to trigger the same refresh path outside Vercel Cron.
 
+Both refresh entrypoints skip database writes when title, release date, poster path, and overview match the stored movie. Their responses retain `trackedMovies`, `refreshedMovies` (all successfully processed movies, including unchanged ones), and `failedMovies`, and add `changedMovies`, `unchangedMovies`, and `releaseDateChanges`. Changed counts include newly inserted movies; the date-change list contains only successfully saved changes to existing rows, as `{ tmdbId, from, to }` with nullable dates, capped at 100 entries. Counts still cover the entire run when the list is capped. Per-movie failures return the same summary with HTTP 502; authentication and environment-error behavior are unchanged.
+
 ## TMDb proxy endpoints
 
 - `GET /api/movies/search?q=` — server-side TMDb search proxy.
