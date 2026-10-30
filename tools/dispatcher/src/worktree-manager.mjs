@@ -8,9 +8,14 @@
 
 import { logKill } from "./kill-log.mjs";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { trustWorkspace as defaultTrustWorkspace } from "./claude-trust.mjs";
+
+// Unique per dispatcher process lifetime. A pid alone cannot tell this process's entries from a prior
+// dispatcher's, because the OS can hand a dead dispatcher's pid to its replacement.
+const DISPATCHER_INSTANCE = randomUUID();
 
 export class DispatcherLock {
   constructor(lockPath, { fsImpl = fs, pid = process.pid } = {}) {
@@ -401,6 +406,7 @@ export class WorktreeManager {
 
     entry.status = "active";
     entry.pid = process.pid;
+    entry.instance = DISPATCHER_INSTANCE;
     entry.workerPid = null;
     entry.workerSpawnPending = false;
     entry.resumedAt = new Date().toISOString();
@@ -523,6 +529,7 @@ export class WorktreeManager {
       },
       status: "active",
       pid: process.pid,
+      instance: DISPATCHER_INSTANCE,
       // MOV-311: the "iOS Companion App" worker-lane simulator lease this
       // attempt holds, if any -- set via setIosSimLeaseId() once acquired.
       // Startup recovery reads it back off an abandoned entry to release a
@@ -695,10 +702,11 @@ export class WorktreeManager {
   }
 
   reconcileStartup({
-    // Registry entries are stamped with the creating dispatcher's pid. An
-    // active entry stamped with this process is a live attempt of this very
-    // dispatcher, never an orphan of a prior one.
-    currentPid = process.pid,
+    // Registry entries are stamped with the creating dispatcher's instance id. An
+    // active entry stamped with this instance is a live attempt of this very
+    // dispatcher, never an orphan of a prior one (entries without a stamp, from
+    // before this field existed, are treated as prior).
+    currentInstance = DISPATCHER_INSTANCE,
     isPidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } },
     // Workers are spawned detached, making workerPid both the direct child
     // PID and its process-group ID. Once this dispatcher has acquired the
@@ -715,7 +723,7 @@ export class WorktreeManager {
       logKill(path.join(path.dirname(this.statePath), "dispatcher-kills.jsonl"), {
         caller: "worktree-manager.reconcileStartup", target: { pgid: workerPid }, signal: "SIGKILL", delivered,
         reason: "recorded active worker group was still live at poll start",
-        entry: entry ? { id, status: entry.status, workerPid: entry.workerPid, dispatcherPid: entry.pid,
+        entry: entry ? { id, status: entry.status, workerPid: entry.workerPid, dispatcherPid: entry.pid, instance: entry.instance,
           startedAt: entry.startedAt, branch: entry.branch } : null,
       });
       return delivered;
@@ -729,11 +737,11 @@ export class WorktreeManager {
         continue;
       }
       if (!["active", "review"].includes(entry.status)) continue;
-      if (entry.status === "active" && entry.pid === currentPid) {
+      if (entry.status === "active" && entry.instance === currentInstance) {
         logKill(path.join(path.dirname(this.statePath), "dispatcher-kills.jsonl"), {
           caller: "worktree-manager.reconcileStartup", target: entry.workerPid ? { pgid: entry.workerPid } : null, signal: null, delivered: false,
           reason: "skipped: active entry belongs to this dispatcher process",
-          entry: { id, status: entry.status, workerPid: entry.workerPid, dispatcherPid: entry.pid, startedAt: entry.startedAt, branch: entry.branch },
+          entry: { id, status: entry.status, workerPid: entry.workerPid, dispatcherPid: entry.pid, instance: entry.instance, startedAt: entry.startedAt, branch: entry.branch },
         });
         continue;
       }
