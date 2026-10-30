@@ -32,7 +32,9 @@ export async function GET(request: Request) {
       try {
         const results = searchE2EMovieCatalog(query);
 
-        return NextResponse.json({ results: page === 1 ? results : [], page, totalPages: 1 });
+        return NextResponse.json({
+          results: page === 1 ? results : [], page, totalPages: 1, totalResults: results.length,
+        });
       } catch (error) {
         return apiError(
           error instanceof Error ? error.message : 'Movie search is unavailable right now.',

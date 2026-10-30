@@ -26,6 +26,7 @@ interface SearchResponse {
   results?: NormalizedMovieSummary[];
   page?: number;
   totalPages?: number;
+  totalResults?: number;
   error?: string;
 }
 
@@ -59,7 +60,11 @@ export function getWatchlistSignInHref(
 }
 
 export function getResultCountLabel(resultCount: number): string {
-  return resultCount === 1 ? '1 match' : `${resultCount} matches`;
+  return resultCount === 1 ? '1 match' : `${resultCount.toLocaleString()} matches`;
+}
+
+function validTotalResults(value: number | undefined): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 export function shouldSyncSubmittedQuery(
@@ -106,6 +111,7 @@ export function SearchPageClient({
   const [results, setResults] = useState<NormalizedMovieSummary[]>([]);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [totalResults, setTotalResults] = useState<number | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [pagingError, setPagingError] = useState<string | null>(null);
   const pagingRequest = useRef<AbortController | null>(null);
@@ -149,6 +155,7 @@ export function SearchPageClient({
     pagingRequest.current = controller;
     setPage(1);
     setTotalPages(1);
+    setTotalResults(null);
     setIsLoadingMore(false);
     setPagingError(null);
 
@@ -185,6 +192,7 @@ export function SearchPageClient({
 
         if (!isCancelled) {
           setResults(Array.isArray(payload.results) ? payload.results : []);
+          setTotalResults(validTotalResults(payload.totalResults));
           setPage(payload.page ?? 1);
           setTotalPages(Math.min(payload.totalPages ?? 1, 500));
           setStatus('success');
@@ -192,6 +200,7 @@ export function SearchPageClient({
       } catch (error) {
         if (!isCancelled) {
           setResults([]);
+          setTotalResults(null);
           setErrorMessage(
             error instanceof Error
               ? error.message
@@ -245,6 +254,7 @@ export function SearchPageClient({
         });
         setPage(payload.page ?? page + 1);
         setTotalPages(Math.min(payload.totalPages ?? page + 1, 500));
+        setTotalResults(validTotalResults(payload.totalResults));
       }
     } catch {
       if (!controller.signal.aborted) {
@@ -299,7 +309,7 @@ export function SearchPageClient({
   }
 
   const hasSearched = submittedQuery.length > 0;
-  const resultCountLabel = getResultCountLabel(results.length);
+  const resultCountLabel = getResultCountLabel(Math.max(totalResults ?? 0, results.length));
   const selectedWatchlist =
     editableWatchlists.find((watchlist) => watchlist.id === selectedWatchlistId) ?? null;
 

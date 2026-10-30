@@ -38,6 +38,7 @@ describe('search page helpers', () => {
   it('renders result count labels for singular and plural result sets', () => {
     expect(getResultCountLabel(1)).toBe('1 match');
     expect(getResultCountLabel(2)).toBe('2 matches');
+    expect(getResultCountLabel(1234)).toBe((1234).toLocaleString() + ' matches');
   });
 
   it('describes watchlist save states without exposing implementation details', () => {
