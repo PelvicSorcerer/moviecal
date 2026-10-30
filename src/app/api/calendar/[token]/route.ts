@@ -2,6 +2,7 @@ import {
   createServerSupabaseServiceRoleClient,
 } from '../../../../lib/supabase/server';
 import { buildCalendarFeed } from '../../../../lib/calendar-feed';
+import { createCalendarFeedResponse } from '../../../../lib/calendar-feed-http';
 import { isE2ECalendarTokenActive } from '../../../../lib/e2e/calendar-token-state';
 import {
   E2E_USER,
@@ -31,7 +32,7 @@ function createWatchlistRepository() {
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ token: string }> },
 ) {
   const { token } = await context.params;
@@ -48,9 +49,7 @@ export async function GET(
       'END:VCALENDAR',
     ].join('\r\n');
 
-    return new Response(ics, {
-      headers: { 'Content-Type': 'text/calendar; charset=utf-8' },
-    });
+    return createCalendarFeedResponse(request, ics);
   }
 
   const repository = createCalendarTokenRepository();
@@ -73,7 +72,5 @@ export async function GET(
     userId: ownerId,
   });
 
-  return new Response(ics, {
-    headers: { 'Content-Type': 'text/calendar; charset=utf-8' },
-  });
+  return createCalendarFeedResponse(request, ics);
 }

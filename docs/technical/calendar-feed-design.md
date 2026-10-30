@@ -27,7 +27,8 @@ Event content
 - SUMMARY: movie title (include year optional)
 - DESCRIPTION: optional TMDb URL and overview snippet
 - DTSTART;VALUE=DATE: YYYYMMDD (all-day event)
-- DTSTAMP: use server timestamp when generating the feed
+- DTSTAMP: use the watchlist item's stable added-at timestamp, not the request time; event UIDs and release dates are unchanged.
+- Successful feeds include a strong quoted SHA-256 ETag of the UTF-8 body and `Cache-Control: private, max-age=0, must-revalidate`. `If-None-Match` supports lists, weak comparison, and `*`; a match returns a bodyless 304 with the same ETag and cache policy. Token validation still runs first, and invalid/unknown tokens retain the uniform 404 without an ETag.
 - STATUS: CONFIRMED
 
 Caching

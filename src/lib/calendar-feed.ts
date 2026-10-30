@@ -32,11 +32,10 @@ function dedupeWatchlistItemsByTmdbId(items: WatchlistItem[]): WatchlistItem[] {
 }
 
 export function buildCalendarFeed({
-  generatedAt = new Date(),
+  generatedAt,
   items,
   userId,
 }: BuildCalendarFeedOptions): string {
-  const dtstamp = formatCalendarTimestamp(generatedAt);
   const events = dedupeWatchlistItemsByTmdbId(items)
     .flatMap((item) => {
       const dtstart = formatCalendarDate(item.movie.releaseDate);
@@ -47,7 +46,7 @@ export function buildCalendarFeed({
 
       return [
         buildCalendarFeedEvent({
-          dtstamp,
+          dtstamp: formatCalendarTimestamp(generatedAt ?? new Date(item.addedAt)),
           dtstart,
           item,
           userId,
