@@ -61,7 +61,7 @@ function shellSegments(normalized) {
 // Consumers whose heredoc body is data: plain file writers and interpreters
 // fed from stdin (`python3 -`, `node -`). Anything else, notably a shell,
 // keeps its body under command classification.
-const HEREDOC_DATA_CONSUMERS = /^(?:cat|tee|python(?:3(?:\.\d+)?)?|node)$/;
+const HEREDOC_DATA_CONSUMERS = /^(?:cat|tee|apply_patch|python(?:3(?:\.\d+)?)?|node)$/;
 const INLINE_SCRIPT_FLAGS = { python: /^-c$/, node: /^(?:-e|-p|--eval|--print)$/ };
 const INLINE_SCRIPT_PLACEHOLDER = "__inline_script__";
 // A command word that can evaluate text as shell: shells and their wrappers,

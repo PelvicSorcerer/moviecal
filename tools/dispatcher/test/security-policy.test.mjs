@@ -122,6 +122,31 @@ describe("classifyAction", () => {
     expect(classifyAction(command).verdict).toBe("hard-deny");
   });
 
+  it.each([
+    "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: src/etag.ts\n+  const set = parseEtag(token)\n+  env.token = set\n*** End Patch\nEOF",
+    "bash -lc \"apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: src/etag.ts\n+// set the ETag token from the header\n*** End Patch\nEOF\"",
+  ])("does not treat an apply_patch heredoc body as a printenv/env/set command: %s", (command) => {
+    expect(classifyAction(command)).toEqual({ verdict: "allow", reason: null, category: null });
+  });
+
+  it.each([
+    "printenv | grep TOKEN",
+    "env | grep -i secret",
+    "set | grep PASSWORD",
+    "npm run verify && printenv API_KEY",
+    "sudo env | grep token",
+    "FOO=1 env | grep key",
+    "/usr/bin/env | grep token",
+    "`printenv` | grep token",
+    "if true; then env | grep key; fi",
+    "{ env; } | grep token",
+    "sudo -E env | grep token",
+    "xargs -n1 env | grep TOKEN",
+    "\\env | grep token",
+  ])("still hard-denies printing credential-shaped environment data: %s", (command) => {
+    expect(classifyAction(command).verdict).toBe("hard-deny");
+  });
+
   it("does not treat a later grep pattern as an echo of a credential", () => {
     expect(classifyAction('echo ---; grep -rln "ANTHROPIC_API_KEY\\|anthropic" tools/dispatcher/src')).toEqual({ verdict: "allow", reason: null, category: null });
     expect(classifyAction("echo $ANTHROPIC_API_KEY").verdict).toBe("hard-deny");
