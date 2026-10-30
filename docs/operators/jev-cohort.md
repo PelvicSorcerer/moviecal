@@ -161,6 +161,17 @@ A corrupt ledger, or a missing primary with a retained backup, requires human
 reconciliation: the cohort never restores an older backup that could discard
 an unresolved paid-request reservation. Keep all ledger evidence for review.
 
+### Provider HTTP errors (MOV-482)
+A non-2xx provider response records a bounded diagnostic (status, numeric or
+string code, error type, provider name, and a fixed-vocabulary message
+category) in `openrouter-attribution.jsonl`; message text, prompts and raw
+provider payloads are never stored. A 4xx other than 401/402/403 fails only
+that issue's attempt: its broker stops serving, the worker exits non-zero, the
+reservation is settled as `failed`, and any key usage the request incurred is
+counted as spend. The cohort stays active for the other issues. 5xx responses,
+timeouts, 401/402/403 and every spend, identity or attribution failure still
+stop the whole cohort.
+
 Fixed controls pin model, provider and effort and send `provider.only`,
 `allow_fallbacks: false` and `require_parameters: true`. The broker removes
 Codex's optional boolean `parallel_tool_calls` parameter because the
