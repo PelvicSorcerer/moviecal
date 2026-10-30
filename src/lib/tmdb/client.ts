@@ -247,12 +247,14 @@ async function fetchTMDbJsonUncached(
         throw lastError;
       }
 
+      // A missing response (network failure) is transient and gets the same backoff.
       const delay = retryDelay(response, attempt, random);
       if (delay >= deadline - Date.now()) {
         throw lastError;
       }
 
       await sleep(delay);
+      // The next iteration re-checks abort/deadline before issuing another fetch.
     }
 
     throw lastError;
