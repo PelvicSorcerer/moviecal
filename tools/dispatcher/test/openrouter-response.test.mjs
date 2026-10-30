@@ -240,6 +240,17 @@ describe("OpenRouter Responses evidence", () => {
     data.candidates = [{ model: "other/model", effort: "low" }];
     expect(observe([event]).routerCandidate).toMatchObject({ matched: 0, entries: [] });
   });
+  it("redacts identifier-shaped private debug text from attribution evidence", () => {
+    const event = completed(), metadata = event.response.openrouter_metadata;
+    metadata.pipeline[0].data.candidates[0].prompt = "private-debug-prompt-sentinel";
+    metadata.pipeline[0].data.reconsidered = { final_model: "google/fixture", final_effort: "low",
+      note: "private-debug-tool-sentinel" };
+    const result = observe([event], { proofDebug: true });
+    expect(result.error).toBeNull();
+    expect(result.routerCandidate.entries[0].prompt).toBe("[redacted]");
+    expect(result.routerReconsidered.found[0].data.note).toBe("[redacted]");
+    expect(JSON.stringify(result)).not.toMatch(/private-debug-(prompt|tool)-sentinel/);
+  });
   it("logs Jev's reconsidered step, redacted and bounded, without changing the guard", () => {
     const event = completed(), metadata = event.response.openrouter_metadata, data = metadata.pipeline[0].data;
     expect(observe([event]).routerReconsidered).toEqual({ stageNames: ["jev-router"], found: [] });
