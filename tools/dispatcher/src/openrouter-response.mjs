@@ -60,7 +60,7 @@ function reconsideredEvidence(pipeline, jev) {
   return { stageNames: stages.slice(0, 16).map((stage) => shown(stage?.name)), found };
 }
 
-export function createResponseObserver({ modelAliases = {}, proofDebug = false, deferCompletion = false, control = null, rejectFallback = false, provenModels = null } = {}) {
+export function createResponseObserver({ modelAliases = {}, proofDebug = false, deferCompletion = false, control = null, rejectFallback = false, provenModels = null, rewriteEvent = null } = {}) {
   const canonical = (model) => id(modelAliases[model]) || id(model);
   // A pinned alias must match exactly. Otherwise the endpoint may report the
   // resolved ID plus one strict `-YYYYMMDD` snapshot suffix, nothing else.
@@ -136,9 +136,12 @@ export function createResponseObserver({ modelAliases = {}, proofDebug = false, 
     const data = raw.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
     if (!data || data === "[DONE]") return forward(raw);
     try {
-      const value = JSON.parse(data); event(value);
+      const value = rewriteEvent ? rewriteEvent(JSON.parse(data)) : JSON.parse(data);
+      if (!value) return "";
+      event(value);
       if (value.type === "response.debug" || Object.hasOwn(value, "debug")) return "";
-      return forward(raw);
+      return forward(rewriteEvent && value.type === "response.output_item.done"
+        ? `data: ${JSON.stringify(value)}` : raw);
     } catch { fail("malformed-response"); return ""; }
   }
   function end() {

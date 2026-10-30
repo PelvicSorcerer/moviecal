@@ -82,7 +82,7 @@ export async function runDisposableProof({ proofDebug = true } = {}) {
   const invocation = workerInvocation("codex", "cheap");
   invocation.args.push("--skip-git-repo-check");
   const result = await spawnWorker({ invocation, cwd, logDir, issueIdentifier: "MOV-429",
-    brief: "Disposable proof: read answer.txt with exec_command, edit it from before to after using apply_patch through exec_command (a quoted shell heredoc), then run the exact command npm run verify. The unknown router model uses Codex's shell patch path; use only tools offered in this request. Report the result. Do not delegate, access the network or inspect credentials. Stop after verification.",
+    brief: "Disposable proof: read answer.txt with exec_command, edit it from before to after with the offered JSON apply_patch function (one patch string), then run the exact command npm run verify. Use only tools offered in this request. Report the result. Do not delegate, access the network or inspect credentials. Stop after verification.",
     securityContext: { mode: "implementation" }, signal: AbortSignal.timeout(180000),
     jev: { armId: "jev-hosted", policyHash: policy.hash, worker: "codex" }, providerTransport: transport,
     prepareCodexContainmentFn: (args) => prepareCodexContainment({ ...args,
@@ -94,8 +94,8 @@ export async function runDisposableProof({ proofDebug = true } = {}) {
   const transcript = fs.readFileSync(path.join(logDir, "stdout.log"), "utf8").split("\n").flatMap((line) => {
     try { return [JSON.parse(line)]; } catch { return []; }
   });
-  const editedWithTool = transcript.some((event) => event.type === "item.completed" && event.item?.type === "file_change"
-    && event.item.status === "completed");
+  const editedWithTool = transcript.some((event) => event.type === "item.completed" && event.item?.type === "command_execution"
+    && event.item.exit_code === 0 && /apply_patch/.test(event.item.command || ""));
   const nonAnthropic = records.some((record, index) => record.resolvedModel && !record.resolvedModel.startsWith("anthropic/")
     && record.toolCalls > 0 && records[index + 1]?.toolOutputs > 0 && !record.error && !records[index + 1].error);
   const toolLoopPassed = result.exitCode === 0 && verification.status === "passed" && nonAnthropic && editedWithTool
