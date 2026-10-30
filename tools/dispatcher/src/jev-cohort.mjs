@@ -309,6 +309,9 @@ export class JevCohortStore {
   reserve(requestId, issue, account, now = new Date()) {
     if (!ID.test(requestId) || !ISSUE.test(issue)) throw new Error("invalid request identity");
     const state = this.state(now);
+    // A sibling worker's unsettled request is transient: the caller waits and
+    // retries, and the cohort is neither stopped nor spent against meanwhile.
+    if (state.status === "pending-invoice" && this.get(issue)) throw Object.assign(new Error("another request is unresolved"), { code: "cohort-busy" });
     if (state.status !== "active" || !this.get(issue)) throw new Error(`cohort request stopped: ${state.status}`);
     const approval = readProtected(this.approvalPath, "cohort approval");
     const ledger = this.ledger.load();
@@ -341,8 +344,9 @@ export class JevCohortStore {
       throw new Error("unknown or excessive account exposure");
     }
     this.updateLedger((data) => {
-      if (data.stoppedReason || Object.values(data.requests || {}).some((r) => r.status === "pending"))
-        throw new Error("cohort stopped or another request is unresolved");
+      if (data.stoppedReason) throw new Error("cohort stopped");
+      if (Object.values(data.requests || {}).some((r) => r.status === "pending"))
+        throw Object.assign(new Error("another request is unresolved"), { code: "cohort-busy" });
       const fresh = this.state(now);
       if (fresh.status !== "active" || comparableUsd > fresh.remainingUsd)
         throw new Error("cohort budget changed during request reservation");

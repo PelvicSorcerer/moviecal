@@ -202,11 +202,19 @@ const server = http.createServer(async (request, response) => {
     observer.setRequestedEffort(requestedEffort);
     if (cohort) {
       try {
-        assertCohortBinding(cohort, config);
-        account = await readOpenRouterAccount(config.upstream, key, { fixture: config.fixture === true });
-        assertCohortBinding(cohort, config);
-        cohort.reserve(requestId, config.cohort.issue, account);
-        reserved = true;
+        // The cohort holds one unresolved request at a time. A sibling worker's
+        // request still being settled is not a budget failure: wait for it
+        // rather than stop the cohort and kill this worker's route.
+        for (const waitUntil = Date.now() + (config.fixture ? 1000 : 60000); ; ) {
+          assertCohortBinding(cohort, config);
+          account = await readOpenRouterAccount(config.upstream, key, { fixture: config.fixture === true });
+          assertCohortBinding(cohort, config);
+          try { cohort.reserve(requestId, config.cohort.issue, account); reserved = true; break; }
+          catch (error) {
+            if (error?.code !== "cohort-busy" || Date.now() >= waitUntil) throw error;
+            await new Promise((resolve) => setTimeout(resolve, config.fixture ? 50 : 2000));
+          }
+        }
       } catch {
         stopped = true;
         cohort.stop("account-preflight-or-budget-failed");

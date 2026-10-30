@@ -186,7 +186,7 @@ describe("reviewed production Jev cohort", () => {
     store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
     store.reserve("request-1", "MOV-10", account, NOW);
     expect(store.state(NOW).status).toBe("pending-invoice");
-    expect(() => store.reserve("request-2", "MOV-10", account, NOW)).toThrow(/stopped|pending/);
+    expect(() => store.reserve("request-2", "MOV-10", account, NOW)).toThrow(/unresolved/);
     const invoice = { invoiceId: "invoice-1", amountUsd: 0.2, model: "openai/fixture", provider: "OpenAI", effort: "medium", account };
     store.finish("request-1", invoice, NOW);
     store.finish("request-1", invoice, NOW);
@@ -394,6 +394,14 @@ describe("reviewed production Jev cohort", () => {
       const result = store.reconcileOrphans({ ...account, keyUsageUsd: 69.5 }, { apply: true, minAgeMs: 0, now: NOW, issue: "MOV-10" });
       expect(result).toMatchObject({ outcome: "stop", reason: "usage-exceeds-reservation" });
       expect(store.export().requests[0].status).toBe("pending");
+    });
+
+    it("reports a sibling's unresolved request as transient cohort-busy without stopping the cohort", () => {
+      store.admit(issue("MOV-11"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+      reserveOne();
+      expect(() => store.reserve("req-2", "MOV-11", account, NOW)).toThrow(expect.objectContaining({ code: "cohort-busy" }));
+      expect(store.export().stoppedReason ?? null).toBeNull();
+      expect(store.state(NOW).pending).toBe(1);
     });
 
     it("does nothing when nothing is pending", () => {
