@@ -10,6 +10,7 @@ import { createResponseObserver } from "./openrouter-response.mjs";
 import { parseRoutedRequests, writeRoutedRequestEvidence } from "./routed-request.mjs";
 import { JevCohortStore, assertCohortBinding } from "./jev-cohort.mjs";
 import { readOpenRouterAccount } from "./openrouter-account.mjs";
+import { offerJevPatch, createJevPatchTranslator } from "./jev-patch.mjs";
 
 const config = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const token = process.env.MOVIECAL_PROVIDER_BROKER_TOKEN;
@@ -63,7 +64,8 @@ const server = http.createServer(async (request, response) => {
   }
   const requestId = randomUUID(), started = Date.now();
   const observer = createResponseObserver({ modelAliases: config.modelAliases, proofDebug: config.proofDebug === true,
-    deferCompletion: true, rejectFallback: Boolean(cohort), provenModels, control: config.policy.side === "control" ? { model: config.policy.model,
+    deferCompletion: true, rewriteEvent: config.policy.side === "control" ? null : createJevPatchTranslator(config.cwd),
+    rejectFallback: Boolean(cohort), provenModels, control: config.policy.side === "control" ? { model: config.policy.model,
       provider: config.policy.provider, effort: config.policy.effort } : null });
   let recorded = false, toolOutputs = 0, requestedEffort = null, account = null, reserved = false;
   const record = (error = null) => {
@@ -116,7 +118,7 @@ const server = http.createServer(async (request, response) => {
       body += chunk;
       if (body.length > 16 * 1024 * 1024) throw new Error("request too large");
     }
-    const parsed = buildOpenRouterRequest(JSON.parse(body), config.policy);
+    const parsed = offerJevPatch(buildOpenRouterRequest(JSON.parse(body), config.policy), config.policy.side);
     observer.setTools(parsed.tools);
     if (config.proofDebug === true) parsed.debug = { echo_upstream_body: true };
     toolOutputs = Array.isArray(parsed.input) ? parsed.input.filter((item) => ["function_call_output", "custom_tool_call_output"].includes(item.type)).length : 0;

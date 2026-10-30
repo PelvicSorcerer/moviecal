@@ -1,5 +1,26 @@
 # Guarded Codex Jev cohort (MOV-437)
 
+## Patch calls from routed models (MOV-479)
+
+The MOV-476 run log records Codex rejecting the routed model's
+`apply_patch` call with `unsupported call: apply_patch`; the broker then
+stopped the route with `unsupported-tool-response`. Codex's unknown-model
+request did not offer its native custom-grammar patch tool, so the routed
+model's call could not reach the executor. The retained worker transcript
+does not include the rejected call's patch arguments.
+
+For the Jev arm, the protected broker now adds a standard JSON-schema
+`apply_patch` function with one required string field, `patch`. It converts
+the completed function call to Codex's offered `exec_command` and invokes
+the installed patch executable with a quoted heredoc inside the existing
+executor sandbox. Invalid arguments, incomplete patches, paths outside the
+worktree, and symlink escapes become clear failing tool results so the model
+can retry. The sandbox and post-run audit continue to protect repository
+policy paths. Fixed controls and Codex runs without Jev retain their native
+tool path. The fake-provider integration test covers a non-OpenAI-style call;
+the disposable OpenRouter proof prompt now requests this function directly.
+After this fix lands, MOV-476 can be re-queued under the same Jev policy.
+
 This production route is **off by default**. MOV-437 supplies the guarded
 execution and accounting boundary; MOV-431 owns the later owner/security
 decision, actual matched issue selection, account review, activation, paid

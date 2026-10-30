@@ -96,11 +96,13 @@ describe.skipIf(!available)("Codex sibling executor containment (MOV-401)", () =
       if (failure === "timeout") { requests++; return; }
       let command = commands[requests++]?.replaceAll?.("PROVIDER_PORT", String(provider.address().port))
         ?.replaceAll("FIXTURE_SOCKET_PATH", unixPath) ?? commands[requests - 1];
-      // Unknown router slugs use Codex's fallback tool set: shell patches,
-      // not the native custom apply_patch tool offered by known Codex models.
-      if (broker && command?.patch) command = `apply_patch <<'PATCH'\n${command.patch}\nPATCH`;
+      // Fixed controls keep the native path. The Jev fixture emits the
+      // ordinary JSON function call made by a non-OpenAI model.
+      if (broker && control && command?.patch) command = `apply_patch <<'PATCH'\n${command.patch}\nPATCH`;
       const events = command ? [{ type: "response.output_item.done", item: typeof command === "string" ? { type: "function_call", name: "exec_command", call_id: `call-${requests}`,
         arguments: JSON.stringify({ cmd: command, workdir: own, login: false, max_output_tokens: 2000 }) }
+        : broker && command.patch ? { type: "function_call", name: "apply_patch", call_id: `call-${requests}`,
+          arguments: JSON.stringify({ patch: command.patch }) }
         : { type: "custom_tool_call", name: command.code ? "exec" : "apply_patch", call_id: `call-${requests}`, input: command.code || command.patch } }]
         : [{ type: "response.output_item.done", item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Fixture complete." }] } }];
       events.push({ type: "response.completed", response: { id: `response-${requests}`, output: [],
