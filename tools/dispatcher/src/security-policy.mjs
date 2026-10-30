@@ -61,7 +61,7 @@ function shellSegments(normalized) {
 // Consumers whose heredoc body is data: plain file writers and interpreters
 // fed from stdin (`python3 -`, `node -`). Anything else, notably a shell,
 // keeps its body under command classification.
-const HEREDOC_DATA_CONSUMERS = /^(?:cat|tee|python(?:3(?:\.\d+)?)?|node)$/;
+const HEREDOC_DATA_CONSUMERS = /^(?:cat|tee|apply_patch|python(?:3(?:\.\d+)?)?|node)$/;
 const INLINE_SCRIPT_FLAGS = { python: /^-c$/, node: /^(?:-e|-p|--eval|--print)$/ };
 const INLINE_SCRIPT_PLACEHOLDER = "__inline_script__";
 // A command word that can evaluate text as shell: shells and their wrappers,
@@ -566,7 +566,8 @@ export const COMMAND_RULES = [
     category: "safety",
     credential: true,
   },
-  { re: /\b(?:printenv|env|set)\b[^\n]*(?:key|token|secret|password)/, reason: "prints credential-shaped environment data", category: "safety", credential: true },
+  // printenv/env/set must be a command word, not a word inside file content.
+  { re: /(?:^|[;&|\n(]\s*)(?:(?:sudo|command|exec|nohup|time|[a-z_][a-z0-9_]*=\S*) +)*(?:printenv|env|set)\b[^\n]*(?:key|token|secret|password)/, reason: "prints credential-shaped environment data", category: "safety", credential: true },
   { re: /\b(?:echo|printf)\b[^;|&\n]*(?:key|token|secret|password)/, reason: "prints credential-shaped data", category: "safety", credential: true },
   { re: /supabase_db_url_prod/, reason: "references the production database URL", category: "safety" },
   { re: /\bsupabase\b[^\n]*(?:db +(?:reset|push)|migration +up|link|functions +deploy|projects? +(?:create|delete))\b/, reason: "mutates a Supabase resource", category: "safety" },
