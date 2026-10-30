@@ -16,17 +16,18 @@ let deadline;
 // broker that dies mid-request leaves more than "exit 1" behind.
 const logDir = path.dirname(config.transportPath);
 const exits = {};
-// O_NOFOLLOW: never write through a symlink planted at an evidence path.
-const writeEvidence = (file, data, append) => {
-  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW
-    | (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC);
-  const fd = fs.openSync(file, flags, 0o600);
+// Exclusive-create a private temp file, then rename over the target: a file or
+// symlink planted at the evidence path is replaced, never written through.
+const writeEvidence = (file, data) => {
+  const temp = `${file}.${process.pid}.tmp`;
+  const fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
   try { fs.writeSync(fd, data); } finally { fs.closeSync(fd); }
+  fs.renameSync(temp, file);
 };
 const noteExit = (role, code, signal) => {
   exits[role] = { code: code ?? null, signal: signal || null, at: new Date().toISOString() };
   try {
-    writeEvidence(path.join(logDir, "process-exit.json"), JSON.stringify(exits, null, 2), false);
+    writeEvidence(path.join(logDir, "process-exit.json"), JSON.stringify(exits, null, 2));
   } catch { /* evidence is best effort */ }
 };
 const fail = (message) => {
