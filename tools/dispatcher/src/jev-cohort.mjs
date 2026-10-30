@@ -309,6 +309,9 @@ export class JevCohortStore {
   reserve(requestId, issue, account, now = new Date()) {
     if (!ID.test(requestId) || !ISSUE.test(issue)) throw new Error("invalid request identity");
     const state = this.state(now);
+    // A sibling worker's unsettled request is transient: the caller waits and
+    // retries, and the cohort is neither stopped nor spent against meanwhile.
+    if (state.status === "pending-invoice" && this.get(issue)) throw Object.assign(new Error("another request is unresolved"), { code: "cohort-busy" });
     if (state.status !== "active" || !this.get(issue)) throw new Error(`cohort request stopped: ${state.status}`);
     const approval = readProtected(this.approvalPath, "cohort approval");
     const ledger = this.ledger.load();
@@ -341,8 +344,9 @@ export class JevCohortStore {
       throw new Error("unknown or excessive account exposure");
     }
     this.updateLedger((data) => {
-      if (data.stoppedReason || Object.values(data.requests || {}).some((r) => r.status === "pending"))
-        throw new Error("cohort stopped or another request is unresolved");
+      if (data.stoppedReason) throw new Error("cohort stopped");
+      if (Object.values(data.requests || {}).some((r) => r.status === "pending"))
+        throw Object.assign(new Error("another request is unresolved"), { code: "cohort-busy" });
       const fresh = this.state(now);
       if (fresh.status !== "active" || comparableUsd > fresh.remainingUsd)
         throw new Error("cohort budget changed during request reservation");
@@ -379,14 +383,18 @@ export class JevCohortStore {
     if (this.state(now).spentUsd > 75) this.stop("all-in-ceiling", now);
   }
 
+  pendingFor(issue) {
+    return Object.values(this.ledger.load().requests || {}).filter((r) => r.status === "pending" && r.issue === issue);
+  }
+
   // Operator recovery for reservations a dead broker never settled (SIGKILL,
   // crash). Fail-closed: a row is settled only when the key's usage since the
   // last observation is attributable to exactly one request, or is zero.
   // Anything else stops the cohort for owner reconciliation. A request younger
   // than minAgeMs may still be in flight and is left alone.
-  reconcileOrphans(account, { apply = false, minAgeMs = 300000, now = new Date() } = {}) {
+  reconcileOrphans(account, { apply = false, minAgeMs = 300000, now = new Date(), issue = null, reason = "orphaned-request-reconciled" } = {}) {
     const plan = (ledger) => {
-      const pending = Object.values(ledger.requests || {}).filter((r) => r.status === "pending");
+      const pending = Object.values(ledger.requests || {}).filter((r) => r.status === "pending" && (!issue || r.issue === issue));
       if (!pending.length) return { outcome: "none", pending };
       if (pending.some((r) => now.getTime() - Date.parse(r.startedAt) < minAgeMs)) return { outcome: "too-recent", pending };
       if (!MONEY(account?.keyUsageUsd) || !MONEY(account?.keyRemainingUsd)) return { outcome: "stop", reason: "account-evidence-invalid", pending };
@@ -413,7 +421,7 @@ export class JevCohortStore {
         if (final.outcome !== "settle") return;
         for (const row of final.pending) {
           Object.assign(row, { status: "failed", amountUsd: row === final.pending[0] ? final.amountUsd : 0,
-            reason: "orphaned-request-reconciled", completedAt: now.toISOString() });
+            reason, completedAt: now.toISOString() });
         }
         data.observedKeyUsageUsd = Math.max(data.observedKeyUsageUsd || 0, account.keyUsageUsd);
         data.keyRemainingUsd = mergeKeyRemaining(data, account);

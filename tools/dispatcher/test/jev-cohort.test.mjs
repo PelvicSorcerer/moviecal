@@ -186,7 +186,7 @@ describe("reviewed production Jev cohort", () => {
     store.admit(issue("MOV-10"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
     store.reserve("request-1", "MOV-10", account, NOW);
     expect(store.state(NOW).status).toBe("pending-invoice");
-    expect(() => store.reserve("request-2", "MOV-10", account, NOW)).toThrow(/stopped|pending/);
+    expect(() => store.reserve("request-2", "MOV-10", account, NOW)).toThrow(/unresolved/);
     const invoice = { invoiceId: "invoice-1", amountUsd: 0.2, model: "openai/fixture", provider: "OpenAI", effort: "medium", account };
     store.finish("request-1", invoice, NOW);
     store.finish("request-1", invoice, NOW);
@@ -369,6 +369,38 @@ describe("reviewed production Jev cohort", () => {
       reserveOne();
       expect(store.reconcileOrphans(account, { apply: true, now: new Date(NOW.getTime() + 30000) }))
         .toMatchObject({ applied: false, outcome: "too-recent" });
+      expect(store.state(NOW).pending).toBe(1);
+    });
+
+    it("settles a just-started request of one issue when its worker has exited (minAge 0, issue-scoped)", () => {
+      reserveOne();
+      const result = store.reconcileOrphans({ ...account, keyUsageUsd: 1.05, keyRemainingUsd: 67.95 },
+        { apply: true, minAgeMs: 0, now: NOW, issue: "MOV-10", reason: "worker-exited-request-settled" });
+      expect(result).toMatchObject({ applied: true, outcome: "settle" });
+      expect(store.export().requests[0]).toMatchObject({ status: "failed", reason: "worker-exited-request-settled" });
+      expect(store.state(NOW)).toMatchObject({ pending: 0, stoppedReason: null });
+    });
+
+    it("ignores pending requests of other issues when scoped to an issue", () => {
+      reserveOne();
+      expect(store.reconcileOrphans(account, { apply: true, minAgeMs: 0, now: NOW, issue: "MOV-99" }))
+        .toMatchObject({ applied: false, outcome: "none" });
+      expect(store.pendingFor("MOV-10")).toHaveLength(1);
+      expect(store.pendingFor("MOV-99")).toHaveLength(0);
+    });
+
+    it("still stops rather than undercount when a worker-exit settlement sees usage above the reservation", () => {
+      reserveOne();
+      const result = store.reconcileOrphans({ ...account, keyUsageUsd: 69.5 }, { apply: true, minAgeMs: 0, now: NOW, issue: "MOV-10" });
+      expect(result).toMatchObject({ outcome: "stop", reason: "usage-exceeds-reservation" });
+      expect(store.export().requests[0].status).toBe("pending");
+    });
+
+    it("reports a sibling's unresolved request as transient cohort-busy without stopping the cohort", () => {
+      store.admit(issue("MOV-11"), { worker: "codex", tier: "default", effort: "medium", now: NOW });
+      reserveOne();
+      expect(() => store.reserve("req-2", "MOV-11", account, NOW)).toThrow(expect.objectContaining({ code: "cohort-busy" }));
+      expect(store.export().stoppedReason ?? null).toBeNull();
       expect(store.state(NOW).pending).toBe(1);
     });
 

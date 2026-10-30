@@ -427,6 +427,18 @@ describe("spawnWorker", () => {
     expect(killImpl).not.toHaveBeenCalled();
   });
 
+  it("records the terminating signal in the result and manifest", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
+    const logDir = path.join(tmpDir, "run");
+    const result = await spawnWorker({
+      invocation: { command: "sh", args: ["-c", "kill -KILL $$"] },
+      cwd: tmpDir, brief: "", logDir, spawnImpl: (...args) => spawn(...args), killGraceMs: 100,
+    });
+    expect(result.signal).toBe("SIGKILL");
+    const manifest = JSON.parse(fs.readFileSync(path.join(logDir, "manifest.json"), "utf8"));
+    expect(manifest).toMatchObject({ exitCode: null, signal: "SIGKILL" });
+  });
+
   it("reaps a real backgrounded child so it does not outlive the worker (MOV-137)", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
     const pidFile = path.join(tmpDir, "child.pid");

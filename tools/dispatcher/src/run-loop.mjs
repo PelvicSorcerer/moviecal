@@ -7,6 +7,7 @@
 // logic — which is the part worth getting right — is fully unit-testable
 // with fakes. See bin/dispatcher.mjs for how real dependencies are wired up.
 
+import { settleExitedCohortRequests } from "./jev-cohort-settle.mjs";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -723,6 +724,7 @@ async function dispatchIssue(issue, ctx) {
     workerTrialStore = null,
     jevTrialStore = null,
     jevCohortStore = null,
+    settleExitedCohortRequestsFn = settleExitedCohortRequests,
     resolveCohortTransportFn = () => null,
     resolveJevTransportFn = () => null,
     validateJevTransportFn = validateOpenRouterTransport,
@@ -1184,6 +1186,8 @@ async function dispatchIssue(issue, ctx) {
         jev,
         providerTransport,
         jevTrialStore: cohortSide ? null : jevTrialStore,
+        jevCohortStore: cohortSide ? jevCohortStore : null,
+        settleExitedCohortRequestsFn,
         now,
         logger,
         recordRouting,
@@ -1297,6 +1301,8 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     jev = null,
     providerTransport = null,
     jevTrialStore = null,
+    jevCohortStore = null,
+    settleExitedCohortRequestsFn = async () => null,
     captureWorkerUsageFn = () => null,
     readWorkerProgressFn = readWorkerProgress,
     hasWorkerProgressFn = hasWorkerProgress,
@@ -1567,7 +1573,23 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     watcherAbort.abort();
   }
 
-  recordOperatorStage("worker-settled", { workerExitCode: typeof spawnResult === "object" ? spawnResult?.exitCode ?? null : null });
+  recordOperatorStage("worker-settled", { workerExitCode: typeof spawnResult === "object" ? spawnResult?.exitCode ?? null : null,
+    workerSignal: typeof spawnResult === "object" ? spawnResult?.signal ?? null : null });
+
+  // The worker and its provider broker have both exited, so no request can
+  // still be in flight. Settle any reservation they left pending through the
+  // fail-closed reconcile path, or the cohort stays blocked as pending-invoice.
+  if (jevCohortStore && spawnResult && typeof spawnResult === "object") {
+    try {
+      const settled = await settleExitedCohortRequestsFn(jevCohortStore, issue.identifier);
+      if (settled && settled.outcome !== "none") {
+        recordOperatorStage("cohort-request-settlement", { outcome: settled.outcome, reason: settled.reason || null });
+        if (settled.outcome !== "settle") logger.error(`Jev cohort request for ${issue.identifier} not settled (${settled.outcome}${settled.reason ? `: ${settled.reason}` : ""}); run jev-cohort reconcile.`);
+      }
+    } catch (error) {
+      logger.error(`Could not settle Jev cohort requests for ${issue.identifier}: ${error.message}`);
+    }
+  }
 
   if (spawnResult === WORKER_STOPPED) {
     // MOV-158, `during-worker` boundary: a human took the issue away while the

@@ -12,6 +12,24 @@ let harness;
 let broker;
 let finished = false;
 let deadline;
+// Exit status of each child, kept beside the other run evidence so a worker or
+// broker that dies mid-request leaves more than "exit 1" behind.
+const logDir = path.dirname(config.transportPath);
+const exits = {};
+// Exclusive-create a private temp file, then rename over the target: a file or
+// symlink planted at the evidence path is replaced, never written through.
+const writeEvidence = (file, data) => {
+  const temp = `${file}.${process.pid}.tmp`;
+  const fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+  try { fs.writeSync(fd, data); } finally { fs.closeSync(fd); }
+  fs.renameSync(temp, file);
+};
+const noteExit = (role, code, signal) => {
+  exits[role] = { code: code ?? null, signal: signal || null, at: new Date().toISOString() };
+  try {
+    writeEvidence(path.join(logDir, "process-exit.json"), JSON.stringify(exits, null, 2));
+  } catch { /* evidence is best effort */ }
+};
 const fail = (message) => {
   if (finished) return;
   finished = true;
@@ -45,7 +63,7 @@ if (config.broker) {
     stdio: ["ignore", "pipe", "pipe"],
   });
   broker.on("error", () => fail("provider broker could not start"));
-  broker.on("exit", () => { if (!finished) fail("provider broker exited before worker completion"); });
+  broker.on("exit", (code, signal) => { noteExit("broker", code, signal); if (!finished) fail("provider broker exited before worker completion"); });
   const ready = await new Promise((resolve) => {
     const timer = setTimeout(() => resolve(false), 10000);
     let output = "";
@@ -68,7 +86,7 @@ executor = spawn("/usr/bin/sandbox-exec", ["-D", `EXECUTOR_LISTENER=localhost:${
   { cwd: config.cwd, env: executorEnv, stdio: ["ignore", "pipe", "pipe"] });
 executor.on("error", () => fail("executor could not start"));
 executor.stderr.pipe(process.stderr, { end: false });
-executor.on("exit", () => { if (!finished) fail("executor exited before worker completion"); });
+executor.on("exit", (code, signal) => { noteExit("executor", code, signal); if (!finished) fail("executor exited before worker completion"); });
 deadline = setTimeout(() => fail("executor startup timed out"), 10000);
 let startup = "";
 executor.stdout.on("data", (chunk) => {
@@ -97,7 +115,8 @@ executor.stdout.on("data", (chunk) => {
   process.stdin.pipe(harness.stdin);
   harness.stdout.pipe(process.stdout);
   harness.stderr.pipe(process.stderr);
-  harness.on("exit", (code) => {
+  harness.on("exit", (code, signal) => {
+    noteExit("worker", code, signal);
     if (finished) return;
     finished = true;
     executor.kill("SIGTERM");
