@@ -1,5 +1,7 @@
 # Guarded Codex Jev cohort (MOV-437)
 
+> **Archived (2026-10-31):** the trial concluded with a decision not to adopt Jev (MOV-433). This runbook stays accurate for a future rerun; see [the trial archive](../research/jev-router-trial/README.md) for results and re-enable steps.
+
 ## Patch calls from routed models (MOV-479)
 
 The MOV-476 run log records Codex rejecting the routed model's
