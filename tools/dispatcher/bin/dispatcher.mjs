@@ -135,6 +135,7 @@ import {
   selectCloudCandidates,
 } from "../src/dispatch-eligibility.mjs";
 import { DispatcherLock, WorktreeManager } from "../src/worktree-manager.mjs";
+import { resolveGcSchedule, shouldRunScheduledGc, formatGcLogRecord, appendGcLog } from "../src/gc-schedule.mjs";
 import { WorktreeRetention, formatResult } from "../src/worktree-retention.mjs";
 import { UsageLimitStore } from "../src/usage-limit.mjs";
 import { runOnce, runOperatorResume, DISPATCH_BREAKERS } from "../src/run-loop.mjs";
@@ -876,7 +877,7 @@ async function cmdGc(args = []) {
  * calls this between polls (MOV-447) -- a separate launchd `gc` job could
  * never acquire the daemon's lock.
  */
-async function runGcPass(parsed) {
+async function runGcPass(parsed, { onResults } = {}) {
   const auth = resolveLinearAuth();
   const linear = auth.mode === "app" ? new LinearClient({ appAuth: auth.appAuth })
     : auth.mode === "apiKey" ? new LinearClient({ apiKey: auth.apiKey }) : null;
@@ -908,6 +909,7 @@ async function runGcPass(parsed) {
     console.error(`worktree inventory failed: ${error.message}`);
     return 1;
   }
+  if (onResults) onResults(results);
   if (parsed.json) {
     console.log(JSON.stringify({ dryRun: parsed.dryRun, retentionDays: parsed.retentionDays, results }, null, 2));
   } else {
@@ -1563,7 +1565,26 @@ function buildAgentStreamClient() {
   return new AgentStreamClient(streamConfig);
 }
 
-const GC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+/** One scheduled gc pass; never throws, always leaves a worktree-gc.log record (MOV-491). */
+async function runScheduledGc() {
+  let parsed = { retentionDays: null };
+  let results = [];
+  let exitCode = 1;
+  let error = null;
+  try {
+    parsed = parseGcArgs([]);
+    exitCode = await runGcPass(parsed, { onResults: (r) => { results = r; } });
+    if (exitCode !== 0) console.error(`Scheduled worktree gc finished with exit code ${exitCode}`);
+  } catch (err) {
+    error = err.message;
+    console.error("Scheduled worktree gc failed (continuing to dispatch):", err.message);
+  }
+  try {
+    appendGcLog(logRoot(), formatGcLogRecord({ exitCode, retentionDays: parsed.retentionDays, results, error }));
+  } catch (err) {
+    console.error("Could not write worktree-gc.log:", err.message);
+  }
+}
 
 async function cmdRun({ once, intervalMs }) {
   const lock = new DispatcherLock(dispatcherLockPath());
@@ -1611,17 +1632,17 @@ async function cmdRun({ once, intervalMs }) {
   // eslint-disable-next-line no-constant-condition
   let firstPoll = true;
   let lastGcAt = 0;
+  const gcSchedule = resolveGcSchedule();
+  for (const warning of gcSchedule.warnings) console.error(`Scheduled worktree gc: ${warning}`);
+  if (!gcSchedule.enabled) console.log("Scheduled worktree gc is disabled (MOVIECAL_GC_SCHEDULED).");
   while (true) {
     // MOV-447: nothing else schedules gc. Run it in-process, between polls
-    // (the single dispatch slot is idle here), at most once per GC_INTERVAL_MS.
-    if (!firstPoll && Date.now() - lastGcAt >= GC_INTERVAL_MS) {
+    // (the single dispatch slot is idle here). MOV-491: MOVIECAL_GC_SCHEDULED
+    // and MOVIECAL_GC_HOUR control whether and when; every pass is appended to
+    // worktree-gc.log.
+    if (!firstPoll && shouldRunScheduledGc({ schedule: gcSchedule, now: new Date(), lastRunAt: lastGcAt })) {
       lastGcAt = Date.now();
-      try {
-        const code = await runGcPass(parseGcArgs([]));
-        if (code !== 0) console.error(`Scheduled worktree gc finished with exit code ${code}`);
-      } catch (err) {
-        console.error("Scheduled worktree gc failed (continuing to dispatch):", err.message);
-      }
+      await runScheduledGc();
     }
     try {
       const result = await cmdRunOnce({ repairLockHeld: lock.owned });
