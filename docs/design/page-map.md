@@ -4,7 +4,7 @@ Key pages and API routes in the current web app. The shared-list operations belo
 
 ## Frontend pages
 
-- `/` — landing page and app overview.
+- `/` — product overview with sign-in and movie search links for signed-out visitors; a welcome with direct Search, Watchlists, and Calendar settings links for signed-in visitors.
 - `/sign-in` — sign-in page or Supabase-powered auth entry point.
 - `/search` — movie search UI.
 - `/watchlist` — authenticated watchlist overview showing the signed-in user's personal watchlist plus shared watchlists they belong to. Personal item management stays on this page for now.
@@ -17,6 +17,7 @@ Key pages and API routes in the current web app. The shared-list operations belo
 - `/api/movies/search?q=` — server-side movie search proxy backed by TMDb.
 - `/api/watchlist` — authenticated `GET` and `POST` watchlist operations. `POST` may target a specific authorized watchlist with `watchlist_id`; otherwise it falls back to the actor's personal watchlist.
 - `/api/watchlist/shared` — authenticated `POST` endpoint for creating a shared watchlist owned by the current user.
+- `/api/watchlist/shared/[watchlistId]` — `PATCH` to rename a shared watchlist, available to the owner and any accepted editor.
 - `/api/watchlist/shared/[watchlistId]/invite` — owner-only `POST` to generate or rotate a secret invitation URL.
 - `/api/watchlist/invite/accept` — authenticated `POST` to accept a valid invitation as an editor.
 - `/api/watchlist/shared/[watchlistId]/members/[membershipId]` — owner-only `DELETE` to remove a member.

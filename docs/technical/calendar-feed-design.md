@@ -18,11 +18,17 @@ UID strategy
   - UID = SHA256(CONCAT(user_id, ":", tmdb_id)) + "@moviecal"
 - Do not derive UID from token value because token rotation should not force event identity churn.
 
+Subscription settings
+- `/settings/calendar` shows the authenticated owner's private URL with a Copy link button and live success/failure feedback. If clipboard access is unavailable, it selects the URL for manual copying.
+- Brief Apple Calendar, Google Calendar, and Outlook instructions explain subscription rather than one-time file import. Apple Calendar can open the same URL with the `webcal:` scheme.
+- Rotation requires inline confirmation that existing subscriptions stop updating. Cancel does not submit the rotation action. After confirming, subscribe again with the new URL; the old URL returns HTTP 404.
+
 Event content
 - SUMMARY: movie title (include year optional)
 - DESCRIPTION: optional TMDb URL and overview snippet
 - DTSTART;VALUE=DATE: YYYYMMDD (all-day event)
-- DTSTAMP: use server timestamp when generating the feed
+- DTSTAMP: use the watchlist item's stable added-at timestamp, not the request time; event UIDs and release dates are unchanged.
+- Successful feeds include a strong quoted SHA-256 ETag of the UTF-8 body and `Cache-Control: private, max-age=0, must-revalidate`. `If-None-Match` supports lists, weak comparison, and `*`; a match returns a bodyless 304 with the same ETag and cache policy. Token validation still runs first, and invalid/unknown tokens retain the uniform 404 without an ETag.
 - STATUS: CONFIRMED
 
 Caching

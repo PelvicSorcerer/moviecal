@@ -55,6 +55,32 @@ function mockClient(result: { data: unknown; error: PostgrestError | null }) {
   } as unknown as ServerSupabaseClient;
 }
 
+describe('createItemsAggregate — findMovieByTmdbId', () => {
+  it.each([VALID_MOVIE_ROW, null])('returns the stored row or null: %j', async (data) => {
+    const chain = makeChain({ data, error: null });
+    const adminClient = { from: vi.fn(() => chain) } as unknown as ServerSupabaseClient;
+    const { findMovieByTmdbId } = createItemsAggregate({
+      adminClient, userClient: adminClient,
+    });
+
+    await expect(findMovieByTmdbId(603)).resolves.toEqual(data);
+    expect(adminClient.from).toHaveBeenCalledWith('movies');
+    expect(chain.eq).toHaveBeenCalledWith('tmdb_id', 603);
+    expect(chain.maybeSingle).toHaveBeenCalledOnce();
+  });
+
+  it('propagates read errors instead of treating them as missing movies', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const adminClient = mockClient({ data: null, error: SUPABASE_ERROR });
+    const { findMovieByTmdbId } = createItemsAggregate({
+      adminClient, userClient: adminClient,
+    });
+
+    await expect(findMovieByTmdbId(603)).rejects.toThrow(WatchlistDataError);
+    consoleSpy.mockRestore();
+  });
+});
+
 describe('createItemsAggregate — listItemsForWatchlist', () => {
   it('returns an array of mapped WatchlistRows', async () => {
     const adminClient = mockClient({ data: [VALID_WATCHLIST_ROW], error: null });

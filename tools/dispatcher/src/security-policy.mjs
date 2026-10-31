@@ -44,6 +44,10 @@ function canonicalize(text, { lines = false } = {}) {
     .toLowerCase();
 }
 
+function withoutMemberAccess(text) {
+  return text.replace(/(?<=[\w$)\]])\.(?:set(?=\()|env(?=[.[]))/g, ".member");
+}
+
 function shellSegments(normalized) {
   return normalized.split(/\s*(?:&&|\|\||[;|&\n])\s*/);
 }
@@ -61,7 +65,7 @@ function shellSegments(normalized) {
 // Consumers whose heredoc body is data: plain file writers and interpreters
 // fed from stdin (`python3 -`, `node -`). Anything else, notably a shell,
 // keeps its body under command classification.
-const HEREDOC_DATA_CONSUMERS = /^(?:cat|tee|python(?:3(?:\.\d+)?)?|node)$/;
+const HEREDOC_DATA_CONSUMERS = /^(?:cat|tee|apply_patch|python(?:3(?:\.\d+)?)?|node)$/;
 const INLINE_SCRIPT_FLAGS = { python: /^-c$/, node: /^(?:-e|-p|--eval|--print)$/ };
 const INLINE_SCRIPT_PLACEHOLDER = "__inline_script__";
 // A command word that can evaluate text as shell: shells and their wrappers,
@@ -341,6 +345,31 @@ export function shellView(text) {
   return { exact, command: render(command), script: render(script) };
 }
 
+// Read a double-quoted word from `start` and return the text the wrapped shell
+// receives, or null when the outer shell would run something while expanding
+// it. Backslash escapes are resolved the way the shell does; a command
+// substitution, arithmetic or backtick expansion, or a zsh `${(…)}` flag
+// (which can evaluate its value) makes the word unreadable. A plain `$name` or
+// `${name}` only splices in a value, so it stays visible to classification.
+function readDoubleQuoted(argument, start) {
+  let text = "";
+  for (let pos = start + 1; pos < argument.length; ) {
+    const ch = argument[pos];
+    const next = argument[pos + 1];
+    if (ch === '"') return { text, end: pos + 1 };
+    if (ch === "`" || (ch === "$" && (next === "(" || (next === "{" && argument[pos + 2] === "(")))) return null;
+    if (ch === "\\" && next !== undefined) {
+      if (next === "\n") text += "";
+      else text += /["\\$`]/.test(next) ? next : ch + next;
+      pos += 2;
+    } else {
+      text += ch;
+      pos += 1;
+    }
+  }
+  return null;
+}
+
 // Codex reports every command as `bash -lc '<script>'`. When the wrapper's
 // argument is one plainly quoted word, classify the script it runs; any
 // other shape returns null and is classified as written.
@@ -351,12 +380,15 @@ function unwrapShellWrapper(text) {
   let inner = "";
   for (let pos = 0; pos < argument.length; ) {
     const ch = argument[pos];
-    if (ch === "'" || ch === '"') {
+    if (ch === '"') {
+      const quoted = readDoubleQuoted(argument, pos);
+      if (quoted === null) return null;
+      inner += quoted.text;
+      pos = quoted.end;
+    } else if (ch === "'") {
       const close = argument.indexOf(ch, pos + 1);
       if (close === -1) return null;
-      const part = argument.slice(pos + 1, close);
-      if (ch === '"' && /[$`\\]/.test(part)) return null;
-      inner += part;
+      inner += argument.slice(pos + 1, close);
       pos = close + 1;
     } else if (ch === "\\" && pos + 1 < argument.length && argument[pos + 1] !== "\n") {
       inner += argument[pos + 1];
@@ -566,7 +598,9 @@ export const COMMAND_RULES = [
     category: "safety",
     credential: true,
   },
-  { re: /\b(?:printenv|env|set)\b[^\n]*(?:key|token|secret|password)/, reason: "prints credential-shaped environment data", category: "safety", credential: true },
+  // A method or property access (`headers.set(`, `process.env.`) in code is
+  // not the command; every other spelling of the word still counts.
+  { test: (normalized) => /\b(?:printenv|env|set)\b[^\n]*(?:key|token|secret|password)/.test(withoutMemberAccess(normalized)), reason: "prints credential-shaped environment data", category: "safety", credential: true },
   { re: /\b(?:echo|printf)\b[^;|&\n]*(?:key|token|secret|password)/, reason: "prints credential-shaped data", category: "safety", credential: true },
   { re: /supabase_db_url_prod/, reason: "references the production database URL", category: "safety" },
   { re: /\bsupabase\b[^\n]*(?:db +(?:reset|push)|migration +up|link|functions +deploy|projects? +(?:create|delete))\b/, reason: "mutates a Supabase resource", category: "safety" },

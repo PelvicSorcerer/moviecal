@@ -80,6 +80,28 @@ describe("classifyUsageLimitFailure", () => {
     expect(classifyUsageLimitFailure({ exitCode: 1, logTail, now: NOW })).toBeNull();
   });
 
+  it("does not fire when the phrase is only quoted inside tool output (doc-quote regression)", () => {
+    // MOV-443..446: a worker ran `rg` over docs/operators and the output quoted
+    // usage-limit prose. That is not a provider refusal.
+    const docQuote = "docs/operators/local-execution.md:120: a provider usage limit message says the session limit is reached and resets 3pm";
+    const logTail = [
+      JSON.stringify({ type: "item.completed", item: { type: "command_execution", command: "rg usage docs", aggregated_output: docQuote, exit_code: 0 } }),
+      JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: docQuote }] } }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: docQuote }] } }),
+    ].join("\n");
+    expect(classifyUsageLimitFailure({ exitCode: 1, logTail, now: NOW })).toBeNull();
+  });
+
+  it.each([
+    ["a Claude error result", JSON.stringify({ type: "result", is_error: true, result: "Claude AI usage limit reached · reset|1789000000" })],
+    ["a Codex turn.failed event", JSON.stringify({ type: "turn.failed", error: { message: "usage limit reached. resets at 1789000000" } })],
+  ])("still recognizes %s", (_label, logTail) => {
+    expect(classifyUsageLimitFailure({ exitCode: 1, logTail, now: NOW })).toMatchObject({
+      category: PROVIDER_USAGE_LIMIT,
+      resetAt: new Date(1789000000 * 1000).toISOString(),
+    });
+  });
+
   it("never claims a zero exit, whatever the log says", () => {
     expect(
       classifyUsageLimitFailure({ exitCode: 0, logTail: "session limit reached · resets 3pm", now: NOW }),

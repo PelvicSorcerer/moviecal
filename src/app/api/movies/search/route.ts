@@ -5,7 +5,7 @@ import {
   searchE2EMovieCatalog,
 } from '../../../../lib/e2e/fixtures';
 import {
-  searchMovies,
+  searchMoviesPage,
   TMDbEnvironmentError,
   TMDbRequestError,
 } from '../../../../lib/tmdb/client';
@@ -19,12 +19,22 @@ export async function GET(request: Request) {
     return apiError('Search query "q" is required.', 400);
   }
 
+  const rawPage = searchParams.get('page');
+  const page = rawPage === null ? 1 : Number(rawPage);
+
+  if ((rawPage !== null && !/^\d+$/.test(rawPage))
+    || !Number.isInteger(page) || page < 1 || page > 500) {
+    return apiError('Page must be an integer between 1 and 500.', 400);
+  }
+
   try {
     if (isE2ETestModeEnabled()) {
       try {
         const results = searchE2EMovieCatalog(query);
 
-        return NextResponse.json({ results });
+        return NextResponse.json({
+          results: page === 1 ? results : [], page, totalPages: 1, totalResults: results.length,
+        });
       } catch (error) {
         return apiError(
           error instanceof Error ? error.message : 'Movie search is unavailable right now.',
@@ -33,9 +43,9 @@ export async function GET(request: Request) {
       }
     }
 
-    const results = await searchMovies(query);
+    const results = await searchMoviesPage(query, page);
 
-    return NextResponse.json({ results });
+    return NextResponse.json(results);
   } catch (error) {
     if (error instanceof TMDbEnvironmentError) {
       return apiError('Movie search is unavailable until TMDb is configured.', 503);

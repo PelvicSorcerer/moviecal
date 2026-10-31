@@ -233,6 +233,9 @@ describe('calendar watchlist aggregation', () => {
       async listMembersForWatchlist() {
         return [];
       },
+      async findMovieByTmdbId() {
+        return null;
+      },
       async listTrackedMovies() {
         return [];
       },

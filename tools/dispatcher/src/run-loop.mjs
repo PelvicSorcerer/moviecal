@@ -7,11 +7,12 @@
 // logic — which is the part worth getting right — is fully unit-testable
 // with fakes. See bin/dispatcher.mjs for how real dependencies are wired up.
 
+import { settleExitedCohortRequests } from "./jev-cohort-settle.mjs";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { evaluatePreflight, worktreeName, branchName, resolveWorkflowEditAuthorization, IOS_COMPANION_APP_PROJECT } from "./preflight.mjs";
-import { confirmRoutingUnchanged, resolveRouting, resolveDispatchWorker, workerProbeWinners, workerInvocation } from "./worker-routing.mjs";
+import { confirmRoutingUnchanged, resolveRouting, resolveDispatchWorker, workerProbeWinners, workerInvocation, codexReasoningEffortForTier } from "./worker-routing.mjs";
 import { confirmStillClaimable, evaluateLocalDispatch } from "./dispatch-eligibility.mjs";
 import { generateBrief } from "./brief.mjs";
 import { collectRepositoryContext } from "./repository-context.mjs";
@@ -24,6 +25,9 @@ import { classifyUsageLimitFailure, decideUsageLimitOutcome, MAX_USAGE_LIMIT_DEF
 import { admitBudgetContinuation, admitUsageLimitResume } from "./usage-limit-resume.mjs";
 import { WORKERS as WORKER_POOLS } from "./worker-cooldown.mjs";
 import { trialAttribution } from "./worker-trial.mjs";
+import { jevAttribution, isEligibleForJevArm } from "./jev-trial.mjs";
+import { policyDigest } from "./jev-cohort.mjs";
+import { validateOpenRouterTransport } from "./openrouter-transport.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
 import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-signals.mjs";
@@ -360,6 +364,16 @@ export async function runOperatorResume(issue, inspection, ctx) {
   const stopController = new StopController();
   let result;
   try {
+    let providerTransport = null;
+    if (entry.jev?.side) {
+      const decision = ctx.jevCohortStore?.preview(issue, { worker: inspection.routing.worker,
+        tier: inspection.routing.model, effort: codexReasoningEffortForTier(inspection.routing.model), now: ctx.now?.() || new Date() });
+      if (!decision?.admitted) throw new Error(`operator resume cohort refused: ${decision?.reason || "missing store"}`);
+      const record = ctx.jevCohortStore?.get(issue.identifier);
+      providerTransport = ctx.resolveCohortTransportFn?.(record);
+      validateOpenRouterTransport(providerTransport, { cwd: entry.path });
+      if (record?.policyHash !== entry.jev.policyHash) throw new Error("operator resume cohort binding changed");
+    }
     await publisher.begin({ existing: ctx.readAgentSessionFn?.(issue.identifier) || null });
     registerActiveAttempt(issue.id, { identifier: issue.identifier, controller: stopController, publisher });
     result = await runClaimedAttempt({
@@ -369,6 +383,7 @@ export async function runOperatorResume(issue, inspection, ctx) {
       operatorResume: { attemptId, prior: inspection.prior, changedPaths: inspection.changedPaths,
         unpublishedCommits: inspection.unpublishedCommits },
       ctx: { ...ctx, workerMode: "implementation", trial: entry.trial || null,
+        jev: entry.jev || null, providerTransport,
         iosSimLeaseId: iosLease.lease?.id || null,
         now: ctx.now || (() => new Date()) },
     });
@@ -707,6 +722,12 @@ async function dispatchIssue(issue, ctx) {
     resolvedRoute = null,
     writeRoutingEvidenceFn = () => {},
     workerTrialStore = null,
+    jevTrialStore = null,
+    jevCohortStore = null,
+    settleExitedCohortRequestsFn = settleExitedCohortRequests,
+    resolveCohortTransportFn = () => null,
+    resolveJevTransportFn = () => null,
+    validateJevTransportFn = validateOpenRouterTransport,
     captureWorkerUsageFn = () => null,
   } = ctx;
 
@@ -898,6 +919,71 @@ async function dispatchIssue(issue, ctx) {
   // resumes and continuations of a trial-assigned issue stay attributed after
   // the trial ends. It never selects a worker -- routing.worker is already set.
   let trial = resolvedTrial && !resolvedTrial.pending ? trialAttribution(workerTrialStore?.get(issue.identifier)) : null;
+  // MOV-427: a resume, continuation or repair always keeps whatever arm
+  // (or no arm) the issue was originally admitted to -- this read never
+  // re-evaluates eligibility, the cap, expiry or spend. Only a fresh claim
+  // (the `else` branch below) can admit a new assignment. Admission here
+  // never selects a worker/model/provider: it is bookkeeping ahead of the
+  // live router transport (MOV-428/429), so a missed or refused admission
+  // never blocks or changes ordinary worker:*/model:* dispatch.
+  let jev = jevTrialStore ? jevAttribution(jevTrialStore.get(issue.identifier)) : null;
+  if (jev) routingEvidence.selected.jev = jev;
+  let providerTransport = null;
+  // A preselected production issue has only one route. Refusal, stop or an
+  // expired approval never turns a routed/control assignment into a normal
+  // subscription attempt. The record is durable across every attempt kind.
+  let cohortSide = null;
+  let cohortRecord = null;
+  try {
+    cohortRecord = jevCohortStore?.get(issue.identifier) || null;
+    cohortSide = cohortRecord?.side || jevCohortStore?.side(issue.identifier) || null;
+  } catch {
+    if (jevCohortStore?.state(now()).status === "invalid" && routing.worker === "codex") cohortSide = "invalid";
+  }
+  if (cohortSide) {
+    try {
+      if (jev || routing.worker !== "codex") throw new Error("cohort worker or legacy arm conflict");
+      if (!cohortRecord) {
+        const policy = jevCohortStore.policy(now());
+        const preview = { issue: issue.identifier, side: cohortSide, policyHash: policyDigest(policy) };
+        const previewTransport = resolveCohortTransportFn(preview, { preview: true });
+        validateJevTransportFn(previewTransport, { cwd: candidatePath, cohortAdmissionPreview: true });
+      }
+      const admission = jevCohortStore.admit(issue, { worker: routing.worker, tier: routing.model,
+        effort: codexReasoningEffortForTier(routing.model), now: now() });
+      if (!admission.admitted) throw new Error(admission.reason);
+      cohortRecord = admission.record;
+      jev = { trialId: cohortRecord.trialId, armId: cohortRecord.armId, policyHash: cohortRecord.policyHash,
+        worker: "codex", side: cohortRecord.side, assignedAt: cohortRecord.assignedAt,
+        routingReason: `preselected ${cohortRecord.side} cohort` };
+      routingEvidence.selected.jev = jev;
+      providerTransport = resolveCohortTransportFn(cohortRecord);
+      validateJevTransportFn(providerTransport, { cwd: candidatePath });
+    } catch (error) {
+      recordRouting("deferred-jev-cohort");
+      await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
+      await linearClient.addComment(issue.id, `**Jev cohort refused:** ${error.message}; no subscription or provider fallback.`);
+      return { issue: issue.identifier, outcome: "needs-human", reason: "cohort route unavailable" };
+    }
+  }
+  const armState = jevTrialStore?.state(now());
+  // Resolve and validate the guarded route BEFORE consuming a fresh Codex
+  // admission. Production has no resolver/approved hash until MOV-431.
+  const codexAdmission = !cohortSide && !jev && armState?.status === "active" && armState.allowedWorker === "codex"
+    && isEligibleForJevArm(issue).eligible;
+  if (!cohortSide && (jev?.worker === "codex" || codexAdmission)) {
+    try {
+      if (routing.worker !== "codex") throw new Error("recorded Jev worker binding does not match routing");
+      providerTransport = resolveJevTransportFn({ issue, assignment: jev, state: armState });
+      validateJevTransportFn(providerTransport, { cwd: candidatePath });
+      if (providerTransport.policy.hash !== (jev?.policyHash || armState.policyHash)) throw new Error("Jev transport policy does not match admission");
+    } catch {
+      recordRouting("deferred-jev-transport");
+      await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
+      await linearClient.addComment(issue.id, "**Jev route deferred:** missing, invalid or mismatched reviewed Codex transport; no admission consumed and no subscription/provider fallback.");
+      return { issue: issue.identifier, outcome: "needs-human", reason: "Jev transport unavailable or binding mismatch" };
+    }
+  }
   if (resumePlan) {
     const admission = admitUsageLimitResume({
       issueId: issue.identifier,
@@ -993,9 +1079,22 @@ async function dispatchIssue(issue, ctx) {
       }
       trial = trialAttribution(admission.record);
     }
+    // MOV-427: same dispatcher-lock admission point as the worker trial
+    // above, but non-blocking -- an ineligible issue, an inactive/exhausted/
+    // spend-exhausted/invalid arm, or no store at all simply leaves `jev`
+    // null and the issue dispatches under its ordinary worker:*/model:*
+    // route unchanged. There is no live provider to fail closed against yet.
+    if (jevTrialStore && !cohortSide) {
+      const jevAdmission = jevTrialStore.admit(issue, { tier: routing.model, worker: routing.worker, now: now() });
+      if (jevAdmission.admitted) {
+        jev = jevAttribution(jevAdmission.record);
+        routingEvidence.selected.jev = jev;
+      }
+    }
     entry = worktreeManager.create({
       id: issue.identifier,
       trial,
+      jev,
       name,
       branch,
       worker: routing.worker,
@@ -1084,6 +1183,11 @@ async function dispatchIssue(issue, ctx) {
         diagnoseFailureFn,
         steeringEnabled,
         trial,
+        jev,
+        providerTransport,
+        jevTrialStore: cohortSide ? null : jevTrialStore,
+        jevCohortStore: cohortSide ? jevCohortStore : null,
+        settleExitedCohortRequestsFn,
         now,
         logger,
         recordRouting,
@@ -1194,6 +1298,11 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     logger,
     iosSimLeaseId = null,
     trial = null,
+    jev = null,
+    providerTransport = null,
+    jevTrialStore = null,
+    jevCohortStore = null,
+    settleExitedCohortRequestsFn = async () => null,
     captureWorkerUsageFn = () => null,
     readWorkerProgressFn = readWorkerProgress,
     hasWorkerProgressFn = hasWorkerProgress,
@@ -1360,6 +1469,9 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
       },
       iosSimLeaseId,
       trial,
+      jev,
+      providerTransport,
+      issueIdentifier: issue.identifier,
       dependencyInstall,
       // MOV-386: warn as soon as the worker's own init event shows a
       // permission mode or tool set other than the one requested. The usage
@@ -1390,10 +1502,18 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
       ...usageContextFromInvocation(invocation, routing.worker),
       tier: routing.model,
       trial,
+      jev,
       observedTurns,
       terminationReason,
       exitOutcome: result.exitCode === 0 ? "exited-0" : `exited-${result.exitCode}`,
-    })).catch((error) => { logger.error(`Could not capture usage for ${issue.identifier}: ${error.message}`); return null; });
+    })).then((summary) => {
+      for (const request of summary?.routedRequests || []) {
+        if (jev && request.invoiceId && request.billedUsd !== null) jevTrialStore?.recordSpend({
+          requestId: request.invoiceId, issue: issue.identifier, amountUsd: request.billedUsd, trialId: jev.trialId,
+        }, now());
+      }
+      return summary;
+    }).catch((error) => { logger.error(`Could not capture usage for ${issue.identifier}: ${error.message}`); return null; });
     if (steeringActive) {
       // A single-slot queue: `agent-stream-client.mjs` only ever calls
       // `queuePrompt`, never the real writeTurn directly, so a prompt can
@@ -1453,7 +1573,23 @@ async function runClaimedAttempt({ issue, entry, branch, routing, invocation, tu
     watcherAbort.abort();
   }
 
-  recordOperatorStage("worker-settled", { workerExitCode: typeof spawnResult === "object" ? spawnResult?.exitCode ?? null : null });
+  recordOperatorStage("worker-settled", { workerExitCode: typeof spawnResult === "object" ? spawnResult?.exitCode ?? null : null,
+    workerSignal: typeof spawnResult === "object" ? spawnResult?.signal ?? null : null });
+
+  // The worker and its provider broker have both exited, so no request can
+  // still be in flight. Settle any reservation they left pending through the
+  // fail-closed reconcile path, or the cohort stays blocked as pending-invoice.
+  if (jevCohortStore && spawnResult && typeof spawnResult === "object") {
+    try {
+      const settled = await settleExitedCohortRequestsFn(jevCohortStore, issue.identifier);
+      if (settled && settled.outcome !== "none") {
+        recordOperatorStage("cohort-request-settlement", { outcome: settled.outcome, reason: settled.reason || null });
+        if (settled.outcome !== "settle") logger.error(`Jev cohort request for ${issue.identifier} not settled (${settled.outcome}${settled.reason ? `: ${settled.reason}` : ""}); run jev-cohort reconcile.`);
+      }
+    } catch (error) {
+      logger.error(`Could not settle Jev cohort requests for ${issue.identifier}: ${error.message}`);
+    }
+  }
 
   if (spawnResult === WORKER_STOPPED) {
     // MOV-158, `during-worker` boundary: a human took the issue away while the

@@ -402,6 +402,88 @@ test('owners cannot leave their own shared watchlist', async ({
   ).toBeVisible();
 });
 
+test('an accepted editor can rename the shared watchlist and the owner sees it after reload', async ({
+  page,
+  seedAuthenticatedSession,
+}) => {
+  const sharedWatchlist = createE2ESharedWatchlist('Friday movie night', 0);
+
+  await seedAuthenticatedSession({
+    sharedState: {
+      inviteLinks: [],
+      memberships: [
+        createE2EWatchlistMember({
+          userId: 'e2e-collaborator-user',
+          watchlistId: sharedWatchlist.id,
+        }),
+      ],
+    },
+    user: 'collaborator',
+    watchlists: [
+      {
+        canEdit: true,
+        id: 'e2e-personal-watchlist-e2e-collaborator-user',
+        kind: 'personal',
+        name: 'Owner watchlist',
+        ownerUserId: 'e2e-collaborator-user',
+      },
+      sharedWatchlist,
+    ],
+  });
+  await page.goto(`/watchlist/${sharedWatchlist.id}`);
+
+  await page.getByRole('button', { name: 'Rename' }).click();
+  await page.getByLabel('Watchlist name').fill('Saturday movie night');
+  await page.getByRole('button', { name: 'Save name' }).click();
+
+  await expect(
+    page.getByText('Renamed watchlist to Saturday movie night.'),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Saturday movie night' }),
+  ).toBeVisible();
+
+  await page.reload();
+
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Saturday movie night' }),
+  ).toBeVisible();
+});
+
+test('a blank rename is rejected and leaves the shared watchlist name unchanged', async ({
+  page,
+  seedAuthenticatedSession,
+}) => {
+  const sharedWatchlist = createE2ESharedWatchlist('Friday movie night', 0);
+
+  await seedAuthenticatedSession({
+    sharedState: {
+      inviteLinks: [],
+      memberships: [],
+    },
+    user: 'owner',
+    watchlists: [
+      {
+        id: 'e2e-personal-watchlist-e2e-user',
+        kind: 'personal',
+        name: 'My watchlist',
+        ownerUserId: 'e2e-user',
+      },
+      sharedWatchlist,
+    ],
+  });
+  await page.goto(`/watchlist/${sharedWatchlist.id}`);
+
+  await page.getByRole('button', { name: 'Rename' }).click();
+  await page.getByLabel('Watchlist name').fill('   ');
+  await page.getByRole('button', { name: 'Save name' }).click();
+
+  await expect(page.getByText('Watchlist update failed')).toBeVisible();
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Friday movie night' }),
+  ).toBeVisible();
+});
+
 test('authenticated users can open calendar settings', async ({
   page,
   seedAuthenticatedSession,

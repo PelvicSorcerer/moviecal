@@ -136,10 +136,40 @@ preflight/routing failure handling.
 Bounded routing evidence is appended to `routing-decisions.jsonl` beside the
 issue's run logs. It records poll and refreshed routing inputs, the selected
 worker/tier/model/effort/budget and selection reason, and `unchanged`, `deferred`,
-or `spawn-requested` decisions. `spawn-requested` records the invocation the
-dispatcher handed to the worker adapter; the transcript confirms whether it
-started. Evidence uses known routing labels and bounded model identifiers,
-never descriptions, prompts, credentials, or arbitrary label contents.
+or `spawn-requested` decisions (`kind: "routing-decision"`). `spawn-requested`
+records the invocation the dispatcher handed to the worker adapter; the
+transcript confirms whether it started. Evidence uses known routing labels and
+bounded model identifiers, never descriptions, prompts, credentials, or
+arbitrary label contents.
+
+### Per-request routed accounting (MOV-426)
+
+The same file also carries `kind: "routed-request"` rows: one bounded, folded
+record per logical routed request (a worker turn dispatched through a router
+arm), written by `tools/dispatcher/src/routed-request.mjs`. No live router
+arm is wired up yet (MOV-427/MOV-428 own that credential and provider work);
+this is the accounting contract a future broker must emit, built and tested
+ahead of it so the trial can be audited from day one.
+
+Each row carries the issue/attempt/turn/request ID, router arm and policy
+hash, requested and resolved model/effort, provider, input/output/cache
+tokens and cache-hit status, latency, API-equivalent and actual billed USD,
+invoice ID(s), and fallback/error status -- or an explicit `"missing"` marker
+per field in `availability` when the router never reported it; a field is
+never invented. A retried request (chained by the broker's `retryOf`) folds
+to one record keyed by its first attempt, so a retry is never double-counted
+as a second accepted turn, while `billedUsd` still sums every attempt in the
+chain since a failed call can still be invoiced.
+
+`captureWorkerUsage` folds an attempt's routed-request rows (scoped by
+attempt ID) into its `usage.json` as `routedRequests`/`routedInvoice`.
+`dispatcher usage export`'s per-issue `routedInvoice` sums every attempt kind
+(implementation, continuation, resume, repair) for that issue exactly once,
+deduplicated by request ID, and reports `apiEquivalentUsd` and `billedUsd` as
+separate totals -- the former is a Claude-style API-equivalent estimate, the
+latter is the actual OpenRouter (or other provider) invoice; they are never
+added together. Like all routing evidence, a routed-request row never carries
+a prompt, tool payload, header, or credential.
 
 
 - `worker:claude` / `worker:codex` — pins the worker binary. Pinned workers are never changed, including by the quota-pool cooldown below.
@@ -201,6 +231,43 @@ node tools/dispatcher/bin/dispatcher.mjs trial stop
 
 **Rollback.** `trial stop` (or waiting for expiry/exhaustion) restores the baseline for new claims immediately. Issues already assigned to Codex finish there; to move one, relabel it `worker:claude` and requeue it through the normal recovery workflow. Deleting `worker-trial.json` is equivalent to disabled but loses the config record — prefer `stop`.
 
+## Bounded Jev router arm admission (MOV-427)
+
+MOV-437 adds a separate disabled production Codex cohort with exact routed
+and fixed API control pairs, a reviewed account/policy approval, and one
+durable all-in budget. It does not activate the cohort or change ordinary
+worker/model routing. See [guarded Codex Jev cohort](./jev-cohort.md) for the
+operator contract; MOV-431 owns live activation.
+
+A bounded, **disabled-by-default** admission ledger for the Jev router trial designed in [MOV-422](https://linear.app/moviecal/issue/MOV-422/research-the-jev-router-trial-compare-hosted-and-open-source-routers). **This build has no live routing.** Admitting an issue to a Jev arm here never selects a worker, model, or provider — `worker:*`/`model:*` routing (the tables above) is completely unaffected, and `resolveDispatchWorker`/`resolveRouting` never consult this state. It exists to build and test the admission/eligibility/attribution contract ahead of the actual router transport and credential broker ([MOV-428](https://linear.app/moviecal/issue/MOV-428), [MOV-429](https://linear.app/moviecal/issue/MOV-429)), the same way [MOV-426](https://linear.app/moviecal/issue/MOV-426)'s `routed-request.mjs` built the per-request accounting contract ahead of any live broker.
+
+**Opt-in only.** An issue is only eligible once it carries the explicit `router:jev` label (`ELIGIBLE_LABEL` in `jev-trial.mjs`) **and** none of the excluded labels: `human-only`, `risk:high`, `area:auth`, `area:security`, `area:database`, `area:deployment`, `area:migrations`, `area:secrets`, `security-sensitive`. This mirrors MOV-422's "exclude auth, migrations, secrets, high-risk work, and human-only issues" cohort rule. No other label or the absence of `router:jev` ever triggers admission.
+
+**Approved policy hash.** `activate` requires a `policyHash` already present in the code-level `APPROVED_POLICY_HASHES` allowlist in `jev-trial.mjs`. That list ships **empty**: no router candidate list or provider policy has been reviewed yet, so every activation attempt fails validation until a human adds an approved hash in a reviewed change. This is the "cannot activate with a missing guard" requirement from the MOV-422 design.
+
+**State.** Two files under `~/.config/moviecal/` (outside the repo), parallel to the worker trial's: `jev-trial.json` (config: `enabled`, `trialId`, `armId` — `jev-hosted` or `jev-oss`, `policyHash`, `allowedWorker` — `claude` or `codex` for the hosted arm; Codex admission requires a matching reviewed transport before consuming an assignment, `activatedAt`, `expiresAt` in explicit UTC, `maxAssignments`, `spendCeilingUsd`) and `jev-trial-assignments.json` (append-only ledger: one assignment record per distinct issue, plus one spend record per distinct provider request ID so a retried usage report is never double-counted). No file means disabled. Activation requires an approved `policyHash`, an `expiresAt` in the future and at most 14 days out, `maxAssignments` from 1 to **12** (a hard cap — not operator-raisable past 12 without a code change), and a `spendCeilingUsd` from 0 exclusive up to 75. Expiry, the cap and the spend meter are re-read before every new assignment, so expiry/exhaustion take effect without a deploy or daemon restart.
+
+**Activate** (requires Adam's separate credit/governance approval per MOV-422; record it on the eventual live-activation issue):
+
+```sh
+node tools/dispatcher/bin/dispatcher.mjs jev activate --id <trialId> --arm jev-hosted --policy-hash <approved-hash> --expires 2026-10-10T00:00:00Z --max-assignments 12 --spend-ceiling-usd 75
+node tools/dispatcher/bin/dispatcher.mjs jev status     # also shown by `dry-run` and `doctor`
+```
+
+**Early stop** — disables *future* admissions only. It keeps the config and every ledger/spend record and does not touch running work:
+
+```sh
+node tools/dispatcher/bin/dispatcher.mjs jev stop
+```
+
+**States.** `dry-run`, `doctor` and `jev status` report `disabled`, `active` (with `assigned/max` and `spentUsd/spendCeilingUsd`), `expired`, `exhausted`, `spend-exhausted` or `invalid`. `dry-run` shows, per issue, either its existing assignment or (for an eligible fresh issue, while the arm is active) that it would be admitted at dispatch time — previews never admit. In the live loop, admission happens under the dispatcher's singleton lock, at the same point the worker-trial admission happens, immediately before the worktree is created. An ineligible issue, or an arm that is off/expired/exhausted/spend-exhausted/invalid, leaves the issue unattributed and it dispatches under its ordinary `worker:*`/`model:*` route. **MOV-425 adds a fail-closed exception for an already admitted `jev-hosted` issue:** without a matching, reviewed provider transport, `spawnWorker()` refuses to start it and the run loop moves it to `Needs Human Decision`; it must never silently use the subscription or OpenAI route. The production transport policy hash allowlist remains empty, and this build still does not enable a live provider route.
+
+**Existing work keeps its arm.** A running attempt, retained-worktree resume, budget continuation, PR repair, or retry of an issue that already has a ledger record keeps the recorded arm/policy hash unconditionally — that read never re-evaluates eligibility, expiry, the cap, or spend. The toggle and deadline never change an already-assigned issue's arm.
+
+**Attribution.** The trial ID, arm ID, approved policy hash, allowed worker, routing reason and assignment time are written to the run `manifest.json` (`jev`), the worktree registry entry, each usage record (`jev`, exported by `dispatcher usage export`'s per-issue `jevTrialIds`), and a bounded `jev` field on the `routing-decisions.jsonl` entry once admitted. They are `null` for attempts outside the arm.
+
+**Rollback.** `jev stop` (or waiting for expiry/exhaustion/spend-ceiling) stops new admissions immediately; since routing itself is untouched in this build, there is nothing further to roll back for already-assigned issues — they simply keep their recorded attribution. Deleting `jev-trial.json` is equivalent to disabled but loses the config record — prefer `stop`.
+
 ## Subagents
 
 When a worker spawns its own subagents (e.g. Claude Code's `Agent` tool), the subagent inherits the parent worker's effective model by default. A subagent may use a different model only when the issue brief explicitly names one for that subagent. This preserves the existing repo-scoped subagent definitions in `.claude/agents/` (`explore`, `code-reviewer`), which intentionally do not pin a model in their frontmatter.
@@ -221,3 +288,5 @@ The previous `claude-model-selection-policy.md` included two mechanisms specific
 - **The `"default"` is not a valid value / mandatory `Requested Claude model:` field** rule, which existed so a cloud worker with no visibility into the orchestrator's intent wouldn't silently proceed on an unstated model. The local dispatcher always resolves and records an explicit model before spawning a worker, so this is enforced in code rather than by convention.
 
 Both are preserved for reference in `docs/operators/archive/claude-model-selection-policy.md`.
+
+MOV-429 adds the contained Codex route contract: the trusted run-loop transport resolver must supply a matching validated policy before a fresh Codex assignment is written. Existing Codex assignments refuse a changed worker binding. Per-request OpenRouter charges enter the durable spend meter once per provider generation ID. No production resolver or policy hash is enabled; the [disposable proof](./mov-429-codex-responses-proof.md) has separate one-use human approval and never activates the cohort.

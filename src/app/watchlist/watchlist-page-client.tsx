@@ -1,10 +1,18 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { formatReleaseDate } from '../../lib/format-release-date';
 import type { WatchlistItem, WatchlistSummary } from '../../lib/watchlist';
+import {
+  DEFAULT_WATCHLIST_VIEW,
+  parseWatchlistView,
+  selectWatchlistItems,
+  serializeWatchlistView,
+  type WatchlistView,
+} from '../../lib/watchlist-view';
+import { MoviePoster } from '../movie-poster';
 
 interface DeleteWatchlistResponse {
   error?: string;
@@ -31,6 +39,26 @@ export function WatchlistPageClient({
   personalWatchlistId,
 }: WatchlistPageClientProps) {
   const [items, setItems] = useState(initialItems);
+  const [view, setView] = useState(DEFAULT_WATCHLIST_VIEW);
+
+  useEffect(() => {
+    function readView() {
+      setView(parseWatchlistView(new URLSearchParams(window.location.search)));
+    }
+
+    readView();
+    window.addEventListener('popstate', readView);
+    return () => window.removeEventListener('popstate', readView);
+  }, []);
+
+  const visibleItems = selectWatchlistItems(items, view, new Date().toISOString().slice(0, 10));
+
+  function updateView(nextView: WatchlistView) {
+    const url = new URL(window.location.href);
+    url.search = serializeWatchlistView(nextView, url.searchParams).toString();
+    window.history.replaceState(window.history.state, '', url);
+    setView(nextView);
+  }
   const [watchlists, setWatchlists] = useState(initialWatchlists);
   const [createName, setCreateName] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -166,6 +194,20 @@ export function WatchlistPageClient({
           </div>
 
           <div className="mt-6 grid gap-4 md:grid-cols-2">
+            {!overviewErrorMessage && watchlists.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-sm text-slate-600 md:col-span-2">
+                <h4 className="text-lg font-semibold text-slate-950">No watchlists yet</h4>
+                <p className="mt-2 leading-6">
+                  Use the form to create your first shared watchlist and plan a movie night.
+                </p>
+                <a
+                  href="#watchlist-name"
+                  className="mt-4 inline-flex rounded-full bg-sky-700 px-4 py-2 font-medium text-white transition hover:bg-sky-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700"
+                >
+                  Create your first watchlist
+                </a>
+              </div>
+            ) : null}
             {watchlists.map((watchlist) => {
               const isPersonal = watchlist.kind === 'personal';
 
@@ -235,6 +277,7 @@ export function WatchlistPageClient({
             <label className="block space-y-2">
               <span className="text-sm font-medium text-slate-700">Watchlist name</span>
               <input
+                id="watchlist-name"
                 type="text"
                 name="name"
                 value={createName}
@@ -250,7 +293,7 @@ export function WatchlistPageClient({
             <button
               type="submit"
               disabled={isCreatingWatchlist}
-              className="w-full rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+              className="w-full rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700 disabled:cursor-not-allowed disabled:bg-slate-400"
             >
               {isCreatingWatchlist ? 'Creating…' : 'Create shared watchlist'}
             </button>
@@ -298,6 +341,40 @@ export function WatchlistPageClient({
           </p>
         </div>
 
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="min-w-0 text-sm font-medium text-slate-700">
+            Sort movies
+            <select
+              value={view.sort}
+              onChange={(event) => updateView({ ...view, sort: event.target.value as WatchlistView['sort'] })}
+              className="mt-1 block w-full rounded-xl border border-slate-300 bg-white px-3 py-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700"
+            >
+              <option value="added-newest">Date added: newest first</option>
+              <option value="added-oldest">Date added: oldest first</option>
+              <option value="release-soonest">Release date: soonest first</option>
+              <option value="release-latest">Release date: latest first</option>
+              <option value="title">Title: A–Z</option>
+            </select>
+          </label>
+          <label className="min-w-0 text-sm font-medium text-slate-700">
+            Filter movies
+            <select
+              value={view.filter}
+              onChange={(event) => updateView({ ...view, filter: event.target.value as WatchlistView['filter'] })}
+              aria-describedby="watchlist-release-help"
+              className="mt-1 block w-full rounded-xl border border-slate-300 bg-white px-3 py-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700"
+            >
+              <option value="all">All</option>
+              <option value="upcoming">Upcoming</option>
+              <option value="released">Released</option>
+            </select>
+          </label>
+        </div>
+        <p id="watchlist-release-help" className="text-sm text-slate-600">
+          Releases today (UTC) count as released. Movies without a release date appear only in All,
+          last when sorting by release date.
+        </p>
+
         {personalItemsErrorMessage ? (
           <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">
             <p className="font-semibold text-rose-900">Personal watchlist unavailable</p>
@@ -309,10 +386,28 @@ export function WatchlistPageClient({
             <p className="mt-2 max-w-2xl leading-6">
               Save movies from the search page to track upcoming release dates here.
             </p>
+            <Link
+              href="/search"
+              className="mt-4 inline-flex rounded-full bg-sky-700 px-4 py-2 font-medium text-white transition hover:bg-sky-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700"
+            >
+              Search movies
+            </Link>
+          </div>
+        ) : visibleItems.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-sm text-slate-600">
+            <h4 className="text-lg font-semibold text-slate-950">No movies match this filter</h4>
+            <p className="mt-2 leading-6">Choose All to see every saved movie.</p>
+            <button
+              type="button"
+              onClick={() => updateView({ ...view, filter: 'all' })}
+              className="mt-4 rounded-full bg-sky-700 px-4 py-2 font-medium text-white hover:bg-sky-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700"
+            >
+              Clear filter
+            </button>
           </div>
         ) : (
           <ul className="grid gap-4">
-            {items.map((item) => {
+            {visibleItems.map((item) => {
               const isRemoving = removingItemIds[item.id] ?? false;
 
               return (
@@ -321,14 +416,17 @@ export function WatchlistPageClient({
                   className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
                 >
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="space-y-3">
-                      <div>
+                    <div className="min-w-0 space-y-3">
+                      <div className="flex items-start gap-3">
+                        <MoviePoster posterPath={item.movie.posterPath} title={item.movie.title} />
+                        <div className="min-w-0 break-words">
                         <h4 className="text-2xl font-semibold text-slate-950">
                           {item.movie.title}
                         </h4>
                         <p className="mt-1 text-sm font-medium text-sky-700">
                           {formatReleaseDate(item.movie.releaseDate)}
                         </p>
+                        </div>
                       </div>
                       <p className="max-w-2xl text-sm leading-6 text-slate-600">
                         {item.movie.overview
@@ -336,7 +434,7 @@ export function WatchlistPageClient({
                       </p>
                     </div>
 
-                    <div className="sm:w-40">
+                    <div className="shrink-0 sm:w-40">
                       <button
                         type="button"
                         onClick={() => {

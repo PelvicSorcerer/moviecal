@@ -13,6 +13,7 @@
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { requiredSecretPresent } from "./openrouter-transport.mjs";
 import { writeRoutingEvidence } from "./routing-evidence.mjs";
 import {
   worktreeRoot,
@@ -22,6 +23,11 @@ import {
   workerCooldownStatePath,
   workerTrialConfigPath,
   workerTrialAssignmentsPath,
+  jevTrialConfigPath,
+  jevTrialAssignmentsPath,
+  jevCohortConfigPath,
+  jevCohortApprovalPath,
+  jevCohortLedgerPath,
   workerUsageStatePath,
   repairLedgerStatePath,
   envLocalPath,
@@ -43,6 +49,8 @@ import { CircuitBreakerStore } from "./circuit-breaker.mjs";
 import { UsageLimitStore } from "./usage-limit.mjs";
 import { WorkerCooldownStore } from "./worker-cooldown.mjs";
 import { WorkerTrialStore } from "./worker-trial.mjs";
+import { JevArmStore } from "./jev-trial.mjs";
+import { JevCohortStore, resolveCohortTransport } from "./jev-cohort.mjs";
 import { WorkerUsageStore, captureWorkerUsage, DISPATCHER_ORIGIN } from "./worker-usage.mjs";
 import { RepairLedger } from "./repair-ledger.mjs";
 import { buildIsIssueSatisfied } from "./dependency-gate.mjs";
@@ -102,7 +110,7 @@ export async function checkIosRunnerOnline() {
  * ledger. Only this live wiring stamps `origin: "dispatcher"`, which is what
  * the trial export keys on to tell real attempts from fixtures.
  */
-export async function buildRunContext(linearClient, teamKey, issues, { repairLockHeld = false, workerUsageStore = null, workerTrialStore = null } = {}) {
+export async function buildRunContext(linearClient, teamKey, issues, { repairLockHeld = false, workerUsageStore = null, workerTrialStore = null, jevTrialStore = null, jevCohortStore = null } = {}) {
   const usageStore = workerUsageStore || new WorkerUsageStore(workerUsageStatePath());
   const states = await linearClient.workflowStates(teamKey);
   const stateId = (name) => {
@@ -117,6 +125,9 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     statePath: worktreesStatePath(),
   });
 
+  const cohortPath = jevCohortConfigPath();
+  const cohortStore = jevCohortStore || new JevCohortStore({ configPath: cohortPath,
+    approvalPath: jevCohortApprovalPath(), ledgerPath: jevCohortLedgerPath() });
   return {
     linearClient,
     stateIds: {
@@ -141,6 +152,12 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     // MOV-383: disabled unless an operator activates it; admission is written
     // only from the run loop, which holds the dispatcher lock.
     workerTrialStore: workerTrialStore || new WorkerTrialStore({ configPath: workerTrialConfigPath(), ledgerPath: workerTrialAssignmentsPath() }),
+    // MOV-427: disabled unless an operator activates it; admission is written
+    // only from the run loop, which holds the dispatcher lock. Never selects
+    // a worker/model/provider itself -- see jev-trial.mjs.
+    jevTrialStore: jevTrialStore || new JevArmStore({ configPath: jevTrialConfigPath(), ledgerPath: jevTrialAssignmentsPath() }),
+    jevCohortStore: cohortStore,
+    resolveCohortTransportFn: (assignment, options = {}) => resolveCohortTransport(cohortStore, assignment, options),
     captureWorkerUsageFn: (logDir, context) => captureWorkerUsage(logDir, { ...context, origin: DISPATCHER_ORIGIN }, { store: usageStore }),
     writeRoutingEvidenceFn: writeRoutingEvidence,
     // MOV-179: advisory-only diagnosis for the residual "unrecognized
@@ -168,7 +185,7 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     // MOV-303: forwarded to evaluatePreflight() so an incomplete issue is
     // caught at dispatch regardless of how it reached Ready for Agent.
     issueSpecMode: resolveIssueSpecMode(),
-    secretPresent: () => fs.existsSync(envLocalPath()),
+    secretPresent: (name) => requiredSecretPresent(name, { envLocalPath: envLocalPath() }),
     worktreeRoot: worktreeRoot(),
     envLocalSource: fs.existsSync(envLocalPath()) ? envLocalPath() : undefined,
     ghRepo: GITHUB_REPO,

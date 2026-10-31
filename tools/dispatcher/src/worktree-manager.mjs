@@ -6,10 +6,16 @@
 // child_process.execFileSync) so the orchestration logic here can be
 // unit-tested against a fake runner without touching a real git repo.
 
+import { logKill } from "./kill-log.mjs";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { trustWorkspace as defaultTrustWorkspace } from "./claude-trust.mjs";
+
+// Unique per dispatcher process lifetime. A pid alone cannot tell this process's entries from a prior
+// dispatcher's, because the OS can hand a dead dispatcher's pid to its replacement.
+const DISPATCHER_INSTANCE = randomUUID();
 
 export class DispatcherLock {
   constructor(lockPath, { fsImpl = fs, pid = process.pid } = {}) {
@@ -400,6 +406,7 @@ export class WorktreeManager {
 
     entry.status = "active";
     entry.pid = process.pid;
+    entry.instance = DISPATCHER_INSTANCE;
     entry.workerPid = null;
     entry.workerSpawnPending = false;
     entry.resumedAt = new Date().toISOString();
@@ -456,7 +463,7 @@ export class WorktreeManager {
    * Create a new worktree + branch from origin/master and record it.
    * Returns the state entry.
    */
-  create({ id, name, branch, worker, model, trial = null, linearUrl, linearIssueId, envLocalSource, repository }) {
+  create({ id, name, branch, worker, model, trial = null, jev = null, linearUrl, linearIssueId, envLocalSource, repository }) {
     const worktreePath = path.join(this.worktreeRoot, name);
     if (!this.isPathFree(worktreePath)) {
       throw new Error(`worktree path already exists: ${worktreePath}`);
@@ -503,6 +510,10 @@ export class WorktreeManager {
       // MOV-383: worker-trial attribution from the original assignment, kept so
       // repairs of this retained worktree stay attributed after the trial ends.
       trial,
+      // MOV-427: Jev router-arm admission from the original assignment, kept
+      // so a repair or resume of this retained worktree stays attributed to
+      // the same arm after the arm ends -- it never re-admits.
+      jev,
       linearUrl,
       // The Linear issue's internal UUID (distinct from `id`, which is the
       // human-readable identifier like "MOV-152") -- pr-reconcile.mjs needs
@@ -518,6 +529,7 @@ export class WorktreeManager {
       },
       status: "active",
       pid: process.pid,
+      instance: DISPATCHER_INSTANCE,
       // MOV-311: the "iOS Companion App" worker-lane simulator lease this
       // attempt holds, if any -- set via setIosSimLeaseId() once acquired.
       // Startup recovery reads it back off an abandoned entry to release a
@@ -690,18 +702,31 @@ export class WorktreeManager {
   }
 
   reconcileStartup({
+    // Registry entries are stamped with the creating dispatcher's instance id. An
+    // active entry stamped with this instance is a live attempt of this very
+    // dispatcher, never an orphan of a prior one (entries without a stamp, from
+    // before this field existed, are treated as prior).
+    currentInstance = DISPATCHER_INSTANCE,
     isPidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } },
     // Workers are spawned detached, making workerPid both the direct child
     // PID and its process-group ID. Once this dispatcher has acquired the
     // singleton lock, a still-live group belongs to a prior crashed
     // dispatcher and cannot safely retain write access to this worktree.
-    terminateWorkerProcessGroup = (workerPid) => {
+    terminateWorkerProcessGroup = (workerPid, entry = null, id = null) => {
+      let delivered = true;
       try {
         process.kill(-workerPid, "SIGKILL");
-        return true;
       } catch {
-        return false;
+        delivered = false;
       }
+      // Every dispatcher SIGKILL is on record: who sent it, to which group, for which registry entry.
+      logKill(path.join(path.dirname(this.statePath), "dispatcher-kills.jsonl"), {
+        caller: "worktree-manager.reconcileStartup", target: { pgid: workerPid }, signal: "SIGKILL", delivered,
+        reason: "recorded active worker group was still live at poll start",
+        entry: entry ? { id, status: entry.status, workerPid: entry.workerPid, dispatcherPid: entry.pid, instance: entry.instance,
+          startedAt: entry.startedAt, branch: entry.branch } : null,
+      });
+      return delivered;
     },
   } = {}) {
     const state = this.loadState();
@@ -712,6 +737,14 @@ export class WorktreeManager {
         continue;
       }
       if (!["active", "review"].includes(entry.status)) continue;
+      if (entry.status === "active" && entry.instance === currentInstance) {
+        logKill(path.join(path.dirname(this.statePath), "dispatcher-kills.jsonl"), {
+          caller: "worktree-manager.reconcileStartup", target: entry.workerPid ? { pgid: entry.workerPid } : null, signal: null, delivered: false,
+          reason: "skipped: active entry belongs to this dispatcher process",
+          entry: { id, status: entry.status, workerPid: entry.workerPid, dispatcherPid: entry.pid, instance: entry.instance, startedAt: entry.startedAt, branch: entry.branch },
+        });
+        continue;
+      }
       if (!fs.existsSync(entry.path) || !this.isIntactLinkedWorktree(entry.path)) {
         const reason = fs.existsSync(entry.path)
           ? "recorded worktree is no longer an intact linked Git worktree after dispatcher restart"
@@ -726,7 +759,7 @@ export class WorktreeManager {
           // group from a dispatcher that has already died, not a cooperative
           // cancellation path. If the host will not kill it, preserve the
           // worktree and route the issue to human review instead of requeueing.
-          if (!terminateWorkerProcessGroup(entry.workerPid)) {
+          if (!terminateWorkerProcessGroup(entry.workerPid, entry, id)) {
             changes.push(this._abandonForStartupRecovery(
               state,
               id,

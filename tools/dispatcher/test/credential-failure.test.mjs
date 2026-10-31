@@ -77,6 +77,30 @@ describe("classifyCredentialFailure", () => {
     ).toBeNull();
   });
 
+  it("does not fire when a signature is only quoted inside tool output (doc-quote regression)", () => {
+    // MOV-443: a worker ran `rg` over docs/operators and the command output
+    // quoted `api_error_status: 401` as an example. That is not a login failure.
+    const docQuote = "docs/operators/local-execution.md:339: ... an `api_error_status: 401`, a structured `\"error\": \"authentication_failed\"`, the literal `OAuth access token has expired` message";
+    const logTail = [
+      "--- stdout.log (last 50 lines) ---",
+      JSON.stringify({ type: "item.completed", item: { type: "command_execution", command: "rg api_error_status docs/operators", aggregated_output: docQuote, exit_code: 0 } }),
+      JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: docQuote }] } }),
+      "--- stderr.log (last 50 lines) ---",
+      "",
+    ].join("\n");
+    expect(classifyCredentialFailure({ exitCode: 1, logTail })).toBeNull();
+  });
+
+  it("recognizes a Claude result error event carrying api_error_status 401", () => {
+    const logTail = JSON.stringify({ type: "result", is_error: true, api_error_status: 401, result: "Failed to authenticate" });
+    expect(classifyCredentialFailure({ exitCode: 1, logTail })).toMatchObject({ category: CREDENTIAL_FAILURE });
+  });
+
+  it("recognizes a Codex error event with an expired-token message", () => {
+    const logTail = JSON.stringify({ type: "error", message: "401 OAuth access token has expired." });
+    expect(classifyCredentialFailure({ exitCode: 1, logTail })).toMatchObject({ category: CREDENTIAL_FAILURE });
+  });
+
   it("handles a missing/undefined logTail without throwing", () => {
     expect(classifyCredentialFailure({ exitCode: 1 })).toBeNull();
     expect(classifyCredentialFailure({ exitCode: 1, logTail: undefined })).toBeNull();

@@ -6,6 +6,146 @@ html, body, #__next {
   height: 100%;
 }
 body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
   background: #ffffff;
   color: #0f172a;
+}
+
+body > header,
+body > main,
+body > footer {
+  flex-shrink: 0;
+}
+
+#main-content {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.site-footer {
+  margin-top: auto;
+  border-top: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #475569;
+  font-size: 0.875rem;
+}
+
+.site-footer-inner {
+  box-sizing: border-box;
+  max-width: 56rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+
+.site-footer-brand {
+  margin: 0;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.site-footer-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0.5rem 0;
+}
+
+.site-footer-navigation a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: #075985;
+  text-decoration: underline;
+  text-underline-offset: 0.25rem;
+  border-radius: 0.25rem;
+}
+
+.site-footer-attribution {
+  margin: 0;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.site-header-inner {
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.5rem;
+  max-width: 56rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.site-brand {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.site-navigation,
+.site-session {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  max-width: 100%;
+}
+
+.site-session {
+  margin-left: auto;
+}
+
+.site-user-email {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.site-header a,
+.site-header button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.875rem;
+}
+
+.site-navigation a {
+  color: #475569;
+}
+
+.site-navigation a[aria-current='page'] {
+  background: #e0f2fe;
+  color: #075985;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 0.25rem;
+}
+
+.site-header a:focus-visible,
+.site-footer a:focus-visible,
+.site-header button:focus-visible,
+.skip-link:focus-visible,
+#main-content:focus-visible {
+  outline: 3px solid #0369a1;
+  outline-offset: 3px;
+}
+
+.skip-link {
+  position: absolute;
+  top: 0.5rem;
+  left: 1rem;
+  z-index: 50;
+  padding: 0.75rem;
+  transform: translateY(calc(-100% - 1rem));
+  border-radius: 0.25rem;
+  background: #ffffff;
+  color: #075985;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
 }

@@ -5,12 +5,14 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   startTransition,
   useEffect,
+  useRef,
   useState,
 } from 'react';
 
 import { formatReleaseDate } from '../../lib/format-release-date';
 import type { WatchlistSummary } from '../../lib/watchlist';
 import type { NormalizedMovieSummary } from '../../lib/tmdb/client';
+import { MoviePoster } from '../movie-poster';
 
 type SearchStatus = 'idle' | 'loading' | 'success' | 'error';
 export type WatchlistStatus = 'idle' | 'saving' | 'saved' | 'error';
@@ -22,6 +24,9 @@ interface WatchlistMutationState {
 
 interface SearchResponse {
   results?: NormalizedMovieSummary[];
+  page?: number;
+  totalPages?: number;
+  totalResults?: number;
   error?: string;
 }
 
@@ -55,7 +60,11 @@ export function getWatchlistSignInHref(
 }
 
 export function getResultCountLabel(resultCount: number): string {
-  return resultCount === 1 ? '1 match' : `${resultCount} matches`;
+  return resultCount === 1 ? '1 match' : `${resultCount.toLocaleString()} matches`;
+}
+
+function validTotalResults(value: number | undefined): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 export function shouldSyncSubmittedQuery(
@@ -100,6 +109,12 @@ export function SearchPageClient({
   const [status, setStatus] = useState<SearchStatus>(initialQuery ? 'loading' : 'idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [results, setResults] = useState<NormalizedMovieSummary[]>([]);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalResults, setTotalResults] = useState<number | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [pagingError, setPagingError] = useState<string | null>(null);
+  const pagingRequest = useRef<AbortController | null>(null);
   const editableWatchlists = availableWatchlists.filter((watchlist) => watchlist.canEdit);
   const readOnlyWatchlists = availableWatchlists.filter((watchlist) => !watchlist.canEdit);
   const [watchlistStatusByMovie, setWatchlistStatusByMovie] = useState<
@@ -136,6 +151,13 @@ export function SearchPageClient({
 
   useEffect(() => {
     let isCancelled = false;
+    const controller = new AbortController();
+    pagingRequest.current = controller;
+    setPage(1);
+    setTotalPages(1);
+    setTotalResults(null);
+    setIsLoadingMore(false);
+    setPagingError(null);
 
     async function runSearch(nextQuery: string) {
       if (!nextQuery) {
@@ -170,11 +192,15 @@ export function SearchPageClient({
 
         if (!isCancelled) {
           setResults(Array.isArray(payload.results) ? payload.results : []);
+          setTotalResults(validTotalResults(payload.totalResults));
+          setPage(payload.page ?? 1);
+          setTotalPages(Math.min(payload.totalPages ?? 1, 500));
           setStatus('success');
         }
       } catch (error) {
         if (!isCancelled) {
           setResults([]);
+          setTotalResults(null);
           setErrorMessage(
             error instanceof Error
               ? error.message
@@ -189,8 +215,55 @@ export function SearchPageClient({
 
     return () => {
       isCancelled = true;
+      controller.abort();
+      pagingRequest.current?.abort();
     };
   }, [searchNonce, submittedQuery]);
+
+  async function loadMore() {
+    if (isLoadingMore || page >= totalPages || status !== 'success') {
+      return;
+    }
+
+    const controller = new AbortController();
+    pagingRequest.current?.abort();
+    pagingRequest.current = controller;
+    setIsLoadingMore(true);
+    setPagingError(null);
+
+    try {
+      const response = await fetch(
+        `/api/movies/search?q=${encodeURIComponent(submittedQuery)}&page=${page + 1}`,
+        { method: 'GET', cache: 'no-store', signal: controller.signal },
+      );
+      const payload = (await response.json()) as SearchResponse;
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? 'Could not load more movies.');
+      }
+
+      if (!controller.signal.aborted) {
+        setResults((current) => {
+          const seen = new Set(current.map((movie) => movie.tmdbId));
+          const additional = (payload.results ?? []).filter((movie) => {
+            if (seen.has(movie.tmdbId)) return false;
+            seen.add(movie.tmdbId);
+            return true;
+          });
+          return [...current, ...additional];
+        });
+        setPage(payload.page ?? page + 1);
+        setTotalPages(Math.min(payload.totalPages ?? page + 1, 500));
+        setTotalResults(validTotalResults(payload.totalResults));
+      }
+    } catch {
+      if (!controller.signal.aborted) {
+        setPagingError('Could not load more movies. Select Load more to try again.');
+      }
+    } finally {
+      if (!controller.signal.aborted) setIsLoadingMore(false);
+    }
+  }
 
   async function addToWatchlist(tmdbId: number) {
     setWatchlistStatusByMovie((current) => ({
@@ -236,7 +309,7 @@ export function SearchPageClient({
   }
 
   const hasSearched = submittedQuery.length > 0;
-  const resultCountLabel = getResultCountLabel(results.length);
+  const resultCountLabel = getResultCountLabel(Math.max(totalResults ?? 0, results.length));
   const selectedWatchlist =
     editableWatchlists.find((watchlist) => watchlist.id === selectedWatchlistId) ?? null;
 
@@ -268,7 +341,7 @@ export function SearchPageClient({
             });
           }}
         >
-          <label className="flex-1">
+          <label className="min-w-0 flex-1">
             <span className="sr-only">Search for a movie</span>
             <input
               value={query}
@@ -291,48 +364,70 @@ export function SearchPageClient({
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        {status === 'idle' ? (
-          <div className="space-y-2">
-            <h3 className="text-lg font-semibold text-slate-950">
-              Search the TMDb-backed catalog
-            </h3>
-            <p className="text-sm leading-6 text-slate-600">
-              Enter a title to see release dates, result summaries, and watchlist
-              actions from the app&apos;s server-side movie search endpoint.
-            </p>
-          </div>
-        ) : null}
+        <div aria-live="polite" aria-atomic="true" className="[overflow-wrap:anywhere]">
+          {status === 'idle' ? (
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold text-slate-950">
+                Find a movie
+              </h3>
+              <p className="text-sm leading-6 text-slate-600">
+                Enter a movie title above and select Search to find release dates
+                and movies to add to your watchlist.
+              </p>
+            </div>
+          ) : null}
 
-        {status === 'loading' ? (
-          <div className="space-y-2">
-            <h3 className="text-lg font-semibold text-slate-950">Searching…</h3>
-            <p className="text-sm leading-6 text-slate-600">
-              Looking up matches for{' '}
-              <span className="font-medium text-slate-950">
-                {submittedQuery}
-              </span>
-              .
-            </p>
-          </div>
-        ) : null}
+          {status === 'loading' ? (
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold text-slate-950">Searching…</h3>
+              <p className="text-sm leading-6 text-slate-600">
+                Looking up matches for{' '}
+                <span className="font-medium text-slate-950">
+                  {submittedQuery}
+                </span>
+                .
+              </p>
+            </div>
+          ) : null}
 
-        {status === 'error' ? (
-          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">
-            <p className="font-semibold text-rose-900">Search unavailable</p>
-            <p className="mt-2 leading-6">{errorMessage}</p>
-          </div>
-        ) : null}
+          {status === 'error' ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">
+              <p className="font-semibold text-rose-900">Search unavailable</p>
+              <p className="mt-2 leading-6">{errorMessage}</p>
+              <p className="mt-2 leading-6">
+                Try again, or search for another title.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setStatus('loading');
+                  setErrorMessage(null);
+                  setSearchNonce((current) => current + 1);
+                }}
+                className="mt-4 rounded-2xl bg-sky-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-300"
+              >
+                Try again
+              </button>
+            </div>
+          ) : null}
 
-        {status === 'success' && hasSearched && results.length === 0 ? (
-          <div className="space-y-2">
-            <h3 className="text-lg font-semibold text-slate-950">No matches yet</h3>
-            <p className="text-sm leading-6 text-slate-600">
-              No movies matched{' '}
-              <span className="font-medium text-slate-950">{submittedQuery}</span>.
-              Try another title or a broader search.
+          {status === 'success' && hasSearched && results.length === 0 ? (
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold text-slate-950">No matches yet</h3>
+              <p className="text-sm leading-6 text-slate-600">
+                No movies matched{' '}
+                <span className="font-medium text-slate-950">{submittedQuery}</span>.
+                Check the spelling or try another title or a broader search.
+              </p>
+            </div>
+          ) : null}
+
+          {status === 'success' && results.length > 0 ? (
+            <p className="sr-only">
+              Search complete: {resultCountLabel} for {submittedQuery}.
             </p>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
 
         {status === 'success' && results.length > 0 ? (
           <div className="space-y-5">
@@ -406,21 +501,24 @@ export function SearchPageClient({
                     className="rounded-2xl border border-slate-200 bg-slate-50 p-5"
                   >
                     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                      <div className="space-y-3">
-                        <div>
+                      <div className="min-w-0 space-y-3">
+                        <div className="flex items-start gap-3">
+                          <MoviePoster posterPath={movie.posterPath} title={movie.title} />
+                          <div className="min-w-0 break-words">
                           <h4 className="text-xl font-semibold text-slate-950">
                             {movie.title}
                           </h4>
                           <p className="mt-1 text-sm font-medium text-sky-700">
                             {formatReleaseDate(movie.releaseDate)}
                           </p>
+                          </div>
                         </div>
                         <p className="max-w-2xl text-sm leading-6 text-slate-600">
                           {movie.overview ?? 'No overview is available for this title yet.'}
                         </p>
                       </div>
 
-                      <div className="sm:w-48">
+                      <div className="shrink-0 sm:w-48">
                         {isAuthenticated && editableWatchlists.length === 0 ? (
                           <div className="rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-600">
                             {watchlistLoadFailed
@@ -461,6 +559,17 @@ export function SearchPageClient({
                 );
               })}
             </ul>
+            {pagingError ? <p role="alert" className="text-sm text-amber-700">{pagingError}</p> : null}
+            {page < totalPages ? (
+              <button
+                type="button"
+                onClick={() => { void loadMore(); }}
+                disabled={isLoadingMore}
+                className="rounded-xl bg-sky-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-sky-400"
+              >
+                {isLoadingMore ? 'Loading more…' : 'Load more'}
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>

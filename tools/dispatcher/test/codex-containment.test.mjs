@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
-import { prepareCodexContainment, resolveCodexExecutable } from "../src/codex-containment.mjs";
+import { BROKER_SUPPORT_MODULES, prepareCodexContainment, resolveCodexExecutable, executorTempEnvironment } from "../src/codex-containment.mjs";
 import { workerInvocation } from "../src/worker-routing.mjs";
 
 let root;
@@ -44,6 +45,18 @@ describe("Codex containment policy", () => {
     const runtime = containment.runtime;
     containment.cleanup(); expect(fs.existsSync(runtime)).toBe(false);
   });
+  it("points zsh heredoc temp files at the executor scratch without widening the sandbox (MOV-452)", () => {
+    const opts = options(); containment = prepareCodexContainment(opts);
+    const launch = JSON.parse(fs.readFileSync(containment.invocation.args[1], "utf8"));
+    expect(executorTempEnvironment(launch.executorScratch)).toEqual({ TMPDIR: launch.executorScratch, TMP: launch.executorScratch,
+      TEMP: launch.executorScratch, TMPPREFIX: `${launch.executorScratch}/zsh` });
+    expect(fs.readFileSync(path.join(path.dirname(containment.invocation.args[1]), "codex-supervisor.mjs"), "utf8"))
+      .toContain("TMPPREFIX: `${config.executorScratch}/zsh`");
+    for (const key of ["TMPPREFIX", "TMP", "TEMP"]) expect(containment.environment).not.toHaveProperty(key);
+    const executor = fs.readFileSync(launch.executorProfile, "utf8");
+    expect(executor).not.toMatch(/\(allow file-write\*[^\n]*"\/(private\/)?tmp"/);
+    expect(executor).toContain(`(subpath "${launch.executorScratch}")`);
+  });
   it("rejects a broader routing invocation rather than accepting an external bypass", () => {
     const opts = options(); opts.invocation.args[1] = "danger-full-access";
     expect(() => prepareCodexContainment(opts)).toThrow(/workspace-write routing contract/);
@@ -62,5 +75,21 @@ describe("Codex containment policy", () => {
     expect(() => resolveCodexExecutable("codex", { PATH: opts.home })).toThrow(/unavailable/);
     const file = path.join(opts.home, "codex"); fs.writeFileSync(file, "#!/bin/sh\n", { mode: 0o700 });
     expect(() => resolveCodexExecutable(file)).toThrow(/Mach-O/);
+  });
+});
+
+describe("broker run-dir copy list", () => {
+  it("covers every relative import reachable from openrouter-broker.mjs", () => {
+    const src = path.dirname(fileURLToPath(new URL("../src/codex-containment.mjs", import.meta.url)));
+    const copied = new Set(["openrouter-broker.mjs", "openrouter-transport.mjs", ...BROKER_SUPPORT_MODULES]);
+    const seen = new Set(); const queue = ["openrouter-broker.mjs"];
+    while (queue.length) {
+      const file = queue.pop();
+      if (seen.has(file)) continue;
+      seen.add(file);
+      const text = fs.readFileSync(path.join(src, file), "utf8");
+      for (const match of text.matchAll(/(?:from\s+|import\s*\()\s*["']\.\/([^"']+)["']/g)) queue.push(match[1]);
+    }
+    expect([...seen].filter((name) => !copied.has(name))).toEqual([]);
   });
 });

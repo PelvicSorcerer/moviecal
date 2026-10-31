@@ -57,6 +57,18 @@ describe("spawnWorker", () => {
       brief: "must never run", logDir: path.join(tmpDir, "logs") })).rejects.toThrow(/requires a securityContext and OS guard/);
   });
 
+  it.each(["jev-hosted", "fixed-control"])("defers an admitted %s issue when its guarded transport is absent or mismatched", async (armId) => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mov425-no-fallback-"));
+    const spawnImpl = vi.fn();
+    const base = { invocation: { command: "codex", args: ["--sandbox", "workspace-write", "exec"] }, cwd: tmpDir,
+      brief: "must never run", logDir: path.join(tmpDir, "logs"), spawnImpl,
+      jev: { armId, policyHash: "a".repeat(64) } };
+    await expect(spawnWorker(base)).rejects.toThrow(/transport is disabled/);
+    await expect(spawnWorker({ ...base, providerTransport: { policy: { hash: "b".repeat(64) } } }))
+      .rejects.toThrow(/matching Jev admission/);
+    expect(spawnImpl).not.toHaveBeenCalled();
+  });
+
   it.each(["implementation", "repair"])("does not spawn after Codex containment setup fails in %s", async (mode) => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mov401-setup-fail-"));
     const spawnImpl = vi.fn();
@@ -413,6 +425,31 @@ describe("spawnWorker", () => {
     });
 
     expect(killImpl).not.toHaveBeenCalled();
+  });
+
+  it("logs each signal the dispatcher sends when reaping a worker's group", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
+    const logDir = path.join(tmpDir, "run");
+    const killImpl = vi.fn();
+    await spawnWorker({
+      invocation: { command: "sh", args: ["-c", "exit 0"] }, cwd: tmpDir, brief: "", logDir,
+      spawnImpl: (...args) => spawn(...args), killImpl, killGraceMs: 10, issueIdentifier: "MOV-9",
+    });
+    const rows = fs.readFileSync(path.join(logDir, "dispatcher-kills.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+    expect(rows.map((row) => row.signal)).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(rows[0]).toMatchObject({ caller: "worker-spawn.worker-closed-reap", entry: { issue: "MOV-9" } });
+  });
+
+  it("records the terminating signal in the result and manifest", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-worker-spawn-"));
+    const logDir = path.join(tmpDir, "run");
+    const result = await spawnWorker({
+      invocation: { command: "sh", args: ["-c", "kill -KILL $$"] },
+      cwd: tmpDir, brief: "", logDir, spawnImpl: (...args) => spawn(...args), killGraceMs: 100,
+    });
+    expect(result.signal).toBe("SIGKILL");
+    const manifest = JSON.parse(fs.readFileSync(path.join(logDir, "manifest.json"), "utf8"));
+    expect(manifest).toMatchObject({ exitCode: null, signal: "SIGKILL" });
   });
 
   it("reaps a real backgrounded child so it does not outlive the worker (MOV-137)", async () => {

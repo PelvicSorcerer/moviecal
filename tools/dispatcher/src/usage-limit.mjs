@@ -194,7 +194,60 @@ export function parseUsageLimitReset(message, { now = new Date() } = {}) {
  */
 export function classifyUsageLimitFailure({ exitCode, logTail, now = new Date() } = {}) {
   if (exitCode === 0) return null;
-  const tail = text(logTail);
+  // Only the worker's own error events and plain stderr are searched, never
+  // tool output (same rule as credential-failure.mjs): a worker that `rg`s the
+  // operator docs prints "usage limit ... resets" prose that is not a refusal.
+  for (const tail of workerErrorTexts(logTail)) {
+    const classification = classifyTail(tail, now);
+    if (classification) return classification;
+  }
+  return null;
+}
+
+const ERROR_TEXT_KEYS = new Set(["error", "message", "result"]);
+const MAX_DEPTH = 4;
+
+function collectStrings(node, out, depth = 0) {
+  if (!node || typeof node !== "object" || depth > MAX_DEPTH) return;
+  for (const [key, value] of Object.entries(node)) {
+    if (ERROR_TEXT_KEYS.has(key) && typeof value === "string") out.push(value);
+    else if (value && typeof value === "object") collectStrings(value, out, depth + 1);
+  }
+}
+
+// Claude Code: `{"type":"error"}` / `{"type":"result","is_error":true,"result":"..."}`;
+// Codex: `{"type":"error"|"turn.failed"}` or an item of type "error". Tool-output
+// carriers (`user` tool_result, command_execution items) are not error events.
+function errorPayload(event) {
+  if (!event || typeof event !== "object") return null;
+  if (event.item?.type === "error") return event.item;
+  const type = String(event.type ?? "");
+  if (type === "error" || type === "turn.failed" || event.is_error === true) return event;
+  return null;
+}
+
+/** The texts a provider refusal could appear in: error-event strings, then non-JSON stderr lines joined. */
+function workerErrorTexts(logTail) {
+  const texts = [];
+  const plain = [];
+  for (const line of text(logTail).split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || /^--- .* ---$/.test(trimmed)) continue;
+    let event;
+    try {
+      event = JSON.parse(trimmed);
+    } catch {
+      plain.push(trimmed);
+      continue;
+    }
+    const payload = errorPayload(event);
+    if (payload) collectStrings(payload, texts);
+  }
+  if (plain.length) texts.push(plain.join("\n"));
+  return texts;
+}
+
+function classifyTail(tail, now) {
   const marker = USAGE_LIMIT_MARKER_RE.exec(tail);
   if (!marker) return null;
   const evidence = marker[0].replace(/\s+/g, " ").trim().slice(0, 300);

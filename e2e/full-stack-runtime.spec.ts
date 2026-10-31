@@ -49,6 +49,7 @@ test('disposable Supabase runtime proves real auth, calendar rotation, and watch
   expect(await initialFeedResponse.text()).toContain(movieTitle);
 
   await page.getByRole('button', { name: 'Rotate subscription URL' }).click();
+  await page.getByRole('button', { name: 'Confirm rotation' }).click();
   // toHaveURL is a no-op here (URL doesn't change on rotate), so wait for the
   // subscription URL itself to change before reading it.
   await expect(page.locator('code')).not.toHaveText(initialUrl, { timeout: 15_000 });

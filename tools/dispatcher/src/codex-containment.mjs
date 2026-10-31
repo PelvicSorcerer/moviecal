@@ -9,6 +9,11 @@ import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { buildWorkerSandboxProfile, sanitizedWorkerEnvironment } from "./worker-guard.mjs";
+import { validateOpenRouterTransport } from "./openrouter-transport.mjs";
+
+// Modules copied beside the broker into each run dir; the broker runs from that
+// copy, so every relative import it (transitively) reaches must be listed.
+export const BROKER_SUPPORT_MODULES = ["openrouter-response.mjs", "jev-patch.mjs", "routed-request.mjs", "jev-cohort.mjs", "jev-trial.mjs", "state-store.mjs", "openrouter-account.mjs", "worker-tool-format-error.mjs"];
 
 export function verifyCodexVersion(binary) {
   const version = execFileSync(binary, ["--version"], { encoding: "utf8", timeout: 5000,
@@ -17,6 +22,14 @@ export function verifyCodexVersion(binary) {
   // version needs the native and live proof before this allowlist changes.
   if (version !== "codex-cli 0.157.1") throw new Error("unproved Codex containment version; requires codex-cli 0.157.1");
   return version;
+}
+
+// MOV-452: zsh writes here-document temp files under $TMPPREFIX (default
+// /tmp/zsh), not $TMPDIR, so `apply_patch <<EOF` failed in the executor
+// sandbox. Point every temp convention at the per-run scratch, which is the
+// only writable temp location; the sandbox profile is not widened.
+export function executorTempEnvironment(scratch) {
+  return { TMPDIR: scratch, TMP: scratch, TEMP: scratch, TMPPREFIX: path.join(scratch, "zsh") };
 }
 
 export function resolveCodexExecutable(command = "codex", env = process.env) {
@@ -48,7 +61,14 @@ export function resolveCodexExecutable(command = "codex", env = process.env) {
 }
 
 export function prepareCodexContainment({ invocation, cwd, logDir, repositoryPaths, mode, home = os.homedir(),
-  resolveExecutable = resolveCodexExecutable, verifyVersion = verifyCodexVersion, sourceEnvironment = process.env }) {
+  resolveExecutable = resolveCodexExecutable, verifyVersion = verifyCodexVersion, sourceEnvironment = process.env,
+  openRouterTransport = null, openRouterFixture = false, accounting = null,
+  approvedOpenRouterPolicyHashes, providerRequestLimit = null, openRouterModelAliases = {}, openRouterProofDebug = false }) {
+  if (openRouterProofDebug && (!openRouterTransport || !Number.isInteger(providerRequestLimit)
+    || providerRequestLimit < 1 || providerRequestLimit > 6
+    || (!openRouterFixture && !approvedOpenRouterPolicyHashes?.includes(openRouterTransport.policy?.hash)))) {
+    throw new Error("OpenRouter debug requires a capped disposable proof approval");
+  }
   const sandboxIndex = invocation.args.indexOf("--sandbox");
   if (!invocation.args.includes("exec") || sandboxIndex < 0 || invocation.args[sandboxIndex + 1] !== "workspace-write"
     || invocation.args.lastIndexOf("--sandbox") !== sandboxIndex || invocation.args.includes("--dangerously-bypass-approvals-and-sandbox")) {
@@ -67,6 +87,12 @@ export function prepareCodexContainment({ invocation, cwd, logDir, repositoryPat
     throw new Error("Codex native executable must be installed outside repository checkouts");
   }
   const version = verifyVersion(binary);
+  const openRouter = openRouterTransport && validateOpenRouterTransport(openRouterTransport,
+    { cwd, home, fixture: openRouterFixture, approvedPolicyHashes: approvedOpenRouterPolicyHashes });
+  const cohortPaths = openRouter?.cohort ? [openRouter.cohort.storeRoot] : [];
+  if (openRouter && invocation.args.some((arg) => /^model_providers?\./.test(arg) || /^model_provider=/.test(arg))) {
+    throw new Error("OpenRouter transport refuses caller provider overrides");
+  }
   const runtime = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-codex-")));
   try {
     const harnessHome = path.join(runtime, "harness");
@@ -78,18 +104,18 @@ export function prepareCodexContainment({ invocation, cwd, logDir, repositoryPat
     // Do not copy credentials into the runtime or the preserved run logs.
     const auth = path.join(sourceEnvironment.CODEX_HOME || path.join(home, ".codex"), "auth.json");
     const authTarget = fs.existsSync(auth) ? fs.realpathSync(auth) : auth;
-    if (fs.existsSync(auth)) fs.symlinkSync(authTarget, path.join(harnessHome, "auth.json"));
+    if (!openRouter && fs.existsSync(auth)) fs.symlinkSync(authTarget, path.join(harnessHome, "auth.json"));
 
     const context = { worktreePath: cwd, mode, home, logDir, ...repositoryPaths };
     const executorProfile = path.join(logDir, "worker-sandbox.sb");
     const harnessProfile = path.join(logDir, "codex-harness.sb");
     fs.writeFileSync(executorProfile, buildWorkerSandboxProfile({ ...context,
       writablePaths: [cwd, executorHome, executorScratch], networkRole: "executor",
-      unreadablePaths: [harnessHome, harnessScratch, auth, authTarget],
+      unreadablePaths: [harnessHome, harnessScratch, auth, authTarget, ...cohortPaths, ...(openRouter ? [openRouter.credentialPath] : [])],
     }), { mode: 0o600 });
     fs.writeFileSync(harnessProfile, buildWorkerSandboxProfile({ ...context,
       writablePaths: [harnessHome, harnessScratch], executablePaths: [binary, codeModeHost], networkRole: "harness",
-      unreadablePaths: [executorHome, executorScratch],
+      providerBroker: Boolean(openRouter), unreadablePaths: [executorHome, executorScratch, ...cohortPaths, ...(openRouter ? [openRouter.credentialPath, auth, authTarget] : [])],
       immutablePaths: [path.join(harnessHome, "environments.toml"), path.join(harnessHome, "auth.json")],
     }), { mode: 0o600 });
 
@@ -98,26 +124,49 @@ export function prepareCodexContainment({ invocation, cwd, logDir, repositoryPat
     const supervisor = path.join(logDir, "codex-supervisor.mjs");
     fs.copyFileSync(fileURLToPath(new URL("./codex-supervisor.mjs", import.meta.url)), supervisor);
     fs.chmodSync(supervisor, 0o600);
+    let brokerConfig = null;
+    if (openRouter) {
+      const broker = path.join(logDir, "openrouter-broker.mjs");
+      brokerConfig = path.join(logDir, "openrouter-broker.json");
+      fs.copyFileSync(fileURLToPath(new URL("./openrouter-broker.mjs", import.meta.url)), broker);
+      fs.chmodSync(broker, 0o600);
+      const brokerPolicy = path.join(logDir, "openrouter-transport.mjs");
+      fs.copyFileSync(fileURLToPath(new URL("./openrouter-transport.mjs", import.meta.url)), brokerPolicy);
+      fs.chmodSync(brokerPolicy, 0o600);
+      for (const name of BROKER_SUPPORT_MODULES) {
+        const target = path.join(logDir, name);
+        fs.copyFileSync(fileURLToPath(new URL(`./${name}`, import.meta.url)), target);
+        fs.chmodSync(target, 0o600);
+      }
+      fs.writeFileSync(brokerConfig, JSON.stringify({ ...openRouter, cwd, fixture: openRouterFixture, accounting,
+        maxRequests: providerRequestLimit, modelAliases: openRouter.modelAliases || openRouterModelAliases, proofDebug: openRouterProofDebug === true }), { mode: 0o600 });
+    }
     const environment = Object.fromEntries(Object.entries(sanitizedWorkerEnvironment(sourceEnvironment, { worker: "codex" }))
       .filter(([key]) => ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TERM", "CI",
         "MOVIECAL_WORKER_SANDBOX", "MOVIECAL_IOS_SIM_LEASE_ID"].includes(key)));
     const executorEnvironment = Object.fromEntries(Object.entries(environment).filter(([key]) =>
       ["PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "TERM", "CI", "MOVIECAL_WORKER_SANDBOX", "MOVIECAL_IOS_SIM_LEASE_ID"].includes(key)));
-    Object.assign(executorEnvironment, { HOME: executorHome, CODEX_HOME: executorHome, TMPDIR: executorScratch });
+    Object.assign(executorEnvironment, { HOME: executorHome, CODEX_HOME: executorHome, ...executorTempEnvironment(executorScratch) });
     Object.assign(environment, { CODEX_HOME: harnessHome, TMPDIR: harnessScratch });
     // User config, hooks, plugins and a local fallback environment cannot
     // reintroduce execution in the network-capable client. The native client
     // guard permits only the installed Codex binary and stock code-mode host.
     const args = invocation.args.map((arg, index) => invocation.args[index - 1] === "--sandbox" ? "danger-full-access" : arg);
+    if (openRouter) {
+      const modelIndex = args.indexOf("--model");
+      if (modelIndex < 0 || !args[modelIndex + 1]) throw new Error("OpenRouter transport requires an explicit routed model");
+      args[modelIndex + 1] = openRouter.policy.model;
+    }
     args.push("-c", "features.shell_snapshot=false", "-c", "features.shell_snapshot_v2=false",
       "-c", "features.plugins=false", "-c", "features.apps=false",
+      "-c", "features.multi_agent=false",
       "-c", 'web_search="disabled"',
       "-c", "features.code_mode_host={enabled=true,disable_in_process_fallback=true}",
       "-c", "allow_login_shell=false", "-c", `projects.${JSON.stringify(cwd)}.trust_level=\"untrusted\"`);
     const descriptor = path.join(logDir, "codex-launch.json");
     const transportPath = path.join(logDir, "codex-transport.json");
     fs.writeFileSync(descriptor, JSON.stringify({ binary, args, cwd, harnessHome, executorHome, executorScratch, executorProfile, harnessProfile,
-      transportPath,
+      transportPath, ...(openRouter ? { broker: path.join(logDir, "openrouter-broker.mjs"), brokerConfig } : {}),
       // Environment values are passed by the parent, never persisted here.
       executorEnvironmentKeys: Object.keys(executorEnvironment),
     }), { mode: 0o600 });
@@ -125,7 +174,8 @@ export function prepareCodexContainment({ invocation, cwd, logDir, repositoryPat
     return { invocation: { command: process.execPath, args: [supervisor, descriptor] }, environment,
       runtime, cleanup: () => fs.rmSync(runtime, { recursive: true, force: true }),
       evidence: { arrangement: "codex-sibling-exec-server", version, nativeExecutable: binary, codeModeHost, executorProfile, harnessProfile, transportPath,
-        executorProfileSha256: hash(executorProfile), harnessProfileSha256: hash(harnessProfile), launchSha256: hash(descriptor) } };
+        executorProfileSha256: hash(executorProfile), harnessProfileSha256: hash(harnessProfile), launchSha256: hash(descriptor),
+        ...(openRouter ? { providerTransport: "openrouter-broker-disabled-by-default", policyHash: openRouter.policy.hash } : {}) } };
   } catch (error) {
     fs.rmSync(runtime, { recursive: true, force: true });
     throw error;

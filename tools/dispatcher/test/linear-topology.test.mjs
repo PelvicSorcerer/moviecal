@@ -9,6 +9,7 @@ import {
   SHARED_WATCHLISTS_INITIATIVE,
   TESTFLIGHT_INITIATIVE,
   planTopology,
+  readTopology,
   reconcileTopology,
 } from "../src/linear-topology.mjs";
 
@@ -28,36 +29,40 @@ function fakeLinear(seed = {}) {
     projectLabels: seed.projectLabels ?? [],
   };
   const mutations = [];
+  const queries = [];
   const projectById = (pid) => state.projects.find((p) => p.id === pid);
 
   async function gql(query, variables = {}) {
     if (/^\s*query/.test(query)) {
-      if (query.includes("initiatives(first")) {
+      queries.push(query);
+      const size = Number(query.match(/first: (\d+)/)?.[1]);
+      // Cursor = numeric offset, so tests can exercise real pagination.
+      const page = (nodes) => {
+        const start = Number(variables.after ?? 0);
+        const end = start + size;
         return {
-          initiatives: {
-            nodes: state.initiatives.map((i) => ({
-              id: i.id,
-              name: i.name,
-              status: i.status,
-              projects: { nodes: i.projectIds.map((pid) => ({ id: pid, name: projectById(pid).name })) },
-            })),
-          },
+          nodes: nodes.slice(start, end),
+          pageInfo: { hasNextPage: end < nodes.length, endCursor: String(end) },
         };
+      };
+      if (query.includes("initiatives(first")) {
+        return { initiatives: page(state.initiatives.map((i) => ({ id: i.id, name: i.name, status: i.status }))) };
+      }
+      if (query.includes("initiative(id")) {
+        const i = state.initiatives.find((x) => x.id === variables.id);
+        return { initiative: { projects: page(i.projectIds.map((pid) => ({ id: pid, name: projectById(pid).name }))) } };
       }
       if (query.includes("projects(first")) {
-        return {
-          projects: {
-            nodes: state.projects.map((p) => ({
-              id: p.id,
-              name: p.name,
-              status: p.status,
-              labels: { nodes: p.labelIds.map((lid) => state.projectLabels.find((l) => l.id === lid)) },
-              projectMilestones: { nodes: p.milestones },
-            })),
-          },
-        };
+        return { projects: page(state.projects.map((p) => ({ id: p.id, name: p.name, status: p.status }))) };
       }
-      if (query.includes("projectLabels(first")) return { projectLabels: { nodes: state.projectLabels } };
+      if (query.includes("project(id") && query.includes("labels(first")) {
+        const p = projectById(variables.id);
+        return { project: { labels: page(p.labelIds.map((lid) => state.projectLabels.find((l) => l.id === lid))) } };
+      }
+      if (query.includes("project(id") && query.includes("projectMilestones(first")) {
+        return { project: { projectMilestones: page(projectById(variables.id).milestones) } };
+      }
+      if (query.includes("projectLabels(first")) return { projectLabels: page(state.projectLabels) };
       throw new Error(`unexpected query: ${query}`);
     }
     mutations.push(query.match(/(\w+)\(/g)?.[1]?.slice(0, -1));
@@ -97,7 +102,7 @@ function fakeLinear(seed = {}) {
     throw new Error(`unexpected mutation: ${query}`);
   }
 
-  return { gql, state, mutations };
+  return { gql, state, mutations, queries };
 }
 
 describe("desired topology", () => {
@@ -293,5 +298,53 @@ describe("reconcileTopology", () => {
     expect(result.actions.map((a) => a.type).sort()).toEqual(["create-milestone", "link-project"]);
     expect(testflight.projectIds).toContain(dropped);
     expect(milestoneHost.milestones.map((m) => m.name)).toEqual(["Native experience"]);
+  });
+});
+
+describe("readTopology", () => {
+  // Linear rejects queries above complexity 10,000 (the single-query read was
+  // 75,550 live), so every read must stay small and follow cursors.
+  it("reads every connection in bounded pages and follows cursors past the first page", async () => {
+    const projects = Array.from({ length: 120 }, (_, n) => ({
+      id: `p-${n}`,
+      name: `Project ${n}`,
+      status: { type: "started" },
+      labelIds: [],
+      milestones: Array.from({ length: n === 0 ? 75 : 0 }, (_, m) => ({ id: `ms-${m}`, name: `Milestone ${m}` })),
+    }));
+    const linear = fakeLinear({
+      projects,
+      projectLabels: Array.from({ length: 60 }, (_, n) => ({ id: `l-${n}`, name: `label:${n}` })),
+      initiatives: [{ id: "i-1", name: "Big", status: "Active", projectIds: projects.map((p) => p.id) }],
+    });
+
+    const topology = await readTopology(linear.gql);
+
+    expect(topology.projects).toHaveLength(120);
+    expect(topology.projectLabels).toHaveLength(60);
+    expect(topology.initiatives[0].projects).toHaveLength(120);
+    expect(topology.projects[0].milestones).toHaveLength(75);
+    expect(topology.projects[0]).toEqual({
+      id: "p-0",
+      name: "Project 0",
+      status: { type: "started" },
+      labels: [],
+      milestones: expect.any(Array),
+    });
+    expect(linear.mutations).toEqual([]);
+  });
+
+  it("never nests connections or requests more than 50 nodes in one query", async () => {
+    const linear = fakeLinear();
+    await reconcileTopology(linear.gql, { teamId: "team-1" });
+    linear.queries.length = 0;
+    await readTopology(linear.gql);
+
+    expect(linear.queries.length).toBeGreaterThan(0);
+    for (const query of linear.queries) {
+      const connections = [...query.matchAll(/first: (\d+)/g)].map((m) => Number(m[1]));
+      expect(connections).toHaveLength(1);
+      expect(connections[0]).toBeLessThanOrEqual(50);
+    }
   });
 });

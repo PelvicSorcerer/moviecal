@@ -62,6 +62,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { requiredSecretPresent } from "../src/openrouter-transport.mjs";
 import {
   configDir,
   envLocalPath,
@@ -78,6 +79,11 @@ import {
   workerCooldownStatePath,
   workerTrialConfigPath,
   workerTrialAssignmentsPath,
+  jevTrialConfigPath,
+  jevTrialAssignmentsPath,
+  jevCohortConfigPath,
+  jevCohortApprovalPath,
+  jevCohortLedgerPath,
   workerUsageStatePath,
   repairLedgerStatePath,
   masterIncidentLedgerStatePath,
@@ -115,9 +121,13 @@ import { LinearClient } from "../src/linear-client.mjs";
 import { getAppToken } from "../src/linear-app-auth.mjs";
 import { evaluatePreflight, worktreeName, branchName } from "../src/preflight.mjs";
 import { describeWorkerBudget } from "../src/turn-budget.mjs";
-import { resolveRouting, resolveDispatchWorker, workerProbeWinners, workerInvocation, modelIdForTier, claudeEffortForTier, claudeModelDoesNotSupportEffort } from "../src/worker-routing.mjs";
+import { resolveRouting, resolveDispatchWorker, workerProbeWinners, workerInvocation, modelIdForTier, claudeEffortForTier, claudeModelDoesNotSupportEffort, codexReasoningEffortForTier } from "../src/worker-routing.mjs";
 import { WorkerCooldownStore, WORKERS as WORKER_POOLS } from "../src/worker-cooldown.mjs";
 import { WorkerTrialStore, describeTrialState } from "../src/worker-trial.mjs";
+import { JevArmStore, describeJevState, isEligibleForJevArm, ELIGIBLE_LABEL as JEV_ELIGIBLE_LABEL } from "../src/jev-trial.mjs";
+import { JevCohortStore } from "../src/jev-cohort.mjs";
+import { readOpenRouterAccount } from "../src/openrouter-account.mjs";
+import { OPENROUTER_UPSTREAM } from "../src/openrouter-transport.mjs";
 import { inferExecutionRoute, resolveExecutionRoute } from "../src/execution-routing.mjs";
 import {
   describeDelegate,
@@ -125,6 +135,7 @@ import {
   selectCloudCandidates,
 } from "../src/dispatch-eligibility.mjs";
 import { DispatcherLock, WorktreeManager } from "../src/worktree-manager.mjs";
+import { resolveGcSchedule, shouldRunScheduledGc, formatGcLogRecord, appendGcLog } from "../src/gc-schedule.mjs";
 import { WorktreeRetention, formatResult } from "../src/worktree-retention.mjs";
 import { UsageLimitStore } from "../src/usage-limit.mjs";
 import { runOnce, runOperatorResume, DISPATCH_BREAKERS } from "../src/run-loop.mjs";
@@ -364,6 +375,18 @@ async function cmdDoctor() {
     checks.push({ name: "worker:any trial routing", ok: state.status !== "invalid", detail: describeTrialState(state) });
   }
 
+  // MOV-427: bounded Jev router-arm admission. Read-only; an invalid config
+  // fails the check because admission refuses eligible issues until fixed.
+  // No live routing exists yet, so this never affects worker/model dispatch.
+  {
+    const state = buildJevArmStore().state(new Date());
+    checks.push({ name: "jev arm admission", ok: state.status !== "invalid", detail: describeJevState(state) });
+  }
+  {
+    const state = buildJevCohortStore().state(new Date());
+    checks.push({ name: "guarded Jev cohort", ok: state.status !== "invalid", detail: JSON.stringify(state) });
+  }
+
   // MOV-386: the last effective Claude worker permission mode and tool set,
   // read from the usage ledger (each run's own system/init event). Read-only;
   // a recorded mismatch fails the check so it cannot go unnoticed.
@@ -520,6 +543,109 @@ function cmdTrial(args) {
   return 1;
 }
 
+function buildJevArmStore() {
+  return new JevArmStore({ configPath: jevTrialConfigPath(), ledgerPath: jevTrialAssignmentsPath() });
+}
+
+function buildJevCohortStore() {
+  return new JevCohortStore({ configPath: jevCohortConfigPath(),
+    approvalPath: jevCohortApprovalPath(), ledgerPath: jevCohortLedgerPath() });
+}
+
+/**
+ * MOV-427: `dispatcher jev status|activate|stop`. Activation and early stop
+ * touch only the arm config file: stop never deletes an assignment/spend
+ * record or disturbs running work, and neither needs (or contends for) the
+ * run lock. No live routing exists yet -- admission is bookkeeping ahead of
+ * MOV-428/429's transport.
+ */
+function cmdJev(args) {
+  const [action, ...flags] = args;
+  const store = buildJevArmStore();
+  const flag = (name) => {
+    const i = flags.indexOf(name);
+    return i === -1 ? undefined : flags[i + 1];
+  };
+  try {
+    if (action === "status") {
+      const state = store.state(new Date());
+      console.log(JSON.stringify(state, null, 2));
+      console.log(describeJevState(state));
+      return state.status === "invalid" ? 1 : 0;
+    }
+    if (action === "activate") {
+      const max = flag("--max-assignments");
+      const spend = flag("--spend-ceiling-usd");
+      const state = store.activate({
+        trialId: flag("--id"),
+        armId: flag("--arm"),
+        policyHash: flag("--policy-hash"),
+        expiresAt: flag("--expires"),
+        maxAssignments: max === undefined ? undefined : Number(max),
+        spendCeilingUsd: spend === undefined ? undefined : Number(spend),
+      });
+      console.log(describeJevState(state));
+      return 0;
+    }
+    if (action === "stop") {
+      console.log(describeJevState(store.stop()));
+      return 0;
+    }
+  } catch (error) {
+    console.error(`jev ${action} failed: ${error.message}`);
+    return 1;
+  }
+  console.error("Usage: dispatcher jev status | activate --id <trialId> --arm <jev-hosted|jev-oss> --policy-hash <hash> --expires <ISO UTC> --max-assignments <1-12> --spend-ceiling-usd <n> | stop");
+  return 1;
+}
+
+// Settle paid requests a dead broker left pending. Dry run unless --apply.
+async function cmdJevCohortReconcile(store, flags) {
+  const apply = flags.includes("--apply");
+  const ageFlag = flags.indexOf("--min-age-sec");
+  const minAgeMs = ageFlag < 0 ? undefined : Number(flags[ageFlag + 1]) * 1000;
+  try {
+    if (minAgeMs !== undefined && !(minAgeMs >= 0)) throw new Error("--min-age-sec must be a non-negative number");
+    const credential = path.join(store.storeRoot, "openrouter-jev.env");
+    const match = /^OPENROUTER_API_KEY=([A-Za-z0-9_-]{8,256})$/.exec(fs.readFileSync(credential, "utf8").trim());
+    if (!match) throw new Error("provider credential invalid");
+    const account = await readOpenRouterAccount(OPENROUTER_UPSTREAM, match[1]);
+    const result = store.reconcileOrphans(account, { apply, ...(minAgeMs === undefined ? {} : { minAgeMs }) });
+    console.log(JSON.stringify({ ...result, state: store.state() }, null, 2));
+    return result.outcome === "stop" ? 1 : 0;
+  } catch (error) { console.error(`jev-cohort reconcile failed: ${error.message}`); return 1; }
+}
+
+function cmdJevCohort(args) {
+  const store = buildJevCohortStore();
+  const [action, ...flags] = args;
+  const flag = (name) => { const i = flags.indexOf(name); return i < 0 ? undefined : flags[i + 1]; };
+  try {
+    if (action === "status") { console.log(JSON.stringify(store.state(), null, 2)); return store.state().status === "invalid" ? 1 : 0; }
+    if (action === "preview") {
+      const state = store.state();
+      const issue = flag("--issue");
+      console.log(JSON.stringify({ state, issue: issue || null,
+        side: issue ? store.side(issue) : null, assignment: issue ? store.get(issue) : null }, null, 2));
+      return state.status === "invalid" ? 1 : 0;
+    }
+    if (action === "activate") { console.log(JSON.stringify(store.activate(), null, 2)); return 0; }
+    if (action === "stop") { console.log(JSON.stringify(store.stop(), null, 2)); return 0; }
+    if (action === "export") { console.log(JSON.stringify(store.export(), null, 2)); return 0; }
+    if (action === "reconcile") {
+      // Async: handled by the caller so the account read can be awaited.
+      return cmdJevCohortReconcile(store, flags);
+    }
+    if (action === "fee") {
+      console.log(JSON.stringify(store.recordFee({ id: flag("--id"), amountUsd: Number(flag("--usd")),
+        description: flag("--description") || "fee" }), null, 2));
+      return 0;
+    }
+  } catch (error) { console.error(`jev-cohort ${action} failed: ${error.message}`); return 1; }
+  console.error("Usage: dispatcher jev-cohort status|preview [--issue MOV-N]|activate|stop|export|reconcile [--apply] [--min-age-sec N]|fee --id ID --usd N [--description ID]");
+  return 1;
+}
+
 async function cmdDryRun({ fixturePath } = {}) {
   let issues;
   if (fixturePath) {
@@ -551,6 +677,12 @@ async function cmdDryRun({ fixturePath } = {}) {
   // Previewing never admits, so it never consumes an assignment slot.
   const trials = buildWorkerTrialStore();
   const trialState = trials.state(new Date());
+  // MOV-427: read-only snapshot of the same Jev arm admission `dispatcher run`
+  // uses. Previewing never admits, so it never consumes a slot or spend.
+  const jevArm = buildJevArmStore();
+  const jevState = jevArm.state(new Date());
+  const cohort = buildJevCohortStore();
+  const cohortState = cohort.state(new Date());
 
   const requestedRoutes = issues.map((issue) => resolveDispatchWorker(issue, {
     boundWorker: usageLimits.get(issue.identifier)?.worker ?? null,
@@ -566,7 +698,9 @@ async function cmdDryRun({ fixturePath } = {}) {
     },
   });
 
-  console.log(`worker:any trial: ${describeTrialState(trialState)}\n`);
+  console.log(`worker:any trial: ${describeTrialState(trialState)}`);
+  console.log(`jev arm:         ${describeJevState(jevState)}\n`);
+  console.log(`jev cohort:      ${JSON.stringify(cohortState)}\n`);
   console.log(`${issues.length} issue(s) in Ready for Agent:\n`);
   let routingError = false;
   const trialConfigError = trialState.status === "invalid";
@@ -595,7 +729,7 @@ async function cmdDryRun({ fixturePath } = {}) {
       iosRunnerOnline: true, // dry-run: does not hit the network; use `doctor` for the live check
       activeWorktreeCount: activeWorktreeCount.ok ? activeWorktreeCount.value : 0,
       concurrencyLimit: DEFAULT_CONCURRENCY,
-      secretPresent: () => fs.existsSync(envLocalPath()),
+      secretPresent: (name) => requiredSecretPresent(name, { envLocalPath: envLocalPath() }),
       // dry-run: deliberately plain isPathFree, not isPathFreeForIssue
       // (MOV-181) -- the latter performs a real `git worktree remove` when
       // it reclaims, which would violate this command's "no worktree,
@@ -620,6 +754,24 @@ async function cmdDryRun({ fixturePath } = {}) {
     if (resolvedWorker.trial) {
       const t = resolvedWorker.trial;
       console.log(`  trial:    ${t.trialId} — requested worker:any, resolved ${resolvedWorker.worker}, ${t.pending ? "would be assigned at dispatch" : `assigned ${t.assignedAt}`}; ${t.routingReason}`);
+    }
+    // MOV-427: preview only -- never admits. Existing assignments are shown
+    // as-is; a fresh issue shows whether it would be admitted right now.
+    {
+      const existingJev = jevArm.get(issue.identifier);
+      if (existingJev) {
+        console.log(`  jev arm:  ${existingJev.trialId}/${existingJev.armId} — assigned ${existingJev.assignedAt}; ${existingJev.reason}`);
+      } else if (jevState.status === "active") {
+        const eligibility = isEligibleForJevArm(issue, { eligibleLabel: JEV_ELIGIBLE_LABEL });
+        console.log(`  jev arm:  ${eligibility.eligible ? `would be admitted to ${jevState.trialId}/${jevState.armId} at dispatch` : `not eligible — ${eligibility.reason}`}`);
+      }
+    }
+    if (cohortState.status !== "disabled") {
+      const preview = tryRun(() => cohort.preview(issue, { worker: resolvedWorker.worker,
+        tier: routing.model, effort: resolvedWorker.worker === "codex" ? codexReasoningEffortForTier(routing.model) : null,
+        now: previewNow }));
+      if (preview.ok && preview.value.side) console.log(`  jev cohort: ${preview.value.side} — ${preview.value.admitted ? "would use guarded API route" : `refused: ${preview.value.reason}`}`);
+      if (!preview.ok) console.log("  jev cohort: invalid policy; guarded route refused");
     }
     const quota = cooldownSnapshot[resolvedWorker.worker];
     if (quota?.cooling || quota?.probeOwed) console.log(`  worker cooldown: ${quota.cooling ? "COOLING" : "PROBE OWED"} until ${quota.resetAt}`);
@@ -711,14 +863,24 @@ function parseGcArgs(args) {
 async function cmdGc(args = []) {
   let parsed;
   try { parsed = parseGcArgs(args); } catch (error) { console.error(error.message); return 1; }
-  const auth = resolveLinearAuth();
-  const linear = auth.mode === "app" ? new LinearClient({ appAuth: auth.appAuth })
-    : auth.mode === "apiKey" ? new LinearClient({ apiKey: auth.apiKey }) : null;
   const lock = parsed.dryRun ? null : new DispatcherLock(dispatcherLockPath());
   if (lock) {
     try { lock.acquire(); } catch (error) { console.error(error.message); return 2; }
     process.once("exit", () => lock.release());
   }
+  return runGcPass(parsed);
+}
+
+/**
+ * The gc work itself. The caller must already hold the dispatcher lock for a
+ * live pass: `cmdGc` takes it, and `cmdRun` holds it for its whole life and
+ * calls this between polls (MOV-447) -- a separate launchd `gc` job could
+ * never acquire the daemon's lock.
+ */
+async function runGcPass(parsed, { onResults } = {}) {
+  const auth = resolveLinearAuth();
+  const linear = auth.mode === "app" ? new LinearClient({ appAuth: auth.appAuth })
+    : auth.mode === "apiKey" ? new LinearClient({ apiKey: auth.apiKey }) : null;
   const manager = new WorktreeManager({ repoRoot: REPO_ROOT, worktreeRoot: worktreeRoot(), statePath: worktreesStatePath() });
   const usageLimits = new UsageLimitStore(usageLimitStatePath());
   const retention = new WorktreeRetention({
@@ -747,6 +909,7 @@ async function cmdGc(args = []) {
     console.error(`worktree inventory failed: ${error.message}`);
     return 1;
   }
+  if (onResults) onResults(results);
   if (parsed.json) {
     console.log(JSON.stringify({ dryRun: parsed.dryRun, retentionDays: parsed.retentionDays, results }, null, 2));
   } else {
@@ -1402,6 +1565,27 @@ function buildAgentStreamClient() {
   return new AgentStreamClient(streamConfig);
 }
 
+/** One scheduled gc pass; never throws, always leaves a worktree-gc.log record (MOV-491). */
+async function runScheduledGc() {
+  let parsed = { retentionDays: null };
+  let results = [];
+  let exitCode = 1;
+  let error = null;
+  try {
+    parsed = parseGcArgs([]);
+    exitCode = await runGcPass(parsed, { onResults: (r) => { results = r; } });
+    if (exitCode !== 0) console.error(`Scheduled worktree gc finished with exit code ${exitCode}`);
+  } catch (err) {
+    error = err.message;
+    console.error("Scheduled worktree gc failed (continuing to dispatch):", err.message);
+  }
+  try {
+    appendGcLog(logRoot(), formatGcLogRecord({ exitCode, retentionDays: parsed.retentionDays, results, error }));
+  } catch (err) {
+    console.error("Could not write worktree-gc.log:", err.message);
+  }
+}
+
 async function cmdRun({ once, intervalMs }) {
   const lock = new DispatcherLock(dispatcherLockPath());
   try { lock.acquire(); } catch (err) { console.error(err.message); return 2; }
@@ -1447,7 +1631,19 @@ async function cmdRun({ once, intervalMs }) {
   console.log(`Starting poll loop (interval: ${intervalMs}ms). Press Ctrl+C to stop.`);
   // eslint-disable-next-line no-constant-condition
   let firstPoll = true;
+  let lastGcAt = 0;
+  const gcSchedule = resolveGcSchedule();
+  for (const warning of gcSchedule.warnings) console.error(`Scheduled worktree gc: ${warning}`);
+  if (!gcSchedule.enabled) console.log("Scheduled worktree gc is disabled (MOVIECAL_GC_SCHEDULED).");
   while (true) {
+    // MOV-447: nothing else schedules gc. Run it in-process, between polls
+    // (the single dispatch slot is idle here). MOV-491: MOVIECAL_GC_SCHEDULED
+    // and MOVIECAL_GC_HOUR control whether and when; every pass is appended to
+    // worktree-gc.log.
+    if (!firstPoll && shouldRunScheduledGc({ schedule: gcSchedule, now: new Date(), lastRunAt: lastGcAt })) {
+      lastGcAt = Date.now();
+      await runScheduledGc();
+    }
     try {
       const result = await cmdRunOnce({ repairLockHeld: lock.owned });
       if (firstPoll) {
@@ -1580,6 +1776,12 @@ async function main() {
     }
     case "trial":
       process.exitCode = cmdTrial(rest);
+      break;
+    case "jev":
+      process.exitCode = cmdJev(rest);
+      break;
+    case "jev-cohort":
+      process.exitCode = await cmdJevCohort(rest);
       break;
     case "doctor":
       process.exitCode = await cmdDoctor();

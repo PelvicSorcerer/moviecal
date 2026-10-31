@@ -6,17 +6,94 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { WatchlistDetailClient } from '../src/app/watchlist/watchlist-detail-client';
 import {
   buildWatchlistItem,
+  buildWatchlistMovie,
   buildWatchlistSummary,
 } from './support';
+
+const refresh = vi.fn();
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    refresh,
+  }),
+}));
 
 describe('WatchlistDetailClient', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());
+    refresh.mockReset();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+  });
+
+  it.each(['personal', 'shared'] as const)('links an empty %s watchlist to Search', (kind) => {
+    render(
+      <WatchlistDetailClient
+        initialItems={[]}
+        watchlist={buildWatchlistSummary({ kind, name: 'Movie night' })}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'This watchlist is empty' })).toBeTruthy();
+    expect(screen.getByText('Save movies from search and target Movie night to manage them here.')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Search movies' }).getAttribute('href')).toBe('/search');
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('guides read-only members toward a watchlist they can edit', () => {
+    render(
+      <WatchlistDetailClient
+        initialItems={[]}
+        watchlist={buildWatchlistSummary({ kind: 'shared', canEdit: false })}
+      />,
+    );
+
+    expect(screen.getByText('Read-only access')).toBeTruthy();
+    expect(screen.getByText('Search for movies to save to a watchlist you can edit.')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Search movies' }).getAttribute('href')).toBe('/search');
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+  });
+
+  it('renders populated lists without the empty-state action', () => {
+    render(
+      <WatchlistDetailClient
+        initialItems={[buildWatchlistItem()]}
+        watchlist={buildWatchlistSummary()}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'The Matrix' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeTruthy();
+    expect(screen.queryByText('This watchlist is empty')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Search movies' })).toBeNull();
+  });
+
+  describe.each(['personal', 'shared'] as const)('%s watchlist release dates', (kind) => {
+    it.each([
+      ['2027-03-05', 'Mar 5, 2027'],
+      ['2027-01-01', 'Jan 1, 2027'],
+      [null, 'Release date TBA'],
+      ['', 'Release date TBA'],
+      ['2027-02-29', 'Release date TBA'],
+    ])('renders %s as %s', (releaseDate, expected) => {
+      render(
+        <WatchlistDetailClient
+          initialItems={[buildWatchlistItem({
+            movie: buildWatchlistMovie(undefined, { releaseDate }),
+          })]}
+          watchlist={buildWatchlistSummary({ kind })}
+        />,
+      );
+
+      expect(screen.getByText(expected)).toBeTruthy();
+      expect(screen.queryByText('Invalid Date')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Remove' })).toBeTruthy();
+      expect(fetch).not.toHaveBeenCalled();
+    });
   });
 
   it('removes an item from the targeted watchlist detail page', async () => {
@@ -54,6 +131,7 @@ describe('WatchlistDetailClient', () => {
     expect(
       screen.getByText('Removed The Matrix from Friday movie night.'),
     ).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Search movies' })).toBeTruthy();
   });
 
   it('keeps the movie visible when the targeted delete fails', async () => {
@@ -103,5 +181,121 @@ describe('WatchlistDetailClient', () => {
       ),
     ).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+  });
+
+  it('lets an editor rename a shared watchlist and refreshes the page', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        watchlist: {
+          canEdit: true,
+          id: 'shared-watchlist-1',
+          kind: 'shared',
+          name: 'Saturday movie night',
+          ownerUserId: 'user-1',
+        },
+      }),
+    } as Response);
+
+    render(
+      <WatchlistDetailClient
+        initialItems={[]}
+        watchlist={buildWatchlistSummary({
+          id: 'shared-watchlist-1',
+          kind: 'shared',
+          name: 'Friday movie night',
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    fireEvent.change(screen.getByLabelText('Watchlist name'), {
+      target: { value: 'Saturday movie night' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('heading', { level: 3, name: 'Saturday movie night' }),
+      ).toBeTruthy();
+    });
+
+    expect(fetch).toHaveBeenCalledWith('/api/watchlist/shared/shared-watchlist-1', {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'Saturday movie night' }),
+    });
+    expect(
+      screen.getByText('Renamed watchlist to Saturday movie night.'),
+    ).toBeTruthy();
+    expect(refresh).toHaveBeenCalled();
+  });
+
+  it('shows an error and keeps the previous name when rename fails', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: false,
+      json: async () => ({
+        error: 'Watchlist access denied.',
+      }),
+    } as Response);
+
+    render(
+      <WatchlistDetailClient
+        initialItems={[]}
+        watchlist={buildWatchlistSummary({
+          id: 'shared-watchlist-1',
+          kind: 'shared',
+          name: 'Friday movie night',
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    fireEvent.change(screen.getByLabelText('Watchlist name'), {
+      target: { value: 'Hijacked name' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Watchlist update failed')).toBeTruthy();
+    });
+
+    expect(screen.getByText('Watchlist access denied.')).toBeTruthy();
+    expect(
+      screen.getByRole('heading', { level: 3, name: 'Friday movie night' }),
+    ).toBeTruthy();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('hides the rename control for a personal watchlist', () => {
+    render(
+      <WatchlistDetailClient
+        initialItems={[]}
+        watchlist={buildWatchlistSummary({
+          canEdit: true,
+          kind: 'personal',
+          name: 'My watchlist',
+        })}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Rename' })).toBeNull();
+  });
+
+  it('hides the rename control for a read-only shared membership', () => {
+    render(
+      <WatchlistDetailClient
+        initialItems={[]}
+        watchlist={buildWatchlistSummary({
+          canEdit: false,
+          kind: 'shared',
+          name: 'Curated picks',
+        })}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Rename' })).toBeNull();
   });
 });

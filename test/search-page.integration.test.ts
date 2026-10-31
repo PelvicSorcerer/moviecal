@@ -87,7 +87,8 @@ describe('search page integration seam', () => {
       await SearchPage({ searchParams: Promise.resolve({}) }),
     );
 
-    expect(markup).toContain('Search the TMDb-backed catalog');
+    expect(markup).toContain('Find a movie');
+    expect(markup).toContain('aria-live="polite"');
     expect(markup).toContain('Find release dates without exposing TMDb in the browser.');
     expect(markup).toContain('Search by title');
     expect(markup).not.toContain('Save to');

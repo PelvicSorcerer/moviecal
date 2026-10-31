@@ -1,8 +1,13 @@
 import { TMDbEnvironmentError } from './tmdb/env';
 import type { NormalizedMovieDetail } from './tmdb/client';
-import type { WatchlistRepository } from './watchlist';
+import type { WatchlistMovieRow, WatchlistRepository } from './watchlist';
+
+export const MAX_RELEASE_DATE_CHANGES = 100;
 
 export interface ReleaseRefreshResult {
+  changedMovies: number;
+  unchangedMovies: number;
+  releaseDateChanges: { tmdbId: number; from: string | null; to: string | null }[];
   failedMovieIds: number[];
   failedMovies: number;
   refreshedMovies: number;
@@ -47,34 +52,89 @@ export async function persistMovieUpdate(
   await repository.upsertMovie(detail);
 }
 
+function isMovieUnchanged(stored: WatchlistMovieRow, detail: NormalizedMovieDetail): boolean {
+  const metadata =
+    typeof stored.raw_json === 'object' && stored.raw_json !== null && !Array.isArray(stored.raw_json)
+      ? stored.raw_json
+      : {};
+  const normalizeString = (value: unknown): string | null =>
+    typeof value === 'string' ? value.trim() || null : null;
+
+  return stored.title === detail.title
+    && stored.release_date === detail.releaseDate
+    && normalizeString(metadata.poster_path) === detail.posterPath
+    && normalizeString(metadata.overview) === detail.overview;
+}
+
 export async function runRefreshPipeline(args: {
   repository: WatchlistRepository;
   getMovieDetails: (id: number) => Promise<NormalizedMovieDetail>;
+  concurrency?: number;
 }): Promise<ReleaseRefreshResult> {
+  const concurrency = args.concurrency ?? 5;
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new RangeError('Refresh concurrency must be a positive integer.');
+  }
   const trackedTmdbIds = await selectTrackedMovieIds(args.repository);
 
   let refreshedMovies = 0;
-  const failedMovieIds: number[] = [];
+  let changedMovies = 0;
+  let unchangedMovies = 0;
+  const dateChangesByIndex: (ReleaseRefreshResult['releaseDateChanges'][number] | undefined)[] = [];
+  const failedIds = new Set<number>();
+  let nextIndex = 0;
+  let environmentError: TMDbEnvironmentError | undefined;
 
-  for (const tmdbId of trackedTmdbIds) {
-    const fetchResult = await fetchMovieDetail(tmdbId, args.getMovieDetails);
+  async function refreshMovies(): Promise<void> {
+    while (!environmentError && nextIndex < trackedTmdbIds.length) {
+      const index = nextIndex++;
+      const tmdbId = trackedTmdbIds[index];
 
-    if (!fetchResult.success) {
-      failedMovieIds.push(tmdbId);
-      continue;
-    }
+      try {
+        const fetchResult = await fetchMovieDetail(tmdbId, args.getMovieDetails);
+        if (!fetchResult.success) {
+          failedIds.add(tmdbId);
+          continue;
+        }
 
-    try {
-      await persistMovieUpdate(fetchResult.detail, args.repository);
-      refreshedMovies += 1;
-    } catch {
-      // Persist errors are always treated as per-movie failures (not pipeline aborts);
-      // upsertMovie does not throw TMDbEnvironmentError.
-      failedMovieIds.push(tmdbId);
+        const detail = fetchResult.detail;
+        const stored = await args.repository.findMovieByTmdbId(tmdbId);
+
+        if (stored && isMovieUnchanged(stored, detail)) {
+          unchangedMovies += 1;
+        } else {
+          await persistMovieUpdate(detail, args.repository);
+          changedMovies += 1;
+
+          if (stored && stored.release_date !== detail.releaseDate) {
+            dateChangesByIndex[index] = { tmdbId, from: stored.release_date, to: detail.releaseDate };
+          }
+        }
+        refreshedMovies += 1;
+      } catch (error) {
+        if (error instanceof TMDbEnvironmentError) {
+          environmentError ??= error;
+        } else {
+          failedIds.add(tmdbId);
+        }
+      }
     }
   }
 
+  await Promise.all(Array.from(
+    { length: Math.min(concurrency, trackedTmdbIds.length) },
+    () => refreshMovies(),
+  ));
+  if (environmentError) {
+    throw environmentError;
+  }
+
+  const failedMovieIds = trackedTmdbIds.filter((tmdbId) => failedIds.has(tmdbId));
   return {
+    changedMovies,
+    unchangedMovies,
+    releaseDateChanges: dateChangesByIndex.filter((change) => change !== undefined)
+      .slice(0, MAX_RELEASE_DATE_CHANGES),
     failedMovieIds,
     failedMovies: failedMovieIds.length,
     refreshedMovies,

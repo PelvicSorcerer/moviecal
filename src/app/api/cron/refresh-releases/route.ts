@@ -8,7 +8,7 @@ import {
   createServerSupabaseServiceRoleClient,
 } from '../../../../lib/supabase/server';
 import { createSupabaseWatchlistRepository } from '../../../../lib/supabase/watchlist';
-import { getMovieDetails } from '../../../../lib/tmdb/client';
+import { getFreshMovieDetails } from '../../../../lib/tmdb/client';
 import { TMDbEnvironmentError } from '../../../../lib/tmdb/env';
 import { apiError, handleDomainError } from '../../../../lib/api/response';
 
@@ -59,25 +59,30 @@ async function handleRefreshRequest(request: NextRequest) {
     }
 
     const result = await runRefreshPipeline({
-      getMovieDetails,
+      getMovieDetails: (tmdbId) => getFreshMovieDetails(tmdbId),
       repository: createRefreshRepository(),
     });
 
-    const { trackedMovies, refreshedMovies, failedMovies } = result;
+    const {
+      trackedMovies, refreshedMovies, failedMovies,
+      changedMovies, unchangedMovies, releaseDateChanges,
+    } = result;
+    const summary = {
+      trackedMovies, refreshedMovies, failedMovies,
+      changedMovies, unchangedMovies, releaseDateChanges,
+    };
 
     if (failedMovies > 0) {
       return NextResponse.json(
         {
           error: 'One or more movie refreshes failed.',
-          trackedMovies,
-          refreshedMovies,
-          failedMovies,
+          ...summary,
         },
         { status: 502 },
       );
     }
 
-    return NextResponse.json({ trackedMovies, refreshedMovies, failedMovies });
+    return NextResponse.json(summary);
   } catch (error) {
     if (error instanceof CronEnvironmentError) {
       return apiError('Release refresh is unavailable until cron auth is configured.', 503);

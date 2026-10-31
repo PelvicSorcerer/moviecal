@@ -15,7 +15,7 @@ import { createSupabaseWatchlistRepository } from '../../../../lib/supabase/watc
 import { WatchlistInvitePageClient } from './watchlist-invite-page-client';
 
 export const metadata: Metadata = {
-  title: 'Watchlist invite | moviecal',
+  title: 'Watchlist invite',
   description: 'Accept a shared watchlist invite through the moviecal app.',
 };
 

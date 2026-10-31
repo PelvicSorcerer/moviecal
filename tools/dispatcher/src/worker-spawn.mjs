@@ -7,6 +7,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { Transform } from "node:stream";
+import { randomUUID } from "node:crypto";
+import { logKill } from "./kill-log.mjs";
 import { isCodexWorkItemEvent } from "./budget-unit.mjs";
 import { prepareCodexContainment } from "./codex-containment.mjs";
 import { renderDependencyInstallBlocker, writeDependencyInstallRecord } from "./dependency-install.mjs";
@@ -163,11 +165,13 @@ function killProcessGroup(pid, signal) {
  * first, then SIGKILL after a grace period, both idempotent against an
  * already-empty group.
  */
-function reapProcessGroup(pid, { graceMs, killImpl }) {
+function reapProcessGroup(pid, { graceMs, killImpl, record = () => {} }) {
   if (!pid) return Promise.resolve();
+  record(pid, "SIGTERM");
   killImpl(pid, "SIGTERM");
   return new Promise((resolve) => {
     setTimeout(() => {
+      record(pid, "SIGKILL");
       killImpl(pid, "SIGKILL");
       resolve();
     }, graceMs);
@@ -203,6 +207,8 @@ function reapProcessGroup(pid, { graceMs, killImpl }) {
  *   `system/init` event (Claude only emits one), so the caller can confirm the effective permission mode and tool set
  *   while the worker runs. Observation only: a throwing callback is swallowed and never affects the worker.
  * @param {object|null} [opts.trial] - MOV-383: worker-trial attribution (trialId, requestedWorker, resolvedWorker, routingReason, assignedAt) recorded in manifest.json; null outside a trial
+ * @param {object|null} [opts.jev] - MOV-427: Jev router-arm admission attribution (trialId, armId, policyHash, worker, routingReason, assignedAt) recorded in manifest.json; null outside the arm
+ * @param {object|null} [opts.providerTransport] - MOV-425: trusted, explicit Codex OpenRouter transport configuration; absent in production until MOV-429 wires a reviewed route
  * @param {object|null} [opts.dependencyInstall] - MOV-412: the dispatcher's pre-spawn dependency install result, recorded in manifest.json; null when the caller ran no install
  * @returns {Promise<{exitCode: number, logDir: string, pid: number|null}>|{promise: Promise<{exitCode: number, logDir: string, pid: number|null}>, writeTurn: (text: string) => void, requestClose: () => void, nextTurnBoundary: () => Promise<{ended: boolean}>}}
  */
@@ -224,6 +230,9 @@ export function spawnWorker({
   onAssistantTurn = null,
   onWorkerInit = null,
   trial = null,
+  jev = null,
+  providerTransport = null,
+  issueIdentifier = null,
   dependencyInstall = null,
   prepareCodexContainmentFn = prepareCodexContainment,
 }) {
@@ -245,10 +254,37 @@ export function spawnWorker({
 
   const promise = new Promise((resolve, reject) => {
     const startedAt = new Date().toISOString();
+    const attemptId = randomUUID();
+    const recordKill = (pid, killSignal, caller) => logKill(path.join(logDir, "dispatcher-kills.jsonl"), {
+      caller: `worker-spawn.${caller}`, target: { pgid: pid }, signal: killSignal, reason: caller === "abort-signal" ? "dispatcher aborted this attempt" : "reap leftover group after worker close",
+      entry: { attemptId, issue: issueIdentifier ?? null },
+    });
     let effectiveInvocation = invocation;
     let workerEnv = process.env;
     if (!securityContext && spawnImpl === spawn) {
       reject(new Error("production worker launch requires a securityContext and OS guard"));
+      return;
+    }
+    if (["jev-hosted", "fixed-control"].includes(jev?.armId) && !providerTransport) {
+      childClosed = true;
+      reject(new Error("Jev hosted transport is disabled; routed issue requires human review before dispatch"));
+      return;
+    }
+    if (providerTransport && (!["jev-hosted", "fixed-control"].includes(jev?.armId)
+      || jev.policyHash !== providerTransport.policy?.hash
+      || (jev.armId === "fixed-control" && providerTransport.policy?.side !== "control"))) {
+      childClosed = true;
+      reject(new Error("OpenRouter transport requires matching Jev admission and policy"));
+      return;
+    }
+    if (providerTransport && path.basename(invocation.command) !== "codex") {
+      childClosed = true;
+      reject(new Error("OpenRouter transport is restricted to guarded Codex workers"));
+      return;
+    }
+    if (providerTransport && !securityContext) {
+      childClosed = true;
+      reject(new Error("OpenRouter transport requires the native worker guard"));
       return;
     }
     if (securityContext) {
@@ -269,6 +305,8 @@ export function spawnWorker({
       if (path.basename(invocation.command) === "codex") {
         containment = prepareCodexContainmentFn({ invocation, cwd, logDir, repositoryPaths,
           mode: securityContext.mode || "implementation", home: securityContext.home,
+          openRouterTransport: providerTransport,
+          accounting: { issue: issueIdentifier, attemptId },
           sourceEnvironment: { ...process.env, ...(iosSimLeaseId ? { MOVIECAL_IOS_SIM_LEASE_ID: iosSimLeaseId } : {}) } });
         effectiveInvocation = containment.invocation;
         workerEnv = containment.environment;
@@ -346,7 +384,7 @@ export function spawnWorker({
     }
 
     if (signal) {
-      const killOnAbort = () => reapProcessGroup(child.pid, { graceMs: killGraceMs, killImpl });
+      const killOnAbort = () => reapProcessGroup(child.pid, { graceMs: killGraceMs, killImpl, record: (pid, sig) => recordKill(pid, sig, "abort-signal") });
       if (signal.aborted) killOnAbort();
       else signal.addEventListener("abort", killOnAbort, { once: true });
     }
@@ -381,6 +419,7 @@ export function spawnWorker({
     // the resolved result (e.g. reading the log tail, or a test's cleanup
     // removing the log directory) can race an in-flight disk write.
     let exitCode = null;
+    let exitSignal = null;
     let settled = false;
     const pending = new Set(["child", "stdout", "stderr", "reap"]);
 
@@ -396,10 +435,15 @@ export function spawnWorker({
             args: invocation.args,
             cwd,
             startedAt,
+            attemptId,
             endedAt,
             exitCode,
+            // The terminating signal, when the OS ended the worker rather than it exiting.
+            signal: exitSignal,
             // MOV-383: worker-trial attribution; null outside a trial.
             trial,
+            // MOV-427: Jev router-arm admission attribution; null outside the arm.
+            jev,
             // MOV-412: the dispatcher's own pre-spawn install, kept out of the
             // worker transcript that the audit and verification evidence read.
             dependencyInstall,
@@ -410,7 +454,7 @@ export function spawnWorker({
           2,
         ) + "\n",
       );
-      resolve({ exitCode: exitCode ?? 1, logDir, pid: child.pid || null });
+      resolve({ exitCode: exitCode ?? 1, signal: exitSignal, logDir, pid: child.pid || null });
     };
 
     stdoutStream.on("finish", () => {
@@ -430,12 +474,13 @@ export function spawnWorker({
       stderrStream.destroy();
       reject(err);
     });
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       exitCode = code;
+      exitSignal = signal || null;
       childClosed = true;
       while (turnWaiters.length) turnWaiters.shift()({ ended: true });
       pending.delete("child");
-      reapProcessGroup(child.pid, { graceMs: killGraceMs, killImpl }).then(() => {
+      reapProcessGroup(child.pid, { graceMs: killGraceMs, killImpl, record: (pid, sig) => recordKill(pid, sig, "worker-closed-reap") }).then(() => {
         pending.delete("reap");
         maybeFinish();
       });

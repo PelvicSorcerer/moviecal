@@ -19,7 +19,7 @@ vi.mock('../src/lib/tmdb/client', async () => {
 
   return {
     ...actual,
-    searchMovies: mocks.searchMovies,
+    searchMoviesPage: mocks.searchMovies,
   };
 });
 
@@ -46,9 +46,12 @@ describe('movie search route integration seam', () => {
   });
 
   it('returns normalized results through GET /api/movies/search', async () => {
-    mocks.searchMovies.mockResolvedValue(
-      buildNormalizedMovieSummaries([TEST_TMDB_IDS.MATRIX, TEST_TMDB_IDS.INCEPTION]),
-    );
+    mocks.searchMovies.mockResolvedValue({
+      results: buildNormalizedMovieSummaries([TEST_TMDB_IDS.MATRIX, TEST_TMDB_IDS.INCEPTION]),
+      page: 1,
+      totalPages: 3,
+      totalResults: 153,
+    });
 
     const { GET } = await import('../src/app/api/movies/search/route');
     const response = await GET(
@@ -57,6 +60,9 @@ describe('movie search route integration seam', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
+      page: 1,
+      totalPages: 3,
+      totalResults: 153,
       results: [
         {
           tmdbId: TEST_TMDB_IDS.MATRIX,
@@ -74,11 +80,11 @@ describe('movie search route integration seam', () => {
         },
       ],
     });
-    expect(mocks.searchMovies).toHaveBeenCalledWith('matrix');
+    expect(mocks.searchMovies).toHaveBeenCalledWith('matrix', 1);
   });
 
   it('returns an empty result set when no movies match the query', async () => {
-    mocks.searchMovies.mockResolvedValue([]);
+    mocks.searchMovies.mockResolvedValue({ results: [], page: 1, totalPages: 0, totalResults: 0 });
 
     const { GET } = await import('../src/app/api/movies/search/route');
     const response = await GET(
@@ -86,7 +92,20 @@ describe('movie search route integration seam', () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ results: [] });
+    await expect(response.json()).resolves.toEqual({ results: [], page: 1, totalPages: 0, totalResults: 0 });
+  });
+
+  it.each([1, 2, 500])('passes validated page %s to the provider', async (page) => {
+    const payload = { results: [], page, totalPages: 500, totalResults: 5000 };
+    mocks.searchMovies.mockResolvedValue(payload);
+    const { GET } = await import('../src/app/api/movies/search/route');
+    const response = await GET(new NextRequest(
+      `https://moviecal.test/api/movies/search?q=matrix&page=${page}`,
+    ));
+
+    expect(response.status).toBe(200);
+    expect(mocks.searchMovies).toHaveBeenCalledWith('matrix', page);
+    await expect(response.json()).resolves.toEqual(payload);
   });
 
   it('returns a safe 503 when TMDb is not configured', async () => {
@@ -131,6 +150,9 @@ describe('movie search route integration seam', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
+      page: 1,
+      totalPages: 1,
+      totalResults: 1,
       results: [
         {
           tmdbId: TEST_TMDB_IDS.MATRIX,
@@ -155,7 +177,7 @@ describe('movie search route integration seam', () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ results: [] });
+    await expect(response.json()).resolves.toEqual({ results: [], page: 1, totalPages: 1, totalResults: 0 });
     expect(mocks.searchMovies).not.toHaveBeenCalled();
 
     vi.unstubAllEnvs();

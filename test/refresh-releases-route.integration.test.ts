@@ -23,7 +23,7 @@ vi.mock('../src/lib/tmdb/client', async () => {
 
   return {
     ...actual,
-    getMovieDetails: mocks.getMovieDetails,
+    getFreshMovieDetails: mocks.getMovieDetails,
   };
 });
 
@@ -67,6 +67,8 @@ describe('refresh releases route', () => {
         buildMovieRow(),
         buildMovieRow({ id: 43, tmdb_id: 27205, title: 'Inception' }),
       ]),
+      findMovieByTmdbId: vi.fn(async (tmdbId) => buildMovieRow({ tmdb_id: tmdbId,
+        title: tmdbId === 603 ? 'The Matrix' : 'Inception' })),
       upsertMovie,
     });
     mocks.getMovieDetails
@@ -102,12 +104,15 @@ describe('refresh releases route', () => {
       trackedMovies: 2,
       refreshedMovies: 2,
       failedMovies: 0,
+      changedMovies: 1,
+      unchangedMovies: 1,
+      releaseDateChanges: [{ tmdbId: 27205, from: '1999-03-31', to: '2010-07-16' }],
     });
     expect(mocks.createSupabaseWatchlistRepository).toHaveBeenCalledWith({
       adminClient: { name: 'service-role-client' },
       userClient: { name: 'service-role-client' },
     });
-    expect(upsertMovie).toHaveBeenCalledTimes(2);
+    expect(upsertMovie).toHaveBeenCalledTimes(1);
   });
 
   it('allows the Vercel cron GET request shape with bearer auth', async () => {
@@ -115,6 +120,7 @@ describe('refresh releases route', () => {
 
     mocks.createSupabaseWatchlistRepository.mockReturnValue({
       listTrackedMovies: vi.fn(async () => [buildMovieRow()]),
+      findMovieByTmdbId: vi.fn(async () => buildMovieRow()),
       upsertMovie,
     });
     mocks.getMovieDetails.mockResolvedValue({
@@ -142,8 +148,11 @@ describe('refresh releases route', () => {
       trackedMovies: 1,
       refreshedMovies: 1,
       failedMovies: 0,
+      changedMovies: 0,
+      unchangedMovies: 1,
+      releaseDateChanges: [],
     });
-    expect(upsertMovie).toHaveBeenCalledTimes(1);
+    expect(upsertMovie).not.toHaveBeenCalled();
   });
 
   it('rejects unauthorized refresh attempts', async () => {
@@ -163,22 +172,23 @@ describe('refresh releases route', () => {
   });
 
   it('returns a safe aggregate failure when one or more refreshes fail', async () => {
-    const upsertMovie = vi.fn(async () => {
-      throw new Error('db write failed');
-    });
+    const upsertMovie = vi.fn()
+      .mockRejectedValueOnce(new Error('db write failed'))
+      .mockResolvedValueOnce({ id: 43 });
 
     mocks.createSupabaseWatchlistRepository.mockReturnValue({
-      listTrackedMovies: vi.fn(async () => [buildMovieRow()]),
+      listTrackedMovies: vi.fn(async () => [buildMovieRow(), buildMovieRow({ tmdb_id: 550 })]),
+      findMovieByTmdbId: vi.fn(async (tmdbId) => buildMovieRow({ tmdb_id: tmdbId })),
       upsertMovie,
     });
-    mocks.getMovieDetails.mockResolvedValue({
-      tmdbId: 603,
+    mocks.getMovieDetails.mockImplementation(async (tmdbId) => ({
+      tmdbId,
       title: 'The Matrix',
-      releaseDate: '1999-03-31',
+      releaseDate: '2027-01-01',
       posterPath: null,
       overview: null,
       rawJson: { id: 603 },
-    });
+    }));
 
     const { POST } = await import('../src/app/api/cron/refresh-releases/route');
     const response = await POST(
@@ -193,10 +203,57 @@ describe('refresh releases route', () => {
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toEqual({
       error: 'One or more movie refreshes failed.',
-      trackedMovies: 1,
-      refreshedMovies: 0,
+      trackedMovies: 2,
+      refreshedMovies: 1,
       failedMovies: 1,
+      changedMovies: 1,
+      unchangedMovies: 0,
+      releaseDateChanges: [{ tmdbId: 550, from: '1999-03-31', to: '2027-01-01' }],
     });
+  });
+
+  it('uses five concurrent slots and reports partial failures after out-of-order work', async () => {
+    const movies = Array.from({ length: 7 }, (_, index) => buildMovieRow({ tmdb_id: index + 1 }));
+    const completions = movies.map(() => {
+      let complete!: () => void;
+      const promise = new Promise<void>((resolve) => { complete = resolve; });
+      return { promise, complete };
+    });
+    const upsertMovie = vi.fn(async () => ({ id: 42 }));
+    mocks.createSupabaseWatchlistRepository.mockReturnValue({
+      listTrackedMovies: async () => movies,
+      findMovieByTmdbId: async (tmdbId: number) => movies[tmdbId - 1],
+      upsertMovie,
+    });
+    mocks.getMovieDetails.mockImplementation(async (tmdbId: number) => {
+      await completions[tmdbId - 1].promise;
+      if (tmdbId === 2) throw new Error('fetch failed');
+      return {
+        tmdbId, title: 'The Matrix', releaseDate: '2027-01-01',
+        posterPath: null, overview: null, rawJson: { id: tmdbId },
+      };
+    });
+    const { GET } = await import('../src/app/api/cron/refresh-releases/route');
+    const run = GET(new Request('https://moviecal.test/api/cron/refresh-releases', {
+      headers: { authorization: 'Bearer cron-secret-for-tests' },
+    }));
+    await vi.waitFor(() => expect(mocks.getMovieDetails).toHaveBeenCalledTimes(5));
+    completions[4].complete();
+    await vi.waitFor(() => expect(mocks.getMovieDetails).toHaveBeenCalledTimes(6));
+    completions[5].complete();
+    await vi.waitFor(() => expect(mocks.getMovieDetails).toHaveBeenCalledTimes(7));
+    completions.forEach(({ complete }) => complete());
+    const response = await run;
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: 'One or more movie refreshes failed.',
+      trackedMovies: 7, refreshedMovies: 6, failedMovies: 1,
+      changedMovies: 6, unchangedMovies: 0,
+      releaseDateChanges: [1, 3, 4, 5, 6, 7].map((tmdbId) => ({
+        tmdbId, from: '1999-03-31', to: '2027-01-01',
+      })),
+    });
+    expect(upsertMovie).toHaveBeenCalledTimes(6);
   });
 
   it('returns 503 when the cron secret is not configured', async () => {

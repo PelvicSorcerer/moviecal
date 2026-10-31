@@ -224,31 +224,82 @@ export function describeWarning(warning) {
   }
 }
 
+// Linear rejects any single query whose estimated complexity exceeds 10,000,
+// and nested connections multiply (250 initiatives x 250 projects alone blew
+// past it). Read every connection separately, in small cursor-paginated
+// pages, and join by id in memory.
+const PAGE_SIZE = 50;
+
+/** Follow a connection to its last page. `read(after)` returns the connection. */
+async function readAll(read) {
+  const nodes = [];
+  let after = null;
+  for (;;) {
+    const connection = await read(after);
+    nodes.push(...connection.nodes);
+    if (!connection.pageInfo.hasNextPage) return nodes;
+    after = connection.pageInfo.endCursor;
+  }
+}
+
+const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
+
 /** Read the live topology. Read-only. */
 export async function readTopology(gql) {
-  const initiativesData = await gql(
-    `query { initiatives(first: 250) { nodes { id name status projects(first: 250) { nodes { id name } } } } }`,
+  const initiativeNodes = await readAll(
+    async (after) =>
+      (await gql(`query($after: String) { initiatives(first: ${PAGE_SIZE}, after: $after) { nodes { id name status } ${PAGE_INFO} } }`, { after }))
+        .initiatives,
   );
-  const projectsData = await gql(
-    `query { projects(first: 250) { nodes { id name status { type } labels { nodes { id name } } projectMilestones { nodes { id name } } } } }`,
+  const projectNodes = await readAll(
+    async (after) =>
+      (await gql(`query($after: String) { projects(first: ${PAGE_SIZE}, after: $after) { nodes { id name status { type } } ${PAGE_INFO} } }`, { after }))
+        .projects,
   );
-  const labelsData = await gql(`query { projectLabels(first: 250) { nodes { id name } } }`);
-  return {
-    initiatives: initiativesData.initiatives.nodes.map((i) => ({
-      id: i.id,
-      name: i.name,
-      status: i.status,
-      projects: i.projects.nodes,
-    })),
-    projects: projectsData.projects.nodes.map((p) => ({
-      id: p.id,
-      name: p.name,
-      status: p.status,
-      labels: p.labels.nodes,
-      milestones: p.projectMilestones.nodes,
-    })),
-    projectLabels: labelsData.projectLabels.nodes,
-  };
+  const projectLabels = await readAll(
+    async (after) =>
+      (await gql(`query($after: String) { projectLabels(first: ${PAGE_SIZE}, after: $after) { nodes { id name } ${PAGE_INFO} } }`, { after }))
+        .projectLabels,
+  );
+
+  const initiatives = [];
+  for (const i of initiativeNodes) {
+    const projects = await readAll(
+      async (after) =>
+        (
+          await gql(
+            `query($id: String!, $after: String) { initiative(id: $id) { projects(first: ${PAGE_SIZE}, after: $after) { nodes { id name } ${PAGE_INFO} } } }`,
+            { id: i.id, after },
+          )
+        ).initiative.projects,
+    );
+    initiatives.push({ id: i.id, name: i.name, status: i.status, projects });
+  }
+
+  const projects = [];
+  for (const p of projectNodes) {
+    const labels = await readAll(
+      async (after) =>
+        (
+          await gql(
+            `query($id: String!, $after: String) { project(id: $id) { labels(first: ${PAGE_SIZE}, after: $after) { nodes { id name } ${PAGE_INFO} } } }`,
+            { id: p.id, after },
+          )
+        ).project.labels,
+    );
+    const milestones = await readAll(
+      async (after) =>
+        (
+          await gql(
+            `query($id: String!, $after: String) { project(id: $id) { projectMilestones(first: ${PAGE_SIZE}, after: $after) { nodes { id name } ${PAGE_INFO} } } }`,
+            { id: p.id, after },
+          )
+        ).project.projectMilestones,
+    );
+    projects.push({ id: p.id, name: p.name, status: p.status, labels, milestones });
+  }
+
+  return { initiatives, projects, projectLabels };
 }
 
 /** Execute a plan. Resolves ids of objects created earlier in the same plan. */
