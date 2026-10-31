@@ -34,6 +34,7 @@
 
 - Watchlist invite links are bearer credentials and must be treated with the same care as calendar tokens.
 - Store only hashed invite tokens in `watchlist_invite_links.token_hash`; compare them server-side. The raw invite URL is shown once after creation. Rotation and revoke use the caller-scoped, owner-only database RPC; expired and revoked links cannot be accepted.
+- Generation, rotation, and revocation are one shared contract, not a per-surface rule: `createSharedWatchlistInviteLink` and `revokeSharedWatchlistInviteLink` (`src/lib/watchlist/shared.ts`) call the same atomic RPC regardless of transport. Cookie (`/api/watchlist/shared/[watchlistId]/invite`) and bearer (`/api/v1/watchlists/{id}/invite`, MOV-344) routes are expected to call these operations rather than re-deriving the rules, so a failed rotation never strands the old link on either surface and the raw token is never persisted, logged, or re-readable from either one.
 - Invite links must not imply user search, contact discovery, or a friend graph.
 - RLS should keep invite-link rows owner-scoped for interactive reads and writes; token resolution should happen through trusted server-side access.
 
