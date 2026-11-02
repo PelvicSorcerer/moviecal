@@ -408,6 +408,43 @@ burning the whole 35-minute step budget:
   boot-to-first-suite gap, and the failed runs on 2026-10-30/11-01 sat silent
   for ~20 minutes. `--progress-within <minutes>` overrides the limit for manual
   verification. Runs that start suites normally are unaffected.
+- **Idle watchdog (MOV-500).** Under `--early-progress` (or `--progress-within`,
+  or `--idle-within` alone) the wrapper also forwards the command's stderr
+  unchanged and tracks the time of the last output line on either stream. If
+  nothing is printed for `OUTPUT_IDLE_LIMIT_MS` (15 minutes, measured from the
+  command starting and then from the latest output) the run prints
+  `SIMULATOR_TEST_OUTPUT_STALLED` with the idle limit, the time of the last
+  output and the last `Test Suite`/`Test Case` line seen, plus a GitHub
+  `::error` annotation when `GITHUB_ACTIONS` is set. It then captures the same
+  diagnostics as the early check (device state, `simctl list`, recent
+  CoreSimulator log lines, load average and CPU split), stops xcodebuild
+  (SIGTERM, SIGKILL after 10s), releases the lease with the bounded release and
+  exits **78**. This is a stalled simulator, not a test failure: the right
+  response is to re-run the job. The 8-minute no-suite-started check still runs
+  first for a silent start (exit 76); a run that keeps printing, however
+  slowly, is never failed. `--idle-within <minutes>` overrides the limit for
+  manual verification, e.g. `npm run ios:sim:run -- --early-progress
+  --idle-within 1 node -e "console.log(\"Test Suite 'All tests' started at
+  now\"); setTimeout(()=>{}, 600000)"`. Exit codes: 75 lease unavailable, 76
+  tests not started, 77 service unresponsive, 78 output stalled.
+  - *Why 15 minutes.* Healthy xcodebuild output is continuous apart from one
+    known quiet stretch: the gap between the unit bundle finishing and the UI
+    test runner starting. On the healthy, passing #949 run (41524774118) that
+    gap was **6.5 minutes**. In the wedged lane-ios run 41499145743
+    (2026-11-02) the same stretch was ~28.5 minutes and the step used 32.5 of
+    its 35 minutes. 15 minutes is ~2.3x the healthy gap (a 10-minute limit left
+    only 3.5 minutes of margin, and a false positive costs a full re-run) and
+    still fails the wedged run about 15 minutes before the step timeout. These
+    are two data points, not a distribution; revisit the limit against
+    `~/Library/Logs/moviecal-telemetry/` as more passing runs are sampled.
+  - *The second "All tests" suite is not a duplicate.* It is the
+    `MoviecalUITests` bundle. In that run the unit bundle `MoviecalTests`
+    passed at 18:21:39Z (85 tests, 19.4s); the silence was the gap before the UI
+    test runner started (18:50:07Z "MoviecalUITests-Runner ... Running
+    tests..."). `SignInToMainTabsUITests testSignInTransitionsToMainTabs` ran
+    18:50:21Z to 18:50:52Z, TEST SUCCEEDED 18:50:53Z, lease released
+    18:50:57Z. A slightly slower Mac would have hit the 35-minute kill (exit
+    143) with no early signal.
 - **Bounded release.** Release shuts the simulator down with a
   `RELEASE_SHUTDOWN_TIMEOUT_MS` (60s) timeout, logs how long it took, and on a
   timeout warns instead of failing; the lease record is already cleared and the

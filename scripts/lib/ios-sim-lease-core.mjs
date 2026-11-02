@@ -167,6 +167,56 @@ export function createProgressWatch({ limitMs = EARLY_PROGRESS_LIMIT_MS, pattern
 }
 
 /**
+ * MOV-500: how long the wrapped command may print nothing (stdout and stderr)
+ * at any point in the run before it is treated as stalled.
+ *
+ * Evidence: the wedged lane-ios run of 2026-11-02 (41499145743) went silent for
+ * ~28.5 minutes between the unit bundle finishing (18:21:39Z) and the UI test
+ * runner starting (18:50:07Z) and used 32.5 of its 35 minutes. The only healthy
+ * gap measured so far is the 6.5-minute unit-to-UI silence on the passing #949
+ * run (41524774118). 15 minutes is ~2.3x that healthy gap, so a slower Mac or a
+ * busier runner does not turn a passing run into a false failure (a false
+ * failure costs a full job re-run), and it still fails a wedge about 15 minutes
+ * before the 35-minute step timeout. A tighter limit (10 minutes) left only 3.5
+ * minutes of margin over the healthy gap. Revisit once more healthy-run gaps are
+ * sampled; see docs/operators/local-execution.md.
+ */
+export const OUTPUT_IDLE_LIMIT_MS = 15 * MINUTE_MS;
+export const OUTPUT_IDLE_EXIT_CODE = 78;
+export const OUTPUT_IDLE_MESSAGE = "SIMULATOR_TEST_OUTPUT_STALLED";
+/** Suite and test-case lines, kept so a stall report can say where the run stopped. */
+export const DEFAULT_LAST_LINE_PATTERN = /^\s*Test (?:Suite|Case) /u;
+
+/**
+ * Output-idle timer with an injected clock. Time is measured from `startedAtMs`
+ * until the first output, then from the latest output. Lines are reassembled
+ * across chunk boundaries per source so the last suite/test line is exact.
+ */
+export function createIdleWatch({ limitMs = OUTPUT_IDLE_LIMIT_MS, startedAtMs, linePattern = DEFAULT_LAST_LINE_PATTERN }) {
+  let lastOutputAtMs = null;
+  let lastLine = null;
+  const partial = new Map();
+  return {
+    get lastOutputAtMs() {
+      return lastOutputAtMs;
+    },
+    get lastLine() {
+      return lastLine;
+    },
+    onOutput(chunk, nowMs, source = "stdout") {
+      lastOutputAtMs = nowMs;
+      const lines = (partial.get(source) ?? "") + String(chunk);
+      const parts = lines.split("\n");
+      partial.set(source, parts.pop().slice(-1024));
+      for (const line of parts) if (linePattern.test(line)) lastLine = line.trim();
+    },
+    expired(nowMs) {
+      return nowMs - (lastOutputAtMs ?? startedAtMs) >= limitMs;
+    },
+  };
+}
+
+/**
  * MOV-493: a booted simulator is only safe to shut down at job start if this
  * repo's own scripts created it (a `moviecal-*` lane device) and the lease does
  * not own it. Anything else (`iPhone 17`, a human's own device) is left alone.
