@@ -11,6 +11,8 @@ import {
   detectLane, emptyRecord, enqueueWaiter, isHeadWaiter, laneDevice, leaseLiveness, leasePath, parseArguments,
   pruneWaiters, renewLease, resolveSetupPlan, unmanagedState, waiterPosition, withMutex,
   EARLY_PROGRESS_EXIT_CODE, EARLY_PROGRESS_LIMIT_MS, RELEASE_SHUTDOWN_TIMEOUT_MS, createProgressWatch, selectStaleLaneDevices,
+  SERVICE_UNRESPONSIVE_EXIT_CODE, SHUTDOWN_VERIFY_TIMEOUT_MS, ServiceUnresponsiveError, captureSimulatorDiagnostics, cpuSplit,
+  describeNotLive, pollUntilShutdown, runCli,
 } from "../scripts/ios-sim-lease.mjs";
 
 const START = Date.parse("2026-09-23T10:00:00.000Z");
@@ -58,7 +60,13 @@ function fakeRunner(state, processTable) {
     if (subcommand === "list" && rest[0] === "runtimes") return ok(JSON.stringify({ runtimes: state.runtimes }));
     if (subcommand === "list" && rest[0] === "devices") {
       const grouped = {};
-      for (const entry of state.devices) (grouped[entry.runtime] ??= []).push({ ...entry });
+      for (const entry of state.devices) {
+        if (entry.pendingReads !== undefined && (entry.pendingReads -= 1) <= 0) {
+          entry.state = "Shutdown";
+          delete entry.pendingReads;
+        }
+        (grouped[entry.runtime] ??= []).push({ ...entry });
+      }
       return ok(JSON.stringify({ devices: grouped }));
     }
     if (subcommand === "create") {
@@ -74,6 +82,12 @@ function fakeRunner(state, processTable) {
     }
     if (subcommand === "shutdown") {
       if (target.state !== "Booted") return fail("Unable to shutdown device in current state: Shutdown");
+      // A wedged service: exits 0 but the device stays Booted (forever, or until N more state reads).
+      if (state.wedged === true) return ok();
+      if (typeof state.wedged === "number") {
+        target.pendingReads = state.wedged;
+        return ok();
+      }
       target.state = "Shutdown";
       return ok();
     }
@@ -120,6 +134,9 @@ function harness({ env = {}, devices = [], xcodebuild = [], pid = process.pid, w
     processStartTime: (target) => table.get(target) ?? null,
     isProcessAlive: (holder) => table.has(holder.pid) && (!holder.startedAt || table.get(holder.pid) === holder.startedAt),
     spawnWatcher: () => null,
+    runAsync: (command, args, options) => Promise.resolve(environment.run(command, args, options)),
+    loadavg: () => [570.1, 400.25, 120.5],
+    cpus: () => [{ times: { user: 700, nice: 0, sys: 200, idle: 100, irq: 0 } }],
   });
 
   return {
@@ -658,5 +675,170 @@ describe("bounded lease release (MOV-493)", () => {
     expect(() => commandRelease({}, session.environment)).not.toThrow();
     expect(session.environment.store.load().lease).toBeNull();
     expect(session.warnings.join("\n")).toMatch(/did not finish within 1m 00s/u);
+  });
+});
+
+describe("shutdown verification (MOV-497)", () => {
+  function clock() {
+    let at = 0;
+    return { now: () => at, sleep: (ms) => { at += ms; } };
+  }
+
+  it("polls the state with a fake clock: first read, after N reads, never", () => {
+    const first = clock();
+    expect(pollUntilShutdown({ read: () => "Shutdown", ...first })).toMatchObject({ shutdown: true, reads: 1, elapsedMs: 0 });
+
+    const later = clock();
+    let reads = 0;
+    expect(pollUntilShutdown({ read: () => (++reads >= 4 ? "Shutdown" : "Booted"), ...later })).toMatchObject({
+      shutdown: true, reads: 4, elapsedMs: 3000,
+    });
+
+    const never = clock();
+    const result = pollUntilShutdown({ read: () => "Booted", ...never });
+    expect(result).toMatchObject({ shutdown: false, state: "Booted", elapsedMs: SHUTDOWN_VERIFY_TIMEOUT_MS });
+    expect(pollUntilShutdown({ read: () => null, ...clock() }).shutdown).toBe(false);
+  });
+
+  it("computes the CPU split and explains a non-live lease", () => {
+    const sample = [{ times: { user: 60, nice: 0, sys: 30, idle: 10, irq: 0 } }];
+    expect(cpuSplit(sample)).toEqual({ user: 60, system: 30, idle: 10 });
+    expect(cpuSplit(sample, sample)).toBeNull();
+    expect(describeNotLive({ lane: "ci", holder: { pid: 42 } }, "holder-gone")).toMatch(/pid 42\) has exited.*ios:sim:run/u);
+    expect(describeNotLive({ lane: "manual" }, "expired")).toBe("not live — expired");
+  });
+
+  it("reports status of a lease whose acquiring process exited without a bare 'expired'", () => {
+    const ci = harness({ env: { GITHUB_ACTIONS: "true" }, devices: laneDevices(), pid: 91_001 });
+    commandAcquire({}, ci.environment);
+    ci.table.delete(91_001);
+    commandStatus({}, ci.environment);
+    expect(ci.output()).toMatch(/not live — holder-gone: the process that acquired it \(pid 91001\) has exited/u);
+  });
+
+  it("start-of-job cleanup fails fast when a stale device stays Booted, and releases the lease", () => {
+    const session = harness({ env: { GITHUB_ACTIONS: "true" }, devices: laneDevices("Shutdown", "Shutdown", "Shutdown", "Booted") });
+    session.state.wedged = true;
+    let error;
+    try {
+      commandAcquire({}, session.environment);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(ServiceUnresponsiveError);
+    expect(error.exitCode).toBe(SERVICE_UNRESPONSIVE_EXIT_CODE);
+    expect(error.message).toMatch(/^SIMULATOR_SERVICE_UNRESPONSIVE: .*moviecal-manual/u);
+    expect(session.warnings.join("\n")).toMatch(/SIMULATOR_STILL_BOOTED_AFTER_SHUTDOWN: moviecal-manual .* after 2 shutdown attempts/u);
+    expect(session.warnings.join("\n")).toMatch(/load average 570\.10/u);
+    expect(session.environment.store.load().lease).toBeNull();
+    expect(session.booted()).toEqual([LANE_DEVICES.manual]);
+  });
+
+  it("fails fast when the job's own moviecal-ci is Booted and will not shut down, without bootstatus", () => {
+    const session = harness({ env: { GITHUB_ACTIONS: "true" }, devices: laneDevices("Shutdown", "Booted") });
+    session.state.wedged = true;
+    const subcommands = [];
+    const inner = session.environment.run;
+    session.environment.run = (command, args, options) => {
+      subcommands.push(args?.[1]);
+      return inner(command, args, options);
+    };
+
+    expect(() => commandAcquire({}, session.environment)).toThrow(/SIMULATOR_SERVICE_UNRESPONSIVE/u);
+    expect(subcommands).not.toContain("bootstatus");
+    expect(subcommands.filter((name) => name === "shutdown")).toHaveLength(2);
+    expect(session.environment.store.load().lease).toBeNull();
+  });
+
+  it("maps the failure to exit code 77 through the CLI", async () => {
+    const session = harness({ env: { GITHUB_ACTIONS: "true" }, devices: laneDevices("Shutdown", "Booted") });
+    session.state.wedged = true;
+    expect(await runCli(["acquire"], session.environment)).toBe(SERVICE_UNRESPONSIVE_EXIT_CODE);
+  });
+
+  it("accepts a shutdown that takes effect after a delay, with no warning", () => {
+    const session = harness({ env: { GITHUB_ACTIONS: "true" }, devices: laneDevices("Shutdown", "Shutdown", "Shutdown", "Booted") });
+    session.state.wedged = 3;
+    commandAcquire({}, session.environment);
+
+    expect(session.warnings).toEqual([]);
+    expect(session.booted()).toEqual([LANE_DEVICES.ci]);
+  });
+
+  it("a normal shutdown costs one shutdown and one state read, no delay", () => {
+    const session = harness({ env: { GITHUB_ACTIONS: "true" }, devices: laneDevices("Shutdown", "Shutdown", "Shutdown", "Booted") });
+    const calls = [];
+    const inner = session.environment.run;
+    session.environment.run = (command, args, options) => {
+      calls.push(args?.slice(1, 3).join(" "));
+      return inner(command, args, options);
+    };
+    const before = session.at();
+    commandAcquire({}, session.environment);
+
+    expect(calls.filter((call) => call.startsWith("shutdown"))).toHaveLength(1);
+    expect(calls.filter((call) => call === "list devices")).toHaveLength(2); // acquire's inventory + one state read
+    expect(session.at()).toBe(before);
+  });
+
+  it("release never claims success while the device is still Booted, and still clears the lease", () => {
+    const session = harness({ devices: laneDevices() });
+    commandAcquire({}, session.environment);
+    session.state.wedged = true;
+    commandRelease({}, session.environment);
+
+    expect(session.output()).not.toMatch(/shut .* down in/u);
+    expect(session.warnings.join("\n")).toMatch(/SIMULATOR_STILL_BOOTED_AFTER_SHUTDOWN: moviecal-manual .* after 2 shutdown attempts/u);
+    expect(session.warnings.join("\n")).toMatch(/still Booted after 2 shutdown attempts/u);
+    expect(session.environment.store.load().lease).toBeNull();
+  });
+
+  it("release still logs success when a wedge clears after a delay", () => {
+    const session = harness({ devices: laneDevices() });
+    commandAcquire({}, session.environment);
+    session.state.wedged = 4;
+    commandRelease({}, session.environment);
+
+    expect(session.output()).toMatch(/shut moviecal-manual down in/u);
+    expect(session.warnings).toEqual([]);
+  });
+
+  it("a job's own booted device that goes silent is failed, diagnosed, and reported as not shut down on release", async () => {
+    const session = harness({ env: { GITHUB_ACTIONS: "true", MOVIECAL_IOS_SIM_PROGRESS_POLL_MS: "20" }, devices: laneDevices() });
+    session.state.wedged = true;
+    const t0 = Date.now();
+    session.environment.now = () => START + (Date.now() - t0) * 1000;
+    const exitCode = await commandRun(
+      { commandArgs: [process.execPath, "-e", "setTimeout(() => {}, 30000)"], progressWithinMs: 1000 },
+      session.environment,
+    );
+
+    expect(exitCode).toBe(EARLY_PROGRESS_EXIT_CODE);
+    const warnings = session.warnings.join("\n");
+    expect(warnings).toMatch(/--- system load ---\nload average 570\.10/u);
+    expect(warnings).toMatch(/SIMULATOR_STILL_BOOTED_AFTER_SHUTDOWN: moviecal-ci/u);
+    expect(session.output()).not.toMatch(/shut moviecal-ci down in/u);
+    expect(session.environment.store.load().lease).toBeNull();
+  });
+
+  it("diagnostics run in parallel, stay under the total cap, and survive a hung command", async () => {
+    const session = harness({ devices: laneDevices() });
+    session.environment.diagnosticsCapMs = 50;
+    session.environment.stuckDevices = new Set(["udid-moviecal-ci"]);
+    let sampled = 0;
+    session.environment.cpus = () => [{ times: { user: 700 * ++sampled, nice: 0, sys: 200 * sampled, idle: 100 * sampled, irq: 0 } }];
+    session.environment.runAsync = (command, args) =>
+      args?.[0] === "show" ? new Promise(() => {}) : Promise.resolve({ status: 0, stdout: `ok ${command}`, stderr: "" });
+
+    const startedAt = Date.now();
+    await captureSimulatorDiagnostics(session.environment, { device: { name: "moviecal-ci", udid: "udid-moviecal-ci" } });
+
+    expect(Date.now() - startedAt).toBeLessThan(2000);
+    const warnings = session.warnings.join("\n");
+    expect(warnings).toMatch(/--- simctl list \(exit 0\) ---\nok xcrun/u);
+    expect(warnings).toMatch(/recent CoreSimulator log lines: still running at the 0s diagnostics cap; abandoned/u);
+    expect(warnings).toMatch(/CPU 70% user, 20% system, 10% idle/u);
+    expect(warnings).toMatch(/CoreSimulatorService is the likely culprit/u);
   });
 });
