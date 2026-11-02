@@ -7,10 +7,10 @@ import { main } from "../src/cli.mjs";
 import { runCommand } from "../src/exec.mjs";
 import { runLoop } from "../src/loop.mjs";
 import { appendMarker } from "../src/markers.mjs";
-import { fakeRunner } from "./fixtures.mjs";
+import { STALE_SIM_PS, fakeRunner } from "./fixtures.mjs";
 
 const START = Date.UTC(2026, 0, 1);
-const IDLE_PS = "  1  0  0.5  12000 /sbin/launchd\n";
+const IDLE_PS = "  1  0  0.5  12000 Ss /sbin/launchd\n";
 
 function fakeClock(start) {
   let t = start;
@@ -65,6 +65,55 @@ describe("sampler loop", () => {
     expect(Date.parse(samples[1].t) - Date.parse(samples[0].t)).toBe(1500);
     expect(fs.readdirSync(path.join(dir, "snapshots"))).toHaveLength(4);
     expect(calls.filter((c) => c.name === "vm_stat" && c.args.length === 0).length).toBeGreaterThan(0);
+  });
+});
+
+describe("wedged simulator service", () => {
+  const stopAfter = (clock, ms) => () => clock.now() >= START + ms;
+
+  it("a stale booted simulator does not suppress loadNoJob, and one rate-limited snapshot fires", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "telemetry-int-"));
+    const clock = fakeClock(START);
+    const calls = [];
+    let ticks = 0;
+    await runLoop({
+      run: fakeRunner({ ps: STALE_SIM_PS }, calls), clock, dir, cores: 8, loadavg: () => [600, 500, 300],
+      readCpus: () => { ticks += 10; return [{ times: { user: ticks, nice: 0, sys: ticks, idle: ticks, irq: 0 } }]; },
+      shouldStop: stopAfter(clock, 4 * 60_000),
+    });
+    const { samples } = readSamples(dir, "2026-01-01");
+    expect(samples[0].busy).toBe(true);
+    expect(samples.every((x) => x.loadNoJob === true)).toBe(true);
+    expect(samples[0]).toMatchObject({ runnable: 2, simProcs: 2, xpcproxySim: 2, cpu: null });
+    expect(samples.some((x) => x.cpu !== null)).toBe(true);
+    const files = fs.readdirSync(path.join(dir, "snapshots"));
+    expect(files).toHaveLength(1);
+    const text = fs.readFileSync(path.join(dir, "snapshots", files[0]), "utf8");
+    expect(text).toContain("high load with no job running");
+    expect(text).toContain("CoreSimulator");
+    expect(calls.filter((c) => c.name === "sample").length).toBeGreaterThan(0);
+    for (const c of calls) expect(c.timeoutMs).toBeGreaterThan(0);
+  });
+
+  it("with ps timing out, samples still print, loadNoJob is unknown and the snapshot skips sample calls", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "telemetry-int-"));
+    const clock = fakeClock(START);
+    const calls = [];
+    await runLoop({
+      run: fakeRunner({ ps: "hang" }, calls), clock, dir, cores: 8, loadavg: () => [600, 500, 300],
+      shouldStop: stopAfter(clock, 4 * 60_000),
+    });
+    const { samples } = readSamples(dir, "2026-01-01");
+    expect(samples.length).toBeGreaterThan(40);
+    expect(samples[0]).toMatchObject({ runnable: null, groups: null, loadNoJob: null, swapUsedMb: 2000, load: [600, 500, 300] });
+    expect(samples[0].notes.some((n) => n.startsWith("ps:"))).toBe(true);
+    const files = fs.readdirSync(path.join(dir, "snapshots"));
+    expect(files).toHaveLength(1);
+    expect(calls.filter((c) => c.name === "sample")).toHaveLength(0);
+    expect(calls.filter((c) => c.name === "ps").length).toBe(samples.length + 1);
+    const text = fs.readFileSync(path.join(dir, "snapshots", files[0]), "utf8");
+    expect(text).toContain("skipped: ps timed out");
+    expect(text).toContain("CoreSimulator");
   });
 });
 

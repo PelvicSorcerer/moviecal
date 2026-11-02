@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SnapshotGate, TriggerState } from "../src/triggers.mjs";
+import { SnapshotGate, TriggerState, computeLoadNoJob } from "../src/triggers.mjs";
 
 const base = { pressure: 1, swapUsedMb: 1000, load: [1, 1, 1], cores: 8, thermal: { speedLimit: 100 }, diskFreeGb: 50 };
 const s = (o) => ({ ...base, ...o });
@@ -30,6 +30,26 @@ describe("TriggerState", () => {
     expect(t.observe(s({ load: [17, 1, 1] }), 60_000)[0]).toMatch(/load/);
     t.observe(s({ load: [1, 1, 1] }), 61_000);
     expect(t.observe(s({ load: [17, 1, 1] }), 62_000)).toEqual([]);
+  });
+});
+
+describe("loadNoJob", () => {
+  const hi = { load: [17, 1, 1], cores: 8, runnerWorker: false, markerBusy: false };
+  it("is true only for high load with no Runner.Worker and no open marker", () => {
+    expect(computeLoadNoJob(hi)).toBe(true);
+    expect(computeLoadNoJob({ ...hi, runnerWorker: true })).toBe(false);
+    expect(computeLoadNoJob({ ...hi, markerBusy: true })).toBe(false);
+    expect(computeLoadNoJob({ ...hi, load: [3, 1, 1] })).toBe(false);
+    expect(computeLoadNoJob({ ...hi, runnerWorker: null })).toBeNull();
+    expect(computeLoadNoJob({ ...hi, runnerWorker: null, markerBusy: true })).toBe(false);
+  });
+  it("adds a trigger reason only after the sustain window and resets", () => {
+    const t = new TriggerState();
+    const noJob = s({ load: [17, 1, 1], loadNoJob: true });
+    expect(t.observe(noJob, 0)).not.toContain("high load with no job running");
+    expect(t.observe(noJob, 60_000)).toContain("high load with no job running");
+    t.observe(s({ load: [17, 1, 1], loadNoJob: false }), 61_000);
+    expect(t.observe(noJob, 62_000)).not.toContain("high load with no job running");
   });
 });
 

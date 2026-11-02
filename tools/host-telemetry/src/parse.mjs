@@ -27,18 +27,19 @@ export function redactText(text) {
     .replace(/\b((?:\w*(?:token|secret|password|passwd|apikey|api_key|auth)\w*)\s*[=:]\s*)\S+/gi, "$1[redacted]");
 }
 
-// `ps -axo pid=,ppid=,pcpu=,rss=,comm=` (comm is the executable path, no arguments).
+// `ps -axo pid=,ppid=,pcpu=,rss=,state=,comm=` (comm is the executable path, no arguments).
 export function parsePs(text) {
   const procs = [];
   for (const line of String(text).split("\n")) {
-    const m = /^\s*(\d+)\s+(\d+)\s+([\d.]+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
+    const m = /^\s*(\d+)\s+(\d+)\s+([\d.]+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
     if (!m) continue;
     procs.push({
       pid: Number(m[1]),
       ppid: Number(m[2]),
       cpu: Number(m[3]),
       rssMb: Math.round((Number(m[4]) / 1024) * 10) / 10,
-      command: sanitizeCommand(m[5]),
+      state: m[5],
+      command: sanitizeCommand(m[6]),
     });
   }
   return procs;
@@ -123,4 +124,42 @@ export function hasBusyProcess(procs) {
       /CoreSimulator\/Devices\//.test(p.command)
     );
   });
+}
+
+export const isXpcproxySim = (p) => path.basename(p.command) === "xpcproxy_sim";
+
+// Counts derived from one parsed `ps` listing. xpcproxy_sim is counted apart from simProcs.
+export function processCounts(procs) {
+  return {
+    runnable: procs.filter((p) => p.state.startsWith("R")).length,
+    xpcproxySim: procs.filter(isXpcproxySim).length,
+    simProcs: procs.filter((p) => !isXpcproxySim(p) && /CoreSimulator|launchd_sim/.test(p.command)).length,
+    runnerWorker: procs.some((p) => path.basename(p.command) === "Runner.Worker"),
+  };
+}
+
+// Percent user/sys/idle from two os.cpus() readings; null when there is no elapsed CPU time.
+export function cpuSplit(prev, cur) {
+  const sum = (cpus) => cpus.reduce(
+    (a, { times: t }) => ({ user: a.user + t.user + t.nice, sys: a.sys + t.sys + t.irq, idle: a.idle + t.idle }),
+    { user: 0, sys: 0, idle: 0 },
+  );
+  const a = sum(prev);
+  const b = sum(cur);
+  const d = { user: b.user - a.user, sys: b.sys - a.sys, idle: b.idle - a.idle };
+  const total = d.user + d.sys + d.idle;
+  if (!(total > 0) || d.user < 0 || d.sys < 0 || d.idle < 0) return null;
+  const pct = (n) => Math.round((n / total) * 1000) / 10;
+  return { user: pct(d.user), sys: pct(d.sys), idle: pct(d.idle) };
+}
+
+// Returns a function giving the CPU split since its previous call (null on the first call). No spawn.
+export function createCpuSampler(readCpus) {
+  let prev = null;
+  return () => {
+    const cur = readCpus();
+    const out = prev ? cpuSplit(prev, cur) : null;
+    prev = cur;
+    return out;
+  };
 }
