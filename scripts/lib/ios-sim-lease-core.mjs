@@ -167,6 +167,52 @@ export function createProgressWatch({ limitMs = EARLY_PROGRESS_LIMIT_MS, pattern
 }
 
 /**
+ * MOV-500: how long the wrapped command may print nothing (stdout and stderr)
+ * at any point in the run before it is treated as stalled. Healthy xcodebuild
+ * runs print continuously; the lane-ios run of 2026-11-02 (41499145743) went
+ * silent for ~28.5 minutes between the unit bundle finishing (18:21:39Z) and the
+ * UI test runner starting (18:50:07Z) and used 32.5 of its 35 minutes. 10 minutes
+ * is far above any gap between lines in a healthy run, including a slow UI
+ * runner startup, yet fails a wedge ~25 minutes before the step timeout. No
+ * healthy bundle-to-bundle gap has been measured from telemetry yet; see
+ * docs/operators/local-execution.md.
+ */
+export const OUTPUT_IDLE_LIMIT_MS = 10 * MINUTE_MS;
+export const OUTPUT_IDLE_EXIT_CODE = 78;
+export const OUTPUT_IDLE_MESSAGE = "SIMULATOR_TEST_OUTPUT_STALLED";
+/** Suite and test-case lines, kept so a stall report can say where the run stopped. */
+export const DEFAULT_LAST_LINE_PATTERN = /^\s*Test (?:Suite|Case) /u;
+
+/**
+ * Output-idle timer with an injected clock. Time is measured from `startedAtMs`
+ * until the first output, then from the latest output. Lines are reassembled
+ * across chunk boundaries per source so the last suite/test line is exact.
+ */
+export function createIdleWatch({ limitMs = OUTPUT_IDLE_LIMIT_MS, startedAtMs, linePattern = DEFAULT_LAST_LINE_PATTERN }) {
+  let lastOutputAtMs = null;
+  let lastLine = null;
+  const partial = new Map();
+  return {
+    get lastOutputAtMs() {
+      return lastOutputAtMs;
+    },
+    get lastLine() {
+      return lastLine;
+    },
+    onOutput(chunk, nowMs, source = "stdout") {
+      lastOutputAtMs = nowMs;
+      const lines = (partial.get(source) ?? "") + String(chunk);
+      const parts = lines.split("\n");
+      partial.set(source, parts.pop().slice(-1024));
+      for (const line of parts) if (linePattern.test(line)) lastLine = line.trim();
+    },
+    expired(nowMs) {
+      return nowMs - (lastOutputAtMs ?? startedAtMs) >= limitMs;
+    },
+  };
+}
+
+/**
  * MOV-493: a booted simulator is only safe to shut down at job start if this
  * repo's own scripts created it (a `moviecal-*` lane device) and the lease does
  * not own it. Anything else (`iPhone 17`, a human's own device) is left alone.

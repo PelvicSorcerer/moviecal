@@ -10,7 +10,7 @@ import {
   commandExtend, commandRelease, commandRun, commandSetup, commandStatus, commandWatch, createEnvironment, createLease,
   detectLane, emptyRecord, enqueueWaiter, isHeadWaiter, laneDevice, leaseLiveness, leasePath, parseArguments,
   pruneWaiters, renewLease, resolveSetupPlan, unmanagedState, waiterPosition, withMutex,
-  EARLY_PROGRESS_EXIT_CODE, EARLY_PROGRESS_LIMIT_MS, RELEASE_SHUTDOWN_TIMEOUT_MS, createProgressWatch, selectStaleLaneDevices,
+  EARLY_PROGRESS_EXIT_CODE, EARLY_PROGRESS_LIMIT_MS, OUTPUT_IDLE_EXIT_CODE, OUTPUT_IDLE_LIMIT_MS, RELEASE_SHUTDOWN_TIMEOUT_MS, createIdleWatch, createProgressWatch, selectStaleLaneDevices,
   SERVICE_UNRESPONSIVE_EXIT_CODE, SHUTDOWN_VERIFY_TIMEOUT_MS, ServiceUnresponsiveError, captureSimulatorDiagnostics, cpuSplit,
   describeNotLive, pollUntilShutdown, runCli,
 } from "../scripts/ios-sim-lease.mjs";
@@ -646,6 +646,93 @@ describe("early-progress watch (MOV-493)", () => {
   it("parses --early-progress and --progress-within", () => {
     expect(parseArguments(["run", "--early-progress", "--", "x"])).toMatchObject({ earlyProgress: true, commandArgs: ["x"] });
     expect(parseArguments(["run", "--progress-within", "2", "--", "x"]).progressWithinMs).toBe(120_000);
+  });
+});
+
+describe("output idle watchdog (MOV-500)", () => {
+  const scaled = (session) => {
+    const t0 = Date.now();
+    session.environment.now = () => START + (Date.now() - t0) * 1000;
+  };
+
+  it("expires only after the limit and output resets the timer", () => {
+    const watch = createIdleWatch({ startedAtMs: 0 });
+    expect(watch.expired(OUTPUT_IDLE_LIMIT_MS - 1)).toBe(false);
+    expect(watch.expired(OUTPUT_IDLE_LIMIT_MS)).toBe(true);
+    watch.onOutput("x\n", 5000);
+    expect(watch.expired(OUTPUT_IDLE_LIMIT_MS + 4999)).toBe(false);
+    expect(watch.expired(OUTPUT_IDLE_LIMIT_MS + 5000)).toBe(true);
+  });
+
+  it("tracks the last suite or test line across chunk boundaries", () => {
+    const watch = createIdleWatch({ startedAtMs: 0 });
+    watch.onOutput("noise\nTest Case '-[A testOne]' sta", 1);
+    expect(watch.lastLine).toBeNull();
+    watch.onOutput("rted.\nmore noise\n", 2);
+    expect(watch.lastLine).toBe("Test Case '-[A testOne]' started.");
+    expect(watch.lastOutputAtMs).toBe(2);
+  });
+
+  it("is distinct from the early-progress exit code", () => {
+    expect(OUTPUT_IDLE_EXIT_CODE).toBe(78);
+    expect(OUTPUT_IDLE_EXIT_CODE).not.toBe(EARLY_PROGRESS_EXIT_CODE);
+  });
+
+  it("parses --idle-within", () => {
+    expect(parseArguments(["run", "--idle-within", "1", "--", "x"]).idleWithinMs).toBe(60_000);
+  });
+
+  it("fails a run that prints then goes silent with exit 78, diagnostics, and a released lease", async () => {
+    const session = harness({ env: { MOVIECAL_IOS_SIM_PROGRESS_POLL_MS: "20", GITHUB_ACTIONS: "true" }, devices: laneDevices() });
+    scaled(session);
+    const script = "console.log(\"Test Suite 'All tests' started at now\"); setTimeout(() => {}, 30000)";
+    const exitCode = await commandRun({ commandArgs: [process.execPath, "-e", script], earlyProgress: true, idleWithinMs: 150_000 }, session.environment);
+
+    const text = session.warnings.join("\n");
+    expect(exitCode).toBe(OUTPUT_IDLE_EXIT_CODE);
+    expect(text).toMatch(/SIMULATOR_TEST_OUTPUT_STALLED: no output for 2m 30s\. Last output at .*Test Suite 'All tests' started at now/u);
+    expect(text).toMatch(/::error title=SIMULATOR_TEST_OUTPUT_STALLED::/u);
+    expect(text).toMatch(/--- simctl list/u);
+    expect(text).not.toMatch(/SIMULATOR_TESTS_NOT_STARTED/u);
+    expect(session.environment.store.load().lease).toBeNull();
+    expect(session.booted()).toEqual([]);
+  });
+
+  it("fails a stderr-only run that goes silent, and a never-printing run reports no output", async () => {
+    const session = harness({ env: { MOVIECAL_IOS_SIM_PROGRESS_POLL_MS: "20" }, devices: laneDevices() });
+    scaled(session);
+    const exitCode = await commandRun(
+      { commandArgs: [process.execPath, "-e", "console.error('warn'); setTimeout(() => {}, 30000)"], idleWithinMs: 150_000 },
+      session.environment,
+    );
+    expect(exitCode).toBe(OUTPUT_IDLE_EXIT_CODE);
+    expect(session.warnings.join("\n")).toMatch(/last suite\/test line: none seen/u);
+
+    const silent = harness({ env: { MOVIECAL_IOS_SIM_PROGRESS_POLL_MS: "20" }, devices: laneDevices() });
+    scaled(silent);
+    const code = await commandRun({ commandArgs: [process.execPath, "-e", "setTimeout(() => {}, 30000)"], idleWithinMs: 150_000 }, silent.environment);
+    expect(code).toBe(OUTPUT_IDLE_EXIT_CODE);
+    expect(silent.warnings.join("\n")).toMatch(/never \(no output/u);
+  });
+
+  it("never fails a run that keeps printing slowly, and keeps its exit status", async () => {
+    const session = harness({ env: { MOVIECAL_IOS_SIM_PROGRESS_POLL_MS: "20" }, devices: laneDevices() });
+    scaled(session);
+    const script = "let n = 0; const t = setInterval(() => { console.error('tick'); if (++n === 8) { clearInterval(t); process.exit(3); } }, 20)";
+    const exitCode = await commandRun({ commandArgs: [process.execPath, "-e", script], idleWithinMs: 150_000 }, session.environment);
+
+    expect(exitCode).toBe(3);
+    expect(session.warnings.join("\n")).not.toMatch(/SIMULATOR_TEST_OUTPUT_STALLED/u);
+  });
+
+  it("lets the early no-suite check fire first for a silent start", async () => {
+    const session = harness({ env: { MOVIECAL_IOS_SIM_PROGRESS_POLL_MS: "20" }, devices: laneDevices() });
+    scaled(session);
+    const exitCode = await commandRun(
+      { commandArgs: [process.execPath, "-e", "setTimeout(() => {}, 30000)"], progressWithinMs: 1000 },
+      session.environment,
+    );
+    expect(exitCode).toBe(EARLY_PROGRESS_EXIT_CODE);
   });
 });
 

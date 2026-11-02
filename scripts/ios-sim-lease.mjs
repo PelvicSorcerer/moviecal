@@ -13,7 +13,7 @@ import { JsonStateStore } from "../tools/dispatcher/src/state-store.mjs";
 import {
   DEFAULT_WAIT_MS, HEARTBEAT_INTERVAL_MS, LeaseUnavailableError, MANUAL_WARNING_LEAD_MS, MINUTE_MS, SHARED_DEVICE_NAME,
   DEFAULT_PROGRESS_PATTERN, EARLY_PROGRESS_EXIT_CODE, EARLY_PROGRESS_LIMIT_MS, EARLY_PROGRESS_MESSAGE,
-  RELEASE_SHUTDOWN_TIMEOUT_MS, createProgressWatch, selectStaleLaneDevices,
+  RELEASE_SHUTDOWN_TIMEOUT_MS, OUTPUT_IDLE_EXIT_CODE, OUTPUT_IDLE_LIMIT_MS, OUTPUT_IDLE_MESSAGE, createIdleWatch, createProgressWatch, selectStaleLaneDevices,
   BOOTSTATUS_TIMEOUT_MS, DIAGNOSTICS_TOTAL_CAP_MS, STILL_BOOTED_MESSAGE, ServiceUnresponsiveError, cpuSplit, describeNotLive,
   pollUntilShutdown,
   agentGuidance, createLease, describeUnmanaged, detectLane, enqueueWaiter, formatDuration, isHeadWaiter, laneDevice,
@@ -809,30 +809,55 @@ export async function commandRun(options, environment) {
   });
 
   const progressLimitMs = options.progressWithinMs ?? (options.earlyProgress ? EARLY_PROGRESS_LIMIT_MS : null);
-  const watch = progressLimitMs === null ? null : createProgressWatch({ limitMs: progressLimitMs, startedAtMs: environment.now() });
+  const idleLimitMs = options.idleWithinMs ?? (progressLimitMs === null ? null : OUTPUT_IDLE_LIMIT_MS);
+  const startedAtMs = environment.now();
+  const watch = progressLimitMs === null ? null : createProgressWatch({ limitMs: progressLimitMs, startedAtMs });
+  const idleWatch = idleLimitMs === null ? null : createIdleWatch({ limitMs: idleLimitMs, startedAtMs });
+  const watching = Boolean(watch || idleWatch);
 
   child = spawn(options.commandArgs[0], options.commandArgs.slice(1), {
-    stdio: ["inherit", watch ? "pipe" : "inherit", "inherit"],
+    stdio: ["inherit", watching ? "pipe" : "inherit", watching ? "pipe" : "inherit"],
     env: { ...process.env, MOVIECAL_IOS_SIM_DEVICE: lease.device.udid, MOVIECAL_IOS_SIM_LEASE: lease.id },
   });
   if (interrupted) child.kill(interrupted);
 
-  let stalled = false;
+  let stalled = null;
   let stallTimer = null;
   let killTimer = null;
-  if (watch) {
+  if (watching) {
     child.stdout.on("data", (chunk) => {
       process.stdout.write(chunk);
-      watch.onOutput(chunk);
+      watch?.onOutput(chunk);
+      idleWatch?.onOutput(chunk, environment.now(), "stdout");
+    });
+    child.stderr.on("data", (chunk) => {
+      process.stderr.write(chunk);
+      idleWatch?.onOutput(chunk, environment.now(), "stderr");
     });
     const pollMs = Number(environment.env.MOVIECAL_IOS_SIM_PROGRESS_POLL_MS ?? 5_000);
     stallTimer = setInterval(async () => {
-      if (stalled || !watch.expired(environment.now())) return;
-      stalled = true;
-      environment.warn(
-        `${EARLY_PROGRESS_MESSAGE}: no test suite started within ${formatDuration(progressLimitMs)} of the simulator booting. ` +
-          "Failing now instead of waiting out the step timeout; capturing simulator diagnostics, then releasing the lease.",
-      );
+      if (stalled) return;
+      const nowMs = environment.now();
+      let message;
+      if (watch?.expired(nowMs)) {
+        stalled = { exitCode: EARLY_PROGRESS_EXIT_CODE };
+        message =
+          `${EARLY_PROGRESS_MESSAGE}: no test suite started within ${formatDuration(progressLimitMs)} of the simulator booting. ` +
+          "Failing now instead of waiting out the step timeout; capturing simulator diagnostics, then releasing the lease.";
+      } else if (idleWatch?.expired(nowMs)) {
+        stalled = { exitCode: OUTPUT_IDLE_EXIT_CODE };
+        const last = idleWatch.lastOutputAtMs === null ? "never (no output since the command started)" : new Date(idleWatch.lastOutputAtMs).toISOString();
+        message =
+          `${OUTPUT_IDLE_MESSAGE}: no output for ${formatDuration(idleLimitMs)}. Last output at ${last}; ` +
+          `last suite/test line: ${idleWatch.lastLine ?? "none seen"}. This is a stalled simulator, not a test failure; ` +
+          "re-run the job. Capturing simulator diagnostics, then releasing the lease.";
+      } else {
+        return;
+      }
+      environment.warn(message);
+      if (stalled.exitCode === OUTPUT_IDLE_EXIT_CODE && environment.env.GITHUB_ACTIONS === "true") {
+        environment.warn(`::error title=${OUTPUT_IDLE_MESSAGE}::${message.split(". Capturing")[0]}`);
+      }
       await captureSimulatorDiagnostics(environment, lease);
       if (child.exitCode !== null || child.signalCode !== null) return;
       try {
@@ -854,7 +879,7 @@ export async function commandRun(options, environment) {
       child.on("error", reject);
       child.on("exit", (code, signal) => resolve({ code, signal }));
     });
-    if (stalled) return EARLY_PROGRESS_EXIT_CODE;
+    if (stalled) return stalled.exitCode;
     return result.signal ? 128 + (os.constants.signals[result.signal] ?? 0) : (result.code ?? 0);
   } finally {
     clearInterval(heartbeat);
@@ -931,7 +956,7 @@ export async function commandWatch(options, environment) {
 // ---------------------------------------------------------------------- CLI
 
 const VALUED_FLAGS = { "--purpose": "purpose", "--ref": "ref", "--device": "device", "--id": "id" };
-const MINUTE_FLAGS = { "--wait": "waitMs", "--progress-within": "progressWithinMs" };
+const MINUTE_FLAGS = { "--wait": "waitMs", "--progress-within": "progressWithinMs", "--idle-within": "idleWithinMs" };
 const BOOLEAN_FLAGS = {
   "--keep-booted": "keepBooted", "--force-shutdown-unmanaged": "forceShutdownUnmanaged",
   "--force": "force", "--json": "json", "--early-progress": "earlyProgress",
@@ -942,7 +967,7 @@ export function parseArguments(argv) {
   if (!COMMANDS.includes(command)) throw new Error(`Usage: ios-sim-lease.mjs <${COMMANDS.join("|")}> [options]`);
 
   const options = {
-    command, purpose: null, ref: null, waitMs: null, progressWithinMs: null, earlyProgress: false, keepBooted: false,
+    command, purpose: null, ref: null, waitMs: null, progressWithinMs: null, idleWithinMs: null, earlyProgress: false, keepBooted: false,
     forceShutdownUnmanaged: false, force: false, json: false, device: null, id: null, commandArgs: [],
   };
 

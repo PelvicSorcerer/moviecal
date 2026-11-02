@@ -94,3 +94,15 @@ evidence.
 
 Run `npm run ios:sim:release` to free the simulator (`ios:sim:status` shows
 the current lease).
+
+## If a test run goes silent
+
+`npm run ios:sim:run -- --early-progress <command>` fails a wedged simulator run
+early: exit 76 `SIMULATOR_TESTS_NOT_STARTED` if no test suite starts within 8
+minutes, and exit 78 `SIMULATOR_TEST_OUTPUT_STALLED` if the command prints
+nothing (stdout or stderr) for 10 minutes at any point. Both capture simulator
+diagnostics, stop the command and release the lease; they are not test
+failures, so re-run. Use `--progress-within <minutes>` / `--idle-within
+<minutes>` to shorten the limits when verifying. A second "All tests" suite in
+a CI log is the UI test bundle, not a duplicate. Details:
+`docs/operators/local-execution.md` (lane-ios section).
