@@ -414,6 +414,56 @@ burning the whole 35-minute step budget:
   next job's cleanup shuts a leftover device down. The workflow's release step
   also has a 5-minute `timeout-minutes`.
 
+### Wedged simulator service (MOV-497)
+
+`xcrun simctl shutdown <udid>` can exit 0 while the device stays `Booted` when
+CoreSimulatorService is wedged (observed 2026-11-02: load about 570 on 8 cores,
+5.7 GB swap, `ps`/`simctl list` taking 90-120 s). The lease script therefore
+never trusts the exit code alone:
+
+- **Verify after shutdown.** After every `simctl shutdown` (start-of-job
+  cleanup, release, acquire) it re-reads that one device's state with
+  `simctl list devices -j <udid>` and polls for up to
+  `SHUTDOWN_VERIFY_TIMEOUT_MS` (15 s, every `SHUTDOWN_VERIFY_POLL_MS` = 1 s).
+  A healthy shutdown reports `Shutdown` on the first read, so a normal job pays
+  one extra state read and no delay. If the device is still `Booted` it retries
+  the shutdown once, then logs `SIMULATOR_STILL_BOOTED_AFTER_SHUTDOWN` naming
+  the device, the elapsed time and the attempts.
+- **Release.** Release still clears the lease record; if the device is still
+  Booted it logs a warning instead of the "shut ... down in Ns" success line.
+- **Acquire fails fast.** In the `ci` lane a booted `moviecal-ci` with no live
+  lease is leftover and is shut down like the other lane devices. If any device
+  it shuts down at job start stays Booted, acquire releases the lease and exits
+  **77** with `SIMULATOR_SERVICE_UNRESPONSIVE` (an unrecognized non-zero exit,
+  so the workflow step simply fails) instead of waiting on `bootstatus`.
+  `simctl bootstatus -b` is capped at `BOOTSTATUS_TIMEOUT_MS` (10 minutes: the
+  pre-existing bound, the slowest legitimate cold boot, leaving most of the
+  35-minute step budget). Exit codes: 75 lease unavailable, 76 tests not
+  started, 77 service unresponsive.
+- **Diagnostics.** On an early-progress failure the diagnostics run their three
+  commands in parallel, each with its own hard timeout (20/30/45 s), under one
+  `DIAGNOSTICS_TOTAL_CAP_MS` (60 s) cap; a hung command is reported as
+  abandoned and does not block the others. They also print the load average, the
+  user/system/idle CPU split (sampled over the capture, from `os.cpus()`), and,
+  when a shutdown did not take, a hint naming CoreSimulatorService.
+- **`ios:sim:status`.** For a `ci`/`worker` lease whose acquiring process has
+  exited, status says so (`not live — holder-gone: the process that acquired it
+  (pid N) has exited`) rather than a bare reason: such a lease is kept alive only
+  while `ios:sim:run` or `ios:sim:watch` is running.
+
+**Manual recovery (a human step; the script never runs it).** When
+`SIMULATOR_SERVICE_UNRESPONSIVE` or `SIMULATOR_STILL_BOOTED_AFTER_SHUTDOWN`
+appears on the Mac, with no CI job running:
+
+```sh
+killall -9 com.apple.CoreSimulator.CoreSimulatorService; sleep 5; xcrun simctl shutdown all
+```
+
+Then re-run the job. To exercise these paths without wedging the real Mac, point
+`MOVIECAL_IOS_SIM_XCRUN` at a fake `xcrun` whose `simctl shutdown` exits 0 but
+whose `simctl list devices -j` keeps reporting `Booted` (the unit tests in
+`test/ios-sim-lease.test.mjs` do the same with an injected runner).
+
 ## Retained-worktree recovery
 
 ### Operator continuation of a retained failed implementation (MOV-404)
