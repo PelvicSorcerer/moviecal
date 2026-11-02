@@ -157,6 +157,7 @@ import { defaultRunner as ghRunner } from "../src/pr-check.mjs";
 import { checkPrState, checkPrObservation, isCheckPrObservation, reconcileReviewWorktrees } from "../src/pr-reconcile.mjs";
 import { reconcileStartupRecoveries } from "../src/startup-recovery.mjs";
 import { releaseIosWorkerLease } from "../src/ios-worker-lease.mjs";
+import { installTimestampedConsole } from "../src/worker-telemetry.mjs";
 import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
 import { reportReviewCi as reportReviewCiPass } from "../src/review-ci-observer.mjs";
 import { SignalLedger, StopController, handleAgentSignal } from "../src/agent-signals.mjs";
@@ -1587,6 +1588,8 @@ async function runScheduledGc() {
 }
 
 async function cmdRun({ once, intervalMs }) {
+  // MOV-495: only the run daemon's log gets timestamps; CLI subcommands print JSON/plain text.
+  installTimestampedConsole();
   const lock = new DispatcherLock(dispatcherLockPath());
   try { lock.acquire(); } catch (err) { console.error(err.message); return 2; }
   process.once("exit", () => lock.release());

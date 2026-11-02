@@ -14,6 +14,7 @@
 // usage-limit deferral (MOV-151).
 
 import { commandAcquire, commandRelease, createEnvironment } from "../../../scripts/ios-sim-lease.mjs";
+import { emitDispatcherMarker } from "./worker-telemetry.mjs";
 
 function workerLeaseEnvironment() {
   // MOVIECAL_WORKER_SANDBOX is what scripts/lib/ios-sim-lease-core.mjs's
@@ -35,8 +36,10 @@ export async function acquireIosWorkerLease(issue) {
       { purpose: `dispatcher worker run for ${issue.identifier}`, ref: issue.identifier, waitMs: 0 },
       workerLeaseEnvironment(),
     );
+    emitDispatcherMarker("sim-lease-acquired", { issue: issue.identifier, lease: lease.id, device: lease.device.name });
     return { acquired: true, lease };
   } catch (error) {
+    emitDispatcherMarker("sim-lease-deferred", { issue: issue.identifier, reason: String(error.message).slice(0, 160) });
     return { acquired: false, reason: error.message };
   }
 }
@@ -45,6 +48,7 @@ export async function acquireIosWorkerLease(issue) {
 export async function releaseIosWorkerLease(leaseId) {
   try {
     commandRelease({ id: leaseId, force: true }, workerLeaseEnvironment());
+    emitDispatcherMarker("sim-lease-released", { lease: leaseId });
   } catch (error) {
     console.error(`Could not release iOS simulator worker lease ${leaseId}: ${error.message}`);
   }
