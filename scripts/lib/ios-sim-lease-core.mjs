@@ -32,6 +32,151 @@ export class LeaseUnavailableError extends Error {
   }
 }
 
+/**
+ * MOV-493: how long `ios:sim:run --progress-within` waits, measured from the
+ * moment the simulator is booted, for the wrapped command to print its first
+ * test-suite start. Two failed lane-ios runs sat silent for ~20 minutes between
+ * a 1m12s build and the first suite before the 35-minute step budget killed
+ * them; passing runs start suites within a couple of minutes of boot. 8 minutes
+ * is several times the healthy gap yet leaves ~27 minutes of the step budget
+ * for diagnostics and release instead of burning all of it with no signal.
+ */
+export const EARLY_PROGRESS_LIMIT_MS = 8 * MINUTE_MS;
+export const EARLY_PROGRESS_EXIT_CODE = 76;
+export const EARLY_PROGRESS_MESSAGE = "SIMULATOR_TESTS_NOT_STARTED";
+/** XCTest's first line of real progress: `Test Suite 'All tests' started at …`. */
+export const DEFAULT_PROGRESS_PATTERN = /Test Suite '[^']*' started at/u;
+
+/**
+ * Releasing shuts the simulator down; after both observed timeouts that took
+ * 1 to 3.5 minutes. The lease record is already cleared by then, so a wedged
+ * shutdown is abandoned after this bound (the next job's start-of-job cleanup
+ * shuts any leftover lane device down) instead of stalling the whole job.
+ */
+export const RELEASE_SHUTDOWN_TIMEOUT_MS = 60_000;
+
+/**
+ * MOV-497: `simctl shutdown` can exit 0 while CoreSimulatorService is wedged and
+ * the device stays Booted. After every shutdown the state is re-read and polled
+ * for up to this long; if it is still Booted the shutdown is retried once and
+ * polled again before giving up with SIMULATOR_STILL_BOOTED_AFTER_SHUTDOWN.
+ * A healthy shutdown reports Shutdown on the first read, so this costs nothing.
+ */
+export const SHUTDOWN_VERIFY_TIMEOUT_MS = 15_000;
+export const SHUTDOWN_VERIFY_POLL_MS = 1_000;
+export const STILL_BOOTED_MESSAGE = "SIMULATOR_STILL_BOOTED_AFTER_SHUTDOWN";
+
+/** A job whose device cannot be shut down fails fast with its own label and exit code. */
+export const SERVICE_UNRESPONSIVE_EXIT_CODE = 77;
+export const SERVICE_UNRESPONSIVE_MESSAGE = "SIMULATOR_SERVICE_UNRESPONSIVE";
+
+export class ServiceUnresponsiveError extends Error {
+  constructor(detail) {
+    super(`${SERVICE_UNRESPONSIVE_MESSAGE}: ${detail}`);
+    this.name = "ServiceUnresponsiveError";
+    this.exitCode = SERVICE_UNRESPONSIVE_EXIT_CODE;
+  }
+}
+
+/**
+ * `simctl bootstatus -b` boots the device if needed and waits for it. Ten
+ * minutes is the pre-existing bound, kept because a cold boot of a fresh device
+ * on the shared Mac is the slowest legitimate case; it still leaves most of the
+ * 35-minute test-step budget. A wedged service is caught earlier by the
+ * post-shutdown check, so this only bounds a device that is merely slow.
+ */
+export const BOOTSTATUS_TIMEOUT_MS = 10 * MINUTE_MS;
+
+/**
+ * Diagnostics run their commands in parallel; each has its own hard timeout and
+ * the whole capture is abandoned at this total, so one hung command cannot
+ * delay the others or the release that follows.
+ */
+export const DIAGNOSTICS_TOTAL_CAP_MS = 60_000;
+
+/**
+ * Polls `read()` (returns a simulator state string, or null when unreadable)
+ * until it reports Shutdown or `timeoutMs` passes. Always reads at least once.
+ */
+export function pollUntilShutdown({ read, now, sleep, timeoutMs = SHUTDOWN_VERIFY_TIMEOUT_MS, pollMs = SHUTDOWN_VERIFY_POLL_MS }) {
+  const startedAt = now();
+  let reads = 0;
+  for (;;) {
+    reads += 1;
+    const state = read();
+    const elapsedMs = now() - startedAt;
+    if (state === "Shutdown") return { shutdown: true, state, reads, elapsedMs };
+    if (elapsedMs >= timeoutMs) return { shutdown: false, state, reads, elapsedMs };
+    sleep(Math.min(pollMs, timeoutMs - elapsedMs));
+  }
+}
+
+/** Summed per-core times as percentages; with `previous` it is the change between the two samples. */
+export function cpuSplit(current, previous = null) {
+  const total = (cpus) =>
+    cpus.reduce(
+      (sum, { times }) => ({
+        user: sum.user + times.user + times.nice,
+        system: sum.system + times.sys + times.irq,
+        idle: sum.idle + times.idle,
+      }),
+      { user: 0, system: 0, idle: 0 },
+    );
+  const now = total(current);
+  const before = previous ? total(previous) : { user: 0, system: 0, idle: 0 };
+  const delta = { user: now.user - before.user, system: now.system - before.system, idle: now.idle - before.idle };
+  const sum = delta.user + delta.system + delta.idle;
+  if (sum <= 0) return null;
+  const pct = (value) => Math.round((value / sum) * 100);
+  return { user: pct(delta.user), system: pct(delta.system), idle: pct(delta.idle) };
+}
+
+/** Explains a non-live lease so a short-lived `acquire` process does not look like a bug. */
+export function describeNotLive(lease, reason) {
+  if (reason === "holder-gone" || reason === "heartbeat-stale") {
+    return (
+      `not live — ${reason}: the process that acquired it (pid ${lease?.holder?.pid ?? "unknown"}) has exited; a ` +
+      `${lease?.lane ?? "ci/worker"} lease is kept alive only while \`ios:sim:run\` or \`ios:sim:watch\` is running`
+    );
+  }
+  return `not live — ${reason}`;
+}
+
+/**
+ * Early-progress timer with an injected clock. Output is matched across chunk
+ * boundaries; once progress is seen the watch never fails.
+ */
+export function createProgressWatch({ limitMs = EARLY_PROGRESS_LIMIT_MS, pattern = DEFAULT_PROGRESS_PATTERN, startedAtMs }) {
+  let seen = false;
+  let tail = "";
+  return {
+    get seen() {
+      return seen;
+    },
+    onOutput(chunk) {
+      if (seen) return true;
+      const text = tail + String(chunk);
+      seen = pattern.test(text);
+      tail = text.slice(-512);
+      return seen;
+    },
+    expired(nowMs) {
+      return !seen && nowMs - startedAtMs >= limitMs;
+    },
+  };
+}
+
+/**
+ * MOV-493: a booted simulator is only safe to shut down at job start if this
+ * repo's own scripts created it (a `moviecal-*` lane device) and the lease does
+ * not own it. Anything else (`iPhone 17`, a human's own device) is left alone.
+ */
+export function selectStaleLaneDevices(bootedDevices = [], ownedUdids = []) {
+  const owned = new Set(ownedUdids.filter(Boolean));
+  const names = new Set(Object.values(LANE_DEVICES));
+  return bootedDevices.filter((device) => names.has(device.name) && !owned.has(device.udid));
+}
+
 export class HardCapError extends Error {
   constructor(message) {
     super(message);

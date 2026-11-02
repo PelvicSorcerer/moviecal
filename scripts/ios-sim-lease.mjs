@@ -12,6 +12,10 @@ import { fileURLToPath } from "node:url";
 import { JsonStateStore } from "../tools/dispatcher/src/state-store.mjs";
 import {
   DEFAULT_WAIT_MS, HEARTBEAT_INTERVAL_MS, LeaseUnavailableError, MANUAL_WARNING_LEAD_MS, MINUTE_MS, SHARED_DEVICE_NAME,
+  DEFAULT_PROGRESS_PATTERN, EARLY_PROGRESS_EXIT_CODE, EARLY_PROGRESS_LIMIT_MS, EARLY_PROGRESS_MESSAGE,
+  RELEASE_SHUTDOWN_TIMEOUT_MS, createProgressWatch, selectStaleLaneDevices,
+  BOOTSTATUS_TIMEOUT_MS, DIAGNOSTICS_TOTAL_CAP_MS, STILL_BOOTED_MESSAGE, ServiceUnresponsiveError, cpuSplit, describeNotLive,
+  pollUntilShutdown,
   agentGuidance, createLease, describeUnmanaged, detectLane, enqueueWaiter, formatDuration, isHeadWaiter, laneDevice,
   leaseLiveness, normalizeRecord, pruneWaiters, removeWaiter, renewLease, resolveSetupPlan, sameHolder, unmanagedState,
   waiterPosition,
@@ -49,6 +53,44 @@ function runCommand(command, args, { timeout = 120_000 } = {}) {
   return { status: result.error ? 1 : (result.status ?? 1), stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
+/** Non-blocking `runCommand`; a command past its timeout is SIGKILLed and reported without waiting for it to exit. */
+function runCommandAsync(command, args, { timeout = 120_000 } = {}) {
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (status) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ status, stdout, stderr });
+    };
+    let child;
+    try {
+      child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    } catch (error) {
+      resolve({ status: 1, stdout: "", stderr: error.message });
+      return;
+    }
+    const timer = setTimeout(() => {
+      stderr += `\n(timed out after ${timeout}ms)`;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // already gone
+      }
+      finish(1);
+    }, timeout);
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", (error) => {
+      stderr += error.message;
+      finish(1);
+    });
+    child.on("close", (code) => finish(code ?? 1));
+  });
+}
+
 function readStartTime(pid, run) {
   const result = run("ps", ["-o", "lstart=", "-p", String(pid)], { timeout: 10_000 });
   return (result.status === 0 ? result.stdout.trim() : "") || null;
@@ -76,6 +118,9 @@ export function createEnvironment(overrides = {}) {
     sleep: (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
     delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     run: runCommand,
+    runAsync: runCommandAsync,
+    loadavg: () => os.loadavg(),
+    cpus: () => os.cpus(),
     log: (message) => console.log(message),
     warn: (message) => console.error(message),
     store: new LeaseStore(leasePath(env)),
@@ -195,10 +240,75 @@ export function xcodebuildProcesses(environment) {
     .filter((pid) => Number.isInteger(pid) && pid > 0 && pid !== environment.pid);
 }
 
-function shutdownDevice(environment, udid) {
-  const result = environment.run(xcrun(environment), ["simctl", "shutdown", udid], { timeout: 120_000 });
+/** The device's current state from a one-device `simctl list`, or null when it cannot be read. */
+function readDeviceState(environment, udid) {
+  try {
+    const parsed = JSON.parse(simctl(environment, ["list", "devices", "-j", udid], { timeout: 20_000 }));
+    for (const devices of Object.values(parsed.devices ?? {})) {
+      const found = (devices ?? []).find((entry) => entry.udid === udid);
+      if (found) return found.state;
+    }
+  } catch {
+    // an unreadable state is "not confirmed shut down", which the caller handles
+  }
+  return null;
+}
+
+function runShutdown(environment, udid, timeout) {
+  const result = environment.run(xcrun(environment), ["simctl", "shutdown", udid], { timeout });
   if (result.status !== 0 && !/current state: Shutdown/iu.test(`${result.stderr}${result.stdout}`)) {
     throw new Error(`Could not shut the simulator ${udid} down: ${(result.stderr || result.stdout).trim()}`);
+  }
+}
+
+/**
+ * MOV-497: `simctl shutdown` exiting 0 does not prove the device stopped (a
+ * wedged CoreSimulatorService ignores it), so the state is re-read and polled,
+ * the shutdown is retried once, and a device that is still Booted is reported
+ * loudly instead of claimed shut down. Returns `{ shutdown, attempts, elapsedMs }`.
+ */
+function shutdownDevice(environment, device, timeout = 120_000) {
+  const startedAt = environment.now();
+  const poll = () =>
+    pollUntilShutdown({ read: () => readDeviceState(environment, device.udid), now: environment.now, sleep: environment.sleep });
+
+  runShutdown(environment, device.udid, timeout);
+  let polled = poll();
+  let attempts = 1;
+  if (!polled.shutdown) {
+    attempts = 2;
+    try {
+      runShutdown(environment, device.udid, timeout);
+    } catch {
+      // the verdict comes from the state read below, not from the retry's exit code
+    }
+    polled = poll();
+  }
+
+  const elapsedMs = environment.now() - startedAt;
+  if (!polled.shutdown) {
+    (environment.stuckDevices ??= new Set()).add(device.udid);
+    environment.warn(
+      `${STILL_BOOTED_MESSAGE}: ${device.name} (${device.udid}) is still ${polled.state ?? "in an unreadable state"} ` +
+        `${formatDuration(elapsedMs)} after ${attempts} shutdown attempts, although \`simctl shutdown\` did not report an error. ` +
+        "CoreSimulatorService is probably wedged; see docs/operators/local-execution.md (Wedged simulator service).",
+    );
+  }
+  return { shutdown: polled.shutdown, attempts, elapsedMs };
+}
+
+function systemLoadReport(environment, previousCpus = null) {
+  try {
+    const cpus = environment.cpus();
+    const split = cpuSplit(cpus, previousCpus);
+    const load = environment.loadavg().map((value) => value.toFixed(2)).join(" ");
+    return (
+      `load average ${load} on ${cpus.length} cores; CPU ` +
+      `${split ? `${split.user}% user, ${split.system}% system, ${split.idle}% idle` : "split unavailable"} ` +
+      `(${previousCpus ? "over the capture" : "since boot"})`
+    );
+  } catch (error) {
+    return `load and CPU unavailable: ${error.message}`;
   }
 }
 
@@ -272,8 +382,18 @@ function claimLease({ environment, lane, id, holder, options }) {
     throw new Error(`The ${wanted} simulator does not exist. Run \`npm run ios:sim:setup\` first.`);
   }
 
+  // MOV-493: a CI job starts from a known state. With no live lease, a booted
+  // `moviecal-*` lane device (for example a forgotten `moviecal-manual`) is
+  // leftover, not someone's session, so it is shut down instead of waited on.
+  const staleOthers = lane === "ci" ? selectStaleLaneDevices(bootedDevices(devices), [previous?.device?.udid]) : [];
+  // MOV-497: no live lease exists here, so the job's own device being Booted is
+  // leftover too. It is shut down (and verified) so a wedged service is caught
+  // now rather than as a hang in `bootstatus`.
+  const ownLeftover = lane === "ci" && device.state === "Booted" ? [device] : [];
+  const stale = [...staleOthers.filter((entry) => entry.udid !== device.udid), ...ownLeftover];
+  const staleUdids = new Set(stale.map((entry) => entry.udid));
   const unmanaged = unmanagedState({
-    bootedDevices: bootedDevices(devices),
+    bootedDevices: bootedDevices(devices).filter((entry) => !staleUdids.has(entry.udid)),
     xcodebuildProcesses: xcodebuildProcesses(environment),
     ownedUdids: [previous?.device?.udid],
   });
@@ -290,7 +410,8 @@ function claimLease({ environment, lane, id, holder, options }) {
     acquired: true,
     lease: record.lease,
     takeover: previous ? { lease: previous, reason: liveness.reason } : null,
-    shutdown: bootedDevices(devices).filter((candidate) => candidate.udid !== device.udid),
+    shutdown: [...bootedDevices(devices).filter((candidate) => candidate.udid !== device.udid), ...ownLeftover],
+    stale,
   });
 }
 
@@ -308,11 +429,25 @@ function forgetWaiter(environment, id) {
 function finishAcquire(attempt, environment, lane) {
   const { lease, takeover } = attempt;
   if (takeover) environment.log(`Took over the ${takeover.lease.lane} lease ${takeover.lease.id} (${takeover.reason}).`);
+  const staleUdids = new Set((attempt.stale ?? []).map((device) => device.udid));
+  const stuck = [];
   for (const device of attempt.shutdown ?? []) {
-    environment.log(`Shutting ${device.name} (${device.udid}) down so only one simulator stays booted.`);
-    shutdownDevice(environment, device.udid);
+    environment.log(
+      staleUdids.has(device.udid)
+        ? `Start-of-job cleanup: shutting down leftover simulator ${device.name} (${device.udid}), which no lease owns. Its data is not deleted.`
+        : `Shutting ${device.name} (${device.udid}) down so only one simulator stays booted.`,
+    );
+    if (!shutdownDevice(environment, device).shutdown) stuck.push(device);
   }
-  simctl(environment, ["bootstatus", lease.device.udid, "-b"], { timeout: 600_000 });
+  if (stuck.length > 0) {
+    environment.warn(`--- system load ---\n${systemLoadReport(environment)}`);
+    throw new ServiceUnresponsiveError(
+      `${stuck.map((device) => `${device.name} (${device.udid})`).join(", ")} stayed Booted after shutdown, so the simulator ` +
+        "service is not responding. Failing now instead of waiting on bootstatus. The lease is released. " +
+        "This is an infrastructure fault, not a test failure; see docs/operators/local-execution.md (Wedged simulator service).",
+    );
+  }
+  simctl(environment, ["bootstatus", lease.device.udid, "-b"], { timeout: BOOTSTATUS_TIMEOUT_MS });
 
   environment.log(
     lane === "manual"
@@ -402,8 +537,25 @@ export function commandRelease(options, environment) {
   } else if (options.keepBooted) {
     environment.log(`Released lease ${outcome.lease.id}; ${outcome.lease.device.name} was left booted.`);
   } else {
-    shutdownDevice(environment, outcome.lease.device.udid);
-    environment.log(`Released lease ${outcome.lease.id} and shut ${outcome.lease.device.name} down.`);
+    const startedAt = environment.now();
+    const elapsed = () => formatDuration(environment.now() - startedAt);
+    try {
+      const result = shutdownDevice(environment, outcome.lease.device, RELEASE_SHUTDOWN_TIMEOUT_MS);
+      if (result.shutdown) {
+        environment.log(`Released lease ${outcome.lease.id} and shut ${outcome.lease.device.name} down in ${elapsed()}.`);
+      } else {
+        environment.warn(
+          `Released lease ${outcome.lease.id}, but ${outcome.lease.device.name} is still Booted after ${result.attempts} shutdown ` +
+            `attempts (${elapsed()}), so it was not shut down. The next CI job's start-of-job cleanup retries it.`,
+        );
+      }
+    } catch (error) {
+      environment.warn(
+        `Released lease ${outcome.lease.id}, but shutting ${outcome.lease.device.name} down did not finish within ` +
+          `${formatDuration(RELEASE_SHUTDOWN_TIMEOUT_MS)} (gave up after ${elapsed()}): ${error.message} ` +
+          "The next CI job's start-of-job cleanup shuts any leftover lane simulator down.",
+      );
+    }
   }
   return outcome;
 }
@@ -468,7 +620,7 @@ export function commandStatus(options, environment) {
   lines.push(
     ...(lease
       ? [
-          `Lease: ${lease.id} (${lease.lane} lane, ${liveness.live ? "live" : `not live — ${liveness.reason}`})`,
+          `Lease: ${lease.id} (${lease.lane} lane, ${liveness.live ? "live" : describeNotLive(lease, liveness.reason)})`,
           `  device:   ${lease.device.name} (${lease.device.udid})`,
           `  holder:   pid ${lease.holder?.pid ?? "unknown"}${lease.purpose ? ` — ${lease.purpose}` : ""}`,
           ...(lease.ref ? [`  ref:      ${lease.ref}`] : []),
@@ -549,6 +701,76 @@ function renewHeldLease(environment, id) {
   }
 }
 
+/** Best-effort, bounded evidence for a stalled simulator; never throws. */
+export async function captureSimulatorDiagnostics(environment, lease) {
+  const capMs = environment.diagnosticsCapMs ?? DIAGNOSTICS_TOTAL_CAP_MS;
+  const sections = [
+    [`device state (${lease.device.name} ${lease.device.udid})`, xcrun(environment), ["simctl", "list", "devices", lease.device.udid], 20_000],
+    ["simctl list", xcrun(environment), ["simctl", "list"], 30_000],
+    [
+      "recent CoreSimulator log lines",
+      "log",
+      ["show", "--last", "10m", "--style", "compact", "--predicate", 'subsystem == "com.apple.CoreSimulator"'],
+      45_000,
+    ],
+  ];
+
+  // Commands run concurrently; each fills its own slot, so a hung one cannot
+  // hold back the others, and the cap abandons whatever has not finished.
+  const results = sections.map(() => null);
+  const tasks = sections.map(async ([, command, args, timeout], index) => {
+    try {
+      results[index] = await environment.runAsync(command, args, { timeout });
+    } catch (error) {
+      results[index] = { error: error.message };
+    }
+  });
+  let cpuBefore = null;
+  let cpuAfter = null;
+  try {
+    cpuBefore = environment.cpus();
+    tasks.push(
+      (async () => {
+        await environment.delay(500);
+        cpuAfter = environment.cpus();
+      })().catch(() => {}),
+    );
+  } catch {
+    // CPU numbers are optional evidence
+  }
+
+  let capTimer;
+  const capped = new Promise((resolve) => {
+    capTimer = setTimeout(resolve, capMs);
+  });
+  await Promise.race([Promise.all(tasks), capped]);
+  clearTimeout(capTimer);
+
+  try {
+    environment.warn(`--- system load ---\n${systemLoadReport(environment, cpuAfter ? cpuBefore : null)}`);
+    sections.forEach(([title], index) => {
+      const result = results[index];
+      if (!result) {
+        environment.warn(`--- ${title}: still running at the ${formatDuration(capMs)} diagnostics cap; abandoned ---`);
+      } else if (result.error) {
+        environment.warn(`--- ${title}: could not be captured: ${result.error} ---`);
+      } else {
+        const output = `${result.stdout}${result.stderr}`.trim().split("\n");
+        const shown = title.startsWith("recent") ? output.slice(-60) : output;
+        environment.warn(`--- ${title} (exit ${result.status}) ---\n${shown.join("\n")}`);
+      }
+    });
+    if (environment.stuckDevices?.size > 0) {
+      environment.warn(
+        "--- hint ---\nA simulator did not shut down when asked. CoreSimulatorService is the likely culprit; " +
+          "see docs/operators/local-execution.md (Wedged simulator service) for the manual recovery.",
+      );
+    }
+  } catch (error) {
+    environment.warn(`--- diagnostics could not be reported: ${error.message} ---`);
+  }
+}
+
 export async function commandRun(options, environment) {
   if (options.commandArgs.length === 0) throw new Error("`ios:sim:run` needs a command: npm run ios:sim:run -- <command…>");
   const lease = commandAcquire({ ...options, purpose: options.purpose ?? options.commandArgs.join(" ") }, environment);
@@ -586,11 +808,41 @@ export async function commandRun(options, environment) {
     return [signal, handler];
   });
 
+  const progressLimitMs = options.progressWithinMs ?? (options.earlyProgress ? EARLY_PROGRESS_LIMIT_MS : null);
+  const watch = progressLimitMs === null ? null : createProgressWatch({ limitMs: progressLimitMs, startedAtMs: environment.now() });
+
   child = spawn(options.commandArgs[0], options.commandArgs.slice(1), {
-    stdio: "inherit",
+    stdio: ["inherit", watch ? "pipe" : "inherit", "inherit"],
     env: { ...process.env, MOVIECAL_IOS_SIM_DEVICE: lease.device.udid, MOVIECAL_IOS_SIM_LEASE: lease.id },
   });
   if (interrupted) child.kill(interrupted);
+
+  let stalled = false;
+  let stallTimer = null;
+  let killTimer = null;
+  if (watch) {
+    child.stdout.on("data", (chunk) => {
+      process.stdout.write(chunk);
+      watch.onOutput(chunk);
+    });
+    const pollMs = Number(environment.env.MOVIECAL_IOS_SIM_PROGRESS_POLL_MS ?? 5_000);
+    stallTimer = setInterval(async () => {
+      if (stalled || !watch.expired(environment.now())) return;
+      stalled = true;
+      environment.warn(
+        `${EARLY_PROGRESS_MESSAGE}: no test suite started within ${formatDuration(progressLimitMs)} of the simulator booting. ` +
+          "Failing now instead of waiting out the step timeout; capturing simulator diagnostics, then releasing the lease.",
+      );
+      await captureSimulatorDiagnostics(environment, lease);
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // already gone
+      }
+      killTimer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+    }, pollMs);
+  }
 
   // The lease must survive a long build even if the detached watcher died, so
   // this process renews it directly while its command runs.
@@ -602,9 +854,12 @@ export async function commandRun(options, environment) {
       child.on("error", reject);
       child.on("exit", (code, signal) => resolve({ code, signal }));
     });
+    if (stalled) return EARLY_PROGRESS_EXIT_CODE;
     return result.signal ? 128 + (os.constants.signals[result.signal] ?? 0) : (result.code ?? 0);
   } finally {
     clearInterval(heartbeat);
+    clearInterval(stallTimer);
+    clearTimeout(killTimer);
     for (const [signal, handler] of handlers) process.off(signal, handler);
     release();
   }
@@ -676,9 +931,10 @@ export async function commandWatch(options, environment) {
 // ---------------------------------------------------------------------- CLI
 
 const VALUED_FLAGS = { "--purpose": "purpose", "--ref": "ref", "--device": "device", "--id": "id" };
+const MINUTE_FLAGS = { "--wait": "waitMs", "--progress-within": "progressWithinMs" };
 const BOOLEAN_FLAGS = {
   "--keep-booted": "keepBooted", "--force-shutdown-unmanaged": "forceShutdownUnmanaged",
-  "--force": "force", "--json": "json",
+  "--force": "force", "--json": "json", "--early-progress": "earlyProgress",
 };
 
 export function parseArguments(argv) {
@@ -686,7 +942,7 @@ export function parseArguments(argv) {
   if (!COMMANDS.includes(command)) throw new Error(`Usage: ios-sim-lease.mjs <${COMMANDS.join("|")}> [options]`);
 
   const options = {
-    command, purpose: null, ref: null, waitMs: null, keepBooted: false,
+    command, purpose: null, ref: null, waitMs: null, progressWithinMs: null, earlyProgress: false, keepBooted: false,
     forceShutdownUnmanaged: false, force: false, json: false, device: null, id: null, commandArgs: [],
   };
 
@@ -703,16 +959,16 @@ export function parseArguments(argv) {
       options[BOOLEAN_FLAGS[argument]] = true;
       continue;
     }
-    if (!VALUED_FLAGS[argument] && argument !== "--wait") throw new Error(`Unknown argument: ${argument}`);
+    if (!VALUED_FLAGS[argument] && !MINUTE_FLAGS[argument]) throw new Error(`Unknown argument: ${argument}`);
     const value = rest[++index];
     if (value === undefined) throw new Error(`${argument} requires a value.`);
-    if (argument !== "--wait") {
+    if (!MINUTE_FLAGS[argument]) {
       options[VALUED_FLAGS[argument]] = value;
       continue;
     }
     const minutes = Number(value);
-    if (!Number.isFinite(minutes) || minutes < 0) throw new Error("--wait takes a number of minutes.");
-    options.waitMs = minutes * MINUTE_MS;
+    if (!Number.isFinite(minutes) || minutes < 0) throw new Error(`${argument} takes a number of minutes.`);
+    options[MINUTE_FLAGS[argument]] = minutes * MINUTE_MS;
   }
 
   if (command === "watch" && !options.id) throw new Error("watch requires --id <lease id>.");
