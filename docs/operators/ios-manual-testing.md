@@ -100,7 +100,8 @@ the current lease).
 `npm run ios:sim:run -- --early-progress <command>` fails a wedged simulator run
 early: exit 76 `SIMULATOR_TESTS_NOT_STARTED` if no test suite starts within 8
 minutes, and exit 78 `SIMULATOR_TEST_OUTPUT_STALLED` if the command prints
-nothing (stdout or stderr) for 10 minutes at any point. Both capture simulator
+nothing (stdout or stderr) for 15 minutes at any point (a healthy run has been
+seen to go quiet for 6.5 minutes between the unit and UI bundles). Both capture simulator
 diagnostics, stop the command and release the lease; they are not test
 failures, so re-run. Use `--progress-within <minutes>` / `--idle-within
 <minutes>` to shorten the limits when verifying. A second "All tests" suite in

@@ -168,16 +168,20 @@ export function createProgressWatch({ limitMs = EARLY_PROGRESS_LIMIT_MS, pattern
 
 /**
  * MOV-500: how long the wrapped command may print nothing (stdout and stderr)
- * at any point in the run before it is treated as stalled. Healthy xcodebuild
- * runs print continuously; the lane-ios run of 2026-11-02 (41499145743) went
- * silent for ~28.5 minutes between the unit bundle finishing (18:21:39Z) and the
- * UI test runner starting (18:50:07Z) and used 32.5 of its 35 minutes. 10 minutes
- * is far above any gap between lines in a healthy run, including a slow UI
- * runner startup, yet fails a wedge ~25 minutes before the step timeout. No
- * healthy bundle-to-bundle gap has been measured from telemetry yet; see
- * docs/operators/local-execution.md.
+ * at any point in the run before it is treated as stalled.
+ *
+ * Evidence: the wedged lane-ios run of 2026-11-02 (41499145743) went silent for
+ * ~28.5 minutes between the unit bundle finishing (18:21:39Z) and the UI test
+ * runner starting (18:50:07Z) and used 32.5 of its 35 minutes. The only healthy
+ * gap measured so far is the 6.5-minute unit-to-UI silence on the passing #949
+ * run (41524774118). 15 minutes is ~2.3x that healthy gap, so a slower Mac or a
+ * busier runner does not turn a passing run into a false failure (a false
+ * failure costs a full job re-run), and it still fails a wedge about 15 minutes
+ * before the 35-minute step timeout. A tighter limit (10 minutes) left only 3.5
+ * minutes of margin over the healthy gap. Revisit once more healthy-run gaps are
+ * sampled; see docs/operators/local-execution.md.
  */
-export const OUTPUT_IDLE_LIMIT_MS = 10 * MINUTE_MS;
+export const OUTPUT_IDLE_LIMIT_MS = 15 * MINUTE_MS;
 export const OUTPUT_IDLE_EXIT_CODE = 78;
 export const OUTPUT_IDLE_MESSAGE = "SIMULATOR_TEST_OUTPUT_STALLED";
 /** Suite and test-case lines, kept so a stall report can say where the run stopped. */

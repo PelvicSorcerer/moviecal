@@ -725,6 +725,41 @@ describe("output idle watchdog (MOV-500)", () => {
     expect(session.warnings.join("\n")).not.toMatch(/SIMULATOR_TEST_OUTPUT_STALLED/u);
   });
 
+  it("uses a limit with real margin over the measured healthy 6.5-minute unit-to-UI gap", () => {
+    expect(OUTPUT_IDLE_LIMIT_MS).toBeGreaterThanOrEqual(2 * 6.5 * 60_000);
+  });
+
+  it("with only --early-progress, does not fail a healthy 6.5-minute silent gap (default limits, scaled clock)", async () => {
+    const session = harness({ env: { MOVIECAL_IOS_SIM_PROGRESS_POLL_MS: "20" }, devices: laneDevices() });
+    scaled(session);
+    // 390 real ms == 6.5 virtual minutes at the 1000x test clock.
+    const script = "console.log(\"Test Suite 'All tests' started at now\"); setTimeout(() => { console.log('UI runner'); }, 390)";
+    const exitCode = await commandRun({ commandArgs: [process.execPath, "-e", script], earlyProgress: true }, session.environment);
+    expect(exitCode).toBe(0);
+    expect(session.warnings.join("\n")).not.toMatch(/SIMULATOR_TEST_OUTPUT_STALLED|SIMULATOR_TESTS_NOT_STARTED/u);
+  });
+
+  it("with only --early-progress, the default 15-minute idle limit fails a silent run end to end", async () => {
+    const session = harness({ env: { MOVIECAL_IOS_SIM_PROGRESS_POLL_MS: "20" }, devices: laneDevices() });
+    scaled(session);
+    const script = "console.log(\"Test Suite 'All tests' started at now\"); setTimeout(() => {}, 30000)";
+    const exitCode = await commandRun({ commandArgs: [process.execPath, "-e", script], earlyProgress: true }, session.environment);
+    expect(exitCode).toBe(OUTPUT_IDLE_EXIT_CODE);
+    expect(session.warnings.join("\n")).toMatch(/no output for 15m/u);
+  });
+
+  it("with only --early-progress, the default 8-minute no-suite limit fires end to end (no --progress-within override)", async () => {
+    const session = harness({ env: { MOVIECAL_IOS_SIM_PROGRESS_POLL_MS: "20" }, devices: laneDevices() });
+    scaled(session);
+    const exitCode = await commandRun(
+      { commandArgs: [process.execPath, "-e", "setTimeout(() => {}, 30000)"], earlyProgress: true },
+      session.environment,
+    );
+    expect(exitCode).toBe(EARLY_PROGRESS_EXIT_CODE);
+    expect(session.warnings.join("\n")).toMatch(/no test suite started within 8m/u);
+    expect(session.environment.store.load().lease).toBeNull();
+  });
+
   it("lets the early no-suite check fire first for a silent start", async () => {
     const session = harness({ env: { MOVIECAL_IOS_SIM_PROGRESS_POLL_MS: "20" }, devices: laneDevices() });
     scaled(session);

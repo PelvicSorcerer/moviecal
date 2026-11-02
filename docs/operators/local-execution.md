@@ -411,7 +411,7 @@ burning the whole 35-minute step budget:
 - **Idle watchdog (MOV-500).** Under `--early-progress` (or `--progress-within`,
   or `--idle-within` alone) the wrapper also forwards the command's stderr
   unchanged and tracks the time of the last output line on either stream. If
-  nothing is printed for `OUTPUT_IDLE_LIMIT_MS` (10 minutes, measured from the
+  nothing is printed for `OUTPUT_IDLE_LIMIT_MS` (15 minutes, measured from the
   command starting and then from the latest output) the run prints
   `SIMULATOR_TEST_OUTPUT_STALLED` with the idle limit, the time of the last
   output and the last `Test Suite`/`Test Case` line seen, plus a GitHub
@@ -427,14 +427,16 @@ burning the whole 35-minute step budget:
   --idle-within 1 node -e "console.log(\"Test Suite 'All tests' started at
   now\"); setTimeout(()=>{}, 600000)"`. Exit codes: 75 lease unavailable, 76
   tests not started, 77 service unresponsive, 78 output stalled.
-  - *Why 10 minutes.* Healthy xcodebuild output is continuous. In lane-ios run
-    41499145743 (2026-11-02) the xcodebuild step printed nothing for ~28.5
-    minutes and used 32.5 of its 35 minutes. 10 minutes would have failed that
-    run about 18 minutes earlier. Caveat: no healthy gap between the unit
-    bundle and the UI runner starting has been measured from telemetry yet (the
-    only measured gap is the wedged one), so the limit is a proposal that is
-    not yet backed by healthy-run samples; revisit it against
-    `~/Library/Logs/moviecal-telemetry/` once passing runs are sampled.
+  - *Why 15 minutes.* Healthy xcodebuild output is continuous apart from one
+    known quiet stretch: the gap between the unit bundle finishing and the UI
+    test runner starting. On the healthy, passing #949 run (41524774118) that
+    gap was **6.5 minutes**. In the wedged lane-ios run 41499145743
+    (2026-11-02) the same stretch was ~28.5 minutes and the step used 32.5 of
+    its 35 minutes. 15 minutes is ~2.3x the healthy gap (a 10-minute limit left
+    only 3.5 minutes of margin, and a false positive costs a full re-run) and
+    still fails the wedged run about 15 minutes before the step timeout. These
+    are two data points, not a distribution; revisit the limit against
+    `~/Library/Logs/moviecal-telemetry/` as more passing runs are sampled.
   - *The second "All tests" suite is not a duplicate.* It is the
     `MoviecalUITests` bundle. In that run the unit bundle `MoviecalTests`
     passed at 18:21:39Z (85 tests, 19.4s); the silence was the gap before the UI
