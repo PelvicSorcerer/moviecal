@@ -10,6 +10,7 @@ import {
   commandExtend, commandRelease, commandRun, commandSetup, commandStatus, commandWatch, createEnvironment, createLease,
   detectLane, emptyRecord, enqueueWaiter, isHeadWaiter, laneDevice, leaseLiveness, leasePath, parseArguments,
   pruneWaiters, renewLease, resolveSetupPlan, unmanagedState, waiterPosition, withMutex,
+  EARLY_PROGRESS_EXIT_CODE, EARLY_PROGRESS_LIMIT_MS, RELEASE_SHUTDOWN_TIMEOUT_MS, createProgressWatch, selectStaleLaneDevices,
 } from "../scripts/ios-sim-lease.mjs";
 
 const START = Date.parse("2026-09-23T10:00:00.000Z");
@@ -552,5 +553,110 @@ describe("ios:sim:release, extend, status, adopt, and the watcher", () => {
     expect(Date.parse(stored.heartbeatAt)).toBeGreaterThan(Date.parse(lease.heartbeatAt));
     // A dead holder's lease is left in place for the next acquirer to take over.
     expect(stored.id).toBe(lease.id);
+  });
+});
+
+describe("start-of-job cleanup (MOV-493)", () => {
+  it("selects only booted moviecal-* lane devices that the lease does not own", () => {
+    const booted = laneDevices("Booted", "Booted", "Booted", "Booted");
+    const selected = selectStaleLaneDevices(booted, [`udid-${LANE_DEVICES.ci}`]);
+    expect(selected.map((entry) => entry.name)).toEqual([LANE_DEVICES.worker, LANE_DEVICES.manual]);
+    expect(selectStaleLaneDevices([device("Someone's iPad", "Booted")])).toEqual([]);
+  });
+
+  it("shuts a stale moviecal-manual down in a CI job and names it in the log", () => {
+    const session = harness({ env: { GITHUB_ACTIONS: "true" }, devices: laneDevices("Shutdown", "Shutdown", "Shutdown", "Booted") });
+    commandAcquire({}, session.environment);
+
+    expect(session.booted()).toEqual([LANE_DEVICES.ci]);
+    expect(session.output()).toMatch(/Start-of-job cleanup: shutting down leftover simulator moviecal-manual/u);
+  });
+
+  it("still waits on a booted simulator it does not know about", () => {
+    const session = harness({ env: { GITHUB_ACTIONS: "true" }, devices: laneDevices("Booted") });
+    expect(() => commandAcquire({ waitMs: 0 }, session.environment)).toThrow(LeaseUnavailableError);
+    expect(session.booted()).toEqual([SHARED_DEVICE_NAME]);
+  });
+
+  it("does not auto-shut a stale lane device down outside the CI lane", () => {
+    const session = harness({ devices: laneDevices("Shutdown", "Shutdown", "Booted") });
+    expect(() => commandAcquire({ waitMs: 0 }, session.environment)).toThrow(LeaseUnavailableError);
+    expect(session.booted()).toEqual([LANE_DEVICES.worker]);
+  });
+});
+
+describe("early-progress watch (MOV-493)", () => {
+  it("expires only after the limit with no suite start, using the injected clock", () => {
+    const watch = createProgressWatch({ startedAtMs: 1000 });
+    expect(watch.expired(1000 + EARLY_PROGRESS_LIMIT_MS - 1)).toBe(false);
+    expect(watch.expired(1000 + EARLY_PROGRESS_LIMIT_MS)).toBe(true);
+  });
+
+  it("never expires once a suite start is seen, even split across chunks", () => {
+    const watch = createProgressWatch({ startedAtMs: 0 });
+    watch.onOutput("Build succeeded\nTest Suite 'All te");
+    expect(watch.seen).toBe(false);
+    watch.onOutput("sts' started at 2026-11-02 10:00:00.000\n");
+    expect(watch.seen).toBe(true);
+    expect(watch.expired(10 * EARLY_PROGRESS_LIMIT_MS)).toBe(false);
+  });
+
+  it("fails a silent run at the limit with exit 76, diagnostics, and a released lease", async () => {
+    const session = harness({ env: { MOVIECAL_IOS_SIM_PROGRESS_POLL_MS: "20" }, devices: laneDevices() });
+    const t0 = Date.now();
+    session.environment.now = () => START + (Date.now() - t0) * 1000;
+    const exitCode = await commandRun(
+      { commandArgs: [process.execPath, "-e", "setTimeout(() => {}, 30000)"], progressWithinMs: 1000 },
+      session.environment,
+    );
+
+    expect(exitCode).toBe(EARLY_PROGRESS_EXIT_CODE);
+    expect(session.warnings.join("\n")).toMatch(/SIMULATOR_TESTS_NOT_STARTED: no test suite started within 1s/u);
+    expect(session.warnings.join("\n")).toMatch(/--- simctl list/u);
+    expect(session.environment.store.load().lease).toBeNull();
+    expect(session.booted()).toEqual([]);
+  });
+
+  it("does not fail a run that starts its suites in time", async () => {
+    const session = harness({ env: { MOVIECAL_IOS_SIM_PROGRESS_POLL_MS: "20" }, devices: laneDevices() });
+    const script = "console.log(\"Test Suite 'All tests' started at now\"); setTimeout(() => {}, 300)";
+    const exitCode = await commandRun({ commandArgs: [process.execPath, "-e", script], progressWithinMs: 1 }, session.environment);
+
+    expect(exitCode).toBe(0);
+    expect(session.warnings.join("\n")).not.toMatch(/SIMULATOR_TESTS_NOT_STARTED/u);
+  });
+
+  it("parses --early-progress and --progress-within", () => {
+    expect(parseArguments(["run", "--early-progress", "--", "x"])).toMatchObject({ earlyProgress: true, commandArgs: ["x"] });
+    expect(parseArguments(["run", "--progress-within", "2", "--", "x"]).progressWithinMs).toBe(120_000);
+  });
+});
+
+describe("bounded lease release (MOV-493)", () => {
+  it("passes the bounded timeout to the shutdown and logs how long it took", () => {
+    const session = harness({ devices: laneDevices() });
+    commandAcquire({}, session.environment);
+    const timeouts = [];
+    const inner = session.environment.run;
+    session.environment.run = (command, args, options) => {
+      if (args?.[1] === "shutdown") timeouts.push(options?.timeout);
+      return inner(command, args, options);
+    };
+    commandRelease({}, session.environment);
+
+    expect(timeouts).toEqual([RELEASE_SHUTDOWN_TIMEOUT_MS]);
+    expect(session.output()).toMatch(/shut moviecal-manual down in \d+s/u);
+  });
+
+  it("warns instead of hanging or throwing when the shutdown gives up", () => {
+    const session = harness({ devices: laneDevices() });
+    commandAcquire({}, session.environment);
+    const inner = session.environment.run;
+    session.environment.run = (command, args, options) =>
+      args?.[1] === "shutdown" ? { status: 1, stdout: "", stderr: "timed out" } : inner(command, args, options);
+
+    expect(() => commandRelease({}, session.environment)).not.toThrow();
+    expect(session.environment.store.load().lease).toBeNull();
+    expect(session.warnings.join("\n")).toMatch(/did not finish within 1m 00s/u);
   });
 });

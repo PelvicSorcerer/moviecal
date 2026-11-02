@@ -385,6 +385,35 @@ only the `moviecal-worker` device; `npm run ios:sim:run` renews it rather than
 queueing behind its own dispatcher. The id is recorded on the worktree registry
 entry (`iosSimLeaseId`) so startup recovery releases it explicitly.
 
+### lane-ios start-of-job cleanup and early-progress check (MOV-493)
+
+`.github/workflows/ios-verify.yml` runs xcodebuild under `npm run ios:sim:run`
+(`scripts/ios-sim-lease.mjs`). Three behaviors guard against a stalled simulator
+burning the whole 35-minute step budget:
+
+- **Start-of-job cleanup.** In the `ci` lane, when no live lease exists, any
+  booted `moviecal-ci`/`moviecal-worker`/`moviecal-manual` device (the repo's
+  own lane devices, `selectStaleLaneDevices`) is shut down before `moviecal-ci`
+  is booted, and the log line `Start-of-job cleanup: shutting down leftover
+  simulator <name>` names it. Device data is never deleted. Other booted devices
+  or a running `xcodebuild` still make the job wait as before (`unmanaged`).
+- **Early-progress check.** The test step passes `--early-progress`. If
+  xcodebuild prints no `Test Suite '…' started at` line within
+  `EARLY_PROGRESS_LIMIT_MS` (8 minutes, measured from the simulator booting;
+  `scripts/lib/ios-sim-lease-core.mjs`), the run prints
+  `SIMULATOR_TESTS_NOT_STARTED`, captures diagnostics (lease device state,
+  `simctl list`, the last 60 CoreSimulator log lines), stops xcodebuild
+  (SIGTERM, SIGKILL after 10s), releases the lease, and exits 76; the workflow
+  turns that into an error annotation. 8 minutes is several times the healthy
+  boot-to-first-suite gap, and the failed runs on 2026-10-30/11-01 sat silent
+  for ~20 minutes. `--progress-within <minutes>` overrides the limit for manual
+  verification. Runs that start suites normally are unaffected.
+- **Bounded release.** Release shuts the simulator down with a
+  `RELEASE_SHUTDOWN_TIMEOUT_MS` (60s) timeout, logs how long it took, and on a
+  timeout warns instead of failing; the lease record is already cleared and the
+  next job's cleanup shuts a leftover device down. The workflow's release step
+  also has a 5-minute `timeout-minutes`.
+
 ## Retained-worktree recovery
 
 ### Operator continuation of a retained failed implementation (MOV-404)
@@ -844,7 +873,7 @@ The advisory treatment covers only *what the model says about the diff*. If the 
 
 `lane-review` never posts a GitHub review/approval — only a plain PR comment for visibility, stamped with the PR head SHA so a stale comment from an earlier push is not read as the current verdict.
 
-**Acknowledging a legitimate sensitive-path change (MOV-134).** A sensitive-path hit is a `block` by default, and with `bypass_actors: []` that means the PR cannot merge at all — so a real change to one of those paths needs an explicit, auditable sign-off. The repo owner records it by adding the **`sensitive-path-ack` label** to the PR **and** a **`lane-review-ack: <reason>`** line to the PR body. With both present, `lane-review` downgrades the sensitive-path finding from `block` to `warn` (still printed, still in the summary comment). One without the other still blocks, and the message names what is missing. This mirrors MOV-121's workflow-edit authorization (label + marker, fail closed) and is deliberately narrow: **secret-detection and diff-size blocks are never downgradeable this way**, and the acknowledgement is per-PR, visible in the PR's own metadata.
+**Acknowledging a legitimate sensitive-path change (MOV-134).** A sensitive-path hit is a `block` by default, and with `bypass_actors: []` that means the PR cannot merge at all — so a real change to one of those paths needs an explicit, auditable sign-off. The repo owner records it by adding the **`sensitive-path-ack` label** to the PR **and** a **`lane-review-ack: <reason>`** line to the PR body. With both present, `lane-review` downgrades the sensitive-path finding from `block` to `warn` (still printed, still in the summary comment). One without the other still blocks, and the message names what is missing. This mirrors MOV-121's workflow-edit authorization (label + marker, fail closed) and is deliberately narrow: **secret-detection and diff-size blocks are never downgradeable this way**, and the acknowledgement is per-PR, visible in the PR's own metadata. `lane-review` runs when the PR's commits change, not when a label or the PR body is edited, so add the label and the `lane-review-ack:` line first, and only then push a new commit, which makes the check re-evaluate the acknowledgement. A commit pushed before the label and body are in place re-runs the check against the old body and still blocks.
 
 **Overriding a false-positive AI-review block (MOV-150).** A substantive AI-review `block` is advisory — it fails the check, but the repo owner can downgrade it to a `warn` by adding the **`lane-review-ai-ack` label** to the PR **and** a **`lane-review-ai-ack: <reason>`** line to the PR body. Same fail-closed shape as the sensitive-path ack: one without the other still blocks and the message names what is missing; the reason is recorded in the summary comment. This is a distinct label and marker from `sensitive-path-ack` / `lane-review-ack:` — an ack of one kind does not satisfy the other. It applies **only** to the model's judgement about the diff: an AI pass that was configured but failed to run or returned garbage is a non-downgradeable `block`, and heuristic blocks are unaffected. Because `on: pull_request` does not re-trigger on a label or body edit alone, push a commit (or re-run the workflow) after adding the ack.
 

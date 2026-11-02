@@ -32,6 +32,64 @@ export class LeaseUnavailableError extends Error {
   }
 }
 
+/**
+ * MOV-493: how long `ios:sim:run --progress-within` waits, measured from the
+ * moment the simulator is booted, for the wrapped command to print its first
+ * test-suite start. Two failed lane-ios runs sat silent for ~20 minutes between
+ * a 1m12s build and the first suite before the 35-minute step budget killed
+ * them; passing runs start suites within a couple of minutes of boot. 8 minutes
+ * is several times the healthy gap yet leaves ~27 minutes of the step budget
+ * for diagnostics and release instead of burning all of it with no signal.
+ */
+export const EARLY_PROGRESS_LIMIT_MS = 8 * MINUTE_MS;
+export const EARLY_PROGRESS_EXIT_CODE = 76;
+export const EARLY_PROGRESS_MESSAGE = "SIMULATOR_TESTS_NOT_STARTED";
+/** XCTest's first line of real progress: `Test Suite 'All tests' started at …`. */
+export const DEFAULT_PROGRESS_PATTERN = /Test Suite '[^']*' started at/u;
+
+/**
+ * Releasing shuts the simulator down; after both observed timeouts that took
+ * 1 to 3.5 minutes. The lease record is already cleared by then, so a wedged
+ * shutdown is abandoned after this bound (the next job's start-of-job cleanup
+ * shuts any leftover lane device down) instead of stalling the whole job.
+ */
+export const RELEASE_SHUTDOWN_TIMEOUT_MS = 60_000;
+
+/**
+ * Early-progress timer with an injected clock. Output is matched across chunk
+ * boundaries; once progress is seen the watch never fails.
+ */
+export function createProgressWatch({ limitMs = EARLY_PROGRESS_LIMIT_MS, pattern = DEFAULT_PROGRESS_PATTERN, startedAtMs }) {
+  let seen = false;
+  let tail = "";
+  return {
+    get seen() {
+      return seen;
+    },
+    onOutput(chunk) {
+      if (seen) return true;
+      const text = tail + String(chunk);
+      seen = pattern.test(text);
+      tail = text.slice(-512);
+      return seen;
+    },
+    expired(nowMs) {
+      return !seen && nowMs - startedAtMs >= limitMs;
+    },
+  };
+}
+
+/**
+ * MOV-493: a booted simulator is only safe to shut down at job start if this
+ * repo's own scripts created it (a `moviecal-*` lane device) and the lease does
+ * not own it. Anything else (`iPhone 17`, a human's own device) is left alone.
+ */
+export function selectStaleLaneDevices(bootedDevices = [], ownedUdids = []) {
+  const owned = new Set(ownedUdids.filter(Boolean));
+  const names = new Set(Object.values(LANE_DEVICES));
+  return bootedDevices.filter((device) => names.has(device.name) && !owned.has(device.udid));
+}
+
 export class HardCapError extends Error {
   constructor(message) {
     super(message);
