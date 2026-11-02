@@ -951,6 +951,50 @@ The plist's own `StandardOutPath`/`StandardErrorPath` (`~/Library/Logs/moviecal-
 
 **PATH.** launchd runs jobs with a minimal `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), not the interactive shell's `PATH`. `ProgramArguments` invokes node via an absolute path so the daemon process itself starts, but every child process the dispatcher or its workers spawn — `gh`, `npm`, `codex` (`/usr/local/bin`), `claude` (`~/.local/bin`) — fails with `ENOENT` unless the plist sets `PATH` explicitly. The template's `EnvironmentVariables` dict does this (`__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`); keep it when filling in the installed copy. `dispatcher doctor` passing from an interactive shell does **not** prove the daemon's environment is correct — an interactive shell has a fuller `PATH` than launchd gives the job, so `doctor`'s `gh`/`claude`/`codex` checks can pass there while the running service still fails on the same lookups. After any `launchctl load`, confirm the service itself is working (check `dispatcher.stderr.log` and a run-log directory for a completed poll cycle), not just that `doctor` is clean in your terminal.
 
+## Host telemetry sampler (MOV-494)
+
+`tools/host-telemetry/` records Mac load (memory pressure, swap, load average, thermal state, free disk, top processes and a per-group rollup) so stalled CI and simulator runs can be explained afterwards. It is a separate user-level LaunchAgent (`com.moviecal.telemetry`), outside any worker sandbox and independent of the dispatcher daemon. Node ESM, no dependencies, no admin rights. Part 1 of MOV-492; run markers (part 2) and the report (part 3) build on it.
+
+**A human installs this, never a worker.** The Mac's permission check blocks agents installing persistence. Template: `tools/host-telemetry/launchd/com.moviecal.telemetry.plist` (RunAtLoad, KeepAlive, Nice 10). It starts at **login**, not boot, because it is a user LaunchAgent.
+
+**Install** (Adam, in Terminal, from a checkout containing the merged code; use the dispatcher daemon worktree after `git pull`):
+
+```
+REPO=~/code/worktrees/moviecal/dispatcher-daemon
+mkdir -p ~/Library/Logs/moviecal-telemetry
+sed -e "s#__NODE_PATH__#$(command -v node)#g" -e "s#__REPO_PATH__#$REPO#g" -e "s#__HOME__#$HOME#g" \
+  "$REPO/tools/host-telemetry/launchd/com.moviecal.telemetry.plist" > ~/Library/LaunchAgents/com.moviecal.telemetry.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.moviecal.telemetry.plist
+```
+
+Check first with `node tools/host-telemetry/bin/sampler.mjs --once`, which prints the admin reminder and one full sample. Status: `launchctl list | grep com.moviecal.telemetry`. After `git pull` in the daemon worktree, `launchctl kickstart -k gui/$(id -u)/com.moviecal.telemetry`.
+
+**Remove:**
+
+```
+launchctl bootout gui/$(id -u)/com.moviecal.telemetry
+rm ~/Library/LaunchAgents/com.moviecal.telemetry.plist
+```
+
+**Remove the stopgap Python monitor first** so two samplers do not run on an 8 GB Mac:
+
+```
+launchctl bootout gui/$(id -u)/com.moviecal.monitor
+rm ~/Library/LaunchAgents/com.moviecal.monitor.plist
+rm -rf ~/code/moviecal-monitor
+```
+
+**Cadence.** One sample every 5 s when idle, every 1.5 s when busy. Busy means a job-start marker is open (ignoring markers older than 6 hours) or a `Runner.Worker`, `xcodebuild`, `xctest` or simulator process is running. Every external command (`ps`, `vm_stat`, `sysctl`, `pmset -g therm`, `df`) has a 3 s hard timeout; a hung command is skipped and noted in the sample's `notes`. Never `thermlog`, never `du` on CoreSimulator, never long `log show` ranges in the sample loop.
+
+**Files** (all under `~/Library/Logs/moviecal-telemetry/`, dates are UTC; set `MOVIECAL_TELEMETRY_DIR` to override):
+
+* `samples-YYYY-MM-DD.jsonl`: one JSON line per sample after a header line: `t`, `pressure` (1 normal, 2 warn, 4 critical), `freeMb`, `compressorMb`, `swapUsedMb`, `load` (1/5/15 min), `cores`, `thermal.speedLimit`, `diskFreeGb`, `topCpu` and `topRss` (15 each: `pid`, `cpu`, `rssMb`, `command`), `groups` (`runner`, `xcode`, `simulator`, `workers` = claude/codex, `node` = node/vitest, `other`; each `count`, `cpu`, `rssMb`), `busy`, `notes`. Commands are executable paths only, truncated to 100 characters, with flags and token-like words dropped.
+* `markers-YYYY-MM-DD.jsonl`: written and read only through `tools/host-telemetry/src/markers.mjs`. Line schema: `{ "t": ISO UTC ms, "source": "runner" | "sim-lease" | "dispatcher" | "sampler", "event": string, ...fields }`. An event named `<name>-start` opens a span and `<name>-end` closes it, paired on `(source, name, id)` where `id` is an optional string field; unmatched starts keep the sampler in busy mode for up to 6 hours. The sampler's own events (`started`, `snapshot`) never open spans.
+* `snapshots/snapshot-<time>.txt`: deep snapshots with process tree, `sample` of the top 3 CPU processes (15 s timeout each), `vm_stat` and the last 2 minutes of memory-status and jetsam log lines. Triggered by: memory pressure warn sustained for at least 1 minute with swap growth (a single warn reading never triggers, the Mac idles at warn), any critical reading, thermal speed limit under 100, free disk under 10 GB, or load above 2x cores for 1 minute. At most one per 5 minutes, never overlapping, at most 20 files kept (oldest pruned).
+* Retention, at startup and daily: files from a previous UTC day are gzipped, files older than 14 days are deleted.
+
+**Admin-level collection is not enabled.** `powermetrics` and `spindump` need root. Every log and snapshot file starts with a header carrying this reminder and the sampler prints it on startup: *Admin-level collection (powermetrics, spindump) is NOT enabled. If load problems persist after reviewing this data, ask Adam to consider enabling it.* Enabling it means a human-run privileged job (for example a root LaunchDaemon running `powermetrics --samplers cpu_power,thermal -i 5000` into the same directory); it is deliberately out of scope for the sampler.
+
 ## Standing health check
 
 `dispatcher doctor` is a read-only command that asserts: Linear auth works, `gh` auth works, the worktree root is writable, `~/.config/moviecal/env.local` exists and is mode 600, `claude` and `codex` are on `PATH`, `origin/master` is fetchable, and the iOS self-hosted runner is reachable. It also prints the **local dispatch identity** — the delegate an issue must name to be claimed here (MOV-143) — which **lifecycle publication surface** is configured (MOV-158), and each worker's current **quota-pool cooldown state** (MOV-360: open, cooling until a reset, or awaiting a post-reset probe) — all informational rather than pass/fail gates. It also reports the **last observed Claude worker startup mode and tool set** from the worker-usage ledger (MOV-386). That line fails when the last observed run's `system/init` event showed a mode other than `default` or a tool outside `CLAUDE_WORKER_TOOLS`. The Agent Session line reports configuration only: the sole way to test entitlement is `agentSessionCreateOnIssue`, which is a mutation, and `doctor` never mutates. If `~/.config/moviecal/linear-app.env` is present it additionally checks the file is mode 600 and that an app-actor token can be minted from it (MOV-122); if it is absent that check is a no-op pass. Run it after any environment change and before relying on the dispatcher for real work.
