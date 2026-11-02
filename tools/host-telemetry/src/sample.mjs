@@ -1,11 +1,10 @@
 // Builds one telemetry sample from injected command output. MOV-494.
 import os from "node:os";
+import { COMMAND_TIMEOUT_MS, createCommandCache } from "./cache.mjs";
 import {
   hasBusyProcess, parseDfFreeGb, processCounts, parsePmsetTherm, parsePs, parseSwapUsage, parseSysctlInt,
   parseVmStat, rollup, topBy,
 } from "./parse.mjs";
-
-export const COMMAND_TIMEOUT_MS = 3000;
 
 export const COMMANDS = {
   ps: ["/bin/ps", ["-axo", "pid=,ppid=,pcpu=,rss=,state=,comm="]],
@@ -16,16 +15,23 @@ export const COMMANDS = {
   df: ["/bin/df", ["-k", "/"]],
 };
 
-// run(cmd, args, { timeoutMs }) -> { ok, stdout, timedOut }
-export async function collectSample({ run, nowMs, cores = os.cpus().length, loadavg = os.loadavg(), cpu = () => null }) {
+export { COMMAND_TIMEOUT_MS };
+
+// cache: createCommandCache(...) kept across samples by the loop. Without one (tests, --once) a fresh cache is
+// used and every command runs once. Fields whose command failed, timed out or is not back yet are null and noted.
+export async function collectSample({ run, nowMs, cores = os.cpus().length, loadavg = os.loadavg(), cpu = () => null, cache, busy = false }) {
   const names = Object.keys(COMMANDS);
-  const results = await Promise.all(
-    names.map((name) => run(COMMANDS[name][0], COMMANDS[name][1], { timeoutMs: COMMAND_TIMEOUT_MS })),
-  );
-  const out = Object.fromEntries(names.map((n, i) => [n, results[i]]));
+  const c = cache ?? createCommandCache({ run, commands: COMMANDS });
+  await c.refresh(nowMs, { busy, wait: cache ? undefined : COMMAND_TIMEOUT_MS + 1000 });
+  const out = Object.fromEntries(names.map((n) => [n, c.get(n, nowMs)]));
   const notes = names
     .filter((n) => !out[n].ok)
-    .map((n) => (out[n].timedOut ? `${n}: timed out after ${COMMAND_TIMEOUT_MS}ms, skipped` : `${n}: failed`));
+    .map((n) => {
+      if (out[n].timedOut) return `${n}: timed out after ${COMMAND_TIMEOUT_MS}ms, skipped`;
+      if (out[n].pending) return `${n}: no result yet, skipped`;
+      if (out[n].stale) return `${n}: result too old, skipped`;
+      return `${n}: failed`;
+    });
   const text = (n) => (out[n].ok ? out[n].stdout : "");
   const procs = out.ps.ok ? parsePs(out.ps.stdout) : [];
   const counts = out.ps.ok ? processCounts(procs) : null;

@@ -6,7 +6,8 @@ import { DAY_MS, headerLine, utcDate } from "./common.mjs";
 import { appendMarker, hasOpenMarker } from "./markers.mjs";
 import { applyRetention } from "./retention.mjs";
 import { createCpuSampler } from "./parse.mjs";
-import { collectSample } from "./sample.mjs";
+import { COMMANDS, collectSample } from "./sample.mjs";
+import { createCommandCache } from "./cache.mjs";
 import { takeSnapshot } from "./snapshot.mjs";
 import { SnapshotGate, TriggerState, computeLoadNoJob } from "./triggers.mjs";
 
@@ -23,6 +24,8 @@ export function appendSample(dir, sample, nowMs) {
 // clock: { now(), sleep(ms) }. Stops when shouldStop() is true.
 export async function runLoop({ run, clock, dir, shouldStop, cores, loadavg, readCpus = os.cpus, log = () => {} }) {
   const cpu = createCpuSampler(readCpus);
+  const cache = createCommandCache({ run, commands: COMMANDS });
+  let lastBusy = false;
   const triggers = new TriggerState();
   const gate = new SnapshotGate();
   const snapshots = [];
@@ -38,7 +41,7 @@ export async function runLoop({ run, clock, dir, shouldStop, cores, loadavg, rea
         log(`retention failed: ${error.message}`);
       }
     }
-    const sample = await collectSample({ run, nowMs: startMs, cores, loadavg: loadavg?.(), cpu });
+    const sample = await collectSample({ run, nowMs: startMs, cores, loadavg: loadavg?.(), cpu, cache, busy: lastBusy });
     let markerBusy = false;
     try {
       markerBusy = hasOpenMarker({ dir, nowMs: startMs });
@@ -47,6 +50,7 @@ export async function runLoop({ run, clock, dir, shouldStop, cores, loadavg, rea
     }
     const busy = markerBusy || sample.busyProcess === true;
     sample.busy = busy;
+    lastBusy = busy;
     delete sample.busyProcess;
     sample.loadNoJob = computeLoadNoJob({ load: sample.load, cores: sample.cores, runnerWorker: sample.runnerWorker, markerBusy });
     delete sample.runnerWorker;

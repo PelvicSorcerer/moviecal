@@ -82,6 +82,11 @@ describe("ps state, simulator counts and CPU split", () => {
   it("counts simulator processes and xpcproxy_sim separately", () => {
     expect(processCounts(parsePs(STALE_SIM_PS))).toEqual({ runnable: 2, simProcs: 2, xpcproxySim: 2, runnerWorker: false });
   });
+  it("counts xpcproxy_sim and Runner.Worker from long and spaced real-world paths", () => {
+    const rt = "/Library/Developer/CoreSimulator/Volumes/iOS_22C150/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 18.2.simruntime/Contents/Resources/RuntimeRoot";
+    const text = ` 300 1 1.0 1000 R  ${rt}/usr/libexec/xpcproxy_sim\n 301 1 1.0 1000 S  ${rt}/sbin/launchd_sim\n 302 1 1.0 1000 S  /Users/adammoore/actions-runner/bin/Runner.Worker\n`;
+    expect(processCounts(parsePs(text))).toEqual({ runnable: 1, simProcs: 1, xpcproxySim: 1, runnerWorker: true });
+  });
   it("computes the CPU split from os.cpus() deltas", () => {
     const at = (user, sys, idle) => [{ times: { user, nice: 0, sys, idle, irq: 0 } }, { times: { user, nice: 0, sys, idle, irq: 0 } }];
     expect(cpuSplit(at(0, 0, 0), at(300, 540, 160))).toEqual({ user: 30, sys: 54, idle: 16 });

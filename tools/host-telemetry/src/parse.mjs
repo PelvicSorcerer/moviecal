@@ -40,6 +40,11 @@ export function parsePs(text) {
       rssMb: Math.round((Number(m[4]) / 1024) * 10) / 10,
       state: m[5],
       command: sanitizeCommand(m[6]),
+      // Booleans from the raw path: `command` is cut at spaces-then-token-like words and at 100 characters,
+      // which loses the tail of long CoreSimulator runtime paths (".../iOS 18.2.simruntime/.../xpcproxy_sim").
+      isSim: /CoreSimulator|launchd_sim/.test(m[6]),
+      isXpcproxySim: /\/xpcproxy_sim(\s|$)/.test(m[6]),
+      isRunnerWorker: /\/Runner\.Worker(\s|$)/.test(m[6]),
     });
   }
   return procs;
@@ -126,15 +131,15 @@ export function hasBusyProcess(procs) {
   });
 }
 
-export const isXpcproxySim = (p) => path.basename(p.command) === "xpcproxy_sim";
+export const isXpcproxySim = (p) => p.isXpcproxySim === true;
 
 // Counts derived from one parsed `ps` listing. xpcproxy_sim is counted apart from simProcs.
 export function processCounts(procs) {
   return {
     runnable: procs.filter((p) => p.state.startsWith("R")).length,
     xpcproxySim: procs.filter(isXpcproxySim).length,
-    simProcs: procs.filter((p) => !isXpcproxySim(p) && /CoreSimulator|launchd_sim/.test(p.command)).length,
-    runnerWorker: procs.some((p) => path.basename(p.command) === "Runner.Worker"),
+    simProcs: procs.filter((p) => !isXpcproxySim(p) && p.isSim === true).length,
+    runnerWorker: procs.some((p) => p.isRunnerWorker === true),
   };
 }
 

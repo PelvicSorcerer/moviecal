@@ -18,6 +18,7 @@ export async function main(argv, { run = runCommand, clock = realClock, out = co
   if (argv.includes("--once")) {
     const cpu = createCpuSampler(os.cpus);
     cpu();
+    await clock.sleep(1000); // the CPU split needs two readings a little apart
     const sample = await collectSample({ run, nowMs: clock.now(), cpu });
     let markerBusy = false;
     try {
