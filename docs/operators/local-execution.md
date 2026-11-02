@@ -385,6 +385,35 @@ only the `moviecal-worker` device; `npm run ios:sim:run` renews it rather than
 queueing behind its own dispatcher. The id is recorded on the worktree registry
 entry (`iosSimLeaseId`) so startup recovery releases it explicitly.
 
+### lane-ios start-of-job cleanup and early-progress check (MOV-493)
+
+`.github/workflows/ios-verify.yml` runs xcodebuild under `npm run ios:sim:run`
+(`scripts/ios-sim-lease.mjs`). Three behaviors guard against a stalled simulator
+burning the whole 35-minute step budget:
+
+- **Start-of-job cleanup.** In the `ci` lane, when no live lease exists, any
+  booted `moviecal-ci`/`moviecal-worker`/`moviecal-manual` device (the repo's
+  own lane devices, `selectStaleLaneDevices`) is shut down before `moviecal-ci`
+  is booted, and the log line `Start-of-job cleanup: shutting down leftover
+  simulator <name>` names it. Device data is never deleted. Other booted devices
+  or a running `xcodebuild` still make the job wait as before (`unmanaged`).
+- **Early-progress check.** The test step passes `--early-progress`. If
+  xcodebuild prints no `Test Suite '…' started at` line within
+  `EARLY_PROGRESS_LIMIT_MS` (8 minutes, measured from the simulator booting;
+  `scripts/lib/ios-sim-lease-core.mjs`), the run prints
+  `SIMULATOR_TESTS_NOT_STARTED`, captures diagnostics (lease device state,
+  `simctl list`, the last 60 CoreSimulator log lines), stops xcodebuild
+  (SIGTERM, SIGKILL after 10s), releases the lease, and exits 76; the workflow
+  turns that into an error annotation. 8 minutes is several times the healthy
+  boot-to-first-suite gap, and the failed runs on 2026-10-30/11-01 sat silent
+  for ~20 minutes. `--progress-within <minutes>` overrides the limit for manual
+  verification. Runs that start suites normally are unaffected.
+- **Bounded release.** Release shuts the simulator down with a
+  `RELEASE_SHUTDOWN_TIMEOUT_MS` (60s) timeout, logs how long it took, and on a
+  timeout warns instead of failing; the lease record is already cleared and the
+  next job's cleanup shuts a leftover device down. The workflow's release step
+  also has a 5-minute `timeout-minutes`.
+
 ## Retained-worktree recovery
 
 ### Operator continuation of a retained failed implementation (MOV-404)

@@ -14,6 +14,13 @@ and launch, so closing the build terminal does not free the simulator mid-test.
 It prints the lease id, expiry, and cap. Full semantics and the `ios:sim:*`
 commands are in `scripts/ios-sim-lease.mjs`.
 
+**CI cleanup of a forgotten session (MOV-493):** a lane-ios job that finds no
+live lease and a leftover booted `moviecal-*` device (for example
+`moviecal-manual`) shuts it down at job start and names it in the log. Its data
+is never deleted, and `iPhone 17` or any other device is never touched. So a
+manual session must hold a live lease (`ios:manual-test`, `ios:sim:adopt`) or CI
+may shut its simulator down; an unknown booted simulator still makes CI wait.
+
 **Agent procedure:** if you set up the simulator for a user's manual testing,
 run `npm run ios:sim:release` as soon as they say they are finished; an idle
 lease blocks CI, the worker lane, and the next manual session.

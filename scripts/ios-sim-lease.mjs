@@ -12,6 +12,8 @@ import { fileURLToPath } from "node:url";
 import { JsonStateStore } from "../tools/dispatcher/src/state-store.mjs";
 import {
   DEFAULT_WAIT_MS, HEARTBEAT_INTERVAL_MS, LeaseUnavailableError, MANUAL_WARNING_LEAD_MS, MINUTE_MS, SHARED_DEVICE_NAME,
+  DEFAULT_PROGRESS_PATTERN, EARLY_PROGRESS_EXIT_CODE, EARLY_PROGRESS_LIMIT_MS, EARLY_PROGRESS_MESSAGE,
+  RELEASE_SHUTDOWN_TIMEOUT_MS, createProgressWatch, selectStaleLaneDevices,
   agentGuidance, createLease, describeUnmanaged, detectLane, enqueueWaiter, formatDuration, isHeadWaiter, laneDevice,
   leaseLiveness, normalizeRecord, pruneWaiters, removeWaiter, renewLease, resolveSetupPlan, sameHolder, unmanagedState,
   waiterPosition,
@@ -195,8 +197,8 @@ export function xcodebuildProcesses(environment) {
     .filter((pid) => Number.isInteger(pid) && pid > 0 && pid !== environment.pid);
 }
 
-function shutdownDevice(environment, udid) {
-  const result = environment.run(xcrun(environment), ["simctl", "shutdown", udid], { timeout: 120_000 });
+function shutdownDevice(environment, udid, timeout = 120_000) {
+  const result = environment.run(xcrun(environment), ["simctl", "shutdown", udid], { timeout });
   if (result.status !== 0 && !/current state: Shutdown/iu.test(`${result.stderr}${result.stdout}`)) {
     throw new Error(`Could not shut the simulator ${udid} down: ${(result.stderr || result.stdout).trim()}`);
   }
@@ -272,8 +274,13 @@ function claimLease({ environment, lane, id, holder, options }) {
     throw new Error(`The ${wanted} simulator does not exist. Run \`npm run ios:sim:setup\` first.`);
   }
 
+  // MOV-493: a CI job starts from a known state. With no live lease, a booted
+  // `moviecal-*` lane device (for example a forgotten `moviecal-manual`) is
+  // leftover, not someone's session, so it is shut down instead of waited on.
+  const stale = lane === "ci" ? selectStaleLaneDevices(bootedDevices(devices), [previous?.device?.udid]) : [];
+  const staleUdids = new Set(stale.map((entry) => entry.udid));
   const unmanaged = unmanagedState({
-    bootedDevices: bootedDevices(devices),
+    bootedDevices: bootedDevices(devices).filter((entry) => !staleUdids.has(entry.udid)),
     xcodebuildProcesses: xcodebuildProcesses(environment),
     ownedUdids: [previous?.device?.udid],
   });
@@ -291,6 +298,7 @@ function claimLease({ environment, lane, id, holder, options }) {
     lease: record.lease,
     takeover: previous ? { lease: previous, reason: liveness.reason } : null,
     shutdown: bootedDevices(devices).filter((candidate) => candidate.udid !== device.udid),
+    stale: stale.filter((candidate) => candidate.udid !== device.udid),
   });
 }
 
@@ -308,8 +316,13 @@ function forgetWaiter(environment, id) {
 function finishAcquire(attempt, environment, lane) {
   const { lease, takeover } = attempt;
   if (takeover) environment.log(`Took over the ${takeover.lease.lane} lease ${takeover.lease.id} (${takeover.reason}).`);
+  const staleUdids = new Set((attempt.stale ?? []).map((device) => device.udid));
   for (const device of attempt.shutdown ?? []) {
-    environment.log(`Shutting ${device.name} (${device.udid}) down so only one simulator stays booted.`);
+    environment.log(
+      staleUdids.has(device.udid)
+        ? `Start-of-job cleanup: shutting down leftover simulator ${device.name} (${device.udid}), which no lease owns. Its data is not deleted.`
+        : `Shutting ${device.name} (${device.udid}) down so only one simulator stays booted.`,
+    );
     shutdownDevice(environment, device.udid);
   }
   simctl(environment, ["bootstatus", lease.device.udid, "-b"], { timeout: 600_000 });
@@ -402,8 +415,18 @@ export function commandRelease(options, environment) {
   } else if (options.keepBooted) {
     environment.log(`Released lease ${outcome.lease.id}; ${outcome.lease.device.name} was left booted.`);
   } else {
-    shutdownDevice(environment, outcome.lease.device.udid);
-    environment.log(`Released lease ${outcome.lease.id} and shut ${outcome.lease.device.name} down.`);
+    const startedAt = environment.now();
+    const elapsed = () => formatDuration(environment.now() - startedAt);
+    try {
+      shutdownDevice(environment, outcome.lease.device.udid, RELEASE_SHUTDOWN_TIMEOUT_MS);
+      environment.log(`Released lease ${outcome.lease.id} and shut ${outcome.lease.device.name} down in ${elapsed()}.`);
+    } catch (error) {
+      environment.warn(
+        `Released lease ${outcome.lease.id}, but shutting ${outcome.lease.device.name} down did not finish within ` +
+          `${formatDuration(RELEASE_SHUTDOWN_TIMEOUT_MS)} (gave up after ${elapsed()}): ${error.message} ` +
+          "The next CI job's start-of-job cleanup shuts any leftover lane simulator down.",
+      );
+    }
   }
   return outcome;
 }
@@ -549,6 +572,30 @@ function renewHeldLease(environment, id) {
   }
 }
 
+/** Best-effort, bounded evidence for a stalled simulator; never throws. */
+export function captureSimulatorDiagnostics(environment, lease) {
+  const sections = [
+    [`device state (${lease.device.name} ${lease.device.udid})`, xcrun(environment), ["simctl", "list", "devices", lease.device.udid], 30_000],
+    ["simctl list", xcrun(environment), ["simctl", "list"], 60_000],
+    [
+      "recent CoreSimulator log lines",
+      "log",
+      ["show", "--last", "10m", "--style", "compact", "--predicate", 'subsystem == "com.apple.CoreSimulator"'],
+      60_000,
+    ],
+  ];
+  for (const [title, command, args, timeout] of sections) {
+    try {
+      const result = environment.run(command, args, { timeout });
+      const output = `${result.stdout}${result.stderr}`.trim().split("\n");
+      const shown = title.startsWith("recent") ? output.slice(-60) : output;
+      environment.warn(`--- ${title} (exit ${result.status}) ---\n${shown.join("\n")}`);
+    } catch (error) {
+      environment.warn(`--- ${title}: could not be captured: ${error.message} ---`);
+    }
+  }
+}
+
 export async function commandRun(options, environment) {
   if (options.commandArgs.length === 0) throw new Error("`ios:sim:run` needs a command: npm run ios:sim:run -- <command…>");
   const lease = commandAcquire({ ...options, purpose: options.purpose ?? options.commandArgs.join(" ") }, environment);
@@ -586,11 +633,40 @@ export async function commandRun(options, environment) {
     return [signal, handler];
   });
 
+  const progressLimitMs = options.progressWithinMs ?? (options.earlyProgress ? EARLY_PROGRESS_LIMIT_MS : null);
+  const watch = progressLimitMs === null ? null : createProgressWatch({ limitMs: progressLimitMs, startedAtMs: environment.now() });
+
   child = spawn(options.commandArgs[0], options.commandArgs.slice(1), {
-    stdio: "inherit",
+    stdio: ["inherit", watch ? "pipe" : "inherit", "inherit"],
     env: { ...process.env, MOVIECAL_IOS_SIM_DEVICE: lease.device.udid, MOVIECAL_IOS_SIM_LEASE: lease.id },
   });
   if (interrupted) child.kill(interrupted);
+
+  let stalled = false;
+  let stallTimer = null;
+  let killTimer = null;
+  if (watch) {
+    child.stdout.on("data", (chunk) => {
+      process.stdout.write(chunk);
+      watch.onOutput(chunk);
+    });
+    const pollMs = Number(environment.env.MOVIECAL_IOS_SIM_PROGRESS_POLL_MS ?? 5_000);
+    stallTimer = setInterval(() => {
+      if (stalled || !watch.expired(environment.now())) return;
+      stalled = true;
+      environment.warn(
+        `${EARLY_PROGRESS_MESSAGE}: no test suite started within ${formatDuration(progressLimitMs)} of the simulator booting. ` +
+          "Failing now instead of waiting out the step timeout; capturing simulator diagnostics, then releasing the lease.",
+      );
+      captureSimulatorDiagnostics(environment, lease);
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // already gone
+      }
+      killTimer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+    }, pollMs);
+  }
 
   // The lease must survive a long build even if the detached watcher died, so
   // this process renews it directly while its command runs.
@@ -602,9 +678,12 @@ export async function commandRun(options, environment) {
       child.on("error", reject);
       child.on("exit", (code, signal) => resolve({ code, signal }));
     });
+    if (stalled) return EARLY_PROGRESS_EXIT_CODE;
     return result.signal ? 128 + (os.constants.signals[result.signal] ?? 0) : (result.code ?? 0);
   } finally {
     clearInterval(heartbeat);
+    clearInterval(stallTimer);
+    clearTimeout(killTimer);
     for (const [signal, handler] of handlers) process.off(signal, handler);
     release();
   }
@@ -676,9 +755,10 @@ export async function commandWatch(options, environment) {
 // ---------------------------------------------------------------------- CLI
 
 const VALUED_FLAGS = { "--purpose": "purpose", "--ref": "ref", "--device": "device", "--id": "id" };
+const MINUTE_FLAGS = { "--wait": "waitMs", "--progress-within": "progressWithinMs" };
 const BOOLEAN_FLAGS = {
   "--keep-booted": "keepBooted", "--force-shutdown-unmanaged": "forceShutdownUnmanaged",
-  "--force": "force", "--json": "json",
+  "--force": "force", "--json": "json", "--early-progress": "earlyProgress",
 };
 
 export function parseArguments(argv) {
@@ -686,7 +766,7 @@ export function parseArguments(argv) {
   if (!COMMANDS.includes(command)) throw new Error(`Usage: ios-sim-lease.mjs <${COMMANDS.join("|")}> [options]`);
 
   const options = {
-    command, purpose: null, ref: null, waitMs: null, keepBooted: false,
+    command, purpose: null, ref: null, waitMs: null, progressWithinMs: null, earlyProgress: false, keepBooted: false,
     forceShutdownUnmanaged: false, force: false, json: false, device: null, id: null, commandArgs: [],
   };
 
@@ -703,16 +783,16 @@ export function parseArguments(argv) {
       options[BOOLEAN_FLAGS[argument]] = true;
       continue;
     }
-    if (!VALUED_FLAGS[argument] && argument !== "--wait") throw new Error(`Unknown argument: ${argument}`);
+    if (!VALUED_FLAGS[argument] && !MINUTE_FLAGS[argument]) throw new Error(`Unknown argument: ${argument}`);
     const value = rest[++index];
     if (value === undefined) throw new Error(`${argument} requires a value.`);
-    if (argument !== "--wait") {
+    if (!MINUTE_FLAGS[argument]) {
       options[VALUED_FLAGS[argument]] = value;
       continue;
     }
     const minutes = Number(value);
-    if (!Number.isFinite(minutes) || minutes < 0) throw new Error("--wait takes a number of minutes.");
-    options.waitMs = minutes * MINUTE_MS;
+    if (!Number.isFinite(minutes) || minutes < 0) throw new Error(`${argument} takes a number of minutes.`);
+    options[MINUTE_FLAGS[argument]] = minutes * MINUTE_MS;
   }
 
   if (command === "watch" && !options.id) throw new Error("watch requires --id <lease id>.");
