@@ -5,7 +5,7 @@ import path from "node:path";
 import { offerJevPatch, patchCommand, createJevPatchTranslator } from "../src/jev-patch.mjs";
 
 describe("Jev patch function", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "jev-patch-test-"));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "jev-patch-test-")));
   const patch = "*** Begin Patch\n*** Add File: answer.txt\n+after\n*** End Patch";
 
   it("offers a strict JSON function only to the Jev arm", () => {

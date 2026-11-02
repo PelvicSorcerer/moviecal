@@ -6,6 +6,6 @@ export default defineConfig({
     environment: 'node',
     // MOV-382: dispatcher tests can never resolve the live state/log locations.
     setupFiles: ['tools/dispatcher/test/setup-isolated-state.mjs'],
-    include: ['test/**/*.integration.test.*', 'tools/dispatcher/test/**/*.integration.test.*'],
+    include: ['test/**/*.integration.test.*', 'tools/dispatcher/test/**/*.integration.test.*', 'tools/host-telemetry/test/**/*.integration.test.*'],
   },
 });
