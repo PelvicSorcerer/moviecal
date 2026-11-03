@@ -464,7 +464,7 @@ export function issueSpecAuditStatePath() {
   return path.join(configDir(), "issue-spec-audit-state.json");
 }
 
-/** Persisted once-per-issue owner unsubscribe and per-key escalation records (MOV-502). */
+/** Persisted per-key owner escalation records (MOV-502). */
 export function ownerNotificationStatePath() {
   return path.join(configDir(), "owner-notification-state.json");
 }

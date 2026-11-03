@@ -1,15 +1,13 @@
-// MOV-502: one escalation helper, owner unsubscribe-once bookkeeping, and a
+// MOV-502: one escalation helper and a
 // static guard that no other module moves an issue into a needs-state.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { promoteEligible } from "../src/promoter.mjs";
 import { LifecyclePublisher } from "../src/agent-lifecycle.mjs";
 import {
   OwnerNotificationLedger,
-  ensureOwnerUnsubscribed,
   escalateToOwner,
   ownerMention,
   renderEscalationComment,
@@ -23,13 +21,12 @@ const ISSUE = {
   assignee: { id: "user-adam", name: "Adam Moore", displayName: "adam" },
 };
 
-function fakeClient({ unsubscribe = async () => true } = {}) {
+function fakeClient() {
   const log = [];
   return {
     log,
     async moveToState(issueId, stateId) { log.push({ type: "move", issueId, stateId }); return true; },
     async addComment(issueId, body) { log.push({ type: "comment", issueId, body }); return true; },
-    async unsubscribeFromIssue(issueId, userId) { log.push({ type: "unsubscribe", issueId, userId }); return unsubscribe(); },
   };
 }
 
@@ -121,51 +118,6 @@ describe("LifecyclePublisher needs-state moves", () => {
     expect(comments[0].body).toContain("https://linear.app/moviecal/profiles/adam");
     expect(comments[1].body).not.toContain("linear.app/moviecal/profiles");
     await expect(publisher.moveState("state-nhd")).rejects.toThrow(/needs-state/);
-  });
-});
-
-describe("ensureOwnerUnsubscribed", () => {
-  it("unsubscribes once per issue and never again", async () => {
-    const client = fakeClient();
-    const args = { linearClient: client, issue: ISSUE, ledger, logger: SILENT };
-    expect((await ensureOwnerUnsubscribed(args)).unsubscribed).toBe(true);
-    await ensureOwnerUnsubscribed(args);
-    await ensureOwnerUnsubscribed({ ...args, ledger: new OwnerNotificationLedger(ledger.statePath) });
-    expect(client.log.filter((entry) => entry.type === "unsubscribe")).toEqual([{ type: "unsubscribe", issueId: "id-1", userId: "user-adam" }]);
-  });
-
-  it("records a refusal, logs it once and does not throw or retry", async () => {
-    const client = fakeClient({ unsubscribe: async () => { throw new Error("forbidden"); } });
-    const warnings = [];
-    const args = { linearClient: client, issue: ISSUE, ledger, logger: { warn: (message) => warnings.push(message) } };
-    expect((await ensureOwnerUnsubscribed(args)).unsubscribed).toBe(false);
-    await ensureOwnerUnsubscribed(args);
-    expect(client.log).toHaveLength(1);
-    expect(warnings).toHaveLength(1);
-    expect(ledger.load().unsubscribed["id-1"]).toMatchObject({ outcome: "refused", detail: "forbidden" });
-  });
-
-  it("skips an issue with no human assignee", async () => {
-    const client = fakeClient();
-    await ensureOwnerUnsubscribed({ linearClient: client, issue: { ...ISSUE, assignee: null }, ledger, logger: SILENT });
-    expect(client.log).toEqual([]);
-  });
-
-  it("promotion then claim unsubscribes exactly once", async () => {
-    const client = fakeClient();
-    const unassigned = {
-      id: "id-1", identifier: "MOV-1", stateName: "Backlog", labels: [], blockedByIds: [], recentComments: [], assignee: null,
-      description: ["## Acceptance criteria", "- it works.", "", "### Testing Expectations", "- unit: covers it."].join("\n"),
-    };
-    const ownerAssignment = {
-      ensureOwner: async () => ({ ok: true, assigned: true, wouldAssign: false, member: { id: "user-adam", name: "Adam Moore" } }),
-    };
-    await promoteEligible([unassigned], {
-      linearClient: client, readyForAgentStateId: "ready", isBlockerSatisfied: () => true, ownerAssignment,
-      ownerUnsubscribe: (issue) => ensureOwnerUnsubscribed({ linearClient: client, issue, ledger, logger: SILENT }),
-    });
-    await ensureOwnerUnsubscribed({ linearClient: client, issue: ISSUE, ledger, logger: SILENT });
-    expect(client.log.filter((entry) => entry.type === "unsubscribe")).toHaveLength(1);
   });
 });
 

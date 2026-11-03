@@ -2,11 +2,11 @@
 // (MOV-502).
 //
 // Contract: the owner stays the assignee (Linear refuses delegation to an
-// unowned issue) but is unsubscribed from dispatched issues, so routine
-// dispatcher comments never reach their inbox. The dispatcher @mentions the
-// owner exactly when it moves an issue to `Needs Human Decision` / `Needs
-// Input`, and nowhere else. An @mention subscribes the owner to that comment
-// thread only.
+// unowned issue). Linear auto-subscribes assignees and an app actor cannot
+// unsubscribe them (issueUnsubscribe reports success but does nothing), so
+// the owner's inbox cannot be quieted from the dispatcher. The dispatcher
+// instead @mentions the owner exactly when it moves an issue to `Needs Human
+// Decision` / `Needs Input`, so a mention always means "needs you".
 //
 // Every move into a needs-state goes through `escalateToOwner`;
 // owner-escalation.test.mjs statically fails if a new direct `moveToState` to
@@ -19,20 +19,10 @@ const DEFAULT_OPTIONS = [
   "Move it to `Canceled` to drop it.",
 ];
 
-/** Durable once-per-issue unsubscribe record and per-key escalation record. */
+/** Durable per-key escalation record. */
 export class OwnerNotificationLedger extends JsonStateStore {
   get label() {
     return "owner notification ledger";
-  }
-
-  unsubscribeRecorded(issueId) {
-    return Boolean(this.load().unsubscribed?.[issueId]);
-  }
-
-  recordUnsubscribe(issueId, record) {
-    this.update((state) => {
-      state.unsubscribed = { ...(state.unsubscribed || {}), [issueId]: record };
-    });
   }
 
   hasEscalation(key) {
@@ -130,39 +120,4 @@ export function needsStateIds(stateIds = {}) {
 /** User ids that are the dispatcher itself and so can never be @mentioned. */
 export function botUserIdsOf(delegate) {
   return delegate && delegate.id ? [delegate.id] : [];
-}
-
-/**
- * Unsubscribe the issue's human assignee, once per issue. A refusal is
- * logged and recorded so it is neither retried nor allowed to fail the
- * caller, and a later manual re-subscribe is never undone.
- */
-export async function ensureOwnerUnsubscribed({ linearClient, issue, ledger, botUserIds = [], logger = console, now = () => new Date() }) {
-  const assignee = issue && issue.assignee;
-  if (!ledger || !assignee || !assignee.id || assignee.isApp || botUserIds.includes(assignee.id)) {
-    return { unsubscribed: false, reason: "no human assignee or no ledger" };
-  }
-  try {
-    if (ledger.unsubscribeRecorded(issue.id)) return { unsubscribed: false, reason: "already handled" };
-    let outcome = "unsubscribed";
-    let detail = null;
-    try {
-      const ok = await linearClient.unsubscribeFromIssue(issue.id, assignee.id);
-      if (!ok) {
-        outcome = "refused";
-        detail = "Linear reported success: false";
-      }
-    } catch (error) {
-      outcome = "refused";
-      detail = error.message;
-    }
-    ledger.recordUnsubscribe(issue.id, { outcome, detail, at: now().toISOString() });
-    if (outcome === "refused") {
-      logger.warn?.(`${issue.identifier || issue.id}: Linear refused to unsubscribe the owner (${detail}); relying on the "Needs me" view and notification settings`);
-    }
-    return { unsubscribed: outcome === "unsubscribed", reason: detail };
-  } catch (error) {
-    logger.warn?.(`${issue.identifier || issue.id}: owner unsubscribe bookkeeping failed: ${error.message}`);
-    return { unsubscribed: false, reason: error.message };
-  }
 }

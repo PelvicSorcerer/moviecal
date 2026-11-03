@@ -150,7 +150,7 @@ import {
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
 import { createOwnerAssigner } from "../src/owner-assignment.mjs";
-import { OwnerNotificationLedger, botUserIdsOf, ensureOwnerUnsubscribed, escalateToOwner } from "../src/owner-escalation.mjs";
+import { OwnerNotificationLedger, botUserIdsOf, escalateToOwner } from "../src/owner-escalation.mjs";
 import { AUDITED_SPEC_STATE_TYPES, evaluateIssueSpec, formatIssueSpecMissing } from "../src/issue-spec.mjs";
 import { auditIssueSpecs, IssueSpecAuditScheduleStore, isAuditDue } from "../src/issue-spec-audit.mjs";
 import { propagatePriorities, TERMINAL_PRIORITY_STATE_TYPES } from "../src/priority-propagation.mjs";
@@ -1179,7 +1179,6 @@ async function cmdPromoteOnce({ dryRun = false } = {}) {
     dryRun,
     issueSpecMode,
     ownerAssignment,
-    ownerUnsubscribe: (issue) => ensureOwnerUnsubscribed({ linearClient, issue, ledger: ownerLedger, botUserIds: botUserIdsOf(resolveDispatcherDelegate()) }),
   });
 
   const promoted = results.filter((r) => r.promoted);

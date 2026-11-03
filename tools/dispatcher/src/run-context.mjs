@@ -141,7 +141,7 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
       readyForAgent: stateId(RUN_STATE_NAMES.readyForAgent),
     },
     worktreeManager,
-    // MOV-502: once-per-issue owner unsubscribe and per-key escalation records.
+    // MOV-502: per-key owner escalation records.
     ownerLedger: new OwnerNotificationLedger(ownerNotificationStatePath()),
     // MOV-180: host-wide nested-sandbox-crash breaker, persisted outside the
     // repo so it survives a dispatcher restart (see circuit-breaker.mjs).

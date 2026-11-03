@@ -30,7 +30,7 @@ import { policyDigest } from "./jev-cohort.mjs";
 import { validateOpenRouterTransport } from "./openrouter-transport.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
-import { botUserIdsOf, ensureOwnerUnsubscribed, escalateToOwner, needsStateIds } from "./owner-escalation.mjs";
+import { botUserIdsOf, escalateToOwner, needsStateIds } from "./owner-escalation.mjs";
 import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-signals.mjs";
 import { registerActiveAttempt, unregisterActiveAttempt, updateActiveAttempt } from "./active-attempt-registry.mjs";
 import { captureVerificationEvidence } from "./readiness-evidence.mjs";
@@ -1147,10 +1147,6 @@ async function dispatchIssue(issue, ctx) {
     },
   });
   await publisher.begin({ existing: readAgentSessionFn(issue.identifier) });
-
-  // MOV-502: claim covers issues that reached Ready for Agent without the
-  // promoter. Once per issue; a refusal is logged and never fails dispatch.
-  await ensureOwnerUnsubscribed({ linearClient, issue, ledger: ownerLedger, botUserIds: botUserIdsOf(dispatcherDelegate), logger });
 
   // MOV-166: makes this attempt findable by issue id for an inbound Agent
   // Session signal (the stream client looks it up to route a stop to the
