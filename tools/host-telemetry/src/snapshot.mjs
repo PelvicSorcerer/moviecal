@@ -8,7 +8,9 @@ import { SNAPSHOT_MAX_FILES } from "./triggers.mjs";
 
 export const SAMPLE_TIMEOUT_MS = 15_000;
 export const LOG_TIMEOUT_MS = 20_000;
+export const CORESIM_LOG_TIMEOUT_MS = 10_000;
 const SIMPLE_TIMEOUT_MS = 5_000;
+const CORESIM_LOG_PREDICATE = 'subsystem == "com.apple.CoreSimulator"';
 const LOG_PREDICATE =
   'subsystem == "com.apple.memorystatus" OR eventMessage CONTAINS[c] "jetsam" OR eventMessage CONTAINS[c] "memorystatus"';
 
@@ -32,10 +34,13 @@ export async function takeSnapshot({ run, dir, nowMs, reasons }) {
   const iso = new Date(nowMs).toISOString();
   const file = path.join(snapDir, `snapshot-${iso.replace(/:/g, "-")}.txt`);
   const ps = await run("/bin/ps", ["-axo", "pid=,ppid=,pcpu=,rss=,etime=,comm="], { timeoutMs: SIMPLE_TIMEOUT_MS });
-  const cpuPs = await run("/bin/ps", ["-axo", "pid=,ppid=,pcpu=,rss=,comm="], { timeoutMs: SIMPLE_TIMEOUT_MS });
-  const top = cpuPs.ok ? parsePs(cpuPs.stdout).sort((a, b) => b.cpu - a.cpu).slice(0, 3) : [];
+  // A hung ps means a wedged machine: skip the second ps and the sample calls instead of stacking more waits.
+  const psTimedOut = ps.timedOut === true;
+  const cpuPs = psTimedOut ? null : await run("/bin/ps", ["-axo", "pid=,ppid=,pcpu=,rss=,state=,comm="], { timeoutMs: SIMPLE_TIMEOUT_MS });
+  const top = cpuPs?.ok && !cpuPs.timedOut ? parsePs(cpuPs.stdout).sort((a, b) => b.cpu - a.cpu).slice(0, 3) : [];
   let text = `# moviecal host telemetry deep snapshot\n# ${ADMIN_REMINDER}\n# time: ${iso}\n# triggers: ${reasons.join("; ")}\n`;
   text += section("process tree (pid ppid %cpu rss_kb etime command)", ps);
+  if (psTimedOut) text += "\n## sample calls\n(skipped: ps timed out)\n";
   for (const p of top) {
     const r = await run("/usr/bin/sample", [String(p.pid), "2"], { timeoutMs: SAMPLE_TIMEOUT_MS });
     text += section(`sample pid ${p.pid} ${p.command}`, r);
@@ -44,6 +49,10 @@ export async function takeSnapshot({ run, dir, nowMs, reasons }) {
   text += section(
     "unified log, last 2m, memory-status and jetsam",
     await run("/usr/bin/log", ["show", "--last", "2m", "--style", "compact", "--predicate", LOG_PREDICATE], { timeoutMs: LOG_TIMEOUT_MS }),
+  );
+  text += section(
+    "unified log, last 2m, CoreSimulator",
+    await run("/usr/bin/log", ["show", "--last", "2m", "--style", "compact", "--predicate", CORESIM_LOG_PREDICATE], { timeoutMs: CORESIM_LOG_TIMEOUT_MS }),
   );
   fs.writeFileSync(file, text);
   pruneSnapshots(snapDir);

@@ -3,7 +3,9 @@ import os from "node:os";
 import { ADMIN_REMINDER, telemetryDir } from "./common.mjs";
 import { runCommand } from "./exec.mjs";
 import { runLoop } from "./loop.mjs";
-import { appendMarker } from "./markers.mjs";
+import { appendMarker, hasOpenMarker } from "./markers.mjs";
+import { computeLoadNoJob } from "./triggers.mjs";
+import { createCpuSampler } from "./parse.mjs";
 import { collectSample } from "./sample.mjs";
 
 const realClock = {
@@ -14,7 +16,19 @@ const realClock = {
 export async function main(argv, { run = runCommand, clock = realClock, out = console.log, dir = telemetryDir() } = {}) {
   out(ADMIN_REMINDER);
   if (argv.includes("--once")) {
-    out(JSON.stringify(await collectSample({ run, nowMs: clock.now() }), null, 2));
+    const cpu = createCpuSampler(os.cpus);
+    cpu();
+    await clock.sleep(1000); // the CPU split needs two readings a little apart
+    const sample = await collectSample({ run, nowMs: clock.now(), cpu });
+    let markerBusy = false;
+    try {
+      markerBusy = hasOpenMarker({ dir, nowMs: clock.now() });
+    } catch (error) {
+      sample.notes.push(`markers: ${error.message}`);
+    }
+    sample.loadNoJob = computeLoadNoJob({ load: sample.load, cores: sample.cores, runnerWorker: sample.runnerWorker, markerBusy });
+    delete sample.runnerWorker;
+    out(JSON.stringify(sample, null, 2));
     return 0;
   }
   out(`moviecal telemetry sampler writing to ${dir}`);

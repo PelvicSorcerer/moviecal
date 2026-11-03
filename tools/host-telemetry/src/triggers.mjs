@@ -11,6 +11,7 @@ export class TriggerState {
     this.warnSince = null;
     this.warnSwapStart = null;
     this.loadSince = null;
+    this.noJobSince = null;
   }
 
   // Returns the list of trigger reasons for this sample (empty when none).
@@ -40,8 +41,23 @@ export class TriggerState {
     } else {
       this.loadSince = null;
     }
+
+    if (sample.loadNoJob === true) {
+      if (this.noJobSince === null) this.noJobSince = nowMs;
+      if (nowMs - this.noJobSince >= LOAD_SUSTAIN_MS) reasons.push("high load with no job running");
+    } else {
+      this.noJobSince = null;
+    }
     return reasons;
   }
+}
+
+// True: high load, no Runner.Worker, no open job marker. null: unknowable because ps failed. Ignores
+// hasBusyProcess on purpose (a stale booted simulator would look like a running job).
+export function computeLoadNoJob({ load, cores, runnerWorker, markerBusy }) {
+  if (!(load?.[0] > LOAD_FACTOR * cores)) return false;
+  if (markerBusy || runnerWorker === true) return false;
+  return runnerWorker === null ? null : true;
 }
 
 export class SnapshotGate {
