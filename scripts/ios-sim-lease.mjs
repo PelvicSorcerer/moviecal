@@ -10,12 +10,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { JsonStateStore } from "../tools/dispatcher/src/state-store.mjs";
+import { emitMarker } from "../tools/host-telemetry/src/emit.mjs";
 import {
   DEFAULT_WAIT_MS, HEARTBEAT_INTERVAL_MS, LeaseUnavailableError, MANUAL_WARNING_LEAD_MS, MINUTE_MS, SHARED_DEVICE_NAME,
   DEFAULT_PROGRESS_PATTERN, EARLY_PROGRESS_EXIT_CODE, EARLY_PROGRESS_LIMIT_MS, EARLY_PROGRESS_MESSAGE,
   RELEASE_SHUTDOWN_TIMEOUT_MS, OUTPUT_IDLE_EXIT_CODE, OUTPUT_IDLE_LIMIT_MS, OUTPUT_IDLE_MESSAGE, createIdleWatch, createProgressWatch, selectStaleLaneDevices,
   BOOTSTATUS_TIMEOUT_MS, DIAGNOSTICS_TOTAL_CAP_MS, STILL_BOOTED_MESSAGE, ServiceUnresponsiveError, cpuSplit, describeNotLive,
-  pollUntilShutdown,
+  pollUntilShutdown, FIRST_TEST_PATTERN,
   agentGuidance, createLease, describeUnmanaged, detectLane, enqueueWaiter, formatDuration, isHeadWaiter, laneDevice,
   leaseLiveness, normalizeRecord, pruneWaiters, removeWaiter, renewLease, resolveSetupPlan, sameHolder, unmanagedState,
   waiterPosition,
@@ -126,6 +127,8 @@ export function createEnvironment(overrides = {}) {
     store: new LeaseStore(leasePath(env)),
     mutexFile: `${leasePath(env)}.lock`,
     spawnWatcher,
+    // MOV-495: best-effort telemetry markers; a test injects its own writer.
+    marker: (event, fields) => emitMarker({ source: "sim-lease", event, ...fields }, { env: { ...process.env, ...env } }),
     ...overrides,
   };
 
@@ -205,6 +208,33 @@ export function withMutex(environment, mutate) {
   }
 }
 
+// ------------------------------------------------------------------ markers
+
+/** MOV-495: never throws; a telemetry failure must not touch a lease operation. */
+function mark(environment, event, lease, fields = {}) {
+  try {
+    environment.marker?.(event, {
+      lane: lease?.lane ?? detectLane(environment.env),
+      lease: lease?.id ?? null,
+      runId: environment.env.GITHUB_RUN_ID || null,
+      ...fields,
+    });
+  } catch {
+    // best effort
+  }
+}
+
+const RENEW_MARKER_INTERVAL_MS = 5 * MINUTE_MS;
+
+/** One `renewed` marker per lease per 5 minutes, however often the lease is renewed. */
+function markRenewed(environment, lease) {
+  const nowMs = environment.now();
+  const last = (environment.renewMarkedAt ??= new Map());
+  if (nowMs - (last.get(lease.id) ?? -Infinity) < RENEW_MARKER_INTERVAL_MS) return;
+  last.set(lease.id, nowMs);
+  mark(environment, "renewed", lease, { expiresAt: lease.expiresAt });
+}
+
 // ------------------------------------------------------------------- simctl
 
 function xcrun(environment) {
@@ -267,7 +297,7 @@ function runShutdown(environment, udid, timeout) {
  * the shutdown is retried once, and a device that is still Booted is reported
  * loudly instead of claimed shut down. Returns `{ shutdown, attempts, elapsedMs }`.
  */
-function shutdownDevice(environment, device, timeout = 120_000) {
+function shutdownDevice(environment, device, timeout = 120_000, phase = "acquire") {
   const startedAt = environment.now();
   const poll = () =>
     pollUntilShutdown({ read: () => readDeviceState(environment, device.udid), now: environment.now, sleep: environment.sleep });
@@ -288,6 +318,7 @@ function shutdownDevice(environment, device, timeout = 120_000) {
   const elapsedMs = environment.now() - startedAt;
   if (!polled.shutdown) {
     (environment.stuckDevices ??= new Set()).add(device.udid);
+    mark(environment, "shutdown-incomplete", null, { device: device.name, udid: device.udid, attempts, elapsedMs, phase });
     environment.warn(
       `${STILL_BOOTED_MESSAGE}: ${device.name} (${device.udid}) is still ${polled.state ?? "in an unreadable state"} ` +
         `${formatDuration(elapsedMs)} after ${attempts} shutdown attempts, although \`simctl shutdown\` did not report an error. ` +
@@ -437,9 +468,12 @@ function finishAcquire(attempt, environment, lane) {
         ? `Start-of-job cleanup: shutting down leftover simulator ${device.name} (${device.udid}), which no lease owns. Its data is not deleted.`
         : `Shutting ${device.name} (${device.udid}) down so only one simulator stays booted.`,
     );
-    if (!shutdownDevice(environment, device).shutdown) stuck.push(device);
+    if (!shutdownDevice(environment, device, undefined, staleUdids.has(device.udid) ? "cleanup" : "acquire").shutdown) stuck.push(device);
   }
   if (stuck.length > 0) {
+    mark(environment, "service-unresponsive", lease, {
+      devices: stuck.map((device) => device.name).join(","), udids: stuck.map((device) => device.udid).join(","),
+    });
     environment.warn(`--- system load ---\n${systemLoadReport(environment)}`);
     throw new ServiceUnresponsiveError(
       `${stuck.map((device) => `${device.name} (${device.udid})`).join(", ")} stayed Booted after shutdown, so the simulator ` +
@@ -447,7 +481,12 @@ function finishAcquire(attempt, environment, lane) {
         "This is an infrastructure fault, not a test failure; see docs/operators/local-execution.md (Wedged simulator service).",
     );
   }
+  const bootStartedAt = environment.now();
+  mark(environment, "device-boot-started", lease, { device: lease.device.name, udid: lease.device.udid });
   simctl(environment, ["bootstatus", lease.device.udid, "-b"], { timeout: BOOTSTATUS_TIMEOUT_MS });
+  mark(environment, "device-booted", lease, {
+    device: lease.device.name, udid: lease.device.udid, bootMs: environment.now() - bootStartedAt,
+  });
 
   environment.log(
     lane === "manual"
@@ -463,7 +502,8 @@ export function commandAcquire(options, environment) {
   const holder = { pid: environment.pid, startedAt: environment.processStartTime(environment.pid) };
   const waitMs = options.waitMs ?? DEFAULT_WAIT_MS[lane];
   const pollMs = Number(environment.env.MOVIECAL_IOS_SIM_POLL_MS ?? DEFAULT_POLL_MS);
-  const deadline = environment.now() + waitMs;
+  const acquireStartedAt = environment.now();
+  const deadline = acquireStartedAt + waitMs;
   // MOV-311: a lease id handed down via the environment (the dispatcher to
   // its own worker) is this process's to renew, even though its holder
   // pid/startedAt cannot match the dispatcher's -- see claimLease().
@@ -481,6 +521,10 @@ export function commandAcquire(options, environment) {
     }
 
     if (attempt.acquired) {
+      mark(environment, "acquired", attempt.lease, {
+        device: attempt.lease.device.name, waitMs: environment.now() - acquireStartedAt, reused: Boolean(attempt.reused),
+        purpose: String(attempt.lease.purpose ?? "").slice(0, 100) || null,
+      });
       try {
         finishAcquire(attempt, environment, lane);
       } catch (error) {
@@ -516,6 +560,7 @@ export function commandAcquire(options, environment) {
 
 export function commandRelease(options, environment) {
   const lane = detectLane(environment.env);
+  const releaseStartedAt = environment.now();
   const outcome = withMutex(environment, () => {
     const record = environment.store.load();
     if (!record.lease) return { released: false, reason: "no-lease" };
@@ -540,7 +585,7 @@ export function commandRelease(options, environment) {
     const startedAt = environment.now();
     const elapsed = () => formatDuration(environment.now() - startedAt);
     try {
-      const result = shutdownDevice(environment, outcome.lease.device, RELEASE_SHUTDOWN_TIMEOUT_MS);
+      const result = shutdownDevice(environment, outcome.lease.device, RELEASE_SHUTDOWN_TIMEOUT_MS, "release");
       if (result.shutdown) {
         environment.log(`Released lease ${outcome.lease.id} and shut ${outcome.lease.device.name} down in ${elapsed()}.`);
       } else {
@@ -557,6 +602,11 @@ export function commandRelease(options, environment) {
       );
     }
   }
+  if (outcome.released) {
+    mark(environment, "released", outcome.lease, {
+      device: outcome.lease.device.name, releaseMs: environment.now() - releaseStartedAt, keepBooted: Boolean(options.keepBooted),
+    });
+  }
   return outcome;
 }
 
@@ -570,6 +620,7 @@ export function commandExtend(options, environment) {
     }
     record.lease = renewLease(record.lease, environment.now());
     environment.store.save(record);
+    markRenewed(environment, record.lease);
     const { id, expiresAt, hardCapAt } = record.lease;
     environment.log(`Lease ${id} now expires at ${expiresAt}${hardCapAt ? ` (hard cap ${hardCapAt}).` : "."}`);
     return record.lease;
@@ -681,6 +732,7 @@ export function commandAdopt(options, environment) {
     return record.lease;
   });
 
+  mark(environment, "adopted", lease, { device: lease.device.name, udid: lease.device.udid });
   environment.log(agentGuidance(lease));
   environment.spawnWatcher?.(lease, environment);
   return lease;
@@ -695,6 +747,7 @@ function renewHeldLease(environment, id) {
       if (record.lease?.id !== id) return;
       record.lease = renewLease(record.lease, environment.now());
       environment.store.save(record);
+      markRenewed(environment, record.lease);
     });
   } catch {
     // a missed renewal is recovered by the next tick, or by expiry as designed
@@ -814,9 +867,19 @@ export async function commandRun(options, environment) {
   const watch = progressLimitMs === null ? null : createProgressWatch({ limitMs: progressLimitMs, startedAtMs });
   const idleWatch = idleLimitMs === null ? null : createIdleWatch({ limitMs: idleLimitMs, startedAtMs });
   const watching = Boolean(watch || idleWatch);
+  // MOV-495: first-test detection needs the output, so pipe it through unchanged
+  // unless a human's terminal is attached (a TTY child must keep its TTY).
+  const piping = watching || (!process.stdout.isTTY && !process.stderr.isTTY);
+  const firstTest = createProgressWatch({ limitMs: Infinity, pattern: FIRST_TEST_PATTERN, startedAtMs });
+  const noteFirstTest = (chunk) => {
+    if (firstTest.seen || !firstTest.onOutput(chunk)) return;
+    const afterCommandMs = environment.now() - startedAtMs;
+    mark(environment, "first-test-started", lease, { afterCommandMs });
+  };
+  mark(environment, "command-started", lease, { command: path.basename(options.commandArgs[0]) });
 
   child = spawn(options.commandArgs[0], options.commandArgs.slice(1), {
-    stdio: ["inherit", watching ? "pipe" : "inherit", watching ? "pipe" : "inherit"],
+    stdio: ["inherit", piping ? "pipe" : "inherit", piping ? "pipe" : "inherit"],
     env: { ...process.env, MOVIECAL_IOS_SIM_DEVICE: lease.device.udid, MOVIECAL_IOS_SIM_LEASE: lease.id },
   });
   if (interrupted) child.kill(interrupted);
@@ -824,28 +887,32 @@ export async function commandRun(options, environment) {
   let stalled = null;
   let stallTimer = null;
   let killTimer = null;
-  if (watching) {
+  if (piping) {
     child.stdout.on("data", (chunk) => {
       process.stdout.write(chunk);
+      noteFirstTest(chunk);
       watch?.onOutput(chunk);
       idleWatch?.onOutput(chunk, environment.now(), "stdout");
     });
     child.stderr.on("data", (chunk) => {
       process.stderr.write(chunk);
+      noteFirstTest(chunk);
       idleWatch?.onOutput(chunk, environment.now(), "stderr");
     });
+  }
+  if (watching) {
     const pollMs = Number(environment.env.MOVIECAL_IOS_SIM_PROGRESS_POLL_MS ?? 5_000);
     stallTimer = setInterval(async () => {
       if (stalled) return;
       const nowMs = environment.now();
       let message;
       if (watch?.expired(nowMs)) {
-        stalled = { exitCode: EARLY_PROGRESS_EXIT_CODE };
+        stalled = { exitCode: EARLY_PROGRESS_EXIT_CODE, reason: "early-progress" };
         message =
           `${EARLY_PROGRESS_MESSAGE}: no test suite started within ${formatDuration(progressLimitMs)} of the simulator booting. ` +
           "Failing now instead of waiting out the step timeout; capturing simulator diagnostics, then releasing the lease.";
       } else if (idleWatch?.expired(nowMs)) {
-        stalled = { exitCode: OUTPUT_IDLE_EXIT_CODE };
+        stalled = { exitCode: OUTPUT_IDLE_EXIT_CODE, reason: "output-idle" };
         const last = idleWatch.lastOutputAtMs === null ? "never (no output since the command started)" : new Date(idleWatch.lastOutputAtMs).toISOString();
         message =
           `${OUTPUT_IDLE_MESSAGE}: no output for ${formatDuration(idleLimitMs)}. Last output at ${last}; ` +
@@ -874,14 +941,25 @@ export async function commandRun(options, environment) {
   const heartbeat = setInterval(() => renewHeldLease(environment, lease.id), HEARTBEAT_INTERVAL_MS);
   heartbeat.unref?.();
 
+  let outcome = { exitCode: null, signal: null, error: null };
   try {
     const result = await new Promise((resolve, reject) => {
       child.on("error", reject);
       child.on("exit", (code, signal) => resolve({ code, signal }));
     });
-    if (stalled) return stalled.exitCode;
-    return result.signal ? 128 + (os.constants.signals[result.signal] ?? 0) : (result.code ?? 0);
+    const exitCode = stalled
+      ? stalled.exitCode
+      : result.signal ? 128 + (os.constants.signals[result.signal] ?? 0) : (result.code ?? 0);
+    outcome = { exitCode, signal: result.signal ?? null, error: null };
+    return exitCode;
+  } catch (error) {
+    outcome.error = String(error.message).slice(0, 120);
+    throw error;
   } finally {
+    mark(environment, "command-exited", lease, {
+      exitCode: outcome.exitCode, signal: outcome.signal, error: outcome.error, stalled: stalled?.reason ?? null,
+      durationMs: environment.now() - startedAtMs, firstTestSeen: firstTest.seen,
+    });
     clearInterval(heartbeat);
     clearInterval(stallTimer);
     clearTimeout(killTimer);

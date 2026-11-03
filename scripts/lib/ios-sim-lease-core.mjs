@@ -47,6 +47,9 @@ export const EARLY_PROGRESS_MESSAGE = "SIMULATOR_TESTS_NOT_STARTED";
 /** XCTest's first line of real progress: `Test Suite 'All tests' started at …`. */
 export const DEFAULT_PROGRESS_PATTERN = /Test Suite '[^']*' started at/u;
 
+/** MOV-495: the first `Test Suite` or `Test Case` line, for the time-to-first-test marker. */
+export const FIRST_TEST_PATTERN = /Test (?:Suite|Case) '/u;
+
 /**
  * Releasing shuts the simulator down; after both observed timeouts that took
  * 1 to 3.5 minutes. The lease record is already cleared by then, so a wedged
