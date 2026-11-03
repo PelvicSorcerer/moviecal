@@ -57,6 +57,7 @@ import { WorkerUsageStore, captureWorkerUsage, DISPATCHER_ORIGIN } from "./worke
 import { RepairLedger } from "./repair-ledger.mjs";
 import { buildIsIssueSatisfied } from "./dependency-gate.mjs";
 import { spawnWorker } from "./worker-spawn.mjs";
+import { withWorkerMarkers } from "./worker-telemetry.mjs";
 import { ensureWorktreeDependencies } from "./dependency-install.mjs";
 import { auditWorkerResult, writeWorkerAudit } from "./worker-guard.mjs";
 import { publishWorkerResult } from "./worker-publish.mjs";
@@ -194,7 +195,7 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
     envLocalSource: fs.existsSync(envLocalPath()) ? envLocalPath() : undefined,
     ghRepo: GITHUB_REPO,
     logRoot: logRoot(),
-    spawnWorkerFn: spawnWorker,
+    spawnWorkerFn: withWorkerMarkers(spawnWorker),
     // MOV-410/MOV-412: the trusted, locked `npm ci` the dispatcher runs in the
     // worktree before every worker spawn (implementation, resume,
     // continuation, operator continuation and repair). Worker-side installs

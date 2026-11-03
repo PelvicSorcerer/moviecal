@@ -13,6 +13,8 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "moviecal-test-state-"));
 process.env.MOVIECAL_CONFIG_DIR = path.join(root, "config");
 process.env.MOVIECAL_LOG_ROOT = path.join(root, "logs");
 process.env.MOVIECAL_WORKTREE_ROOT = path.join(root, "worktrees");
+// MOV-495: telemetry markers must never land in the live ~/Library/Logs/moviecal-telemetry.
+process.env.MOVIECAL_TELEMETRY_DIR = path.join(root, "telemetry");
 
 afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });

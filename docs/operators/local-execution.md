@@ -1130,6 +1130,48 @@ rm -rf ~/code/moviecal-monitor
 
 **Admin-level collection is not enabled.** `powermetrics` and `spindump` need root. Every log and snapshot file starts with a header carrying this reminder and the sampler prints it on startup: *Admin-level collection (powermetrics, spindump) is NOT enabled. If load problems persist after reviewing this data, ask Adam to consider enabling it.* Enabling it means a human-run privileged job (for example a root LaunchDaemon running `powermetrics --samplers cpu_power,thermal -i 5000` into the same directory); it is deliberately out of scope for the sampler.
 
+### Run markers (MOV-495)
+
+Markers tie the sampler's load data to the work running at the time. Everything is written through `tools/host-telemetry/src/emit.mjs`, which hands the line to a short-lived detached process (`bin/write-marker.mjs`), so an unwritable or stalled telemetry directory can never fail, block or slow CI, the lease script or the dispatcher. A failed write is reported once on stderr and then ignored. Set `MOVIECAL_TELEMETRY_DIR` to redirect them.
+
+**Reading the marker file.** `~/Library/Logs/moviecal-telemetry/markers-YYYY-MM-DD.jsonl` (UTC date; older days are gzipped). The first line is a header; every other line is one JSON object with `t` (ISO UTC, taken when the event happened), `source` and `event`. Read it with `readMarkers({ dir, sinceMs, untilMs })` from `markers.mjs`, or by eye: `grep sim-lease ~/Library/Logs/moviecal-telemetry/markers-$(date -u +%F).jsonl`. Join markers to a CI run with `runId` (hooks and `sim-lease` events inside a CI job), to a dispatcher run with `issue`, and to load samples by `t`. The dispatcher daemon's console log (`~/Library/Logs/moviecal-dispatcher/dispatcher.std{out,err}.log`) now starts every line with an ISO UTC timestamp, in the same clock as `t`.
+
+**Event catalogue.** None of these names end in `-start` or `-end`, so none opens a span or keeps the sampler in busy mode; busy mode keeps coming from the process check.
+
+| source | event | fields |
+| --- | --- | --- |
+| `runner` | `job-started`, `job-completed` | `runId`, `runAttempt`, `job`, `workflow`, `sha`, `ref`, `repository`, `runner` (each `null` if unavailable); `job-completed` adds `result`; `fromDiag` lists fields recovered from the `_diag` log |
+| `runner` | `job-result` | Written by a detached reader the `job-completed` hook starts, 10 to 30 s later: `runId`, `runAttempt`, `job`, `workflow`, `sha`, `repository`, `runner`, `result` (`Succeeded`, `Failed`, `Canceled`, or `null` if no log showed one), `resultSource` (`runner-log`, `worker-log` or `null`), `attempts`, `waitedMs`. Join it to `job-completed` on `runId` |
+| `sim-lease` | `acquired` | `lane`, `lease`, `runId`, `device`, `waitMs` (time spent waiting for the lease), `reused` (re-entered an already held lease), `purpose` |
+| `sim-lease` | `device-boot-started`, `device-booted` | `lane`, `lease`, `runId`, `device`, `udid`; `device-booted` adds `bootMs` (the `bootstatus -b` duration) |
+| `sim-lease` | `renewed` | `lane`, `lease`, `runId`, `expiresAt`; at most one per lease per process per 5 minutes |
+| `sim-lease` | `released` | `lane`, `lease`, `runId`, `device`, `releaseMs` (whole release, including the shutdown), `keepBooted` |
+| `sim-lease` | `adopted` | `lane`, `lease`, `runId`, `device`, `udid` |
+| `sim-lease` | `command-started` | `lane`, `lease`, `runId`, `command` (executable name only, never arguments) |
+| `sim-lease` | `first-test-started` | `lane`, `lease`, `runId`, `afterCommandMs` (time to the first `Test Suite '` or `Test Case '` line in the command's output). Not written for a run in an interactive terminal, where the output is not piped through the wrapper, or for a command that never prints one |
+| `sim-lease` | `command-exited` | `lane`, `lease`, `runId`, `exitCode` (as returned by `ios:sim:run`), `signal`, `error`, `stalled` (`early-progress`, `output-idle` or `null`), `durationMs`, `firstTestSeen` |
+| `sim-lease` | `shutdown-incomplete` | `lane`, `runId`, `device`, `udid`, `attempts`, `elapsedMs`, `phase`: `cleanup` (start-of-job leftover), `acquire` (another booted device) or `release`. Written only when a device is still Booted after the verified shutdown (MOV-497); a normal or merely delayed shutdown writes nothing |
+| `sim-lease` | `service-unresponsive` | `lane`, `lease`, `runId`, `devices`, `udids`. Written when acquire fails fast because of the above |
+| `dispatcher` | `worker-spawned` | `issue`, `adapter` (`claude` or `codex`), `attempt` (`initial`, `budget-continuation` or `operator-resume:<id>`) |
+| `dispatcher` | `worker-exited` | as above plus `exitCode`, `classification` (`ok`, `failed`, `aborted` when the dispatcher itself ended the worker, `spawn-error`) and `durationMs`. This is the exit status only; the run loop's richer failure classification is not duplicated here |
+| `dispatcher` | `sim-lease-acquired`, `sim-lease-deferred`, `sim-lease-released` | iOS issues only: `issue`, `lease`, `device` (`reason`, truncated, on `deferred`). The lease script also writes its own `sim-lease` events (`lane: "worker"`) for the same lease |
+
+**Runner hook setup (Adam, one time; a worker cannot do this).** The runner calls a script at the start and end of every job. The two launchers in `tools/host-telemetry/hooks/` run the `.mjs` hooks with a node found on `PATH`, `/opt/homebrew/bin` or `/usr/local/bin` (override with `MOVIECAL_NODE`). They always exit 0 and wait at most 2 seconds, so they cannot fail a job.
+
+```
+RUNNER=~/actions-runner            # the runner's install directory
+REPO=~/code/worktrees/moviecal/dispatcher-daemon
+cat >> "$RUNNER/.env" <<EOF
+ACTIONS_RUNNER_HOOK_JOB_STARTED=$REPO/tools/host-telemetry/hooks/job-started.sh
+ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$REPO/tools/host-telemetry/hooks/job-completed.sh
+EOF
+cd "$RUNNER" && ./svc.sh stop && ./svc.sh start     # restart the runner service
+```
+
+Then run one job and check `grep runner ~/Library/Logs/moviecal-telemetry/markers-$(date -u +%F).jsonl`. To remove the hooks, delete the two lines and restart the service.
+
+**Which fields hooks provide.** The hooks read `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`, `GITHUB_JOB`, `GITHUB_WORKFLOW`, `GITHUB_SHA`, `GITHUB_REF`, `GITHUB_REPOSITORY` and `RUNNER_NAME` from their environment, and `GITHUB_JOB_STATUS`/`JOB_STATUS` for the result. The runner runs the completed hook before it knows the result and sets no `GITHUB_JOB_STATUS` for hooks (confirmed on the Mac: hook at 01:27:45, `Worker_*.log` result at 01:27:46, `Runner_*.log` "completed with result" at 01:27:48), so the `job-completed` marker's `result` is normally `null`. The real result is the separate `job-result` marker: the hook starts a detached reader (`bin/resolve-job-result.mjs`) and exits at once. The reader waits about 10 s, then reads the newest `<runner root>/_diag/Runner_*.log` (secondary: `Worker_*.log`; directory found from `RUNNER_TEMP`, or `MOVIECAL_RUNNER_DIAG_DIR`), retries every 2 s for at most 30 s in total, and takes the last `Job ... completed with result: ...` line stamped no earlier than the hook (so an earlier job's line is never used). It always writes one marker, with `result: null` if nothing was found, and never blocks or fails the hook or the job. A `null` in the other fields means the hook environment did not have that field; `runId` is still recovered from the Worker log with `fromDiag`.
+
 ## Standing health check
 
 `dispatcher doctor` is a read-only command that asserts: Linear auth works, `gh` auth works, the worktree root is writable, `~/.config/moviecal/env.local` exists and is mode 600, `claude` and `codex` are on `PATH`, `origin/master` is fetchable, and the iOS self-hosted runner is reachable. It also prints the **local dispatch identity** — the delegate an issue must name to be claimed here (MOV-143) — which **lifecycle publication surface** is configured (MOV-158), and each worker's current **quota-pool cooldown state** (MOV-360: open, cooling until a reset, or awaiting a post-reset probe) — all informational rather than pass/fail gates. It also reports the **last observed Claude worker startup mode and tool set** from the worker-usage ledger (MOV-386). That line fails when the last observed run's `system/init` event showed a mode other than `default` or a tool outside `CLAUDE_WORKER_TOOLS`. The Agent Session line reports configuration only: the sole way to test entitlement is `agentSessionCreateOnIssue`, which is a mutation, and `doctor` never mutates. If `~/.config/moviecal/linear-app.env` is present it additionally checks the file is mode 600 and that an app-actor token can be minted from it (MOV-122); if it is absent that check is a no-op pass. Run it after any environment change and before relying on the dispatcher for real work.

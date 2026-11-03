@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   HardCapError, LANE_DEVICES, LeaseStore, LeaseUnavailableError, MANUAL_HARD_CAP_MS, MANUAL_LEASE_MS,
@@ -14,6 +14,7 @@ import {
   SERVICE_UNRESPONSIVE_EXIT_CODE, SHUTDOWN_VERIFY_TIMEOUT_MS, ServiceUnresponsiveError, captureSimulatorDiagnostics, cpuSplit,
   describeNotLive, pollUntilShutdown, runCli,
 } from "../scripts/ios-sim-lease.mjs";
+import { appendMarker, readMarkers } from "../tools/host-telemetry/src/markers.mjs";
 
 const START = Date.parse("2026-09-23T10:00:00.000Z");
 const RUNTIME = "com.apple.CoreSimulator.SimRuntime.iOS-26-0";
@@ -113,6 +114,7 @@ function harness({ env = {}, devices = [], xcodebuild = [], pid = process.pid, w
   const warnings = [];
   const notifications = [];
   let nowMs = world ? world.at() : START;
+  const markerDir = world?.markerDir ?? temporaryDirectory();
 
   const environment = createEnvironment({
     env: { MOVIECAL_IOS_SIM_STATE_DIR: directory, MOVIECAL_IOS_SIM_WATCHER: "0", ...env },
@@ -134,13 +136,16 @@ function harness({ env = {}, devices = [], xcodebuild = [], pid = process.pid, w
     processStartTime: (target) => table.get(target) ?? null,
     isProcessAlive: (holder) => table.has(holder.pid) && (!holder.startedAt || table.get(holder.pid) === holder.startedAt),
     spawnWatcher: () => null,
+    // MOV-495: markers go through the real writer and reader, in-process and into a throwaway directory.
+    marker: (event, fields) => appendMarker({ source: "sim-lease", event, ...fields }, { dir: markerDir, now: () => nowMs }),
     runAsync: (command, args, options) => Promise.resolve(environment.run(command, args, options)),
     loadavg: () => [570.1, 400.25, 120.5],
     cpus: () => [{ times: { user: 700, nice: 0, sys: 200, idle: 100, irq: 0 } }],
   });
 
   return {
-    environment, state, table, directory, logs, warnings, notifications,
+    environment, state, table, directory, logs, warnings, notifications, markerDir,
+    markers: () => readMarkers({ dir: markerDir, sinceMs: START - 1000, untilMs: START + 86_400_000 }),
     output: () => logs.join("\n"),
     booted: () => state.devices.filter((entry) => entry.state === "Booted").map((entry) => entry.name),
     advance: (ms) => {
@@ -962,5 +967,125 @@ describe("shutdown verification (MOV-497)", () => {
     expect(warnings).toMatch(/recent CoreSimulator log lines: still running at the 0s diagnostics cap; abandoned/u);
     expect(warnings).toMatch(/CPU 70% user, 20% system, 10% idle/u);
     expect(warnings).toMatch(/CoreSimulatorService is the likely culprit/u);
+  });
+});
+
+describe("telemetry markers (MOV-495)", () => {
+  const names = (session) => session.markers().map((marker) => marker.event);
+
+  it("writes the full run sequence and leaves the command's output and exit status alone", async () => {
+    const session = harness({ env: { GITHUB_ACTIONS: "true", GITHUB_RUN_ID: "777" }, devices: laneDevices() });
+    const inner = session.environment.run;
+    session.environment.run = (command, args, options) => {
+      if (args?.[1] === "bootstatus") session.advance(90_000);
+      return inner(command, args, options);
+    };
+    const script =
+      "console.log('Build settings from command line'); console.log(\"Test Suite 'All tests' started at now\"); " +
+      "console.log(\"Test Case 'A.b' passed\"); process.exit(3)";
+    const written = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => (written.push(String(chunk)), true));
+    let exitCode;
+    try {
+      exitCode = await commandRun({ commandArgs: [process.execPath, "-e", script] }, session.environment);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(exitCode).toBe(3);
+    expect(written.join("")).toBe("Build settings from command line\nTest Suite 'All tests' started at now\nTest Case 'A.b' passed\n");
+    const markers = session.markers();
+    expect(markers.map((marker) => marker.event)).toEqual([
+      "acquired", "device-boot-started", "device-booted", "command-started", "first-test-started", "command-exited", "released",
+    ]);
+    expect(markers.every((marker) => marker.source === "sim-lease" && marker.lane === "ci" && marker.runId === "777")).toBe(true);
+    expect(markers[0]).toMatchObject({ device: LANE_DEVICES.ci, waitMs: 0, reused: false });
+    expect(markers[2].bootMs).toBe(90_000);
+    expect(markers[3]).toMatchObject({ command: path.basename(process.execPath) });
+    expect(markers[4].afterCommandMs).toBeGreaterThanOrEqual(0);
+    expect(markers[5]).toMatchObject({ exitCode: 3, stalled: null, firstTestSeen: true });
+    expect(markers[6]).toMatchObject({ device: LANE_DEVICES.ci, keepBooted: false });
+    expect(typeof markers[6].releaseMs).toBe("number");
+  });
+
+  it("records no first-test-started when the command prints no test line", async () => {
+    const session = harness({ devices: laneDevices() });
+    expect(await commandRun({ commandArgs: [process.execPath, "-e", "process.exit(0)"] }, session.environment)).toBe(0);
+    expect(names(session)).not.toContain("first-test-started");
+    expect(session.markers().find((marker) => marker.event === "command-exited")).toMatchObject({ exitCode: 0, firstTestSeen: false });
+  });
+
+  it("detects the first test line even when it is split across output chunks", async () => {
+    const session = harness({ devices: laneDevices() });
+    const script = "process.stdout.write('Test Su'); setTimeout(() => process.stdout.write(\"ite 'X' started at now\\n\"), 50)";
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await commandRun({ commandArgs: [process.execPath, "-e", script] }, session.environment);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(names(session)).toContain("first-test-started");
+  });
+
+  it("throttles renewed markers to one per five minutes", () => {
+    const session = harness({ devices: laneDevices() });
+    commandAcquire({}, session.environment);
+    for (let minute = 0; minute < 11; minute += 1) {
+      session.advance(60_000);
+      commandExtend({}, session.environment);
+    }
+    const renewals = session.markers().filter((marker) => marker.event === "renewed");
+    expect(renewals).toHaveLength(3);
+    expect(Date.parse(renewals[1].t) - Date.parse(renewals[0].t)).toBe(5 * 60_000);
+  });
+
+  it("writes adopted for a manual adoption", () => {
+    const session = harness({ devices: [device(SHARED_DEVICE_NAME, "Booted"), ...laneDevices().slice(1)] });
+    commandAdopt({}, session.environment);
+    expect(session.markers()).toEqual([
+      expect.objectContaining({ event: "adopted", lane: "manual", device: SHARED_DEVICE_NAME, runId: null }),
+    ]);
+  });
+
+  it("writes shutdown-incomplete for each phase and service-unresponsive when acquire fails fast", () => {
+    const cleanup = harness({ env: { GITHUB_ACTIONS: "true" }, devices: laneDevices("Shutdown", "Shutdown", "Shutdown", "Booted") });
+    cleanup.state.wedged = true;
+    expect(() => commandAcquire({}, cleanup.environment)).toThrow(ServiceUnresponsiveError);
+    const markers = cleanup.markers();
+    expect(markers.map((marker) => marker.event)).toEqual(["acquired", "shutdown-incomplete", "service-unresponsive", "released"]);
+    expect(markers[1]).toMatchObject({
+      device: LANE_DEVICES.manual, udid: `udid-${LANE_DEVICES.manual}`, lane: "ci", attempts: 2, phase: "cleanup",
+    });
+    expect(markers[1].elapsedMs).toBeGreaterThan(0);
+    expect(markers[2]).toMatchObject({ devices: LANE_DEVICES.manual, lane: "ci" });
+
+    const release = harness({ devices: laneDevices() });
+    commandAcquire({}, release.environment);
+    release.state.wedged = true;
+    commandRelease({}, release.environment);
+    expect(release.markers().find((marker) => marker.event === "shutdown-incomplete")).toMatchObject({ phase: "release", lane: "manual" });
+  });
+
+  it("writes neither shutdown event for a normal or merely delayed shutdown", () => {
+    const normal = harness({ env: { GITHUB_ACTIONS: "true" }, devices: laneDevices("Shutdown", "Shutdown", "Shutdown", "Booted") });
+    commandAcquire({}, normal.environment);
+    commandRelease({}, normal.environment);
+    const delayed = harness({ devices: laneDevices() });
+    commandAcquire({}, delayed.environment);
+    delayed.state.wedged = 3;
+    commandRelease({}, delayed.environment);
+    for (const session of [normal, delayed]) {
+      expect(names(session)).not.toContain("shutdown-incomplete");
+      expect(names(session)).not.toContain("service-unresponsive");
+    }
+  });
+
+  it("never lets a throwing marker writer affect a lease operation", async () => {
+    const session = harness({ devices: laneDevices() });
+    session.environment.marker = () => {
+      throw new Error("disk on fire");
+    };
+    expect(await commandRun({ commandArgs: [process.execPath, "-e", "process.exit(5)"] }, session.environment)).toBe(5);
+    expect(session.environment.store.load().lease).toBeNull();
   });
 });
