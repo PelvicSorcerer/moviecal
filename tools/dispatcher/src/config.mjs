@@ -469,6 +469,43 @@ export function ownerNotificationStatePath() {
   return path.join(configDir(), "owner-notification-state.json");
 }
 
+/**
+ * Stall watchdog (MOV-503). All three values fall back to their default on a
+ * zero, negative or non-numeric override, never to "disabled".
+ *   MOVIECAL_STALL_WATCHDOG_INTERVAL_MS  how often the pass runs (default 10 min)
+ *   MOVIECAL_STALL_AGENT_WORKING_MS      `Agent Working`, no live worker (default 2 h)
+ *   MOVIECAL_STALL_IN_REVIEW_MS          `In Review`, no head/check change (default 12 h)
+ */
+export const DEFAULT_STALL_WATCHDOG_INTERVAL_MS = 10 * 60 * 1000;
+export const DEFAULT_STALL_AGENT_WORKING_MS = 2 * 60 * 60 * 1000;
+export const DEFAULT_STALL_IN_REVIEW_MS = 12 * 60 * 60 * 1000;
+
+function positiveMs(raw, fallback) {
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+export function resolveStallWatchdogIntervalMs(env = process.env) {
+  return positiveMs(env.MOVIECAL_STALL_WATCHDOG_INTERVAL_MS, DEFAULT_STALL_WATCHDOG_INTERVAL_MS);
+}
+
+export function resolveStallThresholds(env = process.env) {
+  return {
+    agentWorkingMs: positiveMs(env.MOVIECAL_STALL_AGENT_WORKING_MS, DEFAULT_STALL_AGENT_WORKING_MS),
+    inReviewMs: positiveMs(env.MOVIECAL_STALL_IN_REVIEW_MS, DEFAULT_STALL_IN_REVIEW_MS),
+  };
+}
+
+/** Persisted `{ lastRunAt }` for the stall watchdog's cadence (MOV-503). */
+export function stallWatchdogScheduleStatePath() {
+  return path.join(configDir(), "stall-watchdog-schedule.json");
+}
+
+/** Persisted per-issue last-change fingerprints for the stall watchdog (MOV-503). */
+export function stallWatchdogStatePath() {
+  return path.join(configDir(), "stall-watchdog-state.json");
+}
+
 /** Off unless explicitly enabled; removing this switch immediately restores manual PR control. */
 export function prAutonomyEnabled(env = process.env) {
   return truthy(env.MOVIECAL_PR_AUTONOMY);
