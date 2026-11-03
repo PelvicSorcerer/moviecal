@@ -314,7 +314,7 @@ describe("runOnce", () => {
     const [result] = await runOnce([issue], ctx);
 
     expect(result.outcome).toBe("needs-human");
-    expect(ctx.linearClient.calls[0]).toEqual({
+    expect(ctx.linearClient.calls.find((call) => call.type === "moveToState")).toEqual({
       type: "moveToState",
       issueId: "id-1",
       stateId: "state-needs-human",
@@ -429,8 +429,8 @@ describe("runOnce", () => {
     expect(publishWorkerResultFn).not.toHaveBeenCalled();
     expect(ctx.findPrForBranchFn).not.toHaveBeenCalled();
     expect(ctx.worktreeManager.statusCalls).toEqual([{ id: "MOV-1", status: "failed" }]);
-    expect(ctx.linearClient.calls.at(-1).body).toContain("Worker safety boundary blocked publication");
-    expect(ctx.linearClient.calls.at(-1).body).toContain("SHA-256");
+    expect(ctx.linearClient.calls.findLast((call) => call.type === "addComment").body).toContain("Worker safety boundary blocked publication");
+    expect(ctx.linearClient.calls.findLast((call) => call.type === "addComment").body).toContain("SHA-256");
   });
 
   it("records a denied scope command as a warning and continues to trusted publication", async () => {
@@ -557,7 +557,7 @@ describe("runOnce", () => {
     expect(result).toMatchObject({ outcome: "publish-failed", error: "trusted dispatcher publisher is not configured" });
     expect(ctx.findPrForBranchFn).not.toHaveBeenCalled();
     expect(ctx.worktreeManager.statusCalls).toEqual([{ id: "MOV-1", status: "failed" }]);
-    expect(ctx.linearClient.calls.at(-1).body).toContain("trusted dispatcher publisher is not configured");
+    expect(ctx.linearClient.calls.findLast((call) => call.type === "addComment").body).toContain("trusted dispatcher publisher is not configured");
   });
 
   it("marks the worktree failed and reports needs-human-decision with log tail when the worker exits non-zero", async () => {
@@ -644,9 +644,9 @@ describe("runOnce", () => {
       ok: false,
       violations: [expect.objectContaining({ reason: expect.stringContaining("ENOENT") })],
     }));
-    expect(ctx.linearClient.calls.at(-1).body).toContain("ENOENT");
-    expect(ctx.linearClient.calls.at(-1).body).toContain("SHA-256");
-    expect(ctx.linearClient.calls.at(-1).body).toContain("no worker ran and no remote mutation was attempted");
+    expect(ctx.linearClient.calls.findLast((call) => call.type === "addComment").body).toContain("ENOENT");
+    expect(ctx.linearClient.calls.findLast((call) => call.type === "addComment").body).toContain("SHA-256");
+    expect(ctx.linearClient.calls.findLast((call) => call.type === "addComment").body).toContain("no worker ran and no remote mutation was attempted");
     expect(ctx.publishWorkerResultFn).not.toHaveBeenCalled();
   });
 
@@ -760,12 +760,12 @@ describe("runOnce", () => {
 
       expect(result.outcome).toBe("needs-human");
       expect(result.reason).toMatch(/missing execution label/);
-      expect(ctx.linearClient.calls[0]).toEqual({
+      expect(ctx.linearClient.calls.find((call) => call.type === "moveToState")).toEqual({
         type: "moveToState",
         issueId: "id-1",
         stateId: "state-needs-human",
       });
-      expect(ctx.linearClient.calls[1].body).toMatch(/execution:mac/);
+      expect(ctx.linearClient.calls.find((call) => call.type === "addComment").body).toMatch(/execution:mac/);
       expect(ctx.worktreeManager.createCalls).toHaveLength(0);
       expect(ctx.spawnWorkerFn).not.toHaveBeenCalled();
     });

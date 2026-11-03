@@ -21,6 +21,7 @@
 import { execFileSync } from "node:child_process";
 import { COMPLETED_BLOCKER_STATE_NAMES } from "./dependency-gate.mjs";
 import { assertParentCompletable } from "./parent-completion-guard.mjs";
+import { escalateToOwner } from "./owner-escalation.mjs";
 import { APPROVED_EXECUTOR } from "./worker-guard.mjs";
 
 export function defaultRunner(command, args, opts = {}) {
@@ -268,11 +269,17 @@ async function escalateClosedUnmerged(entry, ctx) {
     return { synced: true, escalated: false };
   }
   if (!needsHumanDecisionStateId) return { synced: false, reason: "no needsHumanDecisionStateId configured" };
-  await linearClient.moveToState(entry.linearIssueId, needsHumanDecisionStateId);
-  await linearClient.addComment(
-    entry.linearIssueId,
-    `${evidence} Issue was "${snapshot.stateName}" — moved to Needs Human Decision, since a closed-unmerged PR cannot be resolved automatically.`,
-  );
+  await escalateToOwner({
+    linearClient,
+    issue: { ...snapshot, id: entry.linearIssueId },
+    stateId: needsHumanDecisionStateId,
+    ask: `PR #${entry.prNumber} was closed without merging; decide what happens to this issue`,
+    evidence: `${evidence} Issue was "${snapshot.stateName}" — moved to Needs Human Decision, since a closed-unmerged PR cannot be resolved automatically.`,
+    options: [
+      "Move the issue back to `Ready for Agent` to retry with a fresh PR.",
+      "Move it to `Canceled` to drop it.",
+    ],
+  });
   return { synced: true, escalated: true };
 }
 

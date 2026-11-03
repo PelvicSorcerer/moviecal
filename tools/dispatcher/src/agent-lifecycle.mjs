@@ -27,6 +27,7 @@
 // which simply routes the event to the comment surface instead.
 
 import { nullAgentSessionBridge, renderLifecycleEvent } from "./agent-session.mjs";
+import { escalateToOwner } from "./owner-escalation.mjs";
 
 /**
  * Publishes an attempt's lifecycle to Linear on whichever surface is
@@ -41,9 +42,12 @@ export class LifecyclePublisher {
    * @param {object} [opts.context] - durable identity carried on every event: {issue, branch, prUrl, worker, model, worktreePath}
    * @param {{error: Function}} [opts.logger]
    */
-  constructor({ linearClient, bridge = nullAgentSessionBridge(), context = {}, logger = console } = {}) {
+  constructor({ linearClient, bridge = nullAgentSessionBridge(), context = {}, logger = console, needsStateIds = [], escalationLedger = null, botUserIds = [] } = {}) {
     if (!linearClient) throw new Error("LifecyclePublisher requires a linearClient");
     this.linearClient = linearClient;
+    this.needsStateIds = needsStateIds;
+    this.escalationLedger = escalationLedger;
+    this.botUserIds = botUserIds;
     this.bridge = bridge;
     this.context = { ...context };
     this.logger = logger;
@@ -101,17 +105,44 @@ export class LifecyclePublisher {
       return { surface: "none", key: rendered.key, reason: "already published" };
     }
     this.published.add(rendered.key);
+    // A failed publish must stay retryable, so the dedupe entry is dropped on a throw.
+    try {
+      if (fields.stateId && this.needsStateIds.includes(fields.stateId)) {
+        // MOV-502: a move into a needs-state is an ask of the owner, so it goes
+        // through the one escalation helper. The mention comment is the
+        // notification; the Agent Activity is still published as session history.
+        await escalateToOwner({
+          linearClient: this.linearClient,
+          issue,
+          stateId: fields.stateId,
+          ask: fields.summary,
+          evidence: rendered.comment,
+          options: fields.options || [],
+          // The idempotency key covers issue, attempt, kind and content, so a
+          // re-published event after a dispatcher restart never re-mentions.
+          key: rendered.key,
+          ledger: this.escalationLedger,
+          botUserIds: this.botUserIds,
+          logger: this.logger,
+        });
+        await this.bridge.publish(rendered);
+        return { surface: "comment", key: rendered.key, reason: null };
+      }
 
-    if (fields.stateId) {
-      await this.linearClient.moveToState(issue.id, fields.stateId);
-    }
+      if (fields.stateId) {
+        await this.linearClient.moveToState(issue.id, fields.stateId);
+      }
 
-    const sessionResult = await this.bridge.publish(rendered);
-    if (sessionResult.published) {
-      return { surface: "agent-activity", key: rendered.key, reason: null };
+      const sessionResult = await this.bridge.publish(rendered);
+      if (sessionResult.published) {
+        return { surface: "agent-activity", key: rendered.key, reason: null };
+      }
+      await this.linearClient.addComment(issue.id, rendered.comment);
+      return { surface: "comment", key: rendered.key, reason: sessionResult.reason || null };
+    } catch (error) {
+      this.published.delete(rendered.key);
+      throw error;
     }
-    await this.linearClient.addComment(issue.id, rendered.comment);
-    return { surface: "comment", key: rendered.key, reason: sessionResult.reason || null };
   }
 
   /**
@@ -119,6 +150,7 @@ export class LifecyclePublisher {
    * presentation surface. For the rare transition that is pure control state.
    */
   async moveState(stateId) {
+    if (this.needsStateIds.includes(stateId)) throw new Error("moveState cannot enter a needs-state; use publish() so the owner is escalated");
     const issue = this.context.issue || {};
     await this.linearClient.moveToState(issue.id, stateId);
   }

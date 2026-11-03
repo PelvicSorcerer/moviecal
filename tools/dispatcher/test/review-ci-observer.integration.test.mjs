@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { decideCiOutcome, reportObservationToLinear } from "../src/ci-outcomes.mjs";
 import { reportReviewCi } from "../src/review-ci-observer.mjs";
+import { escalateToOwner as escalateToOwnerForTest } from "../src/owner-escalation.mjs";
 
 const entry = { id: "MOV-1", status: "review", prNumber: 1, prUrl: "https://example.test/pr/1" };
 
@@ -180,5 +181,65 @@ describe("review CI observation deduplication on a long comment history (MOV-423
     await reportReviewCi(args);
 
     expect(store.comments.filter((body) => body.includes("ci-observation:"))).toHaveLength(1);
+  });
+});
+
+describe("review CI terminal escalation reaches the owner (MOV-502)", () => {
+  const issue = {
+    id: "linear-1", identifier: "MOV-1", url: "https://linear.app/moviecal/issue/MOV-1/x",
+    assignee: { id: "user-adam", displayName: "adam" },
+  };
+  class ReviewWorktreeManager {
+    loadState() { return { "MOV-1": entry }; }
+  }
+  function setup(current) {
+    const store = fakeLinearComments(0);
+    const moves = [];
+    const linearClient = {
+      issuesInState: async () => [issue],
+      issueComments: store.issueComments,
+      addComment: store.addComment,
+      moveToState: async (id, stateId) => moves.push({ id, stateId }),
+    };
+    const state = { current };
+    const ownerLedger = (() => {
+      const keys = new Set();
+      return { hasEscalation: (key) => keys.has(key), recordEscalation: (key) => keys.add(key) };
+    })();
+    const args = {
+      linearClient, teamKey: "MOV", inReviewStateName: "In Review",
+      WorktreeManager: ReviewWorktreeManager, worktreeManagerOptions: {},
+      observePrFn: () => state.current, githubRepo: "owner/repo",
+      decideCiOutcome, reportObservationToLinear,
+      escalateToOwner: escalateToOwnerForTest,
+      needsHumanDecisionStateId: "state-nhd", ownerLedger,
+    };
+    return { store, moves, state, args };
+  }
+  it("escalates a terminal escalate decision once with one mention comment, and a second poll posts nothing", async () => {
+    const { store, moves, args } = setup({
+      headSha: "head-1",
+      checks: {
+        checks: [{ name: "permission-check", sha: "head-1", outcome: "failure", required: true }],
+        required: [{ name: "permission-check", outcome: "failure", required: true }],
+        missingRequired: [], pending: false, timedOut: false,
+      },
+    });
+    await reportReviewCi(args);
+    await reportReviewCi(args);
+    expect(store.comments.some((body) => body.includes("Decision: **escalate**"))).toBe(true);
+    const mentions = store.comments.filter((body) => body.includes("https://linear.app/moviecal/profiles/adam"));
+    expect(mentions).toHaveLength(1);
+    expect(mentions[0].startsWith("Needs you: CI on PR #1")).toBe(true);
+    expect(moves).toEqual([{ id: "linear-1", stateId: "state-nhd" }]);
+  });
+
+  it("does not escalate a provisional or propose-* snapshot", async () => {
+    for (const outcome of ["pending", "failure"]) {
+      const { store, moves, args } = setup(observation(outcome));
+      await reportReviewCi(args);
+      expect(moves).toEqual([]);
+      expect(store.comments.some((body) => body.includes("profiles/adam"))).toBe(false);
+    }
   });
 });

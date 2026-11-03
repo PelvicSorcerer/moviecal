@@ -222,7 +222,7 @@ After propagation, `dispatcher run` executes the promoter over every issue in `B
 
 For a `Blocked` issue there is one extra condition: its most recent `**Dispatcher preflight failed:**` comment must name an unresolved-relation reason (now resolved). An issue blocked for any other reason — a missing secret, a worktree collision, a human's decision — is left alone.
 
-On promotion the promoter first fills a missing assignee (below), then comments `Auto-promoted to Ready for Agent — …` (which, via the app-actor identity from MOV-122, notifies the repo owner). It is idempotent: a promoted issue is no longer in `Backlog`/`Blocked`, so a second pass does nothing, and an issue that already has an assignee is never reassigned or recommented.
+On promotion the promoter first fills a missing assignee (below), then comments `Auto-promoted to Ready for Agent — …` (a routine status record, not an ask — see §Owner notifications (MOV-502)). It is idempotent: a promoted issue is no longer in `Backlog`/`Blocked`, so a second pass does nothing, and an issue that already has an assignee is never reassigned or recommented.
 
 ### Configured human owner before handoff (MOV-359)
 
@@ -237,6 +237,16 @@ The handoff Loop (§Dispatch trigger, MOV-220) cannot delegate an issue Linear c
 - **Never inferred.** The owner is always the one configured email — never the issue's creator, never an app/bot workspace user, and never applied to an issue the promoter would not otherwise promote (unready, `human-only`, coordination, or still blocked).
 
 See `tools/dispatcher/src/owner-assignment.mjs` for the pure eligibility/validation logic and `promoter.mjs`'s `promoteEligible` for how it is sequenced against the `Ready for Agent` write.
+
+### Owner notifications (MOV-502)
+
+The owner must stay the assignee (Linear refuses delegation on an unowned issue). **Linear auto-subscribes assignees and they cannot be unsubscribed by the dispatcher:** `issueUnsubscribe` called by the app actor returns `success: true` and changes nothing (confirmed in a live test, MOV-502). The dispatcher therefore does not try to quiet the owner's inbox. The contract is: **the dispatcher @mentions the owner exactly when it needs them, and the owner filters their own inbox and notification settings.** **Fallback if that changes:** nothing in the dispatcher depends on the unsubscribe, so if Linear later makes `issueUnsubscribe` work for app actors, the only effect is that the owner's inbox gets quieter by itself; re-adding an unsubscribe step would be a separate issue, decided by the owner. If the owner ever sees mentions missing, the dispatcher logs `escalating without an @mention (<reason>)` for each escalation it could not mention, and the **Needs me** view still lists the issue. The owner's inbox still receives routine dispatcher comments on issues they are assigned to; a mention (first comment line `Needs you: …`) is the only signal that an issue needs action.
+
+- **Owner-side setup.** Treat the Linear inbox as unfiltered. Use the **Needs me** view (`docs/governance/linear-information-architecture.md` §Custom views) to find asks, and an inbox filter or Linear notification settings to cut noise. Revisit a second, non-assignee Linear account only if the noise stays a problem.
+- **One escalation path.** Every move to `Needs Human Decision` / `Needs Input` goes through `escalateToOwner` (directly, or via `LifecyclePublisher.publish` when given a needs-state id). It posts one comment (so a failure leaves a loud ask, never a silent needs-state) and then moves the state; the comment's first line is `Needs you: <ask>`, then the @mention, the evidence (each site's existing reason text), and what each human action does next. Escalations with an explicit key (the review-CI observer's) are idempotent across polls via `~/.config/moviecal/owner-notification-state.json`. A static test fails if a module outside the helper calls `moveToState` with a needs-state, and nothing else builds a mention, so **a mention always means "needs you"**.
+- **Mention syntax.** The comment body carries the assignee's Linear profile URL (`https://linear.app/<workspace>/profiles/<username>`, workspace taken from the issue URL), which Linear renders as a mention. With no assignee, a bot/app assignee (the dispatcher's own actor id), or no resolvable username, the helper still moves state and comments without a mention and logs why.
+- **Review-CI observer.** A terminal (non-provisional) `escalate` decision on a review PR moves the issue to `Needs Human Decision` through the helper, once per observation key. Provisional, `ignore` and `propose-*` decisions keep posting only the quiet status comment. The observer gains no repair or dispatch authority.
+- **One-time operator step.** In Linear → Settings → Notifications, enable **Mobile** and **Desktop** for **Mentions**; optionally turn the other categories off for those channels. Linear's mobile app then pushes each ask.
 
 ### Issue completeness (MOV-303/MOV-307/MOV-308)
 
