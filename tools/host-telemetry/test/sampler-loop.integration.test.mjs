@@ -7,10 +7,12 @@ import { main } from "../src/cli.mjs";
 import { runCommand } from "../src/exec.mjs";
 import { runLoop } from "../src/loop.mjs";
 import { appendMarker } from "../src/markers.mjs";
-import { fakeRunner } from "./fixtures.mjs";
+import { COMMANDS, collectSample } from "../src/sample.mjs";
+import { createCommandCache } from "../src/cache.mjs";
+import { STALE_SIM_PS, fakeRunner } from "./fixtures.mjs";
 
 const START = Date.UTC(2026, 0, 1);
-const IDLE_PS = "  1  0  0.5  12000 /sbin/launchd\n";
+const IDLE_PS = "  1  0  0.5  12000 Ss /sbin/launchd\n";
 
 function fakeClock(start) {
   let t = start;
@@ -65,6 +67,118 @@ describe("sampler loop", () => {
     expect(Date.parse(samples[1].t) - Date.parse(samples[0].t)).toBe(1500);
     expect(fs.readdirSync(path.join(dir, "snapshots"))).toHaveLength(4);
     expect(calls.filter((c) => c.name === "vm_stat" && c.args.length === 0).length).toBeGreaterThan(0);
+  });
+});
+
+describe("wedged simulator service", () => {
+  const stopAfter = (clock, ms) => () => clock.now() >= START + ms;
+
+  it("a stale booted simulator does not suppress loadNoJob, and one rate-limited snapshot fires", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "telemetry-int-"));
+    const clock = fakeClock(START);
+    const calls = [];
+    let ticks = 0;
+    await runLoop({
+      run: fakeRunner({ ps: STALE_SIM_PS }, calls), clock, dir, cores: 8, loadavg: () => [600, 500, 300],
+      readCpus: () => { ticks += 10; return [{ times: { user: ticks, nice: 0, sys: ticks, idle: ticks, irq: 0 } }]; },
+      shouldStop: stopAfter(clock, 4 * 60_000),
+    });
+    const { samples } = readSamples(dir, "2026-01-01");
+    expect(samples[0].busy).toBe(true);
+    expect(samples.every((x) => x.loadNoJob === true)).toBe(true);
+    expect(samples[0]).toMatchObject({ runnable: 2, simProcs: 2, xpcproxySim: 2, cpu: null });
+    expect(samples.some((x) => x.cpu !== null)).toBe(true);
+    const files = fs.readdirSync(path.join(dir, "snapshots"));
+    expect(files).toHaveLength(1);
+    const text = fs.readFileSync(path.join(dir, "snapshots", files[0]), "utf8");
+    expect(text).toContain("high load with no job running");
+    expect(text).toContain("CoreSimulator");
+    expect(calls.filter((c) => c.name === "sample").length).toBeGreaterThan(0);
+    for (const c of calls) expect(c.timeoutMs).toBeGreaterThan(0);
+  });
+
+  it("with ps timing out, samples still print, loadNoJob is unknown and the snapshot skips sample calls", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "telemetry-int-"));
+    const clock = fakeClock(START);
+    const calls = [];
+    await runLoop({
+      run: fakeRunner({ ps: "hang" }, calls), clock, dir, cores: 8, loadavg: () => [600, 500, 300],
+      shouldStop: stopAfter(clock, 4 * 60_000),
+    });
+    const { samples } = readSamples(dir, "2026-01-01");
+    expect(samples.length).toBeGreaterThan(40);
+    expect(samples[0]).toMatchObject({ runnable: null, groups: null, loadNoJob: null, swapUsedMb: 2000, load: [600, 500, 300] });
+    expect(samples[0].notes.some((n) => n.startsWith("ps:"))).toBe(true);
+    const files = fs.readdirSync(path.join(dir, "snapshots"));
+    expect(files).toHaveLength(1);
+    expect(calls.filter((c) => c.name === "sample")).toHaveLength(0);
+    // ps is retried on a backoff, not on every sample, so a wedged machine is not hit with a spawn per tick.
+    expect(calls.filter((c) => c.name === "ps").length).toBeLessThan(samples.length / 2);
+    const text = fs.readFileSync(path.join(dir, "snapshots", files[0]), "utf8");
+    expect(text).toContain("skipped: ps timed out");
+    expect(text).toContain("CoreSimulator");
+  });
+});
+
+describe("spawn budget and hung commands", () => {
+  const stopAfter = (clock, ms) => () => clock.now() >= START + ms;
+
+  it("idle sampling spawns well under one child per sample", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "telemetry-int-"));
+    const clock = fakeClock(START);
+    const calls = [];
+    await runLoop({ run: fakeRunner({ ps: IDLE_PS }, calls), clock, dir, cores: 8, loadavg: () => [0.2, 0.2, 0.2], shouldStop: stopAfter(clock, 10 * 60_000) });
+    const { samples } = readSamples(dir, "2026-01-01");
+    expect(samples.length).toBeGreaterThanOrEqual(119);
+    const perSample = calls.length / samples.length;
+    expect(perSample).toBeLessThan(2.5); // was 6 before the per-command cadence (MOV-498)
+    const count = (n) => calls.filter((c) => c.name === n).length;
+    expect(count("df")).toBeLessThanOrEqual(11);
+    expect(count("pmset")).toBeLessThanOrEqual(11);
+    expect(count("vm_stat")).toBeLessThanOrEqual(41);
+    expect(count("ps")).toBeLessThanOrEqual(samples.length + 1);
+    // the values of slow commands are carried between refreshes, not dropped
+    expect(samples.every((x) => x.diskFreeGb === 40 && x.freeMb === 62.5)).toBe(true);
+  });
+
+  it("a command that never returns neither blocks nor is re-spawned while in flight", async () => {
+    const calls = [];
+    const run = (cmd) => {
+      calls.push(cmd);
+      return new Promise(() => {});
+    };
+    const cache = createCommandCache({ run, commands: COMMANDS, graceMs: 20 });
+    const started = Date.now();
+    const first = await collectSample({ run, nowMs: START, cores: 8, loadavg: [500, 400, 300], cpu: () => ({ user: 1, sys: 90, idle: 9 }), cache });
+    const second = await collectSample({ run, nowMs: START + 5000, cores: 8, loadavg: [500, 400, 300], cache });
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(calls).toHaveLength(6);
+    for (const s of [first, second]) {
+      expect(s).toMatchObject({ load: [500, 400, 300], pressure: null, freeMb: null, swapUsedMb: null, diskFreeGb: null, runnable: null, groups: null });
+      expect(s.notes.length).toBeGreaterThanOrEqual(6);
+    }
+    expect(first.cpu).toEqual({ user: 1, sys: 90, idle: 9 });
+  });
+
+  it("every command timing out still writes a sample each tick from in-process data", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "telemetry-int-"));
+    const clock = fakeClock(START);
+    const hang = { ps: "hang", vm_stat: "hang", sysctl: "hang", df: "hang", pmset: "hang" };
+    const run = async (cmd, args, o) => {
+      const name = cmd.split("/").pop();
+      if (name in hang) return { ok: false, stdout: "", timedOut: true };
+      return fakeRunner()(cmd, args, o);
+    };
+    let ticks = 0;
+    await runLoop({
+      run, clock, dir, cores: 8, loadavg: () => [450, 300, 100], shouldStop: stopAfter(clock, 60_000),
+      readCpus: () => { ticks += 10; return [{ times: { user: ticks, nice: 0, sys: ticks * 5, idle: ticks, irq: 0 } }]; },
+    });
+    const { samples } = readSamples(dir, "2026-01-01");
+    expect(samples).toHaveLength(12);
+    expect(samples[3]).toMatchObject({ load: [450, 300, 100], pressure: null, swapUsedMb: null, freeMb: null, diskFreeGb: null, runnable: null, loadNoJob: null });
+    expect(samples[3].cpu.sys).toBeGreaterThan(samples[3].cpu.user);
+    expect(samples[3].notes.join(" ")).toMatch(/ps.*timed out/);
   });
 });
 

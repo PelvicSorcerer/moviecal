@@ -3,16 +3,25 @@
 const FAKE_TOKEN = "ghp" + "_" + "abcdefghijklmnopqrstuvwxyz0123456789";
 
 export const PS_FIXTURE = `
-  1     0   0.5  12000 /sbin/launchd
- 100    1  42.0 150000 /Users/a/actions-runner/bin/Runner.Worker
- 101  100  80.5 900000 /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -scheme X --token=${FAKE_TOKEN}
- 102  101  12.0 300000 /Applications/Xcode.app/Contents/Developer/usr/bin/swift-frontend
- 103    1  30.0 700000 /Library/Developer/CoreSimulator/Devices/ABC/data/Containers/Bundle/Application/MovieCal
- 104    1   2.0 200000 /Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator
- 105    1  55.0 400000 /Users/a/.local/bin/claude
- 106    1  10.0 100000 /usr/local/bin/codex
- 107    1   9.0  90000 /usr/local/bin/node sk-live_abcdefghijklmnop1234 SECRET_TOKEN=abc
- 108    1   1.0  20000 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+  1     0   0.5  12000 Ss  /sbin/launchd
+ 100    1  42.0 150000 S   /Users/a/actions-runner/bin/Runner.Worker
+ 101  100  80.5 900000 R   /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -scheme X --token=${FAKE_TOKEN}
+ 102  101  12.0 300000 R+  /Applications/Xcode.app/Contents/Developer/usr/bin/swift-frontend
+ 103    1  30.0 700000 S   /Library/Developer/CoreSimulator/Devices/ABC/data/Containers/Bundle/Application/MovieCal
+ 104    1   2.0 200000 S   /Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator
+ 105    1  55.0 400000 R   /Users/a/.local/bin/claude
+ 106    1  10.0 100000 S   /usr/local/bin/codex
+ 107    1   9.0  90000 S   /usr/local/bin/node sk-live_abcdefghijklmnop1234 SECRET_TOKEN=abc
+ 108    1   1.0  20000 S   /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+`;
+
+// Wedged CoreSimulatorService: stale booted simulator, no Runner.Worker, no job.
+export const STALE_SIM_PS = `
+  1     0   0.5  12000 Ss  /sbin/launchd
+ 200    1  20.0  50000 R   /Library/Developer/CoreSimulator/Volumes/iOS/RuntimeRoot/sbin/launchd_sim
+ 201  200  10.0  30000 R   /Library/Developer/CoreSimulator/Volumes/iOS/RuntimeRoot/usr/libexec/xpcproxy_sim
+ 202  200   1.0  30000 S   /Library/Developer/CoreSimulator/Volumes/iOS/RuntimeRoot/usr/libexec/xpcproxy_sim
+ 203  200   5.0  30000 S   /Library/Developer/CoreSimulator/Devices/ABC/data/Containers/Bundle/Application/MovieCal
 `;
 
 export const VM_STAT = `Mach Virtual Memory Statistics: (page size of 16384 bytes)

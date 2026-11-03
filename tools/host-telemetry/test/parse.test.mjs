@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  groupOf, parseDfFreeGb, parsePmsetTherm, parsePs, parseSwapUsage, parseSysctlInt, parseVmStat, rollup,
+  cpuSplit, createCpuSampler, groupOf, parseDfFreeGb, processCounts, parsePmsetTherm, parsePs, parseSwapUsage, parseSysctlInt, parseVmStat, rollup,
   sanitizeCommand, topBy,
 } from "../src/parse.mjs";
 import { collectSample } from "../src/sample.mjs";
-import { DF, PS_FIXTURE, THERM_LIMITED, THERM_NONE, VM_STAT, fakeRunner } from "./fixtures.mjs";
+import { DF, PS_FIXTURE, STALE_SIM_PS, THERM_LIMITED, THERM_NONE, VM_STAT, fakeRunner } from "./fixtures.mjs";
 
 describe("parsers", () => {
   it("parses vm_stat with the reported page size", () => {
@@ -70,5 +70,43 @@ describe("collectSample", () => {
     expect(s.notes).toEqual([expect.stringContaining("therm: timed out")]);
     expect(s.thermal.speedLimit).toBeNull();
     expect(s.freeMb).toBe(62.5);
+  });
+});
+
+describe("ps state, simulator counts and CPU split", () => {
+  it("parses the state column and counts runnable processes", () => {
+    const procs = parsePs(PS_FIXTURE);
+    expect(procs.map((p) => p.state)).toContain("R+");
+    expect(processCounts(procs)).toMatchObject({ runnable: 3, simProcs: 1, xpcproxySim: 0, runnerWorker: true });
+  });
+  it("counts simulator processes and xpcproxy_sim separately", () => {
+    expect(processCounts(parsePs(STALE_SIM_PS))).toEqual({ runnable: 2, simProcs: 2, xpcproxySim: 2, runnerWorker: false });
+  });
+  it("counts xpcproxy_sim and Runner.Worker from long and spaced real-world paths", () => {
+    const rt = "/Library/Developer/CoreSimulator/Volumes/iOS_22C150/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 18.2.simruntime/Contents/Resources/RuntimeRoot";
+    const text = ` 300 1 1.0 1000 R  ${rt}/usr/libexec/xpcproxy_sim\n 301 1 1.0 1000 S  ${rt}/sbin/launchd_sim\n 302 1 1.0 1000 S  /Users/adammoore/actions-runner/bin/Runner.Worker\n`;
+    expect(processCounts(parsePs(text))).toEqual({ runnable: 1, simProcs: 1, xpcproxySim: 1, runnerWorker: true });
+  });
+  it("computes the CPU split from os.cpus() deltas", () => {
+    const at = (user, sys, idle) => [{ times: { user, nice: 0, sys, idle, irq: 0 } }, { times: { user, nice: 0, sys, idle, irq: 0 } }];
+    expect(cpuSplit(at(0, 0, 0), at(300, 540, 160))).toEqual({ user: 30, sys: 54, idle: 16 });
+    expect(cpuSplit(at(5, 5, 5), at(5, 5, 5))).toBeNull();
+    const readings = [at(0, 0, 0), at(10, 10, 80)];
+    const sampler = createCpuSampler(() => readings.shift());
+    expect(sampler()).toBeNull();
+    expect(sampler()).toEqual({ user: 10, sys: 10, idle: 80 });
+  });
+  it("adds the new fields to a sample", async () => {
+    const cpu = () => ({ user: 30, sys: 54, idle: 16 });
+    const s = await collectSample({ run: fakeRunner({ ps: STALE_SIM_PS }), nowMs: 0, cores: 8, loadavg: [1, 1, 1], cpu });
+    expect(s).toMatchObject({ runnable: 2, simProcs: 2, xpcproxySim: 2, cpu: { user: 30, sys: 54, idle: 16 }, busyProcess: true });
+  });
+  it("keeps non-ps fields and nulls ps fields when ps times out", async () => {
+    const s = await collectSample({ run: fakeRunner({ ps: "hang" }), nowMs: 0, cores: 8, loadavg: [9, 9, 9], cpu: () => ({ user: 1, sys: 2, idle: 97 }) });
+    expect(s).toMatchObject({
+      runnable: null, simProcs: null, xpcproxySim: null, topCpu: null, topRss: null, groups: null, busyProcess: null,
+      pressure: 1, swapUsedMb: 2000, freeMb: 62.5, diskFreeGb: 40, load: [9, 9, 9], cpu: { user: 1, sys: 2, idle: 97 },
+    });
+    expect(s.notes.some((n) => n.startsWith("ps:"))).toBe(true);
   });
 });
