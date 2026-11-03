@@ -460,6 +460,17 @@ export class LinearClient {
     return data.issueUpdate.success;
   }
 
+  /** Unsubscribe `userId` from one issue (MOV-502). Resolves to Linear's `success`. */
+  async unsubscribeFromIssue(issueId, userId) {
+    const mutation = `
+      mutation($issueId: String!, $userId: String!) {
+        issueUnsubscribe(id: $issueId, userId: $userId) { success }
+      }
+    `;
+    const data = await this.request(mutation, { issueId, userId });
+    return Boolean(data.issueUnsubscribe && data.issueUnsubscribe.success);
+  }
+
   async updateIssuePriority(issueId, priority) {
     const mutation = `
       mutation($issueId: String!, $priority: Int) {

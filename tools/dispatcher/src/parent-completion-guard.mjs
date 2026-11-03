@@ -3,6 +3,8 @@
 // This is deliberately independent from dependency-gate.mjs: a child
 // completion policy is its own invariant and must not silently change if
 // dependency satisfaction gains another terminal state.
+import { escalateToOwner } from "./owner-escalation.mjs";
+
 export const TERMINAL_CHILD_STATE_NAMES = new Set(["Done", "Released", "Canceled", "Duplicate"]);
 export const COMPLETION_DRIVING_STATE_NAMES = new Set(["Done", "Released"]);
 
@@ -84,8 +86,19 @@ export async function reconcileParents(parents, ctx) {
       continue;
     }
     if (!dryRun) {
-      await linearClient.moveToState(parent.id, targetStateId);
-      await linearClient.addComment(parent.id, verdict.comment);
+      if (verdict.action === "complete") {
+        await linearClient.moveToState(parent.id, targetStateId);
+        await linearClient.addComment(parent.id, verdict.comment);
+      } else {
+        await escalateToOwner({
+          linearClient,
+          issue: parent,
+          stateId: targetStateId,
+          ask: `parent ${parent.identifier} needs a decision: ${verdict.reason}`,
+          evidence: verdict.comment,
+          logger,
+        });
+      }
     }
     results.push({ issue: parent.identifier, action: verdict.action, reason: verdict.reason, comment: verdict.comment });
   }

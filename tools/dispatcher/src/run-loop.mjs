@@ -30,6 +30,7 @@ import { policyDigest } from "./jev-cohort.mjs";
 import { validateOpenRouterTransport } from "./openrouter-transport.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
+import { botUserIdsOf, ensureOwnerUnsubscribed, escalateToOwner, needsStateIds } from "./owner-escalation.mjs";
 import { StopController, detectStopFromSnapshot, watchForStop } from "./agent-signals.mjs";
 import { registerActiveAttempt, unregisterActiveAttempt, updateActiveAttempt } from "./active-attempt-registry.mjs";
 import { captureVerificationEvidence } from "./readiness-evidence.mjs";
@@ -355,8 +356,11 @@ export async function runOperatorResume(issue, inspection, ctx) {
     linearClient: ctx.linearClient,
     bridge: ctx.agentSessionBridgeFn?.() || nullAgentSessionBridge(),
     logger: ctx.logger || console,
+    needsStateIds: needsStateIds(ctx.stateIds),
+    escalationLedger: ctx.ownerLedger || null,
+    botUserIds: botUserIdsOf(ctx.dispatcherDelegate),
     context: {
-      issue: { id: issue.id, identifier: issue.identifier, url: issue.url },
+      issue: { id: issue.id, identifier: issue.identifier, url: issue.url, assignee: issue.assignee },
       branch: entry.branch, worktreePath: entry.path,
       worker: inspection.routing.worker, model: inspection.routing.model,
     },
@@ -729,7 +733,14 @@ async function dispatchIssue(issue, ctx) {
     resolveJevTransportFn = () => null,
     validateJevTransportFn = validateOpenRouterTransport,
     captureWorkerUsageFn = () => null,
+    ownerLedger = null,
   } = ctx;
+
+  // MOV-502: one escalation path for every direct move into a needs-state.
+  const escalate = (args) => escalateToOwner({
+    linearClient, issue, stateId: stateIds.needsHumanDecision, ledger: ownerLedger,
+    botUserIds: botUserIdsOf(dispatcherDelegate), logger, ...args,
+  });
 
   // MOV-143: before anything else, is this issue even ours? An issue routed to
   // another adapter, routed nowhere (coordination), or delegated to somebody
@@ -740,17 +751,17 @@ async function dispatchIssue(issue, ctx) {
   const eligibility = evaluateLocalDispatch(issue, { expectedDelegate: dispatcherDelegate });
   if (!eligibility.eligible) {
     if (eligibility.action === "escalate") {
-      await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
-      await linearClient.addComment(
-        issue.id,
-        [
+      await escalate({
+        ask: `the dispatcher cannot execute this issue: ${eligibility.reason}`,
+        evidence: [
           `**Dispatcher cannot execute this issue:** ${eligibility.reason}`,
           "",
           "The local Mac dispatcher only claims issues that carry exactly one valid `execution:mac` label and are delegated to `moviecal-dispatcher`. Fix the route (or re-delegate the issue) and move it back to `Ready for Agent`.",
           "",
           "See docs/operators/local-execution.md §Dispatch trigger.",
         ].join("\n"),
-      );
+        options: ["Fix the `execution:mac` label or re-delegate to `moviecal-dispatcher`, then move the issue back to `Ready for Agent`."],
+      });
       return { issue: issue.identifier, outcome: "needs-human", reason: eligibility.reason };
     }
     return { issue: issue.identifier, outcome: "not-eligible", reason: eligibility.reason };
@@ -826,8 +837,7 @@ async function dispatchIssue(issue, ctx) {
 
   const routing = resolveRouting(issue);
   if (!routing.ok) {
-    await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
-    await linearClient.addComment(issue.id, `**Dispatcher routing failed:** ${routing.reason}`);
+    await escalate({ ask: `routing failed: ${routing.reason}`, evidence: `**Dispatcher routing failed:** ${routing.reason}` });
     return { issue: issue.identifier, outcome: "needs-human", reason: routing.reason };
   }
   // Reuse the gated provider; direct callers retain resolveRouting defaults.
@@ -838,8 +848,7 @@ async function dispatchIssue(issue, ctx) {
     invocation = workerInvocation(routing.worker, routing.model, { steering: steeringEnabled && routing.worker === "claude" });
     turnBudget = turnBudgetFn(routing.model, routing.worker);
   } catch (error) {
-    await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
-    await linearClient.addComment(issue.id, `**Dispatcher routing failed:** ${error.message}`);
+    await escalate({ ask: `routing failed: ${error.message}`, evidence: `**Dispatcher routing failed:** ${error.message}` });
     return { issue: issue.identifier, outcome: "needs-human", reason: error.message };
   }
 
@@ -961,8 +970,10 @@ async function dispatchIssue(issue, ctx) {
       validateJevTransportFn(providerTransport, { cwd: candidatePath });
     } catch (error) {
       recordRouting("deferred-jev-cohort");
-      await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
-      await linearClient.addComment(issue.id, `**Jev cohort refused:** ${error.message}; no subscription or provider fallback.`);
+      await escalate({
+        ask: `the Jev cohort route was refused: ${error.message}`,
+        evidence: `**Jev cohort refused:** ${error.message}; no subscription or provider fallback.`,
+      });
       return { issue: issue.identifier, outcome: "needs-human", reason: "cohort route unavailable" };
     }
   }
@@ -979,8 +990,10 @@ async function dispatchIssue(issue, ctx) {
       if (providerTransport.policy.hash !== (jev?.policyHash || armState.policyHash)) throw new Error("Jev transport policy does not match admission");
     } catch {
       recordRouting("deferred-jev-transport");
-      await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
-      await linearClient.addComment(issue.id, "**Jev route deferred:** missing, invalid or mismatched reviewed Codex transport; no admission consumed and no subscription/provider fallback.");
+      await escalate({
+        ask: "the Jev route is deferred: missing, invalid or mismatched reviewed Codex transport",
+        evidence: "**Jev route deferred:** missing, invalid or mismatched reviewed Codex transport; no admission consumed and no subscription/provider fallback.",
+      });
       return { issue: issue.identifier, outcome: "needs-human", reason: "Jev transport unavailable or binding mismatch" };
     }
   }
@@ -1007,10 +1020,9 @@ async function dispatchIssue(issue, ctx) {
         : null;
 
     if (refusal) {
-      await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
-      await linearClient.addComment(
-        issue.id,
-        [
+      await escalate({
+        ask: `the scheduled resume of the retained worktree was refused: ${refusal}`,
+        evidence: [
           "**Scheduled resume of the retained worktree was refused (MOV-205).**",
           "",
           `Reason: ${refusal}`,
@@ -1023,7 +1035,8 @@ async function dispatchIssue(issue, ctx) {
           "",
           "See docs/operators/local-execution.md §Worktree lifecycle.",
         ].join("\n"),
-      );
+        options: ["Inspect the retained worktree, recover or discard its unpublished work, then move the issue back to `Ready for Agent`."],
+      });
       return {
         issue: issue.identifier,
         outcome: "needs-human",
@@ -1035,10 +1048,9 @@ async function dispatchIssue(issue, ctx) {
     try {
       entry = worktreeManager.resumeEntry(issue.identifier, { worktreePath: candidatePath, branch });
     } catch (err) {
-      await linearClient.moveToState(issue.id, stateIds.needsHumanDecision);
-      await linearClient.addComment(
-        issue.id,
-        [
+      await escalate({
+        ask: `the scheduled resume of the retained worktree could not be re-opened: ${err.message}`,
+        evidence: [
           "**Scheduled resume of the retained worktree could not be re-opened (MOV-205).**",
           "",
           `Reason: ${err.message}`,
@@ -1047,7 +1059,8 @@ async function dispatchIssue(issue, ctx) {
           "",
           "The worktree was left exactly as it was; no worker ran and nothing was removed.",
         ].join("\n"),
-      );
+        options: ["Inspect the retained worktree, then move the issue back to `Ready for Agent` once it is safe to dispatch again."],
+      });
       return {
         issue: issue.identifier,
         outcome: "needs-human",
@@ -1122,8 +1135,11 @@ async function dispatchIssue(issue, ctx) {
     linearClient,
     bridge: agentSessionBridgeFn(),
     logger,
+    needsStateIds: needsStateIds(stateIds),
+    escalationLedger: ownerLedger,
+    botUserIds: botUserIdsOf(dispatcherDelegate),
     context: {
-      issue: { id: issue.id, identifier: issue.identifier, url: issue.url },
+      issue: { id: issue.id, identifier: issue.identifier, url: issue.url, assignee: issue.assignee },
       branch,
       worktreePath: entry.path,
       worker: routing.worker,
@@ -1131,6 +1147,10 @@ async function dispatchIssue(issue, ctx) {
     },
   });
   await publisher.begin({ existing: readAgentSessionFn(issue.identifier) });
+
+  // MOV-502: claim covers issues that reached Ready for Agent without the
+  // promoter. Once per issue; a refusal is logged and never fails dispatch.
+  await ensureOwnerUnsubscribed({ linearClient, issue, ledger: ownerLedger, botUserIds: botUserIdsOf(dispatcherDelegate), logger });
 
   // MOV-166: makes this attempt findable by issue id for an inbound Agent
   // Session signal (the stream client looks it up to route a stop to the

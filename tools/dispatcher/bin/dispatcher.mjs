@@ -85,6 +85,7 @@ import {
   jevCohortApprovalPath,
   jevCohortLedgerPath,
   workerUsageStatePath,
+  ownerNotificationStatePath,
   repairLedgerStatePath,
   masterIncidentLedgerStatePath,
   prAutonomyLedgerStatePath,
@@ -149,6 +150,7 @@ import {
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
 import { createOwnerAssigner } from "../src/owner-assignment.mjs";
+import { OwnerNotificationLedger, botUserIdsOf, ensureOwnerUnsubscribed, escalateToOwner } from "../src/owner-escalation.mjs";
 import { AUDITED_SPEC_STATE_TYPES, evaluateIssueSpec, formatIssueSpecMissing } from "../src/issue-spec.mjs";
 import { auditIssueSpecs, IssueSpecAuditScheduleStore, isAuditDue } from "../src/issue-spec-audit.mjs";
 import { propagatePriorities, TERMINAL_PRIORITY_STATE_TYPES } from "../src/priority-propagation.mjs";
@@ -1112,6 +1114,10 @@ async function reportReviewCi(linearClient, teamKey) {
     githubRepo: GITHUB_REPO,
     decideCiOutcome,
     reportObservationToLinear,
+    escalateToOwner,
+    needsHumanDecisionStateId: (await linearClient.workflowStates(teamKey)).find((s) => s.name === RUN_STATE_NAMES.needsHumanDecision)?.id || null,
+    ownerLedger: new OwnerNotificationLedger(ownerNotificationStatePath()),
+    botUserIds: botUserIdsOf(resolveDispatcherDelegate()),
   });
 }
 
@@ -1162,6 +1168,7 @@ async function cmdPromoteOnce({ dryRun = false } = {}) {
 
   const issueSpecMode = resolveIssueSpecMode();
   const ownerAssignment = createOwnerAssigner({ linearClient, teamKey, ownerEmail: resolveDefaultOwnerEmail() });
+  const ownerLedger = new OwnerNotificationLedger(ownerNotificationStatePath());
   const issues = await linearClient.issuesForPromotion({ teamKey, stateNames: PROMOTABLE_STATES });
   const isBlockerSatisfied = buildIsIssueSatisfied(issues);
   const results = await promoteEligible(issues, {
@@ -1171,6 +1178,7 @@ async function cmdPromoteOnce({ dryRun = false } = {}) {
     dryRun,
     issueSpecMode,
     ownerAssignment,
+    ownerUnsubscribe: (issue) => ensureOwnerUnsubscribed({ linearClient, issue, ledger: ownerLedger, botUserIds: botUserIdsOf(resolveDispatcherDelegate()) }),
   });
 
   const promoted = results.filter((r) => r.promoted);

@@ -29,6 +29,7 @@ import {
   jevCohortApprovalPath,
   jevCohortLedgerPath,
   workerUsageStatePath,
+  ownerNotificationStatePath,
   repairLedgerStatePath,
   envLocalPath,
   logRoot,
@@ -44,6 +45,7 @@ import {
   DEFAULT_STOP_POLL_INTERVAL_MS,
   REPO_ROOT,
 } from "./config.mjs";
+import { OwnerNotificationLedger } from "./owner-escalation.mjs";
 import { WorktreeManager } from "./worktree-manager.mjs";
 import { CircuitBreakerStore } from "./circuit-breaker.mjs";
 import { UsageLimitStore } from "./usage-limit.mjs";
@@ -138,6 +140,8 @@ export async function buildRunContext(linearClient, teamKey, issues, { repairLoc
       readyForAgent: stateId(RUN_STATE_NAMES.readyForAgent),
     },
     worktreeManager,
+    // MOV-502: once-per-issue owner unsubscribe and per-key escalation records.
+    ownerLedger: new OwnerNotificationLedger(ownerNotificationStatePath()),
     // MOV-180: host-wide nested-sandbox-crash breaker, persisted outside the
     // repo so it survives a dispatcher restart (see circuit-breaker.mjs).
     circuitBreaker: new CircuitBreakerStore(circuitBreakerStatePath()),

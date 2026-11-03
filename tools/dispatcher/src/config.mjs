@@ -464,6 +464,11 @@ export function issueSpecAuditStatePath() {
   return path.join(configDir(), "issue-spec-audit-state.json");
 }
 
+/** Persisted once-per-issue owner unsubscribe and per-key escalation records (MOV-502). */
+export function ownerNotificationStatePath() {
+  return path.join(configDir(), "owner-notification-state.json");
+}
+
 /** Off unless explicitly enabled; removing this switch immediately restores manual PR control. */
 export function prAutonomyEnabled(env = process.env) {
   return truthy(env.MOVIECAL_PR_AUTONOMY);

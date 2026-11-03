@@ -1,5 +1,7 @@
 // Linear reconciliation for worktrees abandoned during dispatcher startup.
 
+import { escalateToOwner } from "./owner-escalation.mjs";
+
 function recoveryComment(change) {
   if (!change.dirty) return `**Worktree abandoned:** ${change.reason}. Requeuing.`;
   if (change.uncommittedPaths?.includes("operator continuation requires human reconciliation even if its tree is clean")) {
@@ -48,6 +50,24 @@ export async function reconcileStartupRecoveries(changes, {
     }
     const progress = worktreeManager.loadState()[change.id]?.startupRecovery;
     if (!progress) continue;
+    if (change.dirty) {
+      if (!progress.stateMoved || !progress.commentPosted) {
+        await escalateToOwner({
+          linearClient,
+          issue: { id: change.linearIssueId, identifier: change.id },
+          stateId: targetStateId,
+          ask: `a worktree was abandoned at startup with unpublished work; inspect ${change.path}`,
+          evidence: recoveryComment(change),
+          options: [
+            `Inspect the retained worktree at \`${change.path}\` and recover or discard its work.`,
+            "Move the issue back to `Ready for Agent` once it is safe to dispatch again.",
+          ],
+          logger,
+        });
+        worktreeManager.markStartupRecoveryProgress(change.id, { stateMoved: true, commentPosted: true });
+      }
+      continue;
+    }
     if (!progress.stateMoved) {
       await linearClient.moveToState(change.linearIssueId, targetStateId);
       worktreeManager.markStartupRecoveryProgress(change.id, { stateMoved: true });

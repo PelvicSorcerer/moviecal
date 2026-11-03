@@ -186,7 +186,7 @@ export function evaluatePromotion(issue, ctx) {
  *   an owner.
  */
 export async function promoteEligible(issues, ctx) {
-  const { linearClient, readyForAgentStateId, isBlockerSatisfied, dryRun = false, issueSpecMode, ownerAssignment } = ctx;
+  const { linearClient, readyForAgentStateId, isBlockerSatisfied, dryRun = false, issueSpecMode, ownerAssignment, ownerUnsubscribe } = ctx;
   const results = [];
   for (const issue of issues) {
     if (issue.stateName === "Ready for Agent") continue;
@@ -223,6 +223,12 @@ export async function promoteEligible(issues, ctx) {
     if (!dryRun) {
       await linearClient.moveToState(issue.id, readyForAgentStateId);
       await linearClient.addComment(issue.id, PROMOTION_COMMENT);
+      // MOV-502: assignment auto-subscribes the owner; drop that so routine
+      // dispatcher comments stay out of their inbox. Never fails promotion.
+      if (ownerUnsubscribe) {
+        const assignee = issue.assignee && issue.assignee.id ? issue.assignee : ownerOutcome?.member ? { id: ownerOutcome.member.id } : null;
+        await ownerUnsubscribe({ ...issue, assignee });
+      }
     }
     results.push({
       issue: issue.identifier,
