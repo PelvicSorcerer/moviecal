@@ -4,7 +4,10 @@
 // and, where possible, recovered from the runner's _diag Worker log.
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { emitMarker } from "./emit.mjs";
+import { telemetryDir } from "./common.mjs";
 
 const ENV_FIELDS = {
   runId: "GITHUB_RUN_ID",
@@ -16,6 +19,7 @@ const ENV_FIELDS = {
   repository: "GITHUB_REPOSITORY",
 };
 
+const RESOLVER = fileURLToPath(new URL("../bin/resolve-job-result.mjs", import.meta.url));
 const DIAG_TAIL_BYTES = 512 * 1024;
 
 export function diagDirectory(env) {
@@ -81,10 +85,30 @@ export function buildHookFields(kind, env, { readLog = readLatestWorkerLog } = {
   return fields;
 }
 
-export async function runHook(kind, { env = process.env, ...emitOptions } = {}) {
+/**
+ * Start the detached reader that writes the `job-result` marker once the runner
+ * has logged the result (it does so after the completed hook runs). Fire and
+ * forget: returns true if spawned, false on any failure; never throws or waits.
+ */
+export function spawnResultResolver(fields, { env = process.env, now = Date.now, spawnImpl = spawn, resolver = RESOLVER, options } = {}) {
+  try {
+    const { result, fromDiag, ...identity } = fields;
+    const payload = JSON.stringify({ fields: identity, dir: telemetryDir(env), diagDir: diagDirectory(env), sinceMs: now(), options });
+    const child = spawnImpl(process.execPath, [resolver, payload], { detached: true, stdio: "ignore" });
+    child.on("error", () => {});
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function runHook(kind, { env = process.env, resolveOptions, spawnImpl, now, ...emitOptions } = {}) {
   try {
     const fields = buildHookFields(kind, env);
-    return await emitMarker({ source: "runner", event: kind, ...fields }, { env, wait: true, ...emitOptions });
+    const written = await emitMarker({ source: "runner", event: kind, ...fields }, { env, wait: true, ...emitOptions });
+    if (kind === "job-completed") spawnResultResolver(fields, { env, options: resolveOptions, spawnImpl, now });
+    return written;
   } catch {
     return false;
   }
