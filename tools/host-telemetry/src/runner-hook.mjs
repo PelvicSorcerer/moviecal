@@ -94,7 +94,9 @@ export function spawnResultResolver(fields, { env = process.env, now = Date.now,
   try {
     const { result, fromDiag, ...identity } = fields;
     const payload = JSON.stringify({ fields: identity, dir: telemetryDir(env), diagDir: diagDirectory(env), sinceMs: now(), options });
-    const child = spawnImpl(process.execPath, [resolver, payload], { detached: true, stdio: "ignore" });
+    // The runner kills leftovers carrying RUNNER_TRACKING_ID right after the hook (seen on the Mac).
+    const { RUNNER_TRACKING_ID: _tracking, ...childEnv } = env;
+    const child = spawnImpl(process.execPath, [resolver, payload], { detached: true, stdio: "ignore", env: childEnv });
     child.on("error", () => {});
     child.unref();
     return true;

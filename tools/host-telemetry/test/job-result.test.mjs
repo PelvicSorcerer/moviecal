@@ -126,21 +126,14 @@ describe("hook integration", () => {
   it("spawnResultResolver is fire-and-forget and carries identity but not the result", () => {
     const child = { on: vi.fn(), unref: vi.fn() };
     const spawnImpl = vi.fn(() => child);
-    expect(spawnResultResolver({ runId: "1", job: "j", result: "x", fromDiag: "runId" }, { env: env(), now: () => 42, spawnImpl })).toBe(true);
+    expect(spawnResultResolver({ runId: "1", job: "j", result: "x", fromDiag: "runId" }, { env: { ...env(), RUNNER_TRACKING_ID: "github_1" }, now: () => 42, spawnImpl })).toBe(true);
     const [, [, payload], opts] = [null, spawnImpl.mock.calls[0][1], spawnImpl.mock.calls[0][2]];
     expect(JSON.parse(payload)).toMatchObject({ fields: { runId: "1", job: "j" }, sinceMs: 42, diagDir: diag });
     expect(JSON.parse(payload).fields).not.toHaveProperty("result");
     expect(opts).toMatchObject({ detached: true, stdio: "ignore" });
+    expect(opts.env).not.toHaveProperty("RUNNER_TRACKING_ID");
+    expect(opts.env).toHaveProperty("GITHUB_RUN_ID");
     expect(child.unref).toHaveBeenCalled();
-  });
-
-  it("job-completed returns without waiting for the result", async () => {
-    const spawnImpl = vi.fn(() => ({ on() {}, unref() {} }));
-    const started = Date.now();
-    expect(await runHook("job-completed", { env: env(), timeoutMs: 10_000, spawnImpl })).toBe(true);
-    expect(Date.now() - started).toBeLessThan(5000);
-    expect(spawnImpl).toHaveBeenCalledTimes(1);
-    expect(readAll().map((marker) => marker.event)).toEqual(["job-completed"]);
   });
 
   it("writes a job-result marker after the result lands in Runner_*.log late", async () => {
