@@ -105,36 +105,44 @@ export class LifecyclePublisher {
       return { surface: "none", key: rendered.key, reason: "already published" };
     }
     this.published.add(rendered.key);
+    // A failed publish must stay retryable, so the dedupe entry is dropped on a throw.
+    try {
+      if (fields.stateId && this.needsStateIds.includes(fields.stateId)) {
+        // MOV-502: a move into a needs-state is an ask of the owner, so it goes
+        // through the one escalation helper. The mention comment is the
+        // notification; the Agent Activity is still published as session history.
+        await escalateToOwner({
+          linearClient: this.linearClient,
+          issue,
+          stateId: fields.stateId,
+          ask: fields.summary,
+          evidence: rendered.comment,
+          options: fields.options || [],
+          // The idempotency key covers issue, attempt, kind and content, so a
+          // re-published event after a dispatcher restart never re-mentions.
+          key: rendered.key,
+          ledger: this.escalationLedger,
+          botUserIds: this.botUserIds,
+          logger: this.logger,
+        });
+        await this.bridge.publish(rendered);
+        return { surface: "comment", key: rendered.key, reason: null };
+      }
 
-    if (fields.stateId && this.needsStateIds.includes(fields.stateId)) {
-      // MOV-502: a move into a needs-state is an ask of the owner, so it goes
-      // through the one escalation helper. The mention comment is the
-      // notification; the Agent Activity is still published as session history.
-      await escalateToOwner({
-        linearClient: this.linearClient,
-        issue,
-        stateId: fields.stateId,
-        ask: fields.summary,
-        evidence: rendered.comment,
-        options: fields.options || [],
-        ledger: this.escalationLedger,
-        botUserIds: this.botUserIds,
-        logger: this.logger,
-      });
-      await this.bridge.publish(rendered);
-      return { surface: "comment", key: rendered.key, reason: null };
-    }
+      if (fields.stateId) {
+        await this.linearClient.moveToState(issue.id, fields.stateId);
+      }
 
-    if (fields.stateId) {
-      await this.linearClient.moveToState(issue.id, fields.stateId);
+      const sessionResult = await this.bridge.publish(rendered);
+      if (sessionResult.published) {
+        return { surface: "agent-activity", key: rendered.key, reason: null };
+      }
+      await this.linearClient.addComment(issue.id, rendered.comment);
+      return { surface: "comment", key: rendered.key, reason: sessionResult.reason || null };
+    } catch (error) {
+      this.published.delete(rendered.key);
+      throw error;
     }
-
-    const sessionResult = await this.bridge.publish(rendered);
-    if (sessionResult.published) {
-      return { surface: "agent-activity", key: rendered.key, reason: null };
-    }
-    await this.linearClient.addComment(issue.id, rendered.comment);
-    return { surface: "comment", key: rendered.key, reason: sessionResult.reason || null };
   }
 
   /**

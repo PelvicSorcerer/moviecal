@@ -46,9 +46,9 @@ describe("escalateToOwner", () => {
       evidence: "**Evidence line**", options: ["Run `dispatcher resume MOV-1`."], logger: SILENT,
     });
     expect(result).toMatchObject({ escalated: true, mentioned: true });
-    expect(client.log.map((entry) => entry.type)).toEqual(["move", "comment"]);
-    expect(client.log[0]).toMatchObject({ issueId: "id-1", stateId: "state-nhd" });
-    expect(client.log[1].body).toBe([
+    expect(client.log.map((entry) => entry.type)).toEqual(["comment", "move"]);
+    expect(client.log[1]).toMatchObject({ issueId: "id-1", stateId: "state-nhd" });
+    expect(client.log[0].body).toBe([
       "Needs you: decide on PR #7",
       "",
       "https://linear.app/moviecal/profiles/adam",
@@ -58,6 +58,13 @@ describe("escalateToOwner", () => {
       "**What you can do next**",
       "- Run `dispatcher resume MOV-1`.",
     ].join("\n"));
+  });
+
+  it("does not move the issue when the mention comment fails", async () => {
+    const client = fakeClient();
+    client.addComment = async () => { throw new Error("linear down"); };
+    await expect(escalateToOwner({ linearClient: client, issue: ISSUE, stateId: "s", ask: "a", evidence: "e", logger: SILENT })).rejects.toThrow("linear down");
+    expect(client.log.filter((entry) => entry.type === "move")).toEqual([]);
   });
 
   it("is idempotent per escalation key", async () => {
@@ -81,9 +88,9 @@ describe("escalateToOwner", () => {
       logger: { warn: (message) => warnings.push(message) },
     });
     expect(result.mentioned).toBe(false);
-    expect(client.log.map((entry) => entry.type)).toEqual(["move", "comment"]);
-    expect(client.log[1].body).not.toContain("linear.app");
-    expect(client.log[1].body.startsWith("Needs you: a")).toBe(true);
+    expect(client.log.map((entry) => entry.type)).toEqual(["comment", "move"]);
+    expect(client.log[0].body).not.toContain("linear.app");
+    expect(client.log[0].body.startsWith("Needs you: a")).toBe(true);
     expect(warnings[0]).toContain("without an @mention");
   });
 
@@ -91,7 +98,7 @@ describe("escalateToOwner", () => {
     const client = fakeClient();
     client.issueSnapshot = async () => ISSUE;
     await escalateToOwner({ linearClient: client, issue: { id: "id-1", identifier: "MOV-1" }, stateId: "s", ask: "a", evidence: "e", logger: SILENT });
-    expect(client.log[1].body).toContain("https://linear.app/moviecal/profiles/adam");
+    expect(client.log[0].body).toContain("https://linear.app/moviecal/profiles/adam");
   });
 
   it("collapses a multi-line ask onto the first line", () => {
@@ -118,6 +125,32 @@ describe("LifecyclePublisher needs-state moves", () => {
     expect(comments[0].body).toContain("https://linear.app/moviecal/profiles/adam");
     expect(comments[1].body).not.toContain("linear.app/moviecal/profiles");
     await expect(publisher.moveState("state-nhd")).rejects.toThrow(/needs-state/);
+  });
+
+  it("does not re-mention the same event after a restart (new publisher, same ledger)", async () => {
+    const client = fakeClient();
+    const make = () => new LifecyclePublisher({
+      linearClient: client, logger: SILENT, needsStateIds: ["state-nhd"], escalationLedger: ledger,
+      context: { issue: ISSUE },
+    });
+    await make().publish("error", { stateId: "state-nhd", summary: "worker failed" });
+    await make().publish("error", { stateId: "state-nhd", summary: "worker failed" });
+    expect(client.log.filter((entry) => entry.type === "comment")).toHaveLength(1);
+    expect(client.log.filter((entry) => entry.type === "move")).toHaveLength(1);
+  });
+
+  it("stays retryable when the escalation throws", async () => {
+    const client = fakeClient();
+    let fail = true;
+    const addComment = client.addComment;
+    client.addComment = async (...args) => { if (fail) { fail = false; throw new Error("linear down"); } return addComment(...args); };
+    const publisher = new LifecyclePublisher({
+      linearClient: client, logger: SILENT, needsStateIds: ["state-nhd"], escalationLedger: ledger,
+      context: { issue: ISSUE },
+    });
+    await expect(publisher.publish("error", { stateId: "state-nhd", summary: "worker failed" })).rejects.toThrow("linear down");
+    await publisher.publish("error", { stateId: "state-nhd", summary: "worker failed" });
+    expect(client.log.filter((entry) => entry.type === "comment")).toHaveLength(1);
   });
 });
 

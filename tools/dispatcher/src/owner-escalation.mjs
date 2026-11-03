@@ -63,8 +63,8 @@ export function renderEscalationComment({ ask, evidence, options, mention }) {
 }
 
 /**
- * Move `issue` to a needs-state and post one comment that @mentions its
- * assignee. Idempotent per `key` when a `ledger` is supplied.
+ * Post one comment that @mentions the assignee, then move `issue` to a
+ * needs-state. Idempotent per `key` when a `ledger` is supplied.
  *
  * @param {object} args
  * @param {object} args.linearClient
@@ -105,9 +105,11 @@ export async function escalateToOwner({
   const { mention, reason } = ownerMention(target, { botUserIds });
   if (!mention) logger.warn?.(`${target.identifier || target.id}: escalating without an @mention (${reason})`);
 
-  if (stateId) await linearClient.moveToState(target.id, stateId);
+  // Comment first: the mention is the notification, so a failure after it
+  // leaves a loud ask instead of an issue silently parked in a needs-state.
   const body = renderEscalationComment({ ask, evidence, options, mention });
   await linearClient.addComment(target.id, body);
+  if (stateId) await linearClient.moveToState(target.id, stateId);
   if (key && ledger) ledger.recordEscalation(key, now().toISOString());
   return { escalated: true, mentioned: Boolean(mention), body, key };
 }

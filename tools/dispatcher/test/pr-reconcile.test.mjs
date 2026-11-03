@@ -440,8 +440,8 @@ describe("reconcileReviewWorktrees", () => {
 
       expect(changes).toEqual([{ id: "MOV-1", prNumber: 7, from: "review", to: "abandoned" }]);
       expect(linearClient.calls).toEqual([
-        { type: "moveToState", issueId: "issue-uuid-1", stateId: "state-needs-human" },
         { type: "addComment", issueId: "issue-uuid-1", body: expect.stringContaining("closed without merging") },
+        { type: "moveToState", issueId: "issue-uuid-1", stateId: "state-needs-human" },
       ]);
       expect(manager._finalState()["MOV-1"].linearSynced).toBe(true);
     });
