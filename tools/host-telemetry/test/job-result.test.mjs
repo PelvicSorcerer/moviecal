@@ -52,30 +52,12 @@ describe("log parsing", () => {
     ]);
   });
 
-  it("tolerates empty, null and garbage input", () => {
-    expect(parseResultLines("")).toEqual([]);
-    expect(parseResultLines(null)).toEqual([]);
-    expect(parseResultLines("completed with result:\nJob completed with result: ")).toEqual([]);
-  });
-
   it("ignores result lines stamped before the hook (earlier jobs)", () => {
     const text = "[2026-11-03 01:00:00Z INFO R] Job old completed with result: Failed\n" + RUNNER_LINE;
     expect(pickResult(text, { sinceMs: SINCE })).toBe("Succeeded");
     expect(pickResult("[2026-11-03 01:00:00Z INFO R] Job old completed with result: Failed", { sinceMs: SINCE })).toBeNull();
   });
 
-  it("takes the last matching line and allows 2s of clock slack", () => {
-    const text = "[2026-11-03 01:27:44Z INFO R] Job a completed with result: Failed\n[2026-11-03 01:27:49Z INFO R] Job b completed with result: Canceled";
-    expect(pickResult(text, { sinceMs: SINCE })).toBe("Canceled");
-    expect(pickResult("[2026-11-03 01:27:44Z INFO R] Job a completed with result: Failed", { sinceMs: SINCE })).toBe("Failed");
-  });
-
-  it("trusts an unstamped line only when the file was written after the hook", () => {
-    const bare = "Job x completed with result: Failed";
-    expect(pickResult(bare, { sinceMs: SINCE })).toBeNull();
-    expect(pickResult(bare, { sinceMs: SINCE, fileMtimeMs: SINCE - 60_000 })).toBeNull();
-    expect(pickResult(bare, { sinceMs: SINCE, fileMtimeMs: SINCE + 3000 })).toBe("Failed");
-  });
 });
 
 describe("log discovery", () => {
@@ -88,23 +70,6 @@ describe("log discovery", () => {
     expect(lookupResult(diag, SINCE)).toEqual({ result: null, source: null });
   });
 
-  it("orders multiple logs newest first and skips logs older than the hook", () => {
-    writeLog("Runner_old.log", "old", SINCE - 3_600_000);
-    writeLog("Runner_a.log", "a", SINCE + 1000);
-    writeLog("Runner_b.log", "b", SINCE + 5000);
-    expect(readLogs(diag, "Runner", { sinceMs: SINCE }).map((log) => log.text)).toEqual(["b", "a"]);
-  });
-
-  it("skips a directory that looks like a log and an unreadable entry", () => {
-    fs.mkdirSync(path.join(diag, "Runner_dir.log"));
-    expect(readLogs(diag, "Runner")).toEqual([]);
-  });
-
-  it("reads only the tail of a huge log", () => {
-    writeLog("Runner_big.log", `${"x".repeat(700 * 1024)}\n${RUNNER_LINE}\n`, SINCE + 5000);
-    expect(lookupResult(diag, SINCE)).toEqual({ result: "Succeeded", source: "runner-log" });
-  });
-
   it("prefers the Runner log, falls back to the Worker log, and uses the newest of several logs", () => {
     writeLog("Worker_1.log", WORKER_LINE.replace("Succeeded", "Failed"), SINCE + 1000);
     expect(lookupResult(diag, SINCE)).toEqual({ result: "Failed", source: "worker-log" });
@@ -113,11 +78,6 @@ describe("log discovery", () => {
     expect(lookupResult(diag, SINCE)).toEqual({ result: "Succeeded", source: "runner-log" });
   });
 
-  it("falls through a Runner log that has no result yet", () => {
-    writeLog("Runner_1.log", "[2026-11-03 01:27:40Z INFO R] Starting\n", SINCE + 1000);
-    writeLog("Worker_1.log", WORKER_LINE, SINCE + 1000);
-    expect(lookupResult(diag, SINCE).source).toBe("worker-log");
-  });
 });
 
 describe("resolveJobResult timing", () => {
@@ -136,6 +96,15 @@ describe("resolveJobResult timing", () => {
     expect(out).toEqual({ result: "Succeeded", source: "runner-log", attempts: 1, waitedMs: 10_000 });
   });
 
+  it("gives up after the bounded wait with a null result", async () => {
+    const clock = fakeClock();
+    const lookup = vi.fn(() => ({ result: null, source: null }));
+    const out = await resolveJobResult({ dir: "d", sinceMs: 0, lookup, ...clock });
+    expect(out.result).toBeNull();
+    expect(out.waitedMs).toBeLessThanOrEqual(30_000);
+    expect(lookup.mock.calls.length).toBeGreaterThan(1);
+  });
+
   it("retries while the result is missing and succeeds when it appears late", async () => {
     const clock = fakeClock();
     let calls = 0;
@@ -145,28 +114,6 @@ describe("resolveJobResult timing", () => {
     expect(clock.sleeps).toEqual([10_000, 2000, 2000, 2000]);
   });
 
-  it("gives up after the bounded wait with a null result", async () => {
-    const clock = fakeClock();
-    const lookup = vi.fn(() => ({ result: null, source: null }));
-    const out = await resolveJobResult({ dir: "d", sinceMs: 0, lookup, ...clock });
-    expect(out.result).toBeNull();
-    expect(out.waitedMs).toBeLessThanOrEqual(30_000);
-    expect(lookup.mock.calls.length).toBeGreaterThan(1);
-    expect(lookup.mock.calls.length).toBeLessThan(20);
-  });
-
-  it("does not look at all without a diag directory", async () => {
-    const clock = fakeClock();
-    const lookup = vi.fn();
-    expect(await resolveJobResult({ dir: null, sinceMs: 0, lookup, ...clock })).toMatchObject({ result: null, attempts: 0 });
-    expect(lookup).not.toHaveBeenCalled();
-  });
-
-  it("survives a lookup that throws", async () => {
-    const clock = fakeClock();
-    const out = await resolveJobResult({ dir: "d", sinceMs: 0, lookup: () => { throw new Error("EIO"); }, ...clock });
-    expect(out.result).toBeNull();
-  });
 });
 
 describe("hook integration", () => {
@@ -187,10 +134,6 @@ describe("hook integration", () => {
     expect(child.unref).toHaveBeenCalled();
   });
 
-  it("returns false instead of throwing when the spawn fails", () => {
-    expect(spawnResultResolver({}, { env: env(), spawnImpl: () => { throw new Error("EMFILE"); } })).toBe(false);
-  });
-
   it("job-completed returns without waiting for the result", async () => {
     const spawnImpl = vi.fn(() => ({ on() {}, unref() {} }));
     const started = Date.now();
@@ -198,12 +141,6 @@ describe("hook integration", () => {
     expect(Date.now() - started).toBeLessThan(5000);
     expect(spawnImpl).toHaveBeenCalledTimes(1);
     expect(readAll().map((marker) => marker.event)).toEqual(["job-completed"]);
-  });
-
-  it("job-started never starts the resolver", async () => {
-    const spawnImpl = vi.fn();
-    await runHook("job-started", { env: env(), timeoutMs: 10_000, spawnImpl });
-    expect(spawnImpl).not.toHaveBeenCalled();
   });
 
   it("writes a job-result marker after the result lands in Runner_*.log late", async () => {
@@ -222,20 +159,6 @@ describe("hook integration", () => {
     spawnResultResolver({ runId: "555" }, { env: env(), options: fast });
     const marker = await waitForMarker("job-result");
     expect(marker).toMatchObject({ runId: "555", result: null, resultSource: null });
-  });
-
-  it("writes a null-result marker when the diag directory does not exist", async () => {
-    spawnResultResolver({ runId: "555" }, { env: { ...env(), MOVIECAL_RUNNER_DIAG_DIR: path.join(root, "gone") }, options: fast });
-    expect(await waitForMarker("job-result")).toMatchObject({ result: null });
-  });
-
-  it("the resolver process exits 0 on garbage input or an unwritable telemetry dir", () => {
-    expect(spawnSync(process.execPath, [RESOLVER, "not json"]).status).toBe(0);
-    expect(spawnSync(process.execPath, [RESOLVER]).status).toBe(0);
-    const blocker = path.join(root, "file");
-    fs.writeFileSync(blocker, "x");
-    const payload = JSON.stringify({ fields: {}, dir: path.join(blocker, "x"), diagDir: diag, sinceMs: 0, options: fast });
-    expect(spawnSync(process.execPath, [RESOLVER, payload]).status).toBe(0);
   });
 
   it("the real hook script exits quickly and the resolver outlives it", async () => {

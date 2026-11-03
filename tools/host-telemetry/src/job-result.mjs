@@ -1,11 +1,8 @@
 // Deferred job-result lookup (MOV-495). The runner runs the job-completed hook
-// BEFORE it knows the job result: in a real run the hook ran at 01:27:45, the
-// Worker log recorded the result at 01:27:46 and Runner_*.log recorded
-// "completed with result" at 01:27:48, and the runner sets no GITHUB_JOB_STATUS
-// for hooks. So the hook cannot report the result itself. Instead it spawns
-// bin/resolve-job-result.mjs detached; that process waits, reads the runner's
-// _diag logs (Runner_*.log first, Worker_*.log second) and writes a separate
-// `job-result` marker. Everything here is best effort and never throws.
+// before it knows the result (it lands in Worker_*.log ~1 s and Runner_*.log
+// ~3 s later) and sets no GITHUB_JOB_STATUS, so the hook spawns
+// bin/resolve-job-result.mjs detached; that reads the _diag logs after a wait
+// and writes a `job-result` marker. Best effort: never throws.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -13,8 +10,7 @@ export const RESULT_INITIAL_WAIT_MS = 10_000;
 export const RESULT_RETRY_INTERVAL_MS = 2_000;
 export const RESULT_MAX_WAIT_MS = 30_000;
 export const RESULT_TAIL_BYTES = 512 * 1024;
-// Log timestamps are second-resolution and the runner's clock is the same host's,
-// but allow a little slack so a result written in the same second still counts.
+// Log timestamps have 1 s resolution: allow slack so a same-second line counts.
 export const RESULT_CLOCK_SLACK_MS = 2_000;
 
 const RESULT_LINE = /^\[?(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.\d+)?Z?\]?.*?\bJob\b.*\bcompleted with result: (\w+)/u;
