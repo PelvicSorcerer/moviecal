@@ -176,18 +176,9 @@ Because routing and delegation are ordinary Linear fields a human can change at 
 
 **Delegation is a prerequisite, not a formality.** An issue that is specced, promoted, and correctly labeled `execution:mac` still will not run until it is delegated to `moviecal-dispatcher` in Linear. `dispatcher doctor` prints the identity being matched, and `dispatcher dry-run` prints each queued issue's delegate and eligibility, so an empty run is diagnosable rather than mysterious. The identity is matched against the app's workspace name and, when set, `LINEAR_APP_ACTOR_ID` from `~/.config/moviecal/linear-app.env` (MOV-122); either identifier qualifies. Setting that variable to the actor's real UUID (it currently holds the app *name*) tightens the match.
 
-**Bounded automatic handoff (MOV-220).** The enabled **Moviecal local
-handoff** Linear Loop watches only `Moviecal` issues entering `Ready for
-Agent`. It rechecks the full local boundary and, for a complete unblocked
-non-human-only, non-coordination issue carrying exactly `execution:mac`, may
-set only `delegate = moviecal-dispatcher`. It cannot start a Coding Session or
-worker, cannot choose `execution:cloud`, and cannot make other issue changes.
-An already-matching delegate is a no-op. Disable that Loop to return to manual
-delegation; the polling dispatcher and every gate in this section are
-unchanged. Configuration and live stop/replay/offline evidence are recorded in
-`docs/governance/mov-220-loop-to-mac-handoff-validation.md`.
+**Automatic handoff is the promoter's job (MOV-508); the MOV-220 Loop is retired.** The promoter sets `delegate = moviecal-dispatcher` itself, after the MOV-359 owner step and before the `Ready for Agent` write, for an otherwise-promotable issue that carries exactly one route label, `execution:mac`, and has no delegate (§Dispatcher delegate before handoff, below). The **Moviecal local handoff** Linear Loop (MOV-220) is retired: its only delegation action in Linear starts an agent session, which its instructions forbid, so on 2026-11-04 it never tried to delegate and moved five freshly promoted iOS issues to `Needs Human Decision` with a fallback comment. **Disable the Loop in Linear by hand** (a human step; no code changes it) so it cannot race the promoter. The polling dispatcher and every gate in this section are unchanged: it still requires `execution:mac` plus the delegate before starting any worker. **Rollback / manual delegation:** delegating an issue by hand in Linear still works and is never overwritten by the promoter. Historical Loop evidence is in `docs/governance/mov-220-loop-to-mac-handoff-validation.md`.
 
-Linear itself refuses this Loop's delegation on an unowned issue: "moviecal-dispatcher works on behalf of a person. Assign a workspace member to the issue first, then delegate." Before MOV-359, nothing in the local flow ever set an assignee, so a fully specced issue promoted without one reached this rejection and the Loop moved it to `Needs Human Decision`. §Automated promotion's configured-human-owner step (below) is what closes that gap: the promoter fills a missing assignee immediately before the `Ready for Agent` transition this Loop reacts to, so the delegation it attempts here always finds an owner already in place.
+Linear refuses delegation on an unowned issue: "moviecal-dispatcher works on behalf of a person. Assign a workspace member to the issue first, then delegate." §Automated promotion's configured-human-owner step (below) closes that gap, and the delegate step runs only after it.
 
 ## Automated promotion
 
@@ -226,7 +217,7 @@ On promotion the promoter first fills a missing assignee (below), then comments 
 
 ### Configured human owner before handoff (MOV-359)
 
-The handoff Loop (§Dispatch trigger, MOV-220) cannot delegate an issue Linear considers unowned. Rather than require a human or authoring agent to set an assignee by hand on every issue, the promoter fills exactly one gap: an otherwise-promotable issue (every clause above except this one) that has **no assignee at all** is assigned the single operator-configured human owner, immediately before the `Ready for Agent` write — never after, since a state transition with no assignee behind it would still race the Loop's own rejection.
+Linear cannot delegate an issue it considers unowned (§Dispatch trigger), and the promoter now delegates (MOV-508). Rather than require a human or authoring agent to set an assignee by hand on every issue, the promoter fills exactly one gap: an otherwise-promotable issue (every clause above except this one) that has **no assignee at all** is assigned the single operator-configured human owner, immediately before the `Ready for Agent` write — never after, since a delegate write on an unowned issue would be rejected.
 
 - **Configuration.** `MOVIECAL_DEFAULT_OWNER_EMAIL`, resolved by `resolveDefaultOwnerEmail()`. Unset by default — the initial operator value is Adam Moore's workspace email, set only in this Mac's own environment, never committed to the repo. Unset or blank reads as "no owner configured", not as a hardcoded fallback person.
 - **Validation.** The configured email must resolve to a workspace member who is active, human (not an app/bot actor), and has access to the `Moviecal` team. Any of those failing — including the lookup itself failing — is treated identically to a missing assignee write: the issue is held out of `Ready for Agent`.
@@ -307,6 +298,18 @@ until a route is applied — visible in `dispatcher dry-run`, and escalated to
 `moviecal-dispatcher`.
 
 `blocks` relations plus the preflight gates below do all **sequencing**; the promoter only judges **readiness**. There is no per-issue human promotion step. To hold a specced issue out of the automated flow, move it to `Spec Ready` — the promoter never touches that state.
+
+
+### Dispatcher delegate before handoff (MOV-508)
+
+Immediately after the owner step and before the `Ready for Agent` write, the promoter sets `delegate = moviecal-dispatcher` on an issue it is about to promote when the issue has **exactly one** route label, `execution:mac` (valid per `resolveExecutionRoute`), and **no delegate**.
+
+- **Never overwritten.** Any existing delegate, the dispatcher's or anyone else's, is left alone: no write, no comment, on any later pass.
+- **Never on other issues.** Unready, `human-only`, coordination, `execution:cloud`, `execution:none`, multi-route, and still-blocked issues never reach this step.
+- **Identity.** Linear's `delegateId` needs the actor UUID. If `LINEAR_APP_ACTOR_ID` in `~/.config/moviecal/linear-app.env` is a UUID it is used as is. If it is the app *name* (as on the Mac today) or unset, the promoter looks up exactly one active app user with that name (falling back to `moviecal-dispatcher`) via `LinearClient.appActorByName`, caches the UUID for the rest of the pass, and uses it. No env edit is needed. A failed, empty, or ambiguous lookup holds the issue with a console reason that says to set `LINEAR_APP_ACTOR_ID` to the actor UUID. Dry run also performs the (read-only) lookup.
+- **Write + readback.** `LinearClient.delegateIssue` reads the delegate back in the same mutation; a bare `success: true` is not trusted.
+- **Failure.** A failed write or readback holds the issue out of `Ready for Agent` with a per-pass console reason (`delegate assignment: …`) and no Linear comment; the next poll retries.
+- **Dry run.** `dispatcher promote --dry-run` prints `would delegate to moviecal-dispatcher` and writes nothing.
 
 ## Preflight gates
 

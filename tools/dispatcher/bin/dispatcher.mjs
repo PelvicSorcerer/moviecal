@@ -154,6 +154,7 @@ import {
 import { buildIsIssueSatisfied } from "../src/dependency-gate.mjs";
 import { promoteEligible, PROMOTABLE_STATES } from "../src/promoter.mjs";
 import { createOwnerAssigner } from "../src/owner-assignment.mjs";
+import { createDelegateAssigner } from "../src/delegate-assignment.mjs";
 import { OwnerNotificationLedger, botUserIdsOf, escalateToOwner } from "../src/owner-escalation.mjs";
 import { AUDITED_SPEC_STATE_TYPES, evaluateIssueSpec, formatIssueSpecMissing } from "../src/issue-spec.mjs";
 import { auditIssueSpecs, IssueSpecAuditScheduleStore, isAuditDue } from "../src/issue-spec-audit.mjs";
@@ -1181,6 +1182,7 @@ async function cmdPromoteOnce({ dryRun = false } = {}) {
 
   const issueSpecMode = resolveIssueSpecMode();
   const ownerAssignment = createOwnerAssigner({ linearClient, teamKey, ownerEmail: resolveDefaultOwnerEmail() });
+  const delegateAssignment = createDelegateAssigner({ linearClient, delegate: resolveDispatcherDelegate() });
   const ownerLedger = new OwnerNotificationLedger(ownerNotificationStatePath());
   const issues = await linearClient.issuesForPromotion({ teamKey, stateNames: PROMOTABLE_STATES });
   const isBlockerSatisfied = buildIsIssueSatisfied(issues);
@@ -1191,6 +1193,7 @@ async function cmdPromoteOnce({ dryRun = false } = {}) {
     dryRun,
     issueSpecMode,
     ownerAssignment,
+    delegateAssignment,
   });
 
   const promoted = results.filter((r) => r.promoted);
@@ -1201,7 +1204,12 @@ async function cmdPromoteOnce({ dryRun = false } = {}) {
         : r.ownerPlanned
           ? `; would assign ${r.ownerName || "configured owner"}`
           : "";
-      console.log(`${r.issue}: ${dryRun ? "would promote" : "promoted"}${ownerNote} — ${r.reason}`);
+      const delegateNote = r.delegateAssigned
+        ? "; delegated to moviecal-dispatcher"
+        : r.delegatePlanned
+          ? "; would delegate to moviecal-dispatcher"
+          : "";
+      console.log(`${r.issue}: ${dryRun ? "would promote" : "promoted"}${ownerNote}${delegateNote} — ${r.reason}`);
     } else {
       console.log(`${r.issue}: skip — ${r.reason}`);
     }

@@ -207,16 +207,17 @@ Three fixture runs cost $1.21 under a $2 weekly cap. See
 for the permissions, fixtures, corrective boundedness test, cost, and rollback
 evidence.
 
-`MOV-220` live-validated the separate handoff on 2026-09-17. The published
-**Moviecal local handoff** Loop triggers only on a `Moviecal` issue entering
-`Ready for Agent`, can mutate only that triggering issue, and sets only
-`delegate = moviecal-dispatcher` after rechecking the complete route,
-specification, dependency, human-only, coordination, and delegation boundary.
-Happy-path, replay, cancellation, route-change, delegation-removal, and
-Mac-offline fixtures produced exactly the expected one-or-zero local attempts.
-See
+`MOV-220` live-validated a separate handoff Loop on 2026-09-17, but that Loop is
+**retired (MOV-508)**: its only delegation action in Linear starts an agent
+session, which its instructions forbid, so on 2026-11-04 it never delegated and
+moved five newly promoted issues to `Needs Human Decision`. The promoter now sets
+`delegate = moviecal-dispatcher` itself, after the owner step and before
+`Ready for Agent`, for a single-route `execution:mac` issue
+with no delegate. Disabling the **Moviecal local handoff** Loop in Linear is a
+human step. Delegate remains the claim authority: the dispatcher still requires
+`execution:mac` plus the delegate before any worker starts. See
 [`mov-220-loop-to-mac-handoff-validation.md`](mov-220-loop-to-mac-handoff-validation.md)
-for the configuration, fixture evidence, failure follow-up, and rollback.
+for the historical evidence and rollback.
 
 ### Agent Sessions
 
@@ -242,7 +243,7 @@ See `docs/governance/mov-159-agent-session-receiver-decision.md` and
 
 | Turn off | Result |
 |---|---|
-| Loop intake/handoff | Intake returns to manual/Triage plus promoter; local dispatch remains available |
+| Loop intake (handoff Loop retired, MOV-508) | Intake returns to manual/Triage plus promoter; local dispatch remains available |
 | Agent Sessions / stream | Lifecycle remains available through polling, state, and comments |
 | Dispatcher daemon | Issues accumulate without mutation until a human restarts it or works manually |
 | Automatic repair | Failures escalate for human action |

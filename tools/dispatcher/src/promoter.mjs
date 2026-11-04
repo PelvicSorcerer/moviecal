@@ -27,6 +27,7 @@
 import { isCoordinationIssue } from "./execution-routing.mjs";
 import { evaluateIssueSpec, formatIssueSpecMissing, DEFAULT_ISSUE_SPEC_MODE } from "./issue-spec.mjs";
 import { needsOwnerAssignment } from "./owner-assignment.mjs";
+import { needsDelegateAssignment } from "./delegate-assignment.mjs";
 
 const ACCEPTANCE_HEADING_RE = /^#{1,6}[ \t]*acceptance criteria\b/im;
 const TESTING_HEADING_RE = /^#{1,6}[ \t]*testing expectations\b/im;
@@ -184,9 +185,13 @@ export function evaluatePromotion(issue, ctx) {
  *   promotable and that has no assignee yet — never for one that is
  *   ineligible for an unrelated reason, and never for one that already has
  *   an owner.
+ * @param {{ensureDelegate: Function}} [ctx.delegateAssignment] - MOV-508; see
+ *   `delegate-assignment.mjs`. Omitted, no delegate is ever written. When
+ *   supplied it runs after the owner step and before the transition, only for
+ *   a promotable single-route `execution:mac` issue with no delegate.
  */
 export async function promoteEligible(issues, ctx) {
-  const { linearClient, readyForAgentStateId, isBlockerSatisfied, dryRun = false, issueSpecMode, ownerAssignment } = ctx;
+  const { linearClient, readyForAgentStateId, isBlockerSatisfied, dryRun = false, issueSpecMode, ownerAssignment, delegateAssignment } = ctx;
   const results = [];
   for (const issue of issues) {
     if (issue.stateName === "Ready for Agent") continue;
@@ -220,6 +225,24 @@ export async function promoteEligible(issues, ctx) {
       }
     }
 
+    // MOV-508: set the dispatcher delegate after the owner step (Linear
+    // refuses to delegate an unowned issue) and before the transition. A
+    // failure holds the issue out of Ready for Agent; the caller logs the
+    // reason on the console, nothing is posted to Linear, next poll retries.
+    let delegateOutcome = null;
+    if (delegateAssignment && needsDelegateAssignment(issue)) {
+      delegateOutcome = await delegateAssignment.ensureDelegate(issue, { dryRun });
+      if (!delegateOutcome.ok) {
+        results.push({
+          issue: issue.identifier,
+          promoted: false,
+          reason: `delegate assignment: ${delegateOutcome.reason}`,
+          specViolations: verdict.specViolations || [],
+        });
+        continue;
+      }
+    }
+
     if (!dryRun) {
       await linearClient.moveToState(issue.id, readyForAgentStateId);
       await linearClient.addComment(issue.id, PROMOTION_COMMENT);
@@ -238,6 +261,12 @@ export async function promoteEligible(issues, ctx) {
             ownerAssigned: Boolean(ownerOutcome.assigned),
             ownerPlanned: Boolean(ownerOutcome.wouldAssign),
             ownerName: ownerOutcome.member ? ownerOutcome.member.name : null,
+          }
+        : {}),
+      ...(delegateOutcome
+        ? {
+            delegateAssigned: Boolean(delegateOutcome.delegated),
+            delegatePlanned: Boolean(delegateOutcome.wouldDelegate),
           }
         : {}),
     });

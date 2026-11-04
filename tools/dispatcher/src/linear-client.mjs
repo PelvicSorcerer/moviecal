@@ -571,6 +571,60 @@ export class LinearClient {
   }
 
   /**
+   * Delegate one issue to an actor (the dispatcher app user), reading the
+   * resulting delegate back in the same mutation (MOV-508). Same trust model
+   * as `assignIssue`: callers compare `delegateId`, never `success` alone.
+   */
+  async delegateIssue(issueId, delegateId) {
+    const mutation = `
+      mutation($issueId: String!, $delegateId: String!) {
+        issueUpdate(id: $issueId, input: { delegateId: $delegateId }) {
+          success
+          issue { delegate { id } }
+        }
+      }
+    `;
+    const data = await this.request(mutation, { issueId, delegateId });
+    return {
+      success: Boolean(data.issueUpdate && data.issueUpdate.success),
+      delegateId: (data.issueUpdate && data.issueUpdate.issue && data.issueUpdate.issue.delegate && data.issueUpdate.issue.delegate.id) || null,
+    };
+  }
+
+  /**
+   * Resolve a Linear app actor (e.g. the dispatcher app user) by its exact
+   * name, returning its UUID (MOV-508). `LINEAR_APP_ACTOR_ID` on the Mac holds
+   * the app *name*, and `delegateId` needs the actor UUID, so the promoter looks
+   * it up. Only active app users whose name or display name equals `name`
+   * (case-insensitive) count. Returns `{ id }` for exactly one match,
+   * `{ id: null, reason }` for none or several. A request error throws and the
+   * caller fails closed. `app`/`active` and the `or` filter are unverified
+   * against the live workspace, which only ever blocks a delegation.
+   */
+  async appActorByName(name) {
+    const wanted = String(name || "").trim();
+    if (!wanted) return { id: null, reason: "no actor name given" };
+    const query = `
+      query($name: String!) {
+        users(filter: { or: [{ name: { eqIgnoreCase: $name } }, { displayName: { eqIgnoreCase: $name } }] }) {
+          nodes { id name displayName active app }
+        }
+      }
+    `;
+    const data = await this.request(query, { name: wanted });
+    const lower = wanted.toLowerCase();
+    const matches = (data.users?.nodes || []).filter(
+      (n) =>
+        n.app &&
+        n.active !== false &&
+        [n.name, n.displayName].filter(Boolean).some((c) => c.toLowerCase() === lower),
+    );
+    if (matches.length === 0) return { id: null, reason: `no active app user named "${wanted}"` };
+    if (matches.length > 1) return { id: null, reason: `${matches.length} app users named "${wanted}"` };
+    return { id: matches[0].id };
+  }
+
+  /**
    * One workspace member by exact email, with enough shape to validate them
    * as a promoter-assignable human owner (MOV-359): whether they are active,
    * an app/bot actor, and which teams they belong to.
