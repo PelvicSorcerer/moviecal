@@ -410,6 +410,83 @@ export class LinearClient {
   }
 
   /**
+   * Edit an existing comment's body in place (MOV-503). An edit does not
+   * notify anyone, which is why the single CI status comment per PR is edited
+   * rather than re-posted; callers must never put a mention in an edited body.
+   */
+  async commentUpdate(commentId, body) {
+    const mutation = `
+      mutation($commentId: String!, $body: String!) {
+        commentUpdate(id: $commentId, input: { body: $body }) { success }
+      }
+    `;
+    const data = await this.request(mutation, { commentId, body });
+    return data.commentUpdate.success;
+  }
+
+  /**
+   * Newest-first comments with ids, so a caller can find and edit its own
+   * earlier comment (MOV-503). Pages until `untilContains` is found.
+   */
+  async issueCommentRecords(issueId, { untilContains } = {}) {
+    const query = `
+      query($issueId: String!, $after: String) {
+        issue(id: $issueId) {
+          comments(first: 20, after: $after) {
+            nodes { id body createdAt }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    `;
+    const records = [];
+    let after = null;
+    do {
+      const data = await this.request(query, { issueId, after });
+      const comments = data.issue?.comments;
+      const page = (comments?.nodes || []).map((c) => ({ id: c.id, body: c.body, createdAt: c.createdAt }));
+      records.push(...page);
+      if (!untilContains || page.some((c) => c.body.includes(untilContains)) || !comments?.pageInfo?.hasNextPage) break;
+      if (!comments.pageInfo.endCursor || comments.pageInfo.endCursor === after) throw new Error("Linear comments pagination did not advance");
+      after = comments.pageInfo.endCursor;
+    } while (true);
+    return records;
+  }
+
+  /**
+   * Issues in `stateNames` with their newest comments (author, id, time) for
+   * the stall watchdog (MOV-503). Comments come back oldest-to-newest.
+   */
+  async issuesForStallWatch({ teamKey, stateNames }) {
+    const query = `
+      query($teamKey: String!, $stateNames: [String!]!) {
+        issues(filter: {
+          team: { key: { eq: $teamKey } }
+          state: { name: { in: $stateNames } }
+        }) {
+          nodes {
+            ${ISSUE_FIELDS}
+            state { name }
+            comments(first: 10) { nodes { id body createdAt user { id } botActor { id } } }
+          }
+        }
+      }
+    `;
+    const data = await this.request(query, { teamKey, stateNames });
+    return data.issues.nodes.map((node) => ({
+      ...normalizeIssue(node),
+      stateName: node.state ? node.state.name : null,
+      comments: [...(node.comments?.nodes || [])].reverse().map((c) => ({
+        id: c.id,
+        body: c.body || "",
+        createdAt: c.createdAt,
+        authorId: c.user?.id || null,
+        isBot: Boolean(c.botActor),
+      })),
+    }));
+  }
+
+  /**
    * Comments on an issue, beginning with the newest (MOV-423). Linear's
    * `comments` connection is ordered newest-first, so `first: N` is the N
    * *newest* comments — confirmed live against MOV-331/PelvicSorcerer/moviecal#797,

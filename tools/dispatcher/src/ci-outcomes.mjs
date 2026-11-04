@@ -266,13 +266,22 @@ export function observationSnapshotKey({ decision, observation = {} } = {}) {
   return `ci-observation:${decision.prNumber}:${decision.headSha}:${fingerprint}`;
 }
 
+/**
+ * First line of the CI status comment for one PR head (MOV-503). It is the
+ * identity of "the status comment for this PR and head SHA": the observer finds
+ * its earlier comment by this exact line and edits it instead of posting again.
+ */
+export function ciStatusHeader({ prNumber, headSha }) {
+  return "**CI observation (read-only)** — PR #" + prNumber + ", SHA `" + headSha + "`";
+}
+
 /** Stable human-readable Linear status, intentionally not a control command. */
 export function linearObservationStatus({ decision, observation } = {}) {
   const observationKey = observationSnapshotKey({ decision, observation });
   const checks = observation?.requiredChecks?.length ? observation.requiredChecks.join(", ") : "none reported";
   const provisional = Boolean(observation?.pending) && !observation?.timedOut;
   return [
-    "**CI observation (read-only)** — PR #" + decision.prNumber + ", SHA `" + decision.headSha + "`",
+    ciStatusHeader(decision),
     ...(decision.prUrl ? [`PR: ${decision.prUrl}`] : []),
     provisional
       ? "Decision: **provisional** — required checks are still pending; no terminal CI conclusion is available yet."
@@ -284,10 +293,23 @@ export function linearObservationStatus({ decision, observation } = {}) {
 }
 
 /** Publish one concise, idempotent status record when a Linear client is supplied. */
-export async function reportObservationToLinear({ linearClient, issueId, decision, observation, existingBodies = [] } = {}) {
+export async function reportObservationToLinear({ linearClient, issueId, decision, observation, existingBodies = [], existingComments = null } = {}) {
   if (!linearClient?.addComment || !issueId) throw new Error("reportObservationToLinear requires a Linear client and issueId");
   const key = observationSnapshotKey({ decision, observation });
-  if (existingBodies.some((body) => text(body).includes(key))) return { reported: false, reason: "already reported", key };
-  await linearClient.addComment(issueId, linearObservationStatus({ decision, observation }));
+  const bodies = existingComments ? existingComments.map((comment) => comment.body) : existingBodies;
+  if (bodies.some((body) => text(body).includes(key))) return { reported: false, reason: "already reported", key };
+  const body = linearObservationStatus({ decision, observation });
+  // MOV-503: one status comment per issue, PR and head SHA. Edit it in place
+  // when the snapshot changed; an edit notifies nobody and carries no mention.
+  // A new head SHA has a different header, so it starts a new comment.
+  const header = ciStatusHeader(decision);
+  const previous = existingComments && typeof linearClient.commentUpdate === "function"
+    ? existingComments.find((comment) => comment.id && text(comment.body).split("\n")[0] === header)
+    : null;
+  if (previous) {
+    await linearClient.commentUpdate(previous.id, body);
+    return { reported: true, updated: true, commentId: previous.id, key };
+  }
+  await linearClient.addComment(issueId, body);
   return { reported: true, key };
 }

@@ -92,6 +92,10 @@ import {
   dispatcherLaunchHealthStatePath,
   priorityPropagationStatePath,
   issueSpecAuditStatePath,
+  resolveStallThresholds,
+  resolveStallWatchdogIntervalMs,
+  stallWatchdogScheduleStatePath,
+  stallWatchdogStatePath,
   loadLinearConfig,
   loadLinearAppConfig,
   resolveLinearAuth,
@@ -162,6 +166,14 @@ import { releaseIosWorkerLease } from "../src/ios-worker-lease.mjs";
 import { installTimestampedConsole } from "../src/worker-telemetry.mjs";
 import { decideCiOutcome, formatShadowReport, reportObservationToLinear } from "../src/ci-outcomes.mjs";
 import { reportReviewCi as reportReviewCiPass } from "../src/review-ci-observer.mjs";
+import { activeAttempt } from "../src/active-attempt-registry.mjs";
+import {
+  STALL_WATCHED_STATES,
+  StallLedger,
+  StallWatchdogScheduleStore,
+  isStallWatchdogDue,
+  runStallWatchdog,
+} from "../src/stall-watchdog.mjs";
 import { SignalLedger, StopController, handleAgentSignal } from "../src/agent-signals.mjs";
 import { AgentStreamClient } from "../src/agent-stream-client.mjs";
 import { previewRepairPass, runRepairPass } from "../src/repair-run.mjs";
@@ -1360,6 +1372,43 @@ async function auditIssuesPass() {
   }
 }
 
+/**
+ * MOV-503: escalate `Agent Working` / `In Review` issues that have stopped
+ * making progress. Interval-gated like the issue-spec audit; never aborts dispatch.
+ */
+async function stallWatchdogPass(linearClient, teamKey) {
+  const scheduleStore = new StallWatchdogScheduleStore(stallWatchdogScheduleStatePath());
+  if (!isStallWatchdogDue(scheduleStore.loadOrReset().lastRunAt, Date.now(), resolveStallWatchdogIntervalMs())) return;
+  try {
+    const states = await linearClient.workflowStates(teamKey);
+    const worktreeEntries = Object.values(
+      new WorktreeManager({ repoRoot: REPO_ROOT, worktreeRoot: worktreeRoot(), statePath: worktreesStatePath() }).loadState(),
+    );
+    const results = await runStallWatchdog({
+      issues: await linearClient.issuesForStallWatch({ teamKey, stateNames: STALL_WATCHED_STATES }),
+      linearClient,
+      stallLedger: new StallLedger(stallWatchdogStatePath()),
+      ownerLedger: new OwnerNotificationLedger(ownerNotificationStatePath()),
+      isLive: (issueId) => Boolean(activeAttempt(issueId)),
+      observePr: (issue) => {
+        const entry = worktreeEntries.find((e) => e.id === issue.identifier && e.status === "review" && e.prNumber);
+        if (!entry) return null;
+        const observation = checkPrObservation(entry.prNumber, GITHUB_REPO, ghRunner);
+        if (observation.observationError || !observation.headSha) return { observationError: true };
+        return { prNumber: entry.prNumber, prUrl: entry.prUrl || null, headSha: observation.headSha, checks: observation.checks };
+      },
+      escalateToOwner,
+      needsHumanDecisionStateId: states.find((s) => s.name === RUN_STATE_NAMES.needsHumanDecision)?.id || null,
+      thresholds: resolveStallThresholds(),
+      botUserIds: botUserIdsOf(resolveDispatcherDelegate()),
+    });
+    for (const r of results) if (r.action === "escalated") console.log(`${r.issue}: stalled (${r.kind}) — escalated to the owner`);
+    scheduleStore.save({ lastRunAt: Date.now() });
+  } catch (err) {
+    console.error("Stall watchdog pass failed (continuing to dispatch):", err.message);
+  }
+}
+
 /** Run a priority propagation pass inside the poll loop; never abort dispatch. */
 async function propagatePass() {
   try {
@@ -1512,6 +1561,8 @@ async function cmdRunOnce({ repairLockHeld = false } = {}) {
   } catch (err) {
     console.error("CI observation reporting failed (continuing to dispatch):", err.message);
   }
+
+  await stallWatchdogPass(linearClient, teamKey);
 
   const issues = await linearClient.issuesInState({
     teamKey,

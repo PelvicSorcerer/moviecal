@@ -2,7 +2,7 @@
 // Keeping it separate from the long-running worker loop lets a terminal CI
 // transition be reported while an unrelated implementation worker is active.
 
-import { observationSnapshotKey } from "./ci-outcomes.mjs";
+import { ciStatusHeader, observationSnapshotKey } from "./ci-outcomes.mjs";
 
 let reportInFlight = false;
 
@@ -48,15 +48,24 @@ export async function reportReviewCi({
         pending: observation.checks.pending,
         timedOut: observation.checks.timedOut,
       };
-      const existingBodies = typeof linearClient?.issueComments === "function"
-        ? await linearClient.issueComments(issue.id, { untilContains: observationSnapshotKey({ decision, observation: statusObservation }) })
-        : [];
+      // MOV-503: read id-bearing comments (when the client can) so the single
+      // status comment for this PR and head can be found and edited in place.
+      const canEdit = typeof linearClient?.issueCommentRecords === "function" && typeof linearClient?.commentUpdate === "function";
+      const existingComments = canEdit
+        ? await linearClient.issueCommentRecords(issue.id, { untilContains: ciStatusHeader(decision) })
+        : null;
+      const existingBodies = existingComments
+        ? existingComments.map((comment) => comment.body)
+        : typeof linearClient?.issueComments === "function"
+          ? await linearClient.issueComments(issue.id, { untilContains: observationSnapshotKey({ decision, observation: statusObservation }) })
+          : [];
       const report = await reportObservationToLinear({
         linearClient,
         issueId: issue.id,
         decision,
         observation: statusObservation,
         existingBodies,
+        existingComments,
       });
       results.push(report);
 
