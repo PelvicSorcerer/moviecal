@@ -137,6 +137,112 @@ final class AppShellSnapshotTests: XCTestCase {
         )
     }
 
+    private var sampleLists: [WatchlistSummary] {
+        [
+            WatchlistSummary(id: "p1", kind: .personal, name: "Watchlist", ownerUserId: "u1", role: .owner, canEdit: true),
+            WatchlistSummary(id: "s1", kind: .shared, name: "Movie Night", ownerUserId: "u1", role: .owner, canEdit: true),
+            WatchlistSummary(id: "s2", kind: .shared, name: "Family Picks", ownerUserId: "u2", role: .editor, canEdit: true),
+        ]
+    }
+
+    func testWatchlistsIndexSnapshot() {
+        assertSnapshot(
+            of: NavigationStack {
+                WatchlistsContentView(state: .loaded(sampleLists), onRetry: {})
+                    .navigationTitle("Watchlist")
+            },
+            named: "Watchlists-Index"
+        )
+    }
+
+    func testWatchlistsIndexPersonalOnlySnapshot() {
+        assertSnapshot(
+            of: NavigationStack {
+                WatchlistsContentView(state: .loaded([sampleLists[0]]), onRetry: {})
+                    .navigationTitle("Watchlist")
+            },
+            named: "Watchlists-PersonalOnly"
+        )
+    }
+
+    func testWatchlistsIndexEmptySnapshot() {
+        assertSnapshot(of: WatchlistsContentView(state: .loaded([]), onRetry: {}), named: "Watchlists-Empty")
+    }
+
+    func testWatchlistsIndexErrorSnapshot() {
+        assertSnapshot(
+            of: WatchlistsContentView(state: .failed("Unable to load your watchlists. Pull to refresh to try again."), onRetry: {}),
+            named: "Watchlists-Error"
+        )
+    }
+
+    func testWatchlistsIndexLargeTextDarkSnapshot() {
+        assertSnapshot(
+            of: NavigationStack {
+                WatchlistsContentView(state: .loaded(sampleLists), onRetry: {})
+                    .navigationTitle("Watchlist")
+            }
+            .dynamicTypeSize(.accessibility3)
+            .preferredColorScheme(.dark),
+            named: "Watchlists-LargeText-Dark"
+        )
+    }
+
+    private func sampleDetail(_ summary: WatchlistSummary, items: [WatchlistItem]) -> WatchlistDetailViewModel.LoadState {
+        .loaded(WatchlistDetail(watchlist: summary, items: items))
+    }
+
+    private var sampleItem: WatchlistItem {
+        WatchlistItem(
+            id: "i1",
+            addedAt: "2026-06-13T05:00:00.000Z",
+            movie: Movie(id: 42, tmdbId: 603, title: "The Matrix", releaseDate: "1999-03-31", posterPath: nil, overview: nil)
+        )
+    }
+
+    func testSharedDetailOwnerSnapshot() {
+        assertSnapshot(
+            of: NavigationStack {
+                WatchlistDetailContentView(state: sampleDetail(sampleLists[1], items: [sampleItem]), onRetry: {})
+                    .navigationTitle("Movie Night")
+                    .navigationBarTitleDisplayMode(.inline)
+            },
+            named: "WatchlistDetail-Owner"
+        )
+    }
+
+    func testSharedDetailEditorSnapshot() {
+        assertSnapshot(
+            of: NavigationStack {
+                WatchlistDetailContentView(state: sampleDetail(sampleLists[2], items: [sampleItem]), onRetry: {})
+                    .navigationTitle("Family Picks")
+                    .navigationBarTitleDisplayMode(.inline)
+            },
+            named: "WatchlistDetail-Editor"
+        )
+    }
+
+    func testSharedDetailEmptySnapshot() {
+        assertSnapshot(
+            of: WatchlistDetailContentView(state: sampleDetail(sampleLists[2], items: []), onRetry: {}),
+            named: "WatchlistDetail-Empty"
+        )
+    }
+
+    func testSharedDetailErrorSnapshot() {
+        assertSnapshot(
+            of: WatchlistDetailContentView(state: .failed("Unable to load this watchlist. Pull to refresh to try again."), onRetry: {}),
+            named: "WatchlistDetail-Error"
+        )
+    }
+
+    func testSharedDetailUnavailableSnapshot() {
+        assertSnapshot(
+            of: WatchlistDetailContentView(state: .unavailable, onRetry: {}),
+            named: "WatchlistDetail-Unavailable"
+        )
+    }
+
     func testWatchlistEmptySnapshot() {
         assertSnapshot(of: WatchlistContentView(state: .loaded([]), onRetry: {}), named: "Watchlist-Empty")
     }
