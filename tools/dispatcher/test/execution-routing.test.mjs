@@ -29,7 +29,9 @@ describe("execution routing", () => {
       expect(inferExecutionRoute({ project })).toBe("mac");
       expect(resolveExecutionRoute({ project, labels: ["execution:mac"] })).toMatchObject({ ok: true, route: "mac" });
     }
-    expect(inferExecutionRoute({ project: "Autonomous local-agent delivery" })).toBe("mac");
+    for (const project of ["Operations backlog", "Mac CI reliability", "Autonomous local-agent delivery"]) {
+      expect(inferExecutionRoute({ project })).toBe("mac");
+    }
     expect(inferExecutionRoute({ project: "Local development workflow stabilization and governance" })).toBe("mac");
   });
 
@@ -42,6 +44,12 @@ describe("execution routing", () => {
     for (const { name } of DESIRED_PROJECTS) {
       expect(inferExecutionRoute({ project: name })).toBe(CLOUD_PROJECTS.has(name) ? "cloud" : "mac");
     }
+  });
+
+  it("keeps the live name of the completed hybrid project resolvable as mixed-route", () => {
+    const project = "Hybrid workflow foundations";
+    expect(inferExecutionRoute({ project })).toBe("mac");
+    expect(resolveExecutionRoute({ project, labels: ["execution:cloud"] })).toMatchObject({ ok: true, route: "cloud" });
   });
 
   it("infers cloud only for the separately deferred cloud project", () => {

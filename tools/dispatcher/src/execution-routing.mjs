@@ -18,8 +18,12 @@ export const MAC_PROJECTS = new Set([
   "iOS Shared Watchlists",
   "iOS Companion App",
   "Documentation aligned with shipped product",
-  "Autonomous local-agent delivery",
+  "Operations backlog",
+  "Mac CI reliability",
   // Completed history remains Mac-only if an old issue is ever re-read.
+  // "Autonomous local-agent delivery" is completed history (MOV-512) but old
+  // issues still name it, so it must stay resolvable here.
+  "Autonomous local-agent delivery",
   "Platform & Infrastructure",
   "Local development workflow stabilization and governance",
 ]);
@@ -27,6 +31,7 @@ export const CLOUD_PROJECTS = new Set(["Deferred Linear cloud execution option"]
 const MIXED_ROUTE_PROJECTS = new Set([
   // Retained aliases for completed history. New work must not be assigned here.
   "Hybrid workflow foundations (completed)",
+  "Hybrid workflow foundations",
   "Hybrid Linear cloud + Mac workflow",
 ]);
 

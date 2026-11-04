@@ -54,7 +54,9 @@ empty Calendar Feed project are not part of the active topology. See
 |---|---|---|
 | **Local development workflow stabilization and governance** | Completed | Historical bounded stabilization and Mac-lane handoff |
 | **Hybrid workflow foundations (completed)** | Completed | Historical architecture, routing, CI/review, and Agent Session foundations |
-| **Autonomous local-agent delivery** | Active | Finish the local-first intake, handoff, acceptance, and controlled-autonomy outcome |
+| **Autonomous local-agent delivery** | Completed | Historical local-first intake, handoff, acceptance, and controlled-autonomy outcome (reached about 2026-09-22) |
+| **Mac CI reliability** | Active | Stop the iOS CI lane and simulator use wedging the Mac, or record an accepted reason why not |
+| **Operations backlog** | Standing (no milestones, no initiative) | Incident fixes, chores, and single deliverables |
 | **Deferred Linear cloud execution option** | Deferred / Backlog, issues in `Icebox` | Preserve an independently authorizable Coding Session option that never blocks local delivery |
 | **Developer Governance & Agent Infrastructure** | Canceled | Original audit container; no new issues |
 
@@ -62,7 +64,7 @@ Completed projects are history, not maintenance buckets. Do not reopen or
 repopulate them for later bugs. A new finite outcome belongs in a new bounded
 project or the appropriate ordinary product backlog.
 
-### Active local milestones and gates
+### Local milestones and gates (Autonomous local-agent delivery, completed history)
 
 **Automated intake & local kickoff**
 
@@ -140,7 +142,8 @@ Current project defaults are deliberately local-first:
 
 - **Mac:** Shared Watchlists Core & API, Web Shared Watchlists, iOS Shared
   Watchlists, iOS Companion App, Documentation aligned with shipped product,
-  Autonomous local-agent delivery, completed Platform & Infrastructure history,
+  Operations backlog, Mac CI reliability, completed Autonomous local-agent
+  delivery and Platform & Infrastructure history,
   and any Xcode, simulator, self-hosted-runner, or local-secret work.
 - **Cloud:** Deferred Linear cloud execution option only. Its implementation
   issues stay in `Icebox` until authorized.
@@ -269,7 +272,8 @@ hybrid project. The later local-first decision did not erase that work:
 - unfinished cloud environment, kickoff, and pilots moved intact to
   **Deferred Linear cloud execution option**;
 - unfinished local intake, acceptance, and autonomy work moved to
-  **Autonomous local-agent delivery**; and
+  **Autonomous local-agent delivery**, since completed and superseded by
+  **Operations backlog** and **Mac CI reliability** (MOV-512); and
 - the original **Developer Governance & Agent Infrastructure** project remains
   canceled for audit history.
 
