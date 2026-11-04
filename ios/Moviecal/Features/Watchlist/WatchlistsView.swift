@@ -22,6 +22,7 @@ extension WatchlistSummary {
 struct WatchlistsIndexScreen: View {
     @State private var viewModel: WatchlistsViewModel
     @Environment(\.scenePhase) private var scenePhase
+    @State private var isCreating = false
     private let apiClient: APIClient
 
     init(apiClient: APIClient) {
@@ -35,6 +36,22 @@ struct WatchlistsIndexScreen: View {
             onRetry: { await viewModel.load() }
         )
         .navigationTitle("Watchlist")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    isCreating = true
+                } label: {
+                    Label("New Shared List", systemImage: "plus")
+                }
+                .accessibilityIdentifier("new-shared-list-button")
+            }
+        }
+        .sheet(isPresented: $isCreating) {
+            WatchlistNameEditorView(
+                viewModel: WatchlistNameEditorViewModel(mode: .create, apiClient: apiClient),
+                onFinish: { _ in await viewModel.load() }
+            )
+        }
         .navigationDestination(for: WatchlistSummary.self) { summary in
             if summary.kind == .personal {
                 PersonalWatchlistScreen(apiClient: apiClient)
@@ -160,10 +177,14 @@ struct SharedWatchlistDetailScreen: View {
     @State private var viewModel: WatchlistDetailViewModel
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
+    @State private var isRenaming = false
+    @State private var currentName: String?
+    private let apiClient: APIClient
 
     init(summary: WatchlistSummary, apiClient: APIClient, onUnavailable: @escaping () async -> Void) {
         self.summary = summary
         self.onUnavailable = onUnavailable
+        self.apiClient = apiClient
         _viewModel = State(
             initialValue: WatchlistDetailViewModel(watchlistId: summary.id, apiClient: apiClient)
         )
@@ -174,8 +195,36 @@ struct SharedWatchlistDetailScreen: View {
             state: viewModel.state,
             onRetry: { await viewModel.load() }
         )
-        .navigationTitle(summary.name)
+        .navigationTitle(displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if summary.kind == .shared && summary.canEdit {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Rename") { isRenaming = true }
+                        .accessibilityIdentifier("rename-shared-list-button")
+                }
+            }
+        }
+        .sheet(isPresented: $isRenaming) {
+            WatchlistNameEditorView(
+                viewModel: WatchlistNameEditorViewModel(
+                    mode: .rename(id: summary.id),
+                    initialName: displayName,
+                    apiClient: apiClient
+                ),
+                onFinish: { outcome in
+                    switch outcome {
+                    case .saved(let saved):
+                        currentName = saved.name
+                        await viewModel.load()
+                        await refreshIndex()
+                    case .accessLost:
+                        dismiss()
+                        await onUnavailable()
+                    }
+                }
+            )
+        }
         .task(id: scenePhase) {
             if scenePhase == .active {
                 await viewModel.load()
@@ -187,6 +236,20 @@ struct SharedWatchlistDetailScreen: View {
                 Task { await onUnavailable() }
             }
         }
+    }
+}
+
+extension SharedWatchlistDetailScreen {
+    /// The freshest known name: the loaded detail, else a just-saved rename,
+    /// else the name from the index row.
+    fileprivate var displayName: String {
+        if case .loaded(let detail) = viewModel.state { return detail.watchlist.name }
+        return currentName ?? summary.name
+    }
+
+    /// Refreshes the index too so its row shows the same name.
+    fileprivate func refreshIndex() async {
+        await onUnavailable()
     }
 }
 
