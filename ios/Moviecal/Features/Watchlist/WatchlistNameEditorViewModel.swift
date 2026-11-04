@@ -6,7 +6,7 @@ import Observation
 enum WatchlistNameValidator {
     static let maxLength = 80
 
-    enum Failure: Equatable {
+    enum Failure: Error, Equatable {
         case blank
         case tooLong
 
