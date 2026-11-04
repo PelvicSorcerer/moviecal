@@ -90,6 +90,24 @@ public final class APIClient {
         return WatchlistDetail(watchlist: summary, items: items)
     }
 
+    /// Creates a shared list owned by the caller. Not idempotent, so callers
+    /// must not blindly retry after an unknown outcome; reload the lists first.
+    public func createSharedWatchlist(name: String) async throws -> WatchlistSummary {
+        var request = try await makeRequest(path: "/api/v1/watchlists", method: "POST")
+        request.httpBody = try encoder.encode(WatchlistNameRequestBody(name: name))
+        let body: WatchlistSummaryResponseBody = try await send(request)
+        return body.watchlist
+    }
+
+    /// Renames a shared list (owner or accepted editor). Idempotent. A `404`
+    /// means the list is gone or the caller lost access.
+    public func renameSharedWatchlist(id: String, name: String) async throws -> WatchlistSummary {
+        var request = try await makeRequest(path: "/api/v1/watchlists/\(id)", method: "PATCH")
+        request.httpBody = try encoder.encode(WatchlistNameRequestBody(name: name))
+        let body: WatchlistSummaryResponseBody = try await send(request)
+        return body.watchlist
+    }
+
     // MARK: - Movie search
 
     public func searchMovies(query: String) async throws -> [MovieSearchResult] {
@@ -142,7 +160,7 @@ public final class APIClient {
         let token = try await tokenProvider.currentAccessToken()
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-        if method == "POST" || method == "DELETE" {
+        if method == "POST" || method == "DELETE" || method == "PATCH" {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
@@ -216,6 +234,14 @@ private struct AddWatchlistItemRequestBody: Encodable {
 
 private struct RemoveWatchlistItemRequestBody: Encodable {
     let watchlistItemId: String
+}
+
+private struct WatchlistNameRequestBody: Encodable {
+    let name: String
+}
+
+private struct WatchlistSummaryResponseBody: Decodable {
+    let watchlist: WatchlistSummary
 }
 
 private struct WatchlistListResponseBody: Decodable {
