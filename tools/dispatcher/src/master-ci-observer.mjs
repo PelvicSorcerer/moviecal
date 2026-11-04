@@ -11,6 +11,8 @@ import {
   masterIncidentReconciledComment, masterIncidentRoutedComment, masterIncidentSourceComment, masterIncidentTitle,
 } from "./master-incident-issue.mjs";
 
+import { escalateToOwner } from "./owner-escalation.mjs";
+
 const TERMINAL_STATE_TYPES = new Set(["completed", "canceled"]);
 
 async function createRemediationIssue({ linearClient, teamKey, evidence, decision, projectName, milestoneName, backlogStateId, repo }) {
@@ -111,8 +113,13 @@ export async function runMasterCiPass(ctx = {}) {
       continue;
     }
     if (!ledger.hasEffect(key, "needs-human-decision")) {
-      if (stateIds.needsHumanDecision) await linearClient.moveToState(remediation.id, stateIds.needsHumanDecision);
-      await linearClient.addComment(remediation.id, masterIncidentHumanDecisionComment({ evidence, decision }));
+      await escalateToOwner({
+        linearClient,
+        issue: remediation,
+        stateId: stateIds.needsHumanDecision || null,
+        ask: `master CI incident ${remediation.identifier} needs a decision: ${decision.reason}`,
+        evidence: masterIncidentHumanDecisionComment({ evidence, decision }),
+      });
       ledger.markEffect(key, "needs-human-decision", { now: now() });
     }
     ledger.setStatus(key, "needs-human-decision", decision.reason, { now: now() });

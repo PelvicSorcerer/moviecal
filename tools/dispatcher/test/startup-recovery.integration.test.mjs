@@ -89,8 +89,8 @@ describe.skipIf(insideWorkerSandbox)("startup recovery Linear reconciliation (MO
     await recover(ctx);
 
     expect(fs.existsSync(path.join(ctx.entry.path, "unfinished.txt"))).toBe(true);
-    expect(ctx.calls[0]).toEqual({ type: "move", id: "linear-1", stateId: "human" });
-    expect(ctx.calls[1].body).toContain(ctx.entry.path);
+    expect(ctx.calls[1]).toEqual({ type: "move", id: "linear-1", stateId: "human" });
+    expect(ctx.calls[0].body).toContain(ctx.entry.path);
   });
 
   it("preserves an unpushed commit and escalates it", async () => {
@@ -100,8 +100,8 @@ describe.skipIf(insideWorkerSandbox)("startup recovery Linear reconciliation (MO
     run("git", ["commit", "-m", "local only"], ctx.entry.path);
     await recover(ctx);
 
-    expect(ctx.calls[0]).toEqual({ type: "move", id: "linear-1", stateId: "human" });
-    expect(ctx.calls[1].body).toContain("remote-tracking branch");
+    expect(ctx.calls[1]).toEqual({ type: "move", id: "linear-1", stateId: "human" });
+    expect(ctx.calls[0].body).toContain("remote-tracking branch");
     expect(run("git", ["rev-list", "--count", "origin/master..HEAD"], ctx.entry.path).trim()).toBe("1");
   });
 

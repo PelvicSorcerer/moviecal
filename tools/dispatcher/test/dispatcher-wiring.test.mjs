@@ -388,11 +388,15 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       "linearEnvPath",
       // MOV-314: durable incident state for master-CI observations, not a credential.
       "masterIncidentLedgerStatePath",
+      "ownerNotificationStatePath",
       "prAutonomyLedgerStatePath",
       "priorityPropagationStatePath",
       // MOV-189: dispatcher state, not a credential — it preserves the
       // automatic-repair budget across a restart.
       "repairLedgerStatePath",
+      // MOV-503: plain state files for the stall watchdog's cadence and episodes.
+      "stallWatchdogScheduleStatePath",
+      "stallWatchdogStatePath",
       "usageLimitStatePath",
       // MOV-360: the worker-quota-pool cooldown record, not a credential —
       // it mirrors usageLimitStatePath's own "dispatcher state, not a

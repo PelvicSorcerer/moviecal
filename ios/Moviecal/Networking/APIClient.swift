@@ -44,6 +44,52 @@ public final class APIClient {
         try await sendExpectingNoContent(request)
     }
 
+    // MARK: - Personal and shared lists
+
+    private static let maxListPages = 20
+
+    /// Every list the caller may read, following `nextCursor` to the end.
+    public func fetchWatchlists() async throws -> [WatchlistSummary] {
+        var lists: [WatchlistSummary] = []
+        var cursor: String?
+        for _ in 0..<Self.maxListPages {
+            let request = try await makeRequest(
+                path: "/api/v1/watchlists",
+                method: "GET",
+                queryItems: cursor.map { [URLQueryItem(name: "cursor", value: $0)] }
+            )
+            let body: WatchlistsResponseBody = try await send(request)
+            lists.append(contentsOf: body.watchlists)
+            guard let next = body.page.nextCursor else { return lists }
+            cursor = next
+        }
+        return lists
+    }
+
+    /// One list and all of its items. A `404` means the list is gone or the
+    /// caller lost access; callers should treat it as such.
+    public func fetchWatchlistDetail(id: String) async throws -> WatchlistDetail {
+        var summary: WatchlistSummary?
+        var items: [WatchlistItem] = []
+        var cursor: String?
+        for _ in 0..<Self.maxListPages {
+            let request = try await makeRequest(
+                path: "/api/v1/watchlists/\(id)",
+                method: "GET",
+                queryItems: cursor.map { [URLQueryItem(name: "cursor", value: $0)] }
+            )
+            let body: WatchlistDetailResponseBody = try await send(request)
+            summary = body.watchlist
+            items.append(contentsOf: body.items)
+            guard let next = body.page.nextCursor else { break }
+            cursor = next
+        }
+        guard let summary else {
+            throw APIClientError.decodingFailed(message: "Missing watchlist.")
+        }
+        return WatchlistDetail(watchlist: summary, items: items)
+    }
+
     // MARK: - Movie search
 
     public func searchMovies(query: String) async throws -> [MovieSearchResult] {
@@ -174,6 +220,17 @@ private struct RemoveWatchlistItemRequestBody: Encodable {
 
 private struct WatchlistListResponseBody: Decodable {
     let items: [WatchlistItem]
+}
+
+private struct WatchlistsResponseBody: Decodable {
+    let watchlists: [WatchlistSummary]
+    let page: WatchlistPage
+}
+
+private struct WatchlistDetailResponseBody: Decodable {
+    let watchlist: WatchlistSummary
+    let items: [WatchlistItem]
+    let page: WatchlistPage
 }
 
 private struct WatchlistItemResponseBody: Decodable {

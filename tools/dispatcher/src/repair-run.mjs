@@ -45,6 +45,7 @@ import { evaluateClaudeInit, reportClaudeStartupCheck } from "./worker-startup-c
 import { formatUsageLine, usageContextFromInvocation } from "./worker-usage.mjs";
 import { tailLogs } from "./worker-spawn.mjs";
 import { LifecyclePublisher } from "./agent-lifecycle.mjs";
+import { botUserIdsOf, needsStateIds } from "./owner-escalation.mjs";
 import { nullAgentSessionBridge } from "./agent-session.mjs";
 import { validateOpenRouterTransport } from "./openrouter-transport.mjs";
 
@@ -152,8 +153,11 @@ class RepairReporter {
       linearClient,
       bridge: agentSessionBridgeFn(),
       logger: this.logger,
+      needsStateIds: needsStateIds(this.ctx.stateIds),
+      escalationLedger: this.ctx.ownerLedger || null,
+      botUserIds: botUserIdsOf(this.ctx.dispatcherDelegate),
       context: {
-        issue: { id: issue.id, identifier: issue.identifier, url: issue.url },
+        issue: { id: issue.id, identifier: issue.identifier, url: issue.url, assignee: issue.assignee },
         branch: this.entry.branch,
         worktreePath: this.entry.path,
         worker: this.entry.worker,
