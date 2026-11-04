@@ -1,40 +1,13 @@
 import SwiftUI
 
-/// The Watchlist tab: the app shell's one screen wired to live backend data
-/// (`GET /api/v1/watchlist`) rather than a static placeholder.
+/// The Watchlist tab: an index of the personal list and every authorized
+/// shared list (`GET /api/v1/watchlists`), each pushing its own detail.
 struct WatchlistView: View {
-    @State private var viewModel: WatchlistViewModel
-
-    init(apiClient: APIClient) {
-        _viewModel = State(initialValue: WatchlistViewModel(apiClient: apiClient))
-    }
+    let apiClient: APIClient
 
     var body: some View {
         NavigationStack {
-            WatchlistContentView(
-                state: viewModel.state,
-                onRetry: { await viewModel.load() },
-                onDelete: { item in await viewModel.remove(item: item) }
-            )
-            .navigationTitle("Watchlist")
-            .task { await viewModel.load() }
-            .alert(
-                "Couldn't Remove Item",
-                isPresented: Binding(
-                    get: { viewModel.removalErrorMessage != nil },
-                    set: { isPresented in
-                        if !isPresented {
-                            viewModel.dismissRemovalError()
-                        }
-                    }
-                ),
-                actions: {
-                    Button("OK", role: .cancel) {}
-                },
-                message: {
-                    Text(viewModel.removalErrorMessage ?? "")
-                }
-            )
+            WatchlistsIndexScreen(apiClient: apiClient)
         }
     }
 }
