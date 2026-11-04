@@ -134,3 +134,22 @@ jobs:
         run: |
           npm run ios:sim:release \
             || echo "::warning title=Simulator lease not released here::A lease held by another lane was left alone. MOV-309's stale-holder takeover is the backstop."
+      # MOV-496: short Mac load summary from the host telemetry sampler and
+      # run markers. Best effort by design: it can neither fail nor delay the
+      # job (continue-on-error, a short timeout, and a shell that always exits 0).
+      - name: Host telemetry summary
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          reminder="Admin-level collection (powermetrics, spindump) is NOT enabled. If load problems persist after reviewing this data, ask Adam to consider enabling it."
+          summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
+          if [ -f tools/host-telemetry/bin/report.mjs ] && command -v node >/dev/null 2>&1; then
+            node tools/host-telemetry/bin/report.mjs --summary --run "$GITHUB_RUN_ID" --status "$JOB_STATUS" >> "$summary" 2>/dev/null \
+              || echo "Telemetry summary unavailable: the report script failed. $reminder" >> "$summary"
+          else
+            echo "Telemetry summary unavailable: tools/host-telemetry/bin/report.mjs or node is missing. $reminder" >> "$summary"
+          fi
+          exit 0
