@@ -1186,7 +1186,7 @@ Then run one job and check `grep runner ~/Library/Logs/moviecal-telemetry/marker
 
 ### Telemetry report and CI job summary (MOV-496)
 
-`tools/host-telemetry/bin/report.mjs` turns the samples, markers and snapshots (plain or gzipped) into an answer. It only reads files and needs no admin rights.
+`tools/host-telemetry/bin/report.mjs` turns the samples, markers and snapshots (plain or gzipped) into an answer. It only reads files (it never runs commands or spawns processes, and treats everything it reads as data) and needs no admin rights.
 
 ```
 node tools/host-telemetry/bin/report.mjs --run <GitHub run id>      # one CI run, from its job-started marker to job-completed
