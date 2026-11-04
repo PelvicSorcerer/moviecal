@@ -6,10 +6,11 @@ import { promoteEligible } from "../src/promoter.mjs";
 import { createOwnerAssigner } from "../src/owner-assignment.mjs";
 import { createDelegateAssigner } from "../src/delegate-assignment.mjs";
 
+const ACTOR_UUID = "dbbee117-9097-4797-b1e5-00169d6bc296";
 const READY = ["## Acceptance criteria", "- it works.", "", "### Testing Expectations", "- unit: covers it."].join("\n");
 
 describe("MOV-508: owner and delegate land before Ready for Agent", () => {
-  it("orders lookup, assign, delegate, transition, comment", async () => {
+  it("resolves the app name to its UUID and orders lookup, assign, delegate, transition, comment", async () => {
     const log = [];
     const linearClient = {
       async workspaceMemberByEmail() {
@@ -20,8 +21,12 @@ describe("MOV-508: owner and delegate land before Ready for Agent", () => {
         log.push("assignIssue");
         return { success: true, assigneeId };
       },
+      async appActorByName(name) {
+        log.push(`appActorByName:${name}`);
+        return { id: ACTOR_UUID };
+      },
       async delegateIssue(_i, delegateId) {
-        log.push("delegateIssue");
+        log.push(`delegateIssue:${delegateId}`);
         return { success: true, delegateId };
       },
       async moveToState() {
@@ -50,10 +55,10 @@ describe("MOV-508: owner and delegate land before Ready for Agent", () => {
         readyForAgentStateId: "state-ready",
         isBlockerSatisfied: () => true,
         ownerAssignment: createOwnerAssigner({ linearClient, teamKey: "MOV", ownerEmail: "adam@example.com" }),
-        delegateAssignment: createDelegateAssigner({ linearClient, delegate: { id: "actor-1", name: "moviecal-dispatcher" } }),
+        delegateAssignment: createDelegateAssigner({ linearClient, delegate: { id: "moviecal-dispatcher", name: "moviecal-dispatcher" } }),
       },
     );
     expect(results).toMatchObject([{ promoted: true, ownerAssigned: true, delegateAssigned: true }]);
-    expect(log).toEqual(["workspaceMemberByEmail", "assignIssue", "delegateIssue", "moveToState", "addComment"]);
+    expect(log).toEqual(["workspaceMemberByEmail", "assignIssue", "appActorByName:moviecal-dispatcher", `delegateIssue:${ACTOR_UUID}`, "moveToState", "addComment"]);
   });
 });

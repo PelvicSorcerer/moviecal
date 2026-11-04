@@ -306,7 +306,7 @@ Immediately after the owner step and before the `Ready for Agent` write, the pro
 
 - **Never overwritten.** Any existing delegate, the dispatcher's or anyone else's, is left alone: no write, no comment, on any later pass.
 - **Never on other issues.** Unready, `human-only`, coordination, `execution:cloud`, `execution:none`, multi-route, and still-blocked issues never reach this step.
-- **Identity.** The write uses `LINEAR_APP_ACTOR_ID` from `~/.config/moviecal/linear-app.env`; if unset, the issue is held with a console reason.
+- **Identity.** Linear's `delegateId` needs the actor UUID. If `LINEAR_APP_ACTOR_ID` in `~/.config/moviecal/linear-app.env` is a UUID it is used as is. If it is the app *name* (as on the Mac today) or unset, the promoter looks up exactly one active app user with that name (falling back to `moviecal-dispatcher`) via `LinearClient.appActorByName`, caches the UUID for the rest of the pass, and uses it. No env edit is needed. A failed, empty, or ambiguous lookup holds the issue with a console reason that says to set `LINEAR_APP_ACTOR_ID` to the actor UUID. Dry run also performs the (read-only) lookup.
 - **Write + readback.** `LinearClient.delegateIssue` reads the delegate back in the same mutation; a bare `success: true` is not trusted.
 - **Failure.** A failed write or readback holds the issue out of `Ready for Agent` with a per-pass console reason (`delegate assignment: …`) and no Linear comment; the next poll retries.
 - **Dry run.** `dispatcher promote --dry-run` prints `would delegate to moviecal-dispatcher` and writes nothing.

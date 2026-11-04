@@ -19,6 +19,14 @@
 
 import { parseExecutionLabels, resolveExecutionRoute } from "./execution-routing.mjs";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** True when `value` looks like a Linear actor UUID rather than an app name. */
+export function isActorUuid(value) {
+  return UUID_RE.test(String(value || "").trim());
+}
+
+
 /** True when the promoter should set the dispatcher delegate on `issue`. */
 export function needsDelegateAssignment(issue) {
   if (!issue) return false;
@@ -33,10 +41,36 @@ export function needsDelegateAssignment(issue) {
  * @param {object} args
  * @param {object} args.linearClient
  * @param {{id?: string|null, name?: string}} args.delegate - from `resolveDispatcherDelegate()`.
- *   The actor id is required to write; without it every issue needing a
- *   delegate is held with an actionable reason.
+ *   `id` may be the actor UUID or (as on the Mac) the app name; a non-UUID
+ *   value, or none, is resolved to the UUID through `linearClient.appActorByName`
+ *   using that value, falling back to `delegate.name`. A failed or ambiguous
+ *   lookup holds every issue needing a delegate with an actionable reason.
+ *   A successful resolution is cached for the life of this assigner.
  */
 export function createDelegateAssigner({ linearClient, delegate }) {
+  const label = (delegate && delegate.name) || "moviecal-dispatcher";
+  const configured = delegate && delegate.id ? String(delegate.id).trim() : "";
+  let resolved = isActorUuid(configured) ? configured : "";
+
+  async function resolveActorId() {
+    if (resolved) return { id: resolved };
+    const lookupName = configured || label;
+    if (!linearClient || typeof linearClient.appActorByName !== "function") {
+      return { id: null, reason: `cannot resolve actor id for "${lookupName}": no lookup available` };
+    }
+    let found;
+    try {
+      found = await linearClient.appActorByName(lookupName);
+    } catch (error) {
+      return { id: null, reason: `looking up actor id for "${lookupName}" failed: ${error && error.message ? error.message : error}` };
+    }
+    if (!found || !isActorUuid(found.id)) {
+      return { id: null, reason: `could not resolve actor id for "${lookupName}"${found && found.reason ? ` (${found.reason})` : ""}; set LINEAR_APP_ACTOR_ID to the actor UUID` };
+    }
+    resolved = String(found.id).trim();
+    return { id: resolved };
+  }
+
   return {
     /**
      * @param {object} issue - must already satisfy `needsDelegateAssignment`.
@@ -44,12 +78,10 @@ export function createDelegateAssigner({ linearClient, delegate }) {
      * @returns {Promise<{ ok: boolean, reason?: string, delegated: boolean, wouldDelegate: boolean }>}
      */
     async ensureDelegate(issue, { dryRun = false } = {}) {
-      const actorId = delegate && delegate.id ? String(delegate.id).trim() : "";
-      const label = (delegate && delegate.name) || "moviecal-dispatcher";
       const fail = (reason) => ({ ok: false, reason, delegated: false, wouldDelegate: false });
-      if (!actorId) {
-        return fail(`no dispatcher actor id configured (LINEAR_APP_ACTOR_ID is unset), cannot delegate to ${label}`);
-      }
+      const actor = await resolveActorId();
+      if (!actor.id) return fail(`cannot delegate to ${label}: ${actor.reason}`);
+      const actorId = actor.id;
       if (dryRun) return { ok: true, delegated: false, wouldDelegate: true };
 
       let result;

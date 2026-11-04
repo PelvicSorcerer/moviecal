@@ -1158,3 +1158,29 @@ describe("LinearClient", () => {
     });
   });
 });
+
+describe("LinearClient.appActorByName (MOV-508)", () => {
+  const node = (over) => ({ id: "dbbee117-9097-4797-b1e5-00169d6bc296", name: "moviecal-dispatcher", displayName: "moviecal-dispatcher", active: true, app: true, ...over });
+  const lookup = (nodes) =>
+    new LinearClient({ apiKey: "k", fetchImpl: mockFetch({ users: { nodes } }) }).appActorByName("MovieCal-Dispatcher");
+
+  it("returns the single active app user matching the name", async () => {
+    expect(await lookup([node()])).toEqual({ id: "dbbee117-9097-4797-b1e5-00169d6bc296" });
+  });
+  it("ignores humans and inactive users, and reports no match", async () => {
+    const out = await lookup([node({ app: false }), node({ active: false })]);
+    expect(out.id).toBeNull();
+    expect(out.reason).toMatch(/no active app user/);
+  });
+  it("refuses an ambiguous match", async () => {
+    const out = await lookup([node(), node({ id: "other" })]);
+    expect(out.id).toBeNull();
+    expect(out.reason).toMatch(/2 app users/);
+  });
+  it("makes no request for an empty name", async () => {
+    const fetchImpl = mockFetch({});
+    const out = await new LinearClient({ apiKey: "k", fetchImpl }).appActorByName("");
+    expect(out.id).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});

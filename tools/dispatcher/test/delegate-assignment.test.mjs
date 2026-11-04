@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { needsDelegateAssignment, createDelegateAssigner } from "../src/delegate-assignment.mjs";
 import { promoteEligible, PROMOTION_COMMENT } from "../src/promoter.mjs";
 
-const ACTOR = "actor-1";
+const ACTOR = "dbbee117-9097-4797-b1e5-00169d6bc296";
 const READY = ["## Acceptance criteria", "- it works.", "", "### Testing Expectations", "- unit: covers it."].join("\n");
 
 function issue(overrides = {}) {
@@ -52,11 +52,39 @@ describe("createDelegateAssigner", () => {
     expect(out).toMatchObject({ ok: true, wouldDelegate: true, delegated: false });
     expect(linearClient.delegateIssue).not.toHaveBeenCalled();
   });
-  it("fails closed without an actor id", async () => {
-    const linearClient = { delegateIssue: vi.fn() };
-    const out = await createDelegateAssigner({ linearClient, delegate: { id: null } }).ensureDelegate(issue());
+  it("resolves an app name to the actor UUID before writing", async () => {
+    const linearClient = {
+      appActorByName: vi.fn(async () => ({ id: ACTOR })),
+      delegateIssue: vi.fn(async (_i, id) => ({ success: true, delegateId: id })),
+    };
+    const assigner = createDelegateAssigner({ linearClient, delegate: { id: "moviecal-dispatcher", name: "moviecal-dispatcher" } });
+    expect(await assigner.ensureDelegate(issue())).toMatchObject({ ok: true, delegated: true });
+    expect(linearClient.appActorByName).toHaveBeenCalledWith("moviecal-dispatcher");
+    expect(linearClient.delegateIssue).toHaveBeenCalledWith("id-1", ACTOR);
+    await assigner.ensureDelegate(issue({ id: "id-2" }));
+    expect(linearClient.appActorByName).toHaveBeenCalledTimes(1);
+  });
+  it("looks up by delegate name when no id is configured, including in dry run", async () => {
+    const linearClient = { appActorByName: vi.fn(async () => ({ id: ACTOR })), delegateIssue: vi.fn() };
+    const out = await createDelegateAssigner({ linearClient, delegate: { id: null, name: "moviecal-dispatcher" } }).ensureDelegate(issue(), { dryRun: true });
+    expect(out).toMatchObject({ ok: true, wouldDelegate: true });
+    expect(linearClient.appActorByName).toHaveBeenCalledWith("moviecal-dispatcher");
+    expect(linearClient.delegateIssue).not.toHaveBeenCalled();
+  });
+  it("does not look up when the configured id is a UUID", async () => {
+    const linearClient = { appActorByName: vi.fn(), delegateIssue: async (_i, id) => ({ success: true, delegateId: id }) };
+    await createDelegateAssigner({ linearClient, delegate: { id: ACTOR } }).ensureDelegate(issue());
+    expect(linearClient.appActorByName).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["no match", async () => ({ id: null, reason: "no active app user" })],
+    ["a non-UUID result", async () => ({ id: "moviecal-dispatcher" })],
+    ["a thrown error", async () => { throw new Error("net down"); }],
+  ])("fails closed when the lookup gives %s", async (_n, appActorByName) => {
+    const linearClient = { appActorByName, delegateIssue: vi.fn() };
+    const out = await createDelegateAssigner({ linearClient, delegate: { id: "moviecal-dispatcher" } }).ensureDelegate(issue());
     expect(out.ok).toBe(false);
-    expect(out.reason).toMatch(/LINEAR_APP_ACTOR_ID/);
+    expect(out.reason).toMatch(/actor id/);
     expect(linearClient.delegateIssue).not.toHaveBeenCalled();
   });
   it("rejects a bare success whose readback differs", async () => {
