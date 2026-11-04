@@ -1,5 +1,15 @@
 # MOV-220: bounded Loop-to-Mac handoff validation
 
+> **Retired (MOV-508, 2026-11-04).** This Loop no longer does the handoff and
+> must be disabled in Linear (a human step). Its only delegation action in
+> Linear starts an agent session, which its instructions forbid, so it never
+> tried to delegate; it moved five newly promoted issues (MOV-348, 349, 350,
+> 351, 354) to `Needs Human Decision`. The promoter now sets
+> `delegate = moviecal-dispatcher` after the owner step and before
+> `Ready for Agent` (see `docs/operators/local-execution.md` §Dispatcher
+> delegate before handoff). The text below is historical evidence; the rollback
+> note at the end still applies to manual delegation.
+
 **Validated 2026-09-17.** The
 [Moviecal local handoff](https://linear.app/moviecal/loop/moviecal-local-handoff-469ed16a2f46)
 Loop is published and enabled. A transition into `Ready for Agent` on the

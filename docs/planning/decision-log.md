@@ -6,6 +6,7 @@
 - Use iCalendar feed subscription rather than native calendar API integration.
 - Use public GitHub repo, so secrets must never be committed.
 - Keep architecture portable enough to self-host later if needed.
+- (MOV-508, 2026-11-04) Retire the MOV-220 "Moviecal local handoff" Loop: it cannot delegate (its only Linear delegation action starts an agent session, which it is forbidden to do), so it stranded five promoted issues in `Needs Human Decision`. The dispatcher promoter now sets `delegate = moviecal-dispatcher` (after the owner step, before `Ready for Agent`, only for single-route `execution:mac` issues with no delegate, never overwriting one). Disabling the Loop in Linear is a human step; manual delegation remains the rollback.
 - Replace the GitHub-Project-centric, multi-cloud-agent dev-governance model with a Linear-based control plane and a local-Mac dispatcher. See `docs/governance/linear-information-architecture.md` and `docs/operators/local-execution.md`. Migration status below.
 
 ## Dev-governance migration status

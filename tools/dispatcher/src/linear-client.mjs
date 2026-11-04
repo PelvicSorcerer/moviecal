@@ -571,6 +571,27 @@ export class LinearClient {
   }
 
   /**
+   * Delegate one issue to an actor (the dispatcher app user), reading the
+   * resulting delegate back in the same mutation (MOV-508). Same trust model
+   * as `assignIssue`: callers compare `delegateId`, never `success` alone.
+   */
+  async delegateIssue(issueId, delegateId) {
+    const mutation = `
+      mutation($issueId: String!, $delegateId: String!) {
+        issueUpdate(id: $issueId, input: { delegateId: $delegateId }) {
+          success
+          issue { delegate { id } }
+        }
+      }
+    `;
+    const data = await this.request(mutation, { issueId, delegateId });
+    return {
+      success: Boolean(data.issueUpdate && data.issueUpdate.success),
+      delegateId: (data.issueUpdate && data.issueUpdate.issue && data.issueUpdate.issue.delegate && data.issueUpdate.issue.delegate.id) || null,
+    };
+  }
+
+  /**
    * One workspace member by exact email, with enough shape to validate them
    * as a promoter-assignable human owner (MOV-359): whether they are active,
    * an app/bot actor, and which teams they belong to.
