@@ -348,11 +348,13 @@ describe("post-merge master CI observer configuration (MOV-305)", () => {
     );
   });
 
-  it("files remediation in the active local-delivery project by default", () => {
+  it("files remediation in the Operations backlog, with no milestone, by default", () => {
     expect(resolveMasterIncidentProject({})).toEqual({
-      projectName: "Autonomous local-agent delivery",
-      milestoneName: "Local acceptance & controlled autonomy",
+      projectName: "Operations backlog",
+      milestoneName: null,
     });
+    expect(resolveMasterIncidentProject({ MOVIECAL_MASTER_CI_MILESTONE: "  " }).milestoneName).toBeNull();
+    expect(resolveMasterIncidentProject({ MOVIECAL_MASTER_CI_MILESTONE: "Phase 2" }).milestoneName).toBe("Phase 2");
     expect(resolveMasterIncidentProject({ MOVIECAL_MASTER_CI_PROJECT: "Platform & Infrastructure" }).projectName).toBe(
       "Platform & Infrastructure",
     );

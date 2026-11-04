@@ -11,7 +11,10 @@ const CORE = "Shared Watchlists Core & API";
 const WEB_SHARED = "Web Shared Watchlists";
 const IOS_SHARED = "iOS Shared Watchlists";
 const IOS_COMPANION = "iOS Companion App";
-const LOCAL_DELIVERY = "Autonomous local-agent delivery";
+// Completed history (closed 2026-11-04, MOV-512); no longer a desired project.
+const LOCAL_DELIVERY_HISTORY = "Autonomous local-agent delivery";
+const OPERATIONS_BACKLOG = "Operations backlog";
+const MAC_CI_RELIABILITY = "Mac CI reliability";
 const DEFERRED_CLOUD = "Deferred Linear cloud execution option";
 
 export const SHARED_WATCHLISTS_INITIATIVE = "Deliver Shared Watchlists across Web and iOS";
@@ -42,11 +45,14 @@ export const DESIRED_INITIATIVES = [
   {
     name: AUTOMATION_INITIATIVE,
     description: null,
-    projects: [LOCAL_DELIVERY, DEFERRED_CLOUD],
+    projects: [MAC_CI_RELIABILITY, DEFERRED_CLOUD],
     historicalProjects: [
       "Local development workflow stabilization and governance",
       "Hybrid workflow foundations (completed)",
+      "Hybrid workflow foundations",
       "Developer Governance & Agent Infrastructure",
+      "Jev router trial",
+      LOCAL_DELIVERY_HISTORY,
     ],
   },
 ];
@@ -80,11 +86,10 @@ export const DESIRED_PROJECTS = [
     milestones: ["Skeleton", "Auth + API client", "Navigation shell"],
   },
   { name: "Documentation aligned with shipped product", labels: [], milestones: [] },
-  {
-    name: LOCAL_DELIVERY,
-    labels: [],
-    milestones: ["Automated intake & local kickoff", "Local acceptance & controlled autonomy"],
-  },
+  // The one standing project: no milestones, deliberately in no initiative
+  // (initiatives must be completable). See linear-information-architecture.md.
+  { name: OPERATIONS_BACKLOG, labels: [], milestones: [] },
+  { name: MAC_CI_RELIABILITY, labels: [], milestones: [] },
   {
     name: DEFERRED_CLOUD,
     labels: [],

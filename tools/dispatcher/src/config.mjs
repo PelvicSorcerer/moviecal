@@ -393,15 +393,16 @@ export function resolveMasterLineageMaxDistance(env = process.env) {
  * Where a master-failure remediation issue is filed (MOV-305). It must be an
  * open project, because the issue-completeness contract refuses a completed
  * or canceled one — the observer surfaces that as a failed creation and a
- * human decision rather than filing an unroutable issue.
+ * human decision rather than filing an unroutable issue. The default is the
+ * standing "Operations backlog" project, which has no milestones, so the
+ * milestone is null unless MOVIECAL_MASTER_CI_MILESTONE is set.
  */
-export const DEFAULT_MASTER_INCIDENT_PROJECT = "Autonomous local-agent delivery";
-export const DEFAULT_MASTER_INCIDENT_MILESTONE = "Local acceptance & controlled autonomy";
+export const DEFAULT_MASTER_INCIDENT_PROJECT = "Operations backlog";
 
 export function resolveMasterIncidentProject(env = process.env) {
   return {
     projectName: String(env.MOVIECAL_MASTER_CI_PROJECT ?? "").trim() || DEFAULT_MASTER_INCIDENT_PROJECT,
-    milestoneName: String(env.MOVIECAL_MASTER_CI_MILESTONE ?? "").trim() || DEFAULT_MASTER_INCIDENT_MILESTONE,
+    milestoneName: String(env.MOVIECAL_MASTER_CI_MILESTONE ?? "").trim() || null,
   };
 }
 

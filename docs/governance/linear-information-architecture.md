@@ -32,7 +32,7 @@ An initiative is a **completable outcome**: it has a definition of done and ends
 
 - **Deliver Shared Watchlists across Web and iOS** — the *feature* outcome. Contains Shared Watchlists Core & API, Web Shared Watchlists, and iOS Shared Watchlists. It completes when shared watchlists work end to end on both clients.
 - **First iOS TestFlight beta** — the *release* outcome. Contains iOS Companion App, Shared Watchlists Core & API, and iOS Shared Watchlists. It does **not** contain Web Shared Watchlists: the first TestFlight build requires native Shared Watchlists and the Core & API capability it needs, not completion of the web collaboration experience.
-- **Automate moviecal Development and Delivery** — cross-cutting development infrastructure that supports every current and future product initiative. Its active projects are Autonomous local-agent delivery and Deferred Linear cloud execution option; completed/canceled predecessor projects remain associated for history.
+- **Automate moviecal Development and Delivery** — cross-cutting development infrastructure that supports every current and future product initiative. Its open projects are Mac CI reliability and Deferred Linear cloud execution option; completed/canceled predecessor projects (including Autonomous local-agent delivery, Jev router trial, and both Hybrid workflow foundations names) remain associated for history. The completable-outcome rule applies: the standing Operations backlog project is deliberately **not** in this or any initiative.
 
 **Feature versus release membership.** A feature initiative groups the projects that together deliver one capability; a release initiative groups the projects that must be complete to cut one release. The same project may belong to both. Shared Watchlists Core & API and iOS Shared Watchlists are in both initiatives above, so their progress is counted in both rollups. Overlapping rollups are intentional and must not be added together as a portfolio total. Membership never gates dispatch; real prerequisites are issue-level blocking relations.
 
@@ -50,10 +50,17 @@ An initiative is a **completable outcome**: it has a definition of done and ends
 | Platform & Infrastructure | None (historical link to the retired Web App initiative) | **Completed.** Finite platform outcome; audit history |
 | iOS Companion App | First iOS TestFlight beta | Finite native-app outcome (personal-watchlist parity and release engineering) |
 | Documentation aligned with shipped product | None | Finite product documentation reconciliation; deliberately not an ongoing documentation bucket |
-| Autonomous local-agent delivery | Automate moviecal Development and Delivery | **Active.** Finish bounded local intake, handoff, acceptance, and controlled autonomy |
+| Operations backlog | None (standing project, never in an initiative) | **The one standing project.** Incident fixes, chores, and single deliverables; no milestones. Master-CI incident issues are filed here |
+| Mac CI reliability | Automate moviecal Development and Delivery | Finite. Exit: the iOS CI lane and simulator use stop wedging the Mac, or an accepted written reason why not. No milestones |
+| Autonomous local-agent delivery | Automate moviecal Development and Delivery (historical link) | **Completed history.** Reached local acceptance and controlled autonomy about 2026-09-22; later work moved to Operations backlog and Mac CI reliability |
+| Outcome-based Linear roadmap migration | None | **Completed history** |
+| Jev router trial | Automate moviecal Development and Delivery (historical link) | **Completed history** |
+| Web app core page polish | None | **Completed history** |
+| Web app page states polish | None | **Completed history** |
+| Web API and pipeline hardening | None | **Completed history** |
 | Deferred Linear cloud execution option | Automate moviecal Development and Delivery | **Deferred.** Keep cloud environment/kickoff/pilots independently authorizable and out of the local critical path |
 | Local development workflow stabilization and governance | Automate moviecal Development and Delivery | **Completed history.** Finite Mac/local stabilization and handoff |
-| Hybrid workflow foundations (completed) | Automate moviecal Development and Delivery | **Completed history.** Architecture, routing, CI/review, and Agent Session foundations |
+| Hybrid workflow foundations (completed) (live name: Hybrid workflow foundations) | Automate moviecal Development and Delivery | **Completed history.** Architecture, routing, CI/review, and Agent Session foundations |
 | Developer Governance & Agent Infrastructure | Automate moviecal Development and Delivery | **Canceled audit history.** Do not assign new issues |
 
 `Docs` and `Migration` are not projects — they are work *types*, represented as labels. `Future` is not a project — it is the `Icebox` backlog state. There is no Calendar Feed project: the calendar feed shipped inside the existing product projects, and the empty project was retired rather than kept as a topic bucket.
@@ -79,7 +86,7 @@ Web and iOS are permanent *classifications*, not outcomes, so they do not get in
 Use the smallest Linear object that expresses the actual planning relationship:
 
 - **Initiative:** a strategic outcome spanning one or more projects, with a definition of done. An initiative is completable — never a permanent platform or topic bucket — and may be cross-cutting. A feature initiative and a release initiative may share projects; their rollups overlap by design.
-- **Project:** a finite, completable outcome with an explicit boundary. A project is not a permanent topic bucket for every future issue in an area. Later defects or enhancements belong in the ordinary backlog or a new bounded project unless they are required to satisfy the original completion criteria.
+- **Project:** a finite, completable outcome with an explicit boundary. A project is not a permanent topic bucket for every future issue in an area. Later defects or enhancements belong in Operations backlog (the one standing project, below) or a new bounded project unless they are required to satisfy the original completion criteria.
 - **Milestone:** a project-local phase containing multiple issues and a recognizable exit condition. Milestones never span projects and should not be used as reusable topic tags.
 - **Parent issue:** one bounded deliverable split into child issues, normally one implementation issue per PR. A parent must not duplicate the scope of its project or act as a permanent milestone coordinator. Parent completion is derived from child state.
 - **Label:** reusable classification across projects, such as execution route, work type, risk, worker, model, or area.
@@ -94,11 +101,31 @@ Used only where a real multi-issue phase exists. Every milestone is local to one
 
 **Shared Watchlists Core & API** uses `Access and invitation safety` and `Cross-client shared API`. The first exits when ownership, invitation concurrency, and acceptance safety are proven; the second exits when the bearer-authenticated API and cross-client authorization parity are verified. **Web Shared Watchlists** uses `Complete web collaboration` for the browser flows and two-account journey. **iOS Shared Watchlists** uses `Native experience` for accessible SwiftUI flows and web/iOS parity. Each milestone belongs only to its own project; genuine issue-level prerequisites cross those project boundaries.
 
-**Autonomous local-agent delivery** uses `Automated intake & local kickoff` → `Local acceptance & controlled autonomy`. The first phase records the architecture, configures bounded intake enrichment, and proves the separate Loop-to-Mac handoff. The second resolves local testing policy, runs local acceptance/recovery drills, and only then permits risk-scoped automatic readiness/merge. The project ends at that local outcome; cloud execution is not an exit criterion.
+**Autonomous local-agent delivery (history)** used `Automated intake & local kickoff` → `Local acceptance & controlled autonomy`. The first phase recorded the architecture, configured bounded intake enrichment, and proved the separate Loop-to-Mac handoff. The second resolved local testing policy and ran local acceptance/recovery drills before risk-scoped automatic readiness/merge. That outcome was reached about 2026-09-22. About 70 later issues (model routing, worker hardening, notifications, simulator leases, telemetry) accumulated in its second milestone, which made it the maintenance bucket this document forbids; it is therefore closed as Completed history and its open work moved to Operations backlog and Mac CI reliability (MOV-512). It stays in the provisioner's `historicalProjects` and in the Mac route roster because closed issues still name it.
 
 **Deferred Linear cloud execution option** uses `Cloud environment & kickoff` → `Cloud pilots & eligibility`. Every delivery issue remains in `Icebox` until the cloud option is explicitly authorized, and the chain never blocks the active local project.
 
 **Completed history:** Local development workflow stabilization and governance retains its five 100%-complete phases, and Hybrid workflow foundations (completed) retains its seven historical phases. Their unfinished cloud/local-convergence concepts were moved into the two active/deferred projects rather than used to keep a partially complete project open.
+
+### Planning rules
+
+1. **Exit condition.** Every project and milestone states its exit condition in its description. A project without one is not finite.
+2. **Close with the last exit issue.** Mark a project Completed in the same sweep as its last exit issue. New work in an area with no open finite project gets a new project with a stated exit, never a reopened one.
+3. **Operations backlog is the one standing project.** It never has milestones and is never linked to an initiative (an initiative must be completable). It holds incident fixes, chores, and single-PR deliverables. Anything bigger than one PR in it needs a parent issue, or its own project.
+4. **Parent issues.** A deliverable needing two or more PRs gets a parent whose description has **Problem**, **Done when**, and **Not part of this**, with one child issue per PR. Open child count answers "how many more". Template:
+
+   ```
+   ## Problem
+   What is wrong or missing, in a few sentences.
+
+   ## Done when
+   * Observable conditions that end this parent.
+
+   ## Not part of this
+   * Related work deliberately excluded (file it separately).
+   ```
+
+5. **Discovery test** for work found mid-fix: does the parent's *Done when* stay false without it? If yes, it is a child. If no, file a separate issue linked `related`, with a note "found while working MOV-X", in Operations backlog or under its own parent.
 
 A project reaching 100% means its defined outcome is complete. Do not keep a finished project open merely as a future maintenance container; create or select the bounded project that owns the new outcome.
 

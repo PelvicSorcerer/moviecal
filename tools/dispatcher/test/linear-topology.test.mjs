@@ -153,6 +153,25 @@ describe("desired topology", () => {
     expect(milestones["iOS Companion App"]).toEqual(["Skeleton", "Auth + API client", "Navigation shell"]);
   });
 
+  it("defines Operations backlog and Mac CI reliability with no milestones or labels", () => {
+    for (const name of ["Operations backlog", "Mac CI reliability"]) {
+      expect(DESIRED_PROJECTS.find((p) => p.name === name)).toEqual({ name, labels: [], milestones: [] });
+    }
+  });
+
+  it("links Mac CI reliability to the automation initiative, keeps Operations backlog in none, and retires local delivery to history", () => {
+    const automation = DESIRED_INITIATIVES.find((i) => i.name === AUTOMATION_INITIATIVE);
+    expect(automation.projects).toContain("Mac CI reliability");
+    expect(automation.projects).not.toContain("Autonomous local-agent delivery");
+    expect(automation.historicalProjects).toEqual(
+      expect.arrayContaining(["Autonomous local-agent delivery", "Jev router trial", "Hybrid workflow foundations"]),
+    );
+    for (const initiative of DESIRED_INITIATIVES) {
+      expect([...initiative.projects, ...initiative.historicalProjects]).not.toContain("Operations backlog");
+    }
+    expect(DESIRED_PROJECTS.map((p) => p.name)).not.toContain("Autonomous local-agent delivery");
+  });
+
   it("uses only declared project labels", () => {
     const declared = new Set(DESIRED_PROJECT_LABELS.map((l) => l.name));
     for (const project of DESIRED_PROJECTS) for (const label of project.labels) expect(declared.has(label)).toBe(true);
@@ -218,6 +237,45 @@ describe("planTopology", () => {
       project: "Web Shared Watchlists",
     });
     expect(warnings.filter((w) => w.initiative === AUTOMATION_INITIATIVE)).toEqual([]);
+  });
+});
+
+describe("planTopology against the live pre-restructure workspace", () => {
+  const live = (localDeliveryType) => {
+    const projects = [
+      { id: "p-ld", name: "Autonomous local-agent delivery", status: { type: localDeliveryType }, labels: [], milestones: [] },
+      { id: "p-hy", name: "Hybrid workflow foundations", status: { type: "completed" }, labels: [], milestones: [] },
+      { id: "p-jev", name: "Jev router trial", status: { type: "completed" }, labels: [], milestones: [] },
+      { id: "p-cloud", name: "Deferred Linear cloud execution option", status: { type: "planned" }, labels: [], milestones: [{ id: "m-c1", name: "Cloud environment & kickoff" }, { id: "m-c2", name: "Cloud pilots & eligibility" }] },
+    ];
+    return {
+      initiatives: [
+        {
+          id: "i3",
+          name: AUTOMATION_INITIATIVE,
+          status: "Active",
+          projects: projects.map((p) => ({ id: p.id, name: p.name })),
+        },
+      ],
+      projects,
+      projectLabels: [],
+    };
+  };
+
+  it("creates the two new projects, links only Mac CI reliability to the automation initiative, and warns about nothing", () => {
+    const { actions, warnings } = planTopology(live("started"));
+    const created = actions.filter((a) => a.type === "create-project").map((a) => a.name);
+    expect(created).toEqual(expect.arrayContaining(["Operations backlog", "Mac CI reliability"]));
+    const links = actions.filter((a) => a.type === "link-project" && a.initiative === AUTOMATION_INITIATIVE);
+    expect(links.map((a) => a.project)).toEqual(["Mac CI reliability"]);
+    expect(actions.some((a) => a.project === "Operations backlog" && a.type === "link-project")).toBe(false);
+    expect(warnings.filter((w) => w.type === "unexpected-link")).toEqual([]);
+  });
+
+  it("produces no warning about Autonomous local-agent delivery once it is completed", () => {
+    const { warnings } = planTopology(live("completed"));
+    expect(JSON.stringify(warnings)).not.toContain("Autonomous local-agent delivery");
+    expect(warnings.filter((w) => w.type === "unexpected-link")).toEqual([]);
   });
 });
 

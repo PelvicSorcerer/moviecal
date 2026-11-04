@@ -35,13 +35,13 @@ const evidence = {
 const decision = { action: "route-fix-pr", reason: "deterministic code-test failure", humanDecision: null };
 
 /** The shape `evaluateIssueSpec`/`evaluatePromotion` read, as the observer files it. */
-function filedIssue({ milestoneAssigned = true } = {}) {
+function filedIssue({ milestoneAssigned = false } = {}) {
   return {
     stateName: "Backlog",
     labels: masterIncidentLabels(),
-    project: "Autonomous local-agent delivery",
+    project: "Operations backlog",
     projectStatus: "started",
-    projectMilestoneCount: 2,
+    projectMilestoneCount: milestoneAssigned ? 2 : 0,
     milestone: milestoneAssigned ? "Local acceptance & controlled autonomy" : null,
     description: masterIncidentIssueBody({ evidence, decision, milestoneAssigned }),
     blockedByIds: [],
