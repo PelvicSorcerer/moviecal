@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateIssueSpec } from "../src/issue-spec.mjs";
+import { evaluateIssueSpec, evaluatePlanningRules } from "../src/issue-spec.mjs";
 import { evaluatePromotion } from "../src/promoter.mjs";
 import { resolveRouting } from "../src/worker-routing.mjs";
 import {
@@ -147,5 +147,19 @@ describe("the master remediation issue (MOV-305)", () => {
     expect(comment).toContain(evidence.headSha);
     expect(comment).toContain("#700");
     expect(comment).toContain("cccc");
+  });
+});
+
+describe("master-CI remediation under the planning rules (MOV-514)", () => {
+  it("passes the follow-up provenance rule when filed by the dispatcher with no parent or related link", () => {
+    const dispatcher = { id: "actor-1", name: "moviecal-dispatcher" };
+    for (const milestoneAssigned of [true, false]) {
+      const body = masterIncidentIssueBody({ evidence, decision, milestoneAssigned });
+      const { missing } = evaluatePlanningRules(
+        { stateName: "Backlog", createdBy: { id: "actor-1" }, description: body, parentId: null, relatedIssueIds: [], childCount: 0 },
+        { dispatcher },
+      );
+      expect(missing).toEqual([]);
+    }
   });
 });

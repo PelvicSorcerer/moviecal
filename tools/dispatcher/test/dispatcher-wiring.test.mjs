@@ -156,7 +156,9 @@ describe("dispatcher run-loop wiring (MOV-129/MOV-317/MOV-366)", () => {
   it("reads and writes nothing at all in off mode (MOV-308)", () => {
     const body = bodyOf("cmdAuditIssuesOnce");
     const modeAt = body.indexOf("resolveIssueSpecMode()");
-    const offReturnAt = body.indexOf('issueSpecMode === "off"');
+    // MOV-514: skipped only when both the completeness contract and the
+    // planning rules are off.
+    const offReturnAt = body.indexOf('issueSpecMode === "off" && planningRulesMode === "off"');
     const clientAt = body.indexOf("buildLinearClient()");
     expect(modeAt).toBeGreaterThan(-1);
     expect(offReturnAt).toBeGreaterThan(modeAt);
@@ -170,8 +172,21 @@ describe("dispatcher run-loop wiring (MOV-129/MOV-317/MOV-366)", () => {
     // without a code change.
     expect(body).toMatch(/AUDITED_SPEC_STATE_TYPES\.has\(/);
     expect(body).not.toMatch(/"Spec Ready"|"Icebox"/);
-    expect(body).toMatch(/issuesForSpecAudit\(\{ teamKey, stateNames \}\)/);
-    expect(body).toMatch(/auditIssueSpecs\(issues, \{ linearClient, dryRun \}\)/);
+    expect(body).toMatch(/issuesForSpecAudit\(\{\s*teamKey,\s*stateNames,\s*includePlanningFields: planningRulesMode !== "off",?\s*\}\)/);
+    expect(body).toMatch(/auditIssueSpecs\(issues, \{[^}]*linearClient[^}]*dryRun[^}]*\}\)/);
+  });
+
+  it("the project planning audit only logs and saves a summary; it never mutates Linear (MOV-514)", () => {
+    const body = bodyOf("planningAuditPass");
+    expect(body).toMatch(/projectsForPlanningAudit\(\)/);
+    expect(body).toMatch(/projectIssuesForPlanningAudit\(/);
+    expect(body).toMatch(/PlanningAuditStateStore/);
+    for (const mutation of ["addComment", "moveToState", "createIssue", "save_issue", "assignIssue", "delegateIssue", "updateIssuePriority"]) {
+      expect(body).not.toContain(mutation);
+    }
+    // Always report-only: not gated on the mode being enforce, and a failure never propagates.
+    expect(body).toMatch(/catch \(err\)/);
+    expect(bodyOf("cmdAuditIssuesOnce")).toMatch(/planningRulesMode !== "off"\) await planningAuditPass/);
   });
 
   it("standalone audit-issues acquires the dispatcher lock only for a mutating run (MOV-308)", () => {
@@ -389,6 +404,8 @@ describe("no inbound listener or new secret (MOV-158 / MOV-141 / MOV-159)", () =
       // MOV-314: durable incident state for master-CI observations, not a credential.
       "masterIncidentLedgerStatePath",
       "ownerNotificationStatePath",
+      // MOV-514: last project planning-audit summary (counts only), not a credential.
+      "planningAuditStatePath",
       "prAutonomyLedgerStatePath",
       "priorityPropagationStatePath",
       // MOV-189: dispatcher state, not a credential — it preserves the

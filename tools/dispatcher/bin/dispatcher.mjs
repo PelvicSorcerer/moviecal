@@ -112,6 +112,9 @@ import {
   resolveMasterLineageMaxDistance,
   resolveMasterIncidentProject,
   resolveIssueSpecMode,
+  resolvePlanningRulesMode,
+  resolvePlanningBacklogMaxAgeDays,
+  planningAuditStatePath,
   resolveIssueSpecAuditIntervalMs,
   resolveDefaultOwnerEmail,
   checkSecretFileMode,
@@ -158,6 +161,13 @@ import { createDelegateAssigner } from "../src/delegate-assignment.mjs";
 import { OwnerNotificationLedger, botUserIdsOf, escalateToOwner } from "../src/owner-escalation.mjs";
 import { AUDITED_SPEC_STATE_TYPES, evaluateIssueSpec, formatIssueSpecMissing } from "../src/issue-spec.mjs";
 import { auditIssueSpecs, IssueSpecAuditScheduleStore, isAuditDue } from "../src/issue-spec-audit.mjs";
+import {
+  auditPlanning,
+  formatPlanningAudit,
+  planningAuditSummary,
+  PlanningAuditStateStore,
+  OPERATIONS_BACKLOG_PROJECT,
+} from "../src/planning-audit.mjs";
 import { propagatePriorities, TERMINAL_PRIORITY_STATE_TYPES } from "../src/priority-propagation.mjs";
 import { reconcileParents } from "../src/parent-completion-guard.mjs";
 import { defaultRunner as ghRunner } from "../src/pr-check.mjs";
@@ -363,6 +373,21 @@ async function cmdDoctor() {
     });
   }
 
+  // Planning rules (MOV-514): own switch, informational like the above.
+  {
+    const mode = resolvePlanningRulesMode();
+    checks.push({
+      name: "planning rules",
+      ok: true,
+      detail:
+        mode === "enforce"
+          ? "enforce — the promoter refuses a parent issue missing Problem / Done when / Not part of this, or an untied follow-up; the project audit stays report-only"
+          : mode === "off"
+            ? "off (MOVIECAL_PLANNING_RULES_MODE=off) — per-issue planning rules and the project planning audit do not run"
+            : "report (default) — violations are logged and audited with the issue-completeness comments; nothing is withheld. Raise with MOVIECAL_PLANNING_RULES_MODE=enforce",
+    });
+  }
+
   // Worker-quota-pool cooldowns (MOV-360). Informational, like the issue
   // completeness contract above: `doctor` never mutates, so this is a read of
   // the same live store `dispatcher run` gates dispatch on, not a probe of
@@ -495,7 +520,14 @@ async function cmdDoctor() {
 /** Read-only view of the launchd first-poll record, for an operator. */
 function cmdHealth() {
   const health = new DispatcherLaunchHealthStore(dispatcherLaunchHealthStatePath()).status();
-  console.log(JSON.stringify(health, null, 2));
+  // MOV-514: report-only planning-audit summary; never affects the exit code.
+  let planningAudit = null;
+  try {
+    planningAudit = new PlanningAuditStateStore(planningAuditStatePath()).load();
+  } catch {
+    planningAudit = null;
+  }
+  console.log(JSON.stringify({ ...health, planningRules: { mode: resolvePlanningRulesMode(), lastAudit: planningAudit && planningAudit.lastRunAt ? planningAudit : null } }, null, 2));
   return ["healthy", "unknown"].includes(health.status) ? 0 : 1;
 }
 
@@ -1181,10 +1213,16 @@ async function cmdPromoteOnce({ dryRun = false } = {}) {
   }
 
   const issueSpecMode = resolveIssueSpecMode();
+  const planningRulesMode = resolvePlanningRulesMode();
+  const dispatcher = resolveDispatcherDelegate();
   const ownerAssignment = createOwnerAssigner({ linearClient, teamKey, ownerEmail: resolveDefaultOwnerEmail() });
   const delegateAssignment = createDelegateAssigner({ linearClient, delegate: resolveDispatcherDelegate() });
   const ownerLedger = new OwnerNotificationLedger(ownerNotificationStatePath());
-  const issues = await linearClient.issuesForPromotion({ teamKey, stateNames: PROMOTABLE_STATES });
+  const issues = await linearClient.issuesForPromotion({
+    teamKey,
+    stateNames: PROMOTABLE_STATES,
+    includePlanningFields: planningRulesMode !== "off",
+  });
   const isBlockerSatisfied = buildIsIssueSatisfied(issues);
   const results = await promoteEligible(issues, {
     linearClient,
@@ -1192,6 +1230,8 @@ async function cmdPromoteOnce({ dryRun = false } = {}) {
     isBlockerSatisfied,
     dryRun,
     issueSpecMode,
+    planningRulesMode,
+    dispatcher,
     ownerAssignment,
     delegateAssignment,
   });
@@ -1221,6 +1261,9 @@ async function cmdPromoteOnce({ dryRun = false } = {}) {
     if (issueSpecMode !== "enforce" && r.specViolations.length > 0) {
       console.log(`${r.issue}: issue-spec violations (${issueSpecMode} mode, not enforced) — ${r.specViolations.join("; ")}`);
     }
+    if (planningRulesMode !== "enforce" && (r.planningViolations || []).length > 0) {
+      console.log(`${r.issue}: planning-rule violations (${planningRulesMode} mode, not enforced) — ${r.planningViolations.join("; ")}`);
+    }
   }
   console.log(
     dryRun
@@ -1245,8 +1288,11 @@ async function cmdPromoteOnce({ dryRun = false } = {}) {
  */
 async function cmdAuditIssuesOnce({ dryRun = false } = {}) {
   const issueSpecMode = resolveIssueSpecMode();
-  if (issueSpecMode === "off") {
-    console.log("Issue-completeness audit skipped (MOVIECAL_ISSUE_SPEC_MODE=off) — nothing read, nothing written.");
+  const planningRulesMode = resolvePlanningRulesMode();
+  if (issueSpecMode === "off" && planningRulesMode === "off") {
+    console.log(
+      "Issue audit skipped (MOVIECAL_ISSUE_SPEC_MODE=off and MOVIECAL_PLANNING_RULES_MODE=off) — nothing read, nothing written.",
+    );
     return 0;
   }
 
@@ -1266,8 +1312,18 @@ async function cmdAuditIssuesOnce({ dryRun = false } = {}) {
     return 1;
   }
 
-  const issues = await linearClient.issuesForSpecAudit({ teamKey, stateNames });
-  const results = await auditIssueSpecs(issues, { linearClient, dryRun });
+  const issues = await linearClient.issuesForSpecAudit({
+    teamKey,
+    stateNames,
+    includePlanningFields: planningRulesMode !== "off",
+  });
+  const results = await auditIssueSpecs(issues, {
+    linearClient,
+    dryRun,
+    issueSpecMode,
+    planningRulesMode,
+    dispatcher: resolveDispatcherDelegate(),
+  });
 
   let wrote = 0;
   for (const result of results) {
@@ -1284,7 +1340,33 @@ async function cmdAuditIssuesOnce({ dryRun = false } = {}) {
       ? `Dry run — ${wrote} issue-completeness comment(s) would be posted across ${results.length} issue(s), nothing written.`
       : `Issue-completeness audit posted ${wrote} comment(s) across ${results.length} issue(s).`,
   );
+
+  if (planningRulesMode !== "off") await planningAuditPass(linearClient, { dryRun });
   return 0;
+}
+
+/**
+ * MOV-514: the project-level planning audit. Read-only and report-only in every
+ * mode (including `enforce`): it prints findings and saves a summary for
+ * `dispatcher health`, and never mutates Linear. A failure here is logged and
+ * never fails the issue audit.
+ */
+async function planningAuditPass(linearClient, { dryRun = false } = {}) {
+  try {
+    const projects = await linearClient.projectsForPlanningAudit();
+    for (const project of projects) {
+      // Issue lists are only needed for the Operations backlog (age/size) and
+      // for drift on projects that name exit issues; skip the read otherwise.
+      if (project.name === OPERATIONS_BACKLOG_PROJECT || /\b[A-Z][A-Z0-9]*-\d+\b/.test(project.description || "")) {
+        project.issues = await linearClient.projectIssuesForPlanningAudit(project.id);
+      }
+    }
+    const findings = auditPlanning(projects, { backlogMaxAgeDays: resolvePlanningBacklogMaxAgeDays() });
+    for (const line of formatPlanningAudit(findings)) console.log(line);
+    if (!dryRun) new PlanningAuditStateStore(planningAuditStatePath()).save(planningAuditSummary(findings));
+  } catch (err) {
+    console.error("Planning audit failed (report-only, continuing):", err.message);
+  }
 }
 
 async function cmdAuditIssues({ dryRun = false } = {}) {
@@ -1369,7 +1451,7 @@ function recordIssueSpecAuditCompleted() {
 
 /** Run the issue-completeness audit inside the poll loop; never abort dispatch. */
 async function auditIssuesPass() {
-  if (resolveIssueSpecMode() === "off") return;
+  if (resolveIssueSpecMode() === "off" && resolvePlanningRulesMode() === "off") return;
   const scheduleStore = new IssueSpecAuditScheduleStore(issueSpecAuditStatePath());
   if (!isAuditDue(scheduleStore.loadOrReset().lastRunAt, Date.now(), resolveIssueSpecAuditIntervalMs())) return;
   try {

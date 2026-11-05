@@ -275,6 +275,23 @@ Preflight runs before every dispatch, no matter how the issue entered `Ready for
 - **Locking.** A mutating standalone `dispatcher audit-issues` takes the dispatcher's singleton lock (exit 2 if the daemon already holds it), exactly as `priorities` and `reconcile-parents` do. `--dry-run` never contends for it, so previewing the audit against a running daemon is always safe.
 - **Cadence.** A successful audit persists its completion time in `~/.config/moviecal/issue-spec-audit-state.json`. Missing or corrupt schedule state triggers one audit; a failed pass is retried next cycle. A manual, non-dry-run audit resets the same clock.
 
+### Planning rules (MOV-514)
+
+The rules and their rationale are in `docs/governance/linear-information-architecture.md` §Planning rules and its "Machine checks" subsection. This is the operator side.
+
+**Mode.** `MOVIECAL_PLANNING_RULES_MODE` = `off` | `report` | `enforce`, resolved by `resolvePlanningRulesMode()` and printed by `dispatcher doctor`. Default **`report`**; an unrecognized value reads as `report`. It is independent of `MOVIECAL_ISSUE_SPEC_MODE`, so the completeness contract can be in `enforce` while these stay in `report`. `off` disables both new passes (the per-issue rules and the project audit); if `MOVIECAL_ISSUE_SPEC_MODE` is also `off`, `audit-issues` skips reading Linear entirely.
+
+**What each mode does.**
+
+- *Per-issue rules* (parent sections, follow-up provenance): in `report` they are logged by `dispatcher promote` and added to the audit pass's issue comment (one comment per changed missing set, same fingerprint de-duplication). In `enforce` the promoter additionally refuses to promote a violating issue. Dispatch preflight is unchanged.
+- *Project audit* (bucket hygiene, exit stated): read-only and report-only in every mode. `dispatcher audit-issues` prints one `planning audit [rule] subject: message` line per finding, and saves a summary under `~/.config/moviecal/planning-audit-state.json` that `dispatcher health` (`npm run dispatcher:health`) prints as `planningRules.lastAudit`. It reads projects and their issues and never writes to Linear. It runs with the in-loop audit, at most once per `MOVIECAL_ISSUE_SPEC_AUDIT_INTERVAL_MS`. `--dry-run` prints findings without saving the summary.
+
+**Raising it to `enforce`** is the owner's step. Read a `report` run first, fix or exempt what it names, then set `MOVIECAL_PLANNING_RULES_MODE=enforce` in the dispatcher's environment on the Mac and restart the daemon (a restart needs the owner's go). To roll back, set it to `report` or `off` and restart.
+
+**Dispatcher identity.** The provenance rule recognizes the dispatcher's own issues by matching the issue creator against `resolveDispatcherDelegate()` (the app-actor id, or the name `moviecal-dispatcher`); nothing is hardcoded in the rule.
+
+**Query size.** The per-issue rules add `creator`, `parent` and `children(first: 2)` to the promote and audit reads, only when the mode is not `off`. `first: 2` is enough to decide "2 or more children" and keeps the audit read well under Linear's complexity limit (MOV-435).
+
 **Pending:** `AGENTS.md`'s "Planning-object changes" bullet still needs a one-line pointer to the contract for anyone filing an issue. `AGENTS.md` is a worker-protected path (§Security model), so a dispatched worker cannot write it — that line is an owner edit.
 
 **Execution routing.** `execution:{cloud,mac,none}` is a mutually-exclusive

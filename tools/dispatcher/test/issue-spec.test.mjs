@@ -15,6 +15,9 @@ import {
   DEFAULT_ISSUE_SPEC_MODE,
   EXEMPT_SPEC_STATE_NAMES,
   AUDITED_SPEC_STATE_TYPES,
+  evaluatePlanningRules,
+  normalizePlanningRulesMode,
+  isDispatcherAuthored,
 } from "../src/issue-spec.mjs";
 
 const COMPLETE_DISPATCHABLE_LABELS = [
@@ -318,5 +321,91 @@ describe("modes", () => {
   it("offers exactly off/report/enforce and defaults to report", () => {
     expect(ISSUE_SPEC_MODES).toEqual(["off", "report", "enforce"]);
     expect(DEFAULT_ISSUE_SPEC_MODE).toBe("report");
+  });
+});
+
+// MOV-514: per-issue planning rules.
+describe("evaluatePlanningRules (MOV-514)", () => {
+  const dispatcher = { id: "actor-1", name: "moviecal-dispatcher" };
+  const FULL_PARENT = "## Problem\nx\n\n## Done when\ny\n\n## Not part of this\nz\n";
+
+  it("flags a parent with 2+ children that lacks each required section", () => {
+    const { missing } = evaluatePlanningRules({ stateName: "Backlog", childCount: 2, description: "## Problem\nx\n" });
+    expect(missing.map((m) => m.code)).toEqual(["planning-parent-done-when", "planning-parent-not-part"]);
+  });
+
+  it("passes a compliant parent, matching headings case-insensitively", () => {
+    expect(evaluatePlanningRules({ stateName: "Backlog", childCount: 3, description: FULL_PARENT.toLowerCase() }).missing).toEqual([]);
+  });
+
+  it("treats an empty section as missing", () => {
+    const { missing } = evaluatePlanningRules({ stateName: "Backlog", childCount: 2, description: "## Problem\n\n## Done when\ny\n## Not part of this\nz" });
+    expect(missing.map((m) => m.code)).toEqual(["planning-parent-problem"]);
+  });
+
+  it("does not treat a single-child issue as a parent", () => {
+    expect(evaluatePlanningRules({ stateName: "Backlog", childCount: 1, description: "" }).missing).toEqual([]);
+  });
+
+  it("exempts Triage and terminal states", () => {
+    for (const stateName of EXEMPT_SPEC_STATE_NAMES) {
+      expect(evaluatePlanningRules({ stateName, childCount: 5, description: "" }).missing).toEqual([]);
+    }
+  });
+
+  it("flags a dispatcher-created issue with neither parent nor Separate line", () => {
+    const { missing } = evaluatePlanningRules(
+      { stateName: "Backlog", createdBy: { id: "actor-1" }, description: "body", relatedIssueIds: [] },
+      { dispatcher },
+    );
+    expect(missing.map((m) => m.code)).toEqual(["planning-provenance"]);
+  });
+
+  it("passes with a parent, or with Separate: plus a related link", () => {
+    const base = { stateName: "Backlog", createdBy: { name: "Moviecal-Dispatcher" }, description: "body" };
+    expect(evaluatePlanningRules({ ...base, parentId: "p" }, { dispatcher }).missing).toEqual([]);
+    expect(
+      evaluatePlanningRules({ ...base, description: "Separate: unrelated defect", relatedIssueIds: ["i"] }, { dispatcher }).missing,
+    ).toEqual([]);
+  });
+
+  it("needs both the Separate line and the related link", () => {
+    const base = { stateName: "Backlog", createdBy: { id: "actor-1" } };
+    expect(evaluatePlanningRules({ ...base, description: "Separate: r", relatedIssueIds: [] }, { dispatcher }).missing).toHaveLength(1);
+    expect(evaluatePlanningRules({ ...base, description: "body", relatedIssueIds: ["i"] }, { dispatcher }).missing).toHaveLength(1);
+  });
+
+  it("applies to an issue that says it was found while working another", () => {
+    const { missing } = evaluatePlanningRules({ stateName: "Backlog", description: "Found while working MOV-1.", createdBy: null });
+    expect(missing.map((m) => m.code)).toEqual(["planning-provenance"]);
+  });
+
+  it("leaves human-filed issues alone", () => {
+    expect(
+      evaluatePlanningRules({ stateName: "Backlog", createdBy: { id: "human" }, description: "body" }, { dispatcher }).missing,
+    ).toEqual([]);
+  });
+
+  it("exempts master-CI remediation by its existing marker", () => {
+    expect(
+      evaluatePlanningRules(
+        { stateName: "Backlog", createdBy: { id: "actor-1" }, description: "x\n<!-- moviecal-master-incident:k -->" },
+        { dispatcher },
+      ).missing,
+    ).toEqual([]);
+  });
+
+  it("does not match the dispatcher by an empty identity", () => {
+    expect(isDispatcherAuthored({ id: "a", name: "x" }, {})).toBe(false);
+    expect(isDispatcherAuthored(null, dispatcher)).toBe(false);
+  });
+});
+
+describe("normalizePlanningRulesMode (MOV-514)", () => {
+  it("defaults to report and reads unknown as report", () => {
+    expect(normalizePlanningRulesMode(undefined)).toBe("report");
+    expect(normalizePlanningRulesMode("enforced")).toBe("report");
+    expect(normalizePlanningRulesMode(" OFF ")).toBe("off");
+    expect(normalizePlanningRulesMode("Enforce")).toBe("enforce");
   });
 });

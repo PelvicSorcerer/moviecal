@@ -35,7 +35,13 @@
 // docs/governance/linear-information-architecture.md §Issue completeness
 // contract.
 
-import { evaluateIssueSpec, issueSpecFingerprint, ISSUE_SPEC_KIND_DESCRIPTIONS } from "./issue-spec.mjs";
+import {
+  evaluateIssueSpec,
+  evaluatePlanningRules,
+  issueSpecFingerprint,
+  ISSUE_SPEC_KIND_DESCRIPTIONS,
+  EXEMPT_SPEC_STATE_NAMES,
+} from "./issue-spec.mjs";
 import { JsonStateStore } from "./state-store.mjs";
 
 /**
@@ -128,6 +134,22 @@ export function auditCommentBody(evaluation) {
 }
 
 /**
+ * The completeness evaluation plus (MOV-514) the per-issue planning rules, in
+ * one result so a single comment and a single fingerprint cover both. Either
+ * half is skipped by its own mode; exempt states stay exempt.
+ */
+function combinedEvaluation(issue, { issueSpecMode, planningRulesMode, dispatcher }) {
+  const spec =
+    issueSpecMode === "off" ? { exempt: false, kind: null, missing: [], ok: true, reason: null } : evaluateIssueSpec(issue);
+  if (spec.exempt) return spec;
+  if (planningRulesMode === "off") return spec;
+  const planning = evaluatePlanningRules(issue, { dispatcher }).missing;
+  if (planning.length === 0) return spec;
+  const missing = [...spec.missing, ...planning];
+  return { ...spec, missing, ok: false, reason: missing.map((m) => m.message).join("; ") };
+}
+
+/**
  * Audit every issue in `issues` and comment on the non-compliant ones.
  *
  * The caller resolves which issues to pass in — `bin/dispatcher.mjs` selects
@@ -141,15 +163,23 @@ export function auditCommentBody(evaluation) {
  * @param {object} ctx
  * @param {{addComment: (issueId: string, body: string) => Promise<any>}} ctx.linearClient
  * @param {boolean} [ctx.dryRun] - evaluate and report, write nothing
+ * @param {"off"|"report"|"enforce"} [ctx.issueSpecMode] - `off` skips the
+ *   completeness contract (default `report`; the audit never blocks anything)
+ * @param {"off"|"report"|"enforce"} [ctx.planningRulesMode] - MOV-514: `off`
+ *   skips the per-issue planning rules; any other value reports them, in the
+ *   same comment and fingerprint as the completeness items. Default `off` so
+ *   existing callers are unchanged.
+ * @param {{id?: string|null, name?: string}} [ctx.dispatcher] - the
+ *   dispatcher's own Linear identity, for the follow-up provenance rule
  * @returns {Promise<Array<{issue: string, action: "exempt"|"compliant"|"unchanged"|"commented"|"updated", missing: string[], fingerprint: string|null, reason: string|null}>>}
  *   one result per issue, in input order
  */
 export async function auditIssueSpecs(issues = [], ctx = {}) {
-  const { linearClient, dryRun = false } = ctx;
+  const { linearClient, dryRun = false, issueSpecMode = "report", planningRulesMode = "off", dispatcher } = ctx;
   const results = [];
 
   for (const issue of issues) {
-    const evaluation = evaluateIssueSpec(issue);
+    const evaluation = combinedEvaluation(issue, { issueSpecMode, planningRulesMode, dispatcher });
     const base = { issue: issue.identifier, missing: [], fingerprint: null, reason: null };
 
     if (evaluation.exempt) {

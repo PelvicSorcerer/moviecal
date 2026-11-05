@@ -418,3 +418,50 @@ describe("promoteEligible", () => {
     });
   });
 });
+
+describe("planning rules in the promoter (MOV-514)", () => {
+  const dispatcher = { id: "actor-1", name: "moviecal-dispatcher" };
+  const parent = issue({ ...COMPLETE_SPEC, childCount: 2 });
+  const ok = (m) => ({ isBlockerSatisfied: () => true, planningRulesMode: m, dispatcher });
+
+  it("reports but still promotes in report mode (and by default)", () => {
+    const verdict = evaluatePromotion(parent, ok("report"));
+    expect(verdict.promote).toBe(true);
+    expect(verdict.planningViolations.length).toBeGreaterThan(0);
+    expect(evaluatePromotion(parent, { isBlockerSatisfied: () => true }).promote).toBe(true);
+  });
+
+  it("refuses to promote a violating parent in enforce mode", () => {
+    const verdict = evaluatePromotion(parent, ok("enforce"));
+    expect(verdict.promote).toBe(false);
+    expect(verdict.reason).toMatch(/planning rule violation/);
+  });
+
+  it("promotes a compliant parent in enforce mode", () => {
+    const full = issue({
+      ...COMPLETE_SPEC,
+      childCount: 2,
+      description: `${READY_SECTIONS}\n\n## Problem\nx\n## Done when\ny\n## Not part of this\nz`,
+    });
+    expect(evaluatePromotion(full, ok("enforce")).promote).toBe(true);
+  });
+
+  it("ignores the rules entirely when off, and never lets the issue-spec mode enforce them", () => {
+    expect(evaluatePromotion(parent, ok("off")).planningViolations).toBeUndefined();
+    expect(evaluatePromotion(parent, { ...ok("report"), issueSpecMode: "enforce" }).reason).not.toMatch(/planning rule/);
+  });
+
+  it("carries planningViolations on promoteEligible results only when present", async () => {
+    const linearClient = { moveToState: vi.fn(), addComment: vi.fn() };
+    const results = await promoteEligible([parent], {
+      linearClient,
+      readyForAgentStateId: "s",
+      isBlockerSatisfied: () => true,
+      dryRun: true,
+      planningRulesMode: "enforce",
+      dispatcher,
+    });
+    expect(results[0].promoted).toBe(false);
+    expect(results[0].planningViolations.length).toBeGreaterThan(0);
+  });
+});

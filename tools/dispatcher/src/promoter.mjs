@@ -25,7 +25,13 @@
 // reason instead of promoting unowned.
 
 import { isCoordinationIssue } from "./execution-routing.mjs";
-import { evaluateIssueSpec, formatIssueSpecMissing, DEFAULT_ISSUE_SPEC_MODE } from "./issue-spec.mjs";
+import {
+  evaluateIssueSpec,
+  evaluatePlanningRules,
+  formatIssueSpecMissing,
+  DEFAULT_ISSUE_SPEC_MODE,
+  DEFAULT_PLANNING_RULES_MODE,
+} from "./issue-spec.mjs";
 import { needsOwnerAssignment } from "./owner-assignment.mjs";
 import { needsDelegateAssignment } from "./delegate-assignment.mjs";
 
@@ -80,10 +86,29 @@ export function lastPreflightFailureReason(recentComments = []) {
  *   promotes exactly as before and returns the violations for the caller to
  *   log; `enforce` refuses to promote an incomplete issue and names every
  *   missing item in the reason.
- * @returns {{ promote: boolean, reason: string, specViolations: string[] }}
+ * @param {"off"|"report"|"enforce"} [ctx.planningRulesMode] - MOV-514: the
+ *   per-issue planning rules, on their own switch. `off` skips them; `report`
+ *   (the default) only returns them as `planningViolations`; `enforce` refuses
+ *   to promote a violating issue.
+ * @param {{id?: string|null, name?: string}} [ctx.dispatcher] - the
+ *   dispatcher's own Linear identity, for the follow-up provenance rule
+ * @returns {{ promote: boolean, reason: string, specViolations: string[], planningViolations: string[] }}
  */
 export function evaluatePromotion(issue, ctx) {
-  const { isBlockerSatisfied, issueSpecMode = DEFAULT_ISSUE_SPEC_MODE } = ctx;
+  const verdict = evaluatePromotionCore(issue, ctx);
+  // Present only when there is something to report, so the shape every
+  // pre-MOV-514 caller sees is unchanged.
+  if (verdict.planningViolations.length === 0) delete verdict.planningViolations;
+  return verdict;
+}
+
+function evaluatePromotionCore(issue, ctx) {
+  const {
+    isBlockerSatisfied,
+    issueSpecMode = DEFAULT_ISSUE_SPEC_MODE,
+    planningRulesMode = DEFAULT_PLANNING_RULES_MODE,
+    dispatcher,
+  } = ctx;
   const labels = issue.labels || [];
 
   // MOV-303: evaluated for every issue this pass sees, whatever the mode and
@@ -92,12 +117,14 @@ export function evaluatePromotion(issue, ctx) {
   // enforcement branch.
   const spec = issueSpecMode === "off" ? { missing: [] } : evaluateIssueSpec(issue);
   const specViolations = spec.missing.map((item) => item.message);
+  const planning = planningRulesMode === "off" ? { missing: [] } : evaluatePlanningRules(issue, { dispatcher });
+  const planningViolations = planning.missing.map((item) => item.message);
 
   if (!PROMOTABLE_STATES.includes(issue.stateName)) {
-    return { promote: false, reason: `state "${issue.stateName}" is not auto-promotable`, specViolations };
+    return { promote: false, reason: `state "${issue.stateName}" is not auto-promotable`, specViolations, planningViolations };
   }
   if (labels.includes("human-only")) {
-    return { promote: false, reason: "labeled human-only", specViolations };
+    return { promote: false, reason: "labeled human-only", specViolations, planningViolations };
   }
   // Coordination issues (execution route "none", from `type:coordination`)
   // must never auto-promote — they produce no PR. This is inference-based and
@@ -108,13 +135,14 @@ export function evaluatePromotion(issue, ctx) {
       promote: false,
       reason: "coordination issue — never auto-promoted (route execution:none)",
       specViolations,
+      planningViolations,
     };
   }
   if (!sectionHasContent(issue.description, ACCEPTANCE_HEADING_RE)) {
-    return { promote: false, reason: "no non-empty acceptance-criteria section", specViolations };
+    return { promote: false, reason: "no non-empty acceptance-criteria section", specViolations, planningViolations };
   }
   if (!sectionHasContent(issue.description, TESTING_HEADING_RE)) {
-    return { promote: false, reason: "no non-empty Testing Expectations section", specViolations };
+    return { promote: false, reason: "no non-empty Testing Expectations section", specViolations, planningViolations };
   }
 
   // MOV-303: the completeness gate. In `enforce` mode an issue that is not
@@ -128,12 +156,24 @@ export function evaluatePromotion(issue, ctx) {
       promote: false,
       reason: `incomplete issue spec (MOV-303): ${formatIssueSpecMissing(spec.missing)}`,
       specViolations,
+      planningViolations,
+    };
+  }
+
+  // MOV-514: the planning rules, on their own switch so merging them can never
+  // block promotion of existing issues; only `enforce` withholds.
+  if (planningRulesMode === "enforce" && planningViolations.length > 0) {
+    return {
+      promote: false,
+      reason: `planning rule violation (MOV-514): ${planningViolations.join("; ")}`,
+      specViolations,
+      planningViolations,
     };
   }
 
   const unresolved = (issue.blockedByIds || []).filter((id) => !isBlockerSatisfied(id));
   if (unresolved.length > 0) {
-    return { promote: false, reason: `unresolved blocker(s): ${unresolved.join(", ")}`, specViolations };
+    return { promote: false, reason: `unresolved blocker(s): ${unresolved.join(", ")}`, specViolations, planningViolations };
   }
 
   if (issue.stateName === "Blocked") {
@@ -143,6 +183,7 @@ export function evaluatePromotion(issue, ctx) {
         promote: false,
         reason: "in Blocked with no dispatcher preflight-failure comment — left for a human",
         specViolations,
+        planningViolations,
       };
     }
     if (!RELATION_BLOCK_REASON_RE.test(reason)) {
@@ -150,6 +191,7 @@ export function evaluatePromotion(issue, ctx) {
         promote: false,
         reason: `in Blocked for a non-relation reason: "${reason}"`,
         specViolations,
+        planningViolations,
       };
     }
     // Relation block, and every blocker is now resolved (checked above) -> recover it.
@@ -159,6 +201,7 @@ export function evaluatePromotion(issue, ctx) {
     promote: true,
     reason: "acceptance criteria ✓, Testing Expectations ✓, not human-only ✓, blockers resolved ✓",
     specViolations,
+    planningViolations,
   };
 }
 
@@ -191,17 +234,18 @@ export function evaluatePromotion(issue, ctx) {
  *   a promotable single-route `execution:mac` issue with no delegate.
  */
 export async function promoteEligible(issues, ctx) {
-  const { linearClient, readyForAgentStateId, isBlockerSatisfied, dryRun = false, issueSpecMode, ownerAssignment, delegateAssignment } = ctx;
+  const { linearClient, readyForAgentStateId, isBlockerSatisfied, dryRun = false, issueSpecMode, planningRulesMode, dispatcher, ownerAssignment, delegateAssignment } = ctx;
   const results = [];
   for (const issue of issues) {
     if (issue.stateName === "Ready for Agent") continue;
-    const verdict = evaluatePromotion(issue, { isBlockerSatisfied, issueSpecMode });
+    const verdict = evaluatePromotion(issue, { isBlockerSatisfied, issueSpecMode, planningRulesMode, dispatcher });
     if (!verdict.promote) {
       results.push({
         issue: issue.identifier,
         promoted: false,
         reason: verdict.reason,
         specViolations: verdict.specViolations || [],
+        ...(verdict.planningViolations?.length ? { planningViolations: verdict.planningViolations } : {}),
       });
       continue;
     }
@@ -220,6 +264,7 @@ export async function promoteEligible(issues, ctx) {
           promoted: false,
           reason: `owner assignment: ${ownerOutcome.reason}`,
           specViolations: verdict.specViolations || [],
+        ...(verdict.planningViolations?.length ? { planningViolations: verdict.planningViolations } : {}),
         });
         continue;
       }
@@ -238,6 +283,7 @@ export async function promoteEligible(issues, ctx) {
           promoted: false,
           reason: `delegate assignment: ${delegateOutcome.reason}`,
           specViolations: verdict.specViolations || [],
+        ...(verdict.planningViolations?.length ? { planningViolations: verdict.planningViolations } : {}),
         });
         continue;
       }
@@ -252,6 +298,7 @@ export async function promoteEligible(issues, ctx) {
       promoted: true,
       reason: verdict.reason,
       specViolations: verdict.specViolations || [],
+        ...(verdict.planningViolations?.length ? { planningViolations: verdict.planningViolations } : {}),
       // Present only when an assignment was actually attempted this pass —
       // omitted (not merely false) when `ownerAssignment` was never supplied
       // or the issue already had an owner, so every caller that predates

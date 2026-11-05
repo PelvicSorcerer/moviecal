@@ -338,3 +338,47 @@ describe("IssueSpecAuditScheduleStore", () => {
     expect(store.loadOrReset()).toEqual({ lastRunAt: 111 });
   });
 });
+
+describe("auditIssueSpecs with planning rules (MOV-514)", () => {
+  const dispatcher = { id: "actor-1", name: "moviecal-dispatcher" };
+  const parentNoSections = () => issue({ childCount: 2, description: "## Acceptance criteria\n- x" });
+
+  it("ignores planning rules by default, so existing callers are unchanged", async () => {
+    const linearClient = { addComment: vi.fn() };
+    const [r] = await auditIssueSpecs([parentNoSections()], { linearClient });
+    expect(r.action).toBe("compliant");
+    expect(linearClient.addComment).not.toHaveBeenCalled();
+  });
+
+  it("reports planning violations in the same comment and de-dups by fingerprint", async () => {
+    const linearClient = { addComment: vi.fn() };
+    const subject = parentNoSections();
+    const [first] = await auditIssueSpecs([subject], { linearClient, planningRulesMode: "report", dispatcher });
+    expect(first.action).toBe("commented");
+    expect(first.missing.join(" ")).toMatch(/planning rule/);
+    const body = linearClient.addComment.mock.calls[0][1];
+    const [second] = await auditIssueSpecs([{ ...subject, recentComments: [body] }], {
+      linearClient,
+      planningRulesMode: "report",
+      dispatcher,
+    });
+    expect(second.action).toBe("unchanged");
+    expect(linearClient.addComment).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports in enforce mode too (the audit never blocks), and skips when off", async () => {
+    const linearClient = { addComment: vi.fn() };
+    const [enforced] = await auditIssueSpecs([parentNoSections()], { linearClient, planningRulesMode: "enforce", dispatcher });
+    expect(enforced.action).toBe("commented");
+    const [off] = await auditIssueSpecs([parentNoSections()], { linearClient, planningRulesMode: "off", dispatcher });
+    expect(off.action).toBe("compliant");
+  });
+
+  it("can run the planning rules with the completeness contract off", async () => {
+    const linearClient = { addComment: vi.fn() };
+    const incomplete = issue({ labels: [], childCount: 2, description: "x" });
+    const [r] = await auditIssueSpecs([incomplete], { linearClient, issueSpecMode: "off", planningRulesMode: "report", dispatcher });
+    expect(r.missing.every((m) => /planning rule/.test(m))).toBe(true);
+    expect(r.missing).toHaveLength(3);
+  });
+});

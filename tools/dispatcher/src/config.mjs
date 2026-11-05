@@ -10,7 +10,7 @@ import fs from "node:fs";
 import { LOCAL_DISPATCHER_DELEGATE } from "./dispatch-eligibility.mjs";
 import { DEFAULT_REPAIR_BUDGETS } from "./ci-outcomes.mjs";
 import { DEFAULT_MASTER_VERIFICATION_WORKFLOWS } from "./master-ci-policy.mjs";
-import { ISSUE_SPEC_MODES, DEFAULT_ISSUE_SPEC_MODE } from "./issue-spec.mjs";
+import { ISSUE_SPEC_MODES, DEFAULT_ISSUE_SPEC_MODE, normalizePlanningRulesMode } from "./issue-spec.mjs";
 
 export const REPO_ROOT = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),
@@ -420,6 +420,31 @@ export function resolveMasterIncidentProject(env = process.env) {
 export function resolveIssueSpecMode(env = process.env) {
   const raw = String(env.MOVIECAL_ISSUE_SPEC_MODE ?? "").trim().toLowerCase();
   return ISSUE_SPEC_MODES.includes(raw) ? raw : DEFAULT_ISSUE_SPEC_MODE;
+}
+
+/**
+ * How strictly the planning rules (MOV-514) are applied: `off` / `report` /
+ * `enforce`, default `report`, unknown reads as `report`. Separate from
+ * `MOVIECAL_ISSUE_SPEC_MODE` on purpose: the completeness contract may already
+ * be in `enforce`, and sharing a switch would block promotion of every
+ * existing issue the moment the new rules merged. Only the per-issue rules
+ * ever enforce; the project-level audit is always report-only.
+ */
+export function resolvePlanningRulesMode(env = process.env) {
+  return normalizePlanningRulesMode(env.MOVIECAL_PLANNING_RULES_MODE);
+}
+
+/** Operations backlog issues open longer than this many days are flagged (MOV-514). Default 60. */
+export const DEFAULT_PLANNING_BACKLOG_MAX_AGE_DAYS = 60;
+
+export function resolvePlanningBacklogMaxAgeDays(env = process.env) {
+  const raw = Number(env.MOVIECAL_PLANNING_BACKLOG_MAX_AGE_DAYS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_PLANNING_BACKLOG_MAX_AGE_DAYS;
+}
+
+/** Last project planning-audit summary, shown by `dispatcher health` (MOV-514). */
+export function planningAuditStatePath() {
+  return path.join(configDir(), "planning-audit-state.json");
 }
 
 /**

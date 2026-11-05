@@ -13,6 +13,8 @@ import {
   resolveTrustedReviewers,
   resolveRepairBudgets,
   resolveIssueSpecMode,
+  resolvePlanningRulesMode,
+  resolvePlanningBacklogMaxAgeDays,
   resolveIssueSpecAuditIntervalMs,
   resolveDefaultOwnerEmail,
   DEFAULT_ISSUE_SPEC_AUDIT_INTERVAL_MS,
@@ -362,5 +364,25 @@ describe("post-merge master CI observer configuration (MOV-305)", () => {
 
   it("stores the incident ledger under the shared config directory", () => {
     expect(masterIncidentLedgerStatePath()).toBe(path.join(configDir(), "master-incidents.json"));
+  });
+});
+
+describe("planning-rules mode (MOV-514)", () => {
+  it("defaults to report and is independent of the issue-spec switch", () => {
+    expect(resolvePlanningRulesMode({})).toBe("report");
+    expect(resolvePlanningRulesMode({ MOVIECAL_ISSUE_SPEC_MODE: "enforce" })).toBe("report");
+    expect(resolveIssueSpecMode({ MOVIECAL_PLANNING_RULES_MODE: "enforce" })).toBe("report");
+  });
+
+  it("honours off / report / enforce and reads anything else as report", () => {
+    expect(resolvePlanningRulesMode({ MOVIECAL_PLANNING_RULES_MODE: "off" })).toBe("off");
+    expect(resolvePlanningRulesMode({ MOVIECAL_PLANNING_RULES_MODE: " ENFORCE " })).toBe("enforce");
+    expect(resolvePlanningRulesMode({ MOVIECAL_PLANNING_RULES_MODE: "strict" })).toBe("report");
+  });
+
+  it("defaults the backlog age limit to 60 days and ignores bad values", () => {
+    expect(resolvePlanningBacklogMaxAgeDays({})).toBe(60);
+    expect(resolvePlanningBacklogMaxAgeDays({ MOVIECAL_PLANNING_BACKLOG_MAX_AGE_DAYS: "30" })).toBe(30);
+    expect(resolvePlanningBacklogMaxAgeDays({ MOVIECAL_PLANNING_BACKLOG_MAX_AGE_DAYS: "-1" })).toBe(60);
   });
 });

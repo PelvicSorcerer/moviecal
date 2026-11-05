@@ -1184,3 +1184,90 @@ describe("LinearClient.appActorByName (MOV-508)", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
+
+// MOV-514: planning-rule fields and project-audit reads.
+describe("LinearClient planning reads (MOV-514)", () => {
+  const node = (overrides = {}) => ({
+    id: "id-1",
+    identifier: "MOV-1",
+    title: "t",
+    description: "d",
+    url: "u",
+    state: { name: "Backlog", type: "backlog" },
+    project: { name: "P", state: "started", projectMilestones: { nodes: [] } },
+    labels: { nodes: [] },
+    relations: { nodes: [{ type: "related", relatedIssue: { id: "rel-1" } }, { type: "blocks", relatedIssue: { id: "x" } }] },
+    inverseRelations: { nodes: [{ type: "related", issue: { id: "rel-2" } }] },
+    comments: { nodes: [] },
+    creator: { id: "c1", name: "moviecal-dispatcher", displayName: null },
+    parent: null,
+    children: { nodes: [{ id: "a" }, { id: "b" }] },
+    ...overrides,
+  });
+  const mock = (data) => vi.fn().mockResolvedValue({ json: async () => ({ data }) });
+
+  it("selects and normalizes the planning fields only when asked", async () => {
+    const fetchImpl = mock({ issues: { pageInfo: { hasNextPage: false }, nodes: [node()] } });
+    const client = new LinearClient({ apiKey: "k", fetchImpl });
+    const [withFields] = await client.issuesForSpecAudit({ teamKey: "MOV", stateNames: ["Backlog"], includePlanningFields: true });
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body).query).toContain("children(first: 2)");
+    expect(withFields).toMatchObject({
+      createdBy: { id: "c1" },
+      parentId: null,
+      childCount: 2,
+      relatedIssueIds: ["rel-1", "rel-2"],
+    });
+
+    const plain = mock({ issues: { pageInfo: { hasNextPage: false }, nodes: [node()] } });
+    const [without] = await new LinearClient({ apiKey: "k", fetchImpl: plain }).issuesForSpecAudit({ teamKey: "MOV", stateNames: ["Backlog"] });
+    expect(JSON.parse(plain.mock.calls[0][1].body).query).not.toContain("children(first: 2)");
+    expect(without.childCount).toBeUndefined();
+  });
+
+  it("reads open projects and a project's issues with only read queries", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        json: async () => ({
+          data: {
+            projects: {
+              pageInfo: { hasNextPage: false },
+              nodes: [
+                { id: "p1", name: "Open", state: "started", description: "Exit: x", content: null, projectMilestones: { nodes: [{ id: "m", name: "M", description: null }] } },
+                { id: "p2", name: "Done", state: "completed", description: "", content: null, projectMilestones: { nodes: [] } },
+              ],
+            },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        json: async () => ({
+          data: {
+            project: {
+              issues: {
+                pageInfo: { hasNextPage: false },
+                nodes: [
+                  {
+                    identifier: "MOV-1",
+                    description: null,
+                    createdAt: "2026-01-01T00:00:00Z",
+                    completedAt: null,
+                    state: { type: "backlog" },
+                    parent: null,
+                    attachments: { nodes: [{ url: "https://github.com/o/r/pull/1", sourceType: "github" }, { url: "https://github.com/o/r/pull/1", sourceType: "github" }, { url: "https://example.test", sourceType: "x" }] },
+                  },
+                ],
+              },
+            },
+          },
+        }),
+      });
+    const client = new LinearClient({ apiKey: "k", fetchImpl });
+    const projects = await client.projectsForPlanningAudit();
+    expect(projects.map((p) => p.name)).toEqual(["Open"]);
+    expect(projects[0].milestones).toEqual([{ name: "M", description: "" }]);
+    const issues = await client.projectIssuesForPlanningAudit("p1");
+    expect(issues[0]).toMatchObject({ identifier: "MOV-1", stateType: "backlog", linkedPrCount: 1 });
+    for (const call of fetchImpl.mock.calls) expect(JSON.parse(call[1].body).query).not.toMatch(/mutation/);
+  });
+});

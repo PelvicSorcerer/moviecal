@@ -79,6 +79,33 @@ function recentCommentBodies(node) {
   return (node.comments?.nodes || []).map((comment) => comment.body).reverse();
 }
 
+/**
+ * Extra selection the per-issue planning rules need (MOV-514): who created the
+ * issue, its parent, and whether it has 2+ children (`first: 2` is enough to
+ * decide that, which keeps the query well under Linear's complexity limit --
+ * see MOV-435). Appended only to the queries that evaluate those rules, and
+ * only when the planning rules are not `off`.
+ */
+const ISSUE_PLANNING_FIELDS = `
+  creator { id name displayName }
+  parent { id }
+  children(first: 2) { nodes { id } }
+`;
+
+function withPlanningFields(node, normalized) {
+  const related = [
+    ...(node.relations?.nodes || []).filter((r) => r.type === "related" && r.relatedIssue).map((r) => r.relatedIssue.id),
+    ...(node.inverseRelations?.nodes || []).filter((r) => r.type === "related" && r.issue).map((r) => r.issue.id),
+  ];
+  return {
+    ...normalized,
+    createdBy: node.creator || null,
+    parentId: node.parent ? node.parent.id : null,
+    childCount: (node.children?.nodes || []).length,
+    relatedIssueIds: [...new Set(related)],
+  };
+}
+
 function withIssueSpecFields(node, normalized) {
   const project = node.project || null;
   return {
@@ -240,7 +267,7 @@ export class LinearClient {
    * reason). Same normalization as issuesInState, plus `stateName` and
    * `recentComments` (oldest-to-newest).
    */
-  async issuesForPromotion({ teamKey, stateNames }) {
+  async issuesForPromotion({ teamKey, stateNames, includePlanningFields = false }) {
     const query = `
       query($teamKey: String!, $stateNames: [String!]!) {
         issues(filter: {
@@ -250,6 +277,7 @@ export class LinearClient {
           nodes {
             ${ISSUE_FIELDS}
             ${ISSUE_SPEC_FIELDS}
+            ${includePlanningFields ? ISSUE_PLANNING_FIELDS : ""}
             state { name }
             comments(first: 20) { nodes { body } }
           }
@@ -258,7 +286,7 @@ export class LinearClient {
     `;
     const data = await this.request(query, { teamKey, stateNames });
     return data.issues.nodes.map((node) => ({
-      ...withIssueSpecFields(node, normalizeIssue(node)),
+      ...(includePlanningFields ? withPlanningFields(node, withIssueSpecFields(node, normalizeIssue(node))) : withIssueSpecFields(node, normalizeIssue(node))),
       stateName: node.state ? node.state.name : null,
       recentComments: recentCommentBodies(node),
     }));
@@ -276,7 +304,7 @@ export class LinearClient {
    * promoter reads two states, while this reads every open state in the team
    * and will routinely exceed a single page.
    */
-  async issuesForSpecAudit({ teamKey, stateNames }) {
+  async issuesForSpecAudit({ teamKey, stateNames, includePlanningFields = false }) {
     const query = `
       query($teamKey: String!, $stateNames: [String!]!, $after: String) {
         issues(filter: {
@@ -287,6 +315,7 @@ export class LinearClient {
           nodes {
             ${ISSUE_FIELDS}
             ${ISSUE_SPEC_FIELDS}
+            ${includePlanningFields ? ISSUE_PLANNING_FIELDS : ""}
             state { name type }
             comments(first: 20) { nodes { body } }
           }
@@ -301,7 +330,7 @@ export class LinearClient {
       const issues = data.issues || {};
       out.push(
         ...(issues.nodes || []).map((node) => ({
-          ...withIssueSpecFields(node, normalizeIssue(node)),
+          ...(includePlanningFields ? withPlanningFields(node, withIssueSpecFields(node, normalizeIssue(node))) : withIssueSpecFields(node, normalizeIssue(node))),
           stateName: node.state ? node.state.name : null,
           stateType: node.state ? node.state.type : null,
           recentComments: recentCommentBodies(node),
@@ -392,6 +421,91 @@ export class LinearClient {
               stateName: child.state ? child.state.name : null,
             })),
           })),
+      );
+      if (!issues.pageInfo?.hasNextPage || !issues.pageInfo.endCursor) break;
+      after = issues.pageInfo.endCursor;
+    }
+    return out;
+  }
+
+  /**
+   * Read-only: every project that is not completed or canceled, with its
+   * description, status, and milestones, for the planning audit (MOV-514).
+   * Paginated; fetches no issues (see `projectIssuesForPlanningAudit`).
+   */
+  async projectsForPlanningAudit() {
+    const query = `
+      query($after: String) {
+        projects(first: 50, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id name state description content
+            projectMilestones { nodes { id name description } }
+          }
+        }
+      }
+    `;
+    const out = [];
+    let after = null;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const data = await this.request(query, { after });
+      const projects = data.projects || {};
+      out.push(
+        ...(projects.nodes || []).map((node) => ({
+          id: node.id,
+          name: node.name,
+          status: String(node.state || "").toLowerCase(),
+          description: [node.description, node.content].filter(Boolean).join("\n"),
+          milestones: (node.projectMilestones?.nodes || []).map((m) => ({ name: m.name, description: m.description || "" })),
+        })),
+      );
+      if (!projects.pageInfo?.hasNextPage || !projects.pageInfo.endCursor) break;
+      after = projects.pageInfo.endCursor;
+    }
+    return out.filter((p) => p.status !== "completed" && p.status !== "canceled" && p.status !== "cancelled");
+  }
+
+  /**
+   * Read-only: the issues of one project with just the dates, state, parent,
+   * and linked-PR attachments the planning audit needs (MOV-514).
+   */
+  async projectIssuesForPlanningAudit(projectId) {
+    const query = `
+      query($projectId: String!, $after: String) {
+        project(id: $projectId) {
+          issues(first: 100, after: $after) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              identifier description createdAt completedAt
+              state { type }
+              parent { id }
+              attachments { nodes { url sourceType } }
+            }
+          }
+        }
+      }
+    `;
+    const out = [];
+    let after = null;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const data = await this.request(query, { projectId, after });
+      const issues = data.project?.issues || {};
+      out.push(
+        ...(issues.nodes || []).map((node) => ({
+          identifier: node.identifier,
+          description: node.description || "",
+          createdAt: node.createdAt || null,
+          completedAt: node.completedAt || null,
+          stateType: node.state ? node.state.type : null,
+          parentId: node.parent ? node.parent.id : null,
+          linkedPrCount: new Set(
+            (node.attachments?.nodes || [])
+              .filter((a) => /github/i.test(a.sourceType || "") && /\/pull\/\d+/.test(a.url || ""))
+              .map((a) => a.url),
+          ).size,
+        })),
       );
       if (!issues.pageInfo?.hasNextPage || !issues.pageInfo.endCursor) break;
       after = issues.pageInfo.endCursor;

@@ -240,3 +240,107 @@ export function issueSpecFingerprint(missing = []) {
     .sort()
     .join(",");
 }
+
+// ---------------------------------------------------------------------------
+// Planning rules, per issue (MOV-514).
+//
+// Two rules from docs/governance/linear-information-architecture.md §Planning
+// rules that are decidable from one issue. They live behind their own switch,
+// `MOVIECAL_PLANNING_RULES_MODE`, and never change `evaluateIssueSpec()`:
+// the completeness contract may already run in `enforce` (MOV-304), so folding
+// these into it would block promotion of every existing issue on merge.
+// ---------------------------------------------------------------------------
+
+export const PLANNING_RULES_MODES = ["off", "report", "enforce"];
+export const DEFAULT_PLANNING_RULES_MODE = "report";
+
+/** Unknown or empty reads as `report`, never `enforce`: a typo cannot stall the queue. */
+export function normalizePlanningRulesMode(raw) {
+  const value = String(raw ?? "").trim().toLowerCase();
+  return PLANNING_RULES_MODES.includes(value) ? value : DEFAULT_PLANNING_RULES_MODE;
+}
+
+/** A parent is an open issue with at least this many child issues. */
+export const PARENT_MIN_CHILDREN = 2;
+
+const PARENT_SECTIONS = [
+  { code: "planning-parent-problem", name: "Problem", re: /^#{1,6}[ \t]*problem\b/im },
+  { code: "planning-parent-done-when", name: "Done when", re: /^#{1,6}[ \t]*done when\b/im },
+  { code: "planning-parent-not-part", name: "Not part of this", re: /^#{1,6}[ \t]*not part of this\b/im },
+];
+const ANY_HEADING_RE = /^#{1,6}[ \t]+\S/m;
+const SEPARATE_LINE_RE = /^[ \t>]*(?:[-*+][ \t]+)?\*{0,2}Separate:?\*{0,2}[ \t]*(\S[^\n]*)$/im;
+const FOUND_WHILE_RE = /\b(?:found|discovered|noticed|spotted)\s+(?:while|when|during)\s+(?:working|fixing|implementing|reviewing|testing)\b/i;
+
+/**
+ * Master-CI remediation issues (`master-incident-issue.mjs`) are filed by the
+ * dispatcher with no originating issue to link, so they are exempt from the
+ * provenance rule by this existing body marker rather than by a `Separate:`
+ * line they could not back with a related link.
+ */
+const MASTER_INCIDENT_MARKER_RE = /<!--\s*moviecal-master-incident:/;
+
+function sectionHasBody(description, headingRe) {
+  const text = description || "";
+  const m = headingRe.exec(text);
+  if (!m) return false;
+  const after = text.slice(m.index + m[0].length);
+  const next = after.search(ANY_HEADING_RE);
+  return (next === -1 ? after : after.slice(0, next)).trim().length > 0;
+}
+
+/** True when `author` ({id, name, displayName}) is the dispatcher's own Linear identity. */
+export function isDispatcherAuthored(author, dispatcher = {}) {
+  if (!author) return false;
+  const ids = [dispatcher.id].filter(Boolean).map(String);
+  const names = [dispatcher.name].filter(Boolean).map((n) => String(n).toLowerCase());
+  if (author.id && ids.includes(String(author.id))) return true;
+  return [author.name, author.displayName].filter(Boolean).some((n) => names.includes(String(n).toLowerCase()));
+}
+
+/**
+ * Evaluate the per-issue planning rules.
+ *
+ * @param {object} issue - needs `description`, `stateName`, `childCount`
+ *   (children capped at PARENT_MIN_CHILDREN is enough), `parentId`,
+ *   `createdBy` ({id,name,displayName}|null), `relatedIssueIds` (string[])
+ * @param {{dispatcher?: {id?: string|null, name?: string}}} [ctx] - the
+ *   dispatcher's own identity (from config; never hardcoded here)
+ * @returns {{missing: Array<{code: string, message: string}>}}
+ */
+export function evaluatePlanningRules(issue = {}, { dispatcher = {} } = {}) {
+  const stateName = issue.stateName ?? null;
+  if (stateName && EXEMPT_SPEC_STATE_NAMES.includes(stateName)) return { missing: [] };
+
+  const description = issue.description || "";
+  const missing = [];
+
+  if ((issue.childCount || 0) >= PARENT_MIN_CHILDREN) {
+    for (const section of PARENT_SECTIONS) {
+      if (!sectionHasBody(description, section.re)) {
+        missing.push({
+          code: section.code,
+          message: `planning rule: parent issue (${issue.childCount}+ children) has no non-empty "${section.name}" section`,
+        });
+      }
+    }
+  }
+
+  const followUp = isDispatcherAuthored(issue.createdBy, dispatcher) || FOUND_WHILE_RE.test(description);
+  if (followUp && !issue.parentId && !MASTER_INCIDENT_MARKER_RE.test(description)) {
+    const reason = SEPARATE_LINE_RE.exec(description);
+    const hasReason = Boolean(reason && reason[1].trim());
+    const hasRelated = (issue.relatedIssueIds || []).length > 0;
+    if (!hasReason || !hasRelated) {
+      const lacks = [!hasReason ? "a `Separate: <reason>` line" : null, !hasRelated ? "a `related` link to the originating issue" : null]
+        .filter(Boolean)
+        .join(" and ");
+      missing.push({
+        code: "planning-provenance",
+        message: `planning rule: follow-up issue has no parent and lacks ${lacks}`,
+      });
+    }
+  }
+
+  return { missing };
+}

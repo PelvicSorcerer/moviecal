@@ -127,6 +127,21 @@ Used only where a real multi-issue phase exists. Every milestone is local to one
 
 5. **Discovery test** for work found mid-fix: does the parent's *Done when* stay false without it? If yes, it is a child. If no, file a separate issue linked `related`, with a note "found while working MOV-X", in Operations backlog or under its own parent.
 
+#### Machine checks for the planning rules (MOV-514)
+
+The dispatcher checks rules 1, 3, 4 and 5 and only ever reports them, behind their own switch `MOVIECAL_PLANNING_RULES_MODE` (`off` / `report` / `enforce`, default `report`, unknown reads as `report`). It is separate from `MOVIECAL_ISSUE_SPEC_MODE` so that merging these rules can never block promotion of existing issues. Nothing is ever auto-moved, auto-filled, or auto-closed.
+
+| Rule checked | Where | `report` | `enforce` |
+|---|---|---|---|
+| **Parent rule.** An open issue with 2 or more child issues has non-empty *Problem*, *Done when*, and *Not part of this* sections. | Per issue (`issue-spec.mjs`) | Logged and audited as an issue comment | Promoter refuses to promote it |
+| **Follow-up provenance.** An open issue created by the dispatcher's Linear identity, or whose description says it was found while working another issue, has a parent, or a `Separate: <reason>` line **and** a `related` relation to the originating issue. Master-CI remediation issues are exempt through their existing `moviecal-master-incident:` body marker, since they have no originating issue to link. | Per issue (`issue-spec.mjs`) | Logged and audited as an issue comment | Promoter refuses to promote it |
+| **Bucket hygiene.** Operations backlog issues open longer than 60 days (`MOVIECAL_PLANNING_BACKLOG_MAX_AGE_DAYS`); Operations backlog issues with no parent that look larger than one PR (2+ linked PRs, or a description naming more than one PR); and bucket drift (below). | Per project (`planning-audit.mjs`) | Log and `dispatcher health` only | Same: always report-only |
+| **Exit stated.** Every non-completed, non-canceled project and milestone, except Operations backlog, has an `Exit:` or `Done when` line in its description. | Per project (`planning-audit.mjs`) | Log and `dispatcher health` only | Same: always report-only |
+
+*Bucket drift.* An *exit issue* is any issue identifier named on a project's `Exit:` / `Done when` line. A project has drifted when all its exit issues are completed, it still has open issues, and every open issue was created after the last exit issue completed. A project that names no exit issues cannot drift by this test.
+
+To raise the per-issue rules to `enforce`, first read a `report` run (`npm run dispatcher:audit-issues -- --dry-run`, `node tools/dispatcher/bin/dispatcher.mjs promote --dry-run`) and fix or exempt what it names, then set `MOVIECAL_PLANNING_RULES_MODE=enforce` in the Mac's dispatcher environment and restart the daemon. See `docs/operators/local-execution.md` §Planning rules.
+
 A project reaching 100% means its defined outcome is complete. Do not keep a finished project open merely as a future maintenance container; create or select the bounded project that owns the new outcome.
 
 ## Workflow states
